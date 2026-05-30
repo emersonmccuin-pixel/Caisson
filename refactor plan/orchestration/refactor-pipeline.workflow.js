@@ -98,11 +98,16 @@ const orientPrompt = `Orient the refactor orchestration for THIS repo.
 
 1. Run \`git status --short\`. Set repoClean=true only if it is empty; otherwise list dirtyFiles.
 2. Report currentBranch. Set onRunBranch=true only if it is exactly "refactor/auto-pathway".
-3. Read AGENTS.md, refactor plan/definitive-session-pathway.md, and refactor plan/refactor-session-tracker.md
-   (read the "Later Sessions" table too).
-4. Find the FIRST unchecked ("[ ]") session row. Return its Session number, its type
-   (plan | build | verify), the slice number, and the exact Prompt cell text (sessionPromptVerbatim).
-   If every row is checked, set allSessionsDone=true and sessionType="none".
+3. Read AGENTS.md, refactor plan/definitive-session-pathway.md, and refactor plan/refactor-session-tracker.md.
+   CRITICAL: this tracker has TWO separate markdown tables — a top table (Sessions 1-9) AND a second
+   table under the "## Later Sessions" heading (Sessions 10-40). You MUST scan BOTH tables, row by row,
+   to the very end of the file. The first table being fully "[x]" does NOT mean the pathway is done.
+4. Find the FIRST row whose Done cell is "[ ]" (unchecked), scanning the top table first and then the
+   "## Later Sessions" table top-to-bottom. Return its Session number, its type (plan | build | verify),
+   the slice number, and the exact Prompt cell text (sessionPromptVerbatim).
+   Only set allSessionsDone=true if EVERY row in BOTH tables is "[x]". If you are about to set
+   allSessionsDone=true, first re-read the "## Later Sessions" table and confirm Sessions 13 through 40
+   are all "[x]"; if any is "[ ]", that is your sessionNumber and allSessionsDone is false.
 5. For a build session, check whether refactor plan/build-slices/00X-*.md for that slice exists and is
    marked planned/ready; set slicePlanReady and slicePlanPath accordingly.
 
