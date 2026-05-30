@@ -11,6 +11,9 @@ coverage/
 apps/desktop/release/
 apps/desktop/staging/
 
+# Refactor pipeline gate logs (transient tooling output)
+.gatelogs/
+
 # Runtime state (transient)
 data/*
 !data/.gitkeep
