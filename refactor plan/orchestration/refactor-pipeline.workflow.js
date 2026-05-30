@@ -98,16 +98,25 @@ const orientPrompt = `Orient the refactor orchestration for THIS repo.
 
 1. Run \`git status --short\`. Set repoClean=true only if it is empty; otherwise list dirtyFiles.
 2. Report currentBranch. Set onRunBranch=true only if it is exactly "refactor/auto-pathway".
-3. Read AGENTS.md, refactor plan/definitive-session-pathway.md, and refactor plan/refactor-session-tracker.md.
-   CRITICAL: this tracker has TWO separate markdown tables — a top table (Sessions 1-9) AND a second
-   table under the "## Later Sessions" heading (Sessions 10-40). You MUST scan BOTH tables, row by row,
-   to the very end of the file. The first table being fully "[x]" does NOT mean the pathway is done.
-4. Find the FIRST row whose Done cell is "[ ]" (unchecked), scanning the top table first and then the
-   "## Later Sessions" table top-to-bottom. Return its Session number, its type (plan | build | verify),
-   the slice number, and the exact Prompt cell text (sessionPromptVerbatim).
-   Only set allSessionsDone=true if EVERY row in BOTH tables is "[x]". If you are about to set
-   allSessionsDone=true, first re-read the "## Later Sessions" table and confirm Sessions 13 through 40
-   are all "[x]"; if any is "[ ]", that is your sessionNumber and allSessionsDone is false.
+3. Read AGENTS.md and refactor plan/definitive-session-pathway.md.
+4. Determine the next session MECHANICALLY — do NOT eyeball the tracker. The tracker has TWO markdown
+   tables (Sessions 1-9, then Sessions 10-40 under "## Later Sessions"); a human read is error-prone,
+   so you MUST derive the answer from the output of this EXACT command, run verbatim:
+
+       grep -nE '^\\| \\[ \\] \\|' "refactor plan/refactor-session-tracker.md" | head -1
+
+   - If that command prints a line, the FIRST unchecked row IS that line. Parse its Session number
+     (the integer in the second pipe-delimited cell) into sessionNumber, set allSessionsDone=false,
+     and set sessionType from that row's artifact text (plan | build | verify). Then Read the tracker
+     to copy that row's Prompt cell verbatim into sessionPromptVerbatim and read its slice number.
+   - Only if that command prints NOTHING (zero matches) may you set allSessionsDone=true,
+     sessionNumber=-1, sessionType="none".
+   Never set allSessionsDone=true while that grep returns a line. The grep output overrides any
+   impression from reading the file. SANITY CHECK: the tracker must contain ~40 session rows across both
+   tables. Run \`grep -c '^| \\[' "refactor plan/refactor-session-tracker.md"\`; if it returns far fewer
+   than 40 (e.g. a handful), the tracker has been corrupted/truncated — do NOT declare the pathway
+   complete. Instead set repoClean=false with dirtyFiles=["tracker truncated"] so the run stops for the
+   human.
 5. For a build session, check whether refactor plan/build-slices/00X-*.md for that slice exists and is
    marked planned/ready; set slicePlanReady and slicePlanPath accordingly.
 
@@ -135,6 +144,15 @@ If you hit a product or design choice, make the most reasonable decision, record
 productQuestion for later human review, and KEEP GOING — do not stop for it. Only stop by setting
 automatedGatesPassed=false with a blocker when an automated gate genuinely fails. Human browser
 verification is batched to the very end; never block on it.
+
+TRACKER EDITS — STRICT: When you update refactor plan/refactor-session-tracker.md, edit ONLY this
+session's own row: flip its Done cell from "[ ]" to "[x]" and fill its Completion Notes cell. Do NOT
+rewrite, compress, restructure, re-summarize, reformat, or remove ANY other row or either table header.
+The file MUST retain all ~40 session rows across both tables (top table Sessions 1-9, "## Later Sessions"
+table Sessions 10-40). Same rule for refactor plan/refactor-tracker.md: change only the cells for this
+session's slice, never rewrite the file. Truncating or rewriting a tracker breaks the whole pipeline —
+a prior verify session did exactly that. Make each change as a single targeted in-place edit, never a
+full-file rewrite. If gate output needs saving, write it under .gatelogs/ (gitignored), never into a tracker.
 
 When done: update refactor plan/refactor-tracker.md and refactor plan/refactor-session-tracker.md, commit
 completed work (code + docs), and confirm a clean repo. Report automatedGatesPassed honestly with the
@@ -181,6 +199,15 @@ Steps:
    Set needsHumanBrowserTest=true and provide a plain-English browserChecklist; note in the tracker that
    the slice is automated-verified, browser pending (the human browser-tests every section at the end).
 4. Commit all completed changes and confirm a clean repo.
+
+TRACKER EDITS — STRICT: In BOTH refactor plan/refactor-session-tracker.md and
+refactor plan/refactor-tracker.md, edit ONLY the cells belonging to THIS session/slice (flip this
+session's Done cell "[ ]"→"[x]", fill its Completion Notes, set this slice's status to done). Do NOT
+rewrite, compress, restructure, re-summarize, reformat, or remove ANY other row, cell, or table header.
+The session tracker MUST retain all ~40 session rows across both tables. Make a single targeted in-place
+edit per file, never a full-file rewrite. Save any gate output under .gatelogs/ (gitignored), never into
+a tracker. A previous verify session truncated both trackers to stubs and broke the pipeline — do not
+repeat that.
 ${RULES}`
 }
 
