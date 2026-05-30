@@ -7,15 +7,24 @@ This is the required path from the completed first foundation slice into the res
 - Start every session with `git status --short`.
 - Work only from a clean repo.
 - End every session by updating the tracker files, committing completed work, and confirming `git status --short` is clean.
-- Do not restart, kill, or replace running dev processes from an agent session.
+- Do not restart, kill, or replace running dev processes from a subagent. The human owns the live dev stack and runs the browser tests.
 - Do not begin a build session unless the matching build-slice plan exists and is marked ready.
-- Do not advance to the next slice when verification fails.
-- If verification fails, the next session is a fix-and-reverify session for the same slice.
 - Keep each implementation slice inside its named scope. Do not add adjacent subsystem work because it is convenient.
-- Each slice has three session types: plan, build, verify.
+- Each slice has two agent session types — plan and build — followed by a human review checkpoint.
 - Planning sessions may update docs only.
-- Build sessions may update implementation code only inside the owning slice.
-- Verify sessions may fix only defects discovered in that slice verification. Broader work becomes a new planned slice.
+- Build sessions may update implementation code only inside the owning slice. The build session ends by posting a plain-English in-app test checklist for the slice.
+- Human review is the advance gate: the human browser-tests the slice against that checklist. On pass, the slice is marked implemented. On a defect, the next session is a fix session for the same slice (not a fresh slice).
+
+## How We Run This (current process, 2026-05-30)
+
+The refactor runs **live in the working session**, not through an external orchestration pipeline.
+
+- Claude dispatches **subagents** (the Agent tool) to do the plan and build work for each slice, supervises them, and reviews their output before committing.
+- After each build, **Claude posts a plain-English in-app test checklist** for that slice.
+- The **human does the per-slice review** by browser-testing against that checklist on the `refactor/auto-pathway` branch, then confirms pass.
+- There are **no dedicated automated verify/close sessions** anymore. Automated tests + typechecks still run inside the build session as a pre-gate; the human review is the real advance gate.
+- The old Workflow-driven pipeline under `refactor plan/orchestration/` is **retired** (kept for history). Do not drive the refactor with the Workflow tool.
+- Building slice N+1 before the human has reviewed slice N is allowed (same accepted risk as before): everything lands on the branch, never main, and the human reviews in batches.
 
 ## Required Slice Order
 
@@ -46,28 +55,28 @@ This is the required path from the completed first foundation slice into the res
 | 16 | Verify/close 003 | Review slice 003 diff and verification evidence. Fix only slice-003 defects if found. Update trackers. | Slice 003 is marked implemented. |
 | 17 | Plan 004 | Create `004-workflow-definition-run-service.md`. | Slice 004 plan exists and is marked planned. |
 | 18 | Build 004 | Implement only slice 004. | Workflow identity, run lifecycle, review/cancel, boot reconcile tests pass, repo clean. |
-| 19 | Verify/close 004 | Review slice 004 diff and verification evidence. Fix only slice-004 defects if found. Update trackers. | Slice 004 is marked implemented. |
+| 19 | Human review 004 | Claude posts a plain-English in-app test checklist for slice 004; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 004 passes; slice 004 marked implemented. |
 | 20 | Plan 005 | Create `005-agent-run-service.md`. | Slice 005 plan exists and is marked planned. |
-| 21 | Build 005 | Implement only slice 005. | Agent dispatch, pending ask, pause/resume/cancel, rev/live-event tests pass, repo clean. |
-| 22 | Verify/close 005 | Review slice 005 diff and verification evidence. Fix only slice-005 defects if found. Update trackers. | Slice 005 is marked implemented. |
+| 21 | Build 005 | Implement only slice 005. End with a slice-005 test checklist. | Agent dispatch, pending ask, pause/resume/cancel, rev/live-event tests pass, repo clean. |
+| 22 | Human review 005 | Claude posts a slice-005 test checklist; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 005 passes; slice 005 marked implemented. |
 | 23 | Plan 006 | Create `006-conversation-send-replay-service.md`. | Slice 006 plan exists and is marked planned. |
-| 24 | Build 006 | Implement only slice 006. | Chat start/send/replay/close/resume and legacy transcript compatibility tests pass, repo clean. |
-| 25 | Verify/close 006 | Review slice 006 diff and verification evidence. Fix only slice-006 defects if found. Update trackers. | Slice 006 is marked implemented. |
+| 24 | Build 006 | Implement only slice 006. End with a slice-006 test checklist. | Chat start/send/replay/close/resume and legacy transcript compatibility tests pass, repo clean. |
+| 25 | Human review 006 | Claude posts a slice-006 test checklist; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 006 passes; slice 006 marked implemented. |
 | 26 | Plan 007 | Create `007-mailbox-platform.md`. | Slice 007 plan exists and is marked planned. |
-| 27 | Build 007 | Implement only slice 007. | Mailbox enqueue/lease/ack/retry/dead-letter, UI inbox, orchestrator-turn worker tests pass, repo clean. |
-| 28 | Verify/close 007 | Review slice 007 diff and verification evidence. Fix only slice-007 defects if found. Update trackers. | Slice 007 is marked implemented. |
+| 27 | Build 007 | Implement only slice 007. End with a slice-007 test checklist. | Mailbox enqueue/lease/ack/retry/dead-letter, UI inbox, orchestrator-turn worker tests pass, repo clean. |
+| 28 | Human review 007 | Claude posts a slice-007 test checklist; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 007 passes; slice 007 marked implemented. |
 | 29 | Plan 008 | Create `008-channel-cutover.md`. | Slice 008 plan exists and is marked planned. |
-| 30 | Build 008 | Implement only slice 008. | Agent delivery, workflow review, external webhook delivery work through mailbox with fallback gated, repo clean. |
-| 31 | Verify/close 008 | Review slice 008 diff and verification evidence. Fix only slice-008 defects if found. Update trackers. | Slice 008 is marked implemented. |
+| 30 | Build 008 | Implement only slice 008. End with a slice-008 test checklist. | Agent delivery, workflow review, external webhook delivery work through mailbox with fallback gated, repo clean. |
+| 31 | Human review 008 | Claude posts a slice-008 test checklist; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 008 passes; slice 008 marked implemented. |
 | 32 | Plan 009 | Create `009-runtime-host-transient-worktrees.md`. | Slice 009 plan exists and is marked planned. |
-| 33 | Build 009 | Implement only slice 009. | Runtime host, transient-session, worktree/path-guard characterization tests pass, repo clean. |
-| 34 | Verify/close 009 | Review slice 009 diff and verification evidence. Fix only slice-009 defects if found. Update trackers. | Slice 009 is marked implemented. |
+| 33 | Build 009 | Implement only slice 009. End with a slice-009 test checklist. | Runtime host, transient-session, worktree/path-guard characterization tests pass, repo clean. |
+| 34 | Human review 009 | Claude posts a slice-009 test checklist; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 009 passes; slice 009 marked implemented. |
 | 35 | Plan 010 | Create `010-mcp-typed-client-capabilities.md`. | Slice 010 plan exists and is marked planned. |
-| 36 | Build 010 | Implement only slice 010. | MCP tool family parity, typed client, capability registry tests pass, repo clean. |
-| 37 | Verify/close 010 | Review slice 010 diff and verification evidence. Fix only slice-010 defects if found. Update trackers. | Slice 010 is marked implemented. |
+| 36 | Build 010 | Implement only slice 010. End with a slice-010 test checklist. | MCP tool family parity, typed client, capability registry tests pass, repo clean. |
+| 37 | Human review 010 | Claude posts a slice-010 test checklist; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 010 passes; slice 010 marked implemented. |
 | 38 | Plan 011 | Create `011-compatibility-cleanup.md`. | Slice 011 plan exists and is marked planned. |
-| 39 | Build 011 | Implement only slice 011. | Static search gates and integration tests prove removed paths have no active callers, repo clean. |
-| 40 | Verify/close 011 | Final review of compatibility cleanup. | Cleanup is marked implemented and no stale target-path references remain. |
+| 39 | Build 011 | Implement only slice 011. End with a slice-011 test checklist. | Static search gates and integration tests prove removed paths have no active callers, repo clean. |
+| 40 | Human review 011 | Claude posts a final cleanup test checklist; human browser-tests it live. | Human confirms cleanup passes; cleanup marked implemented and no stale target-path references remain. |
 
 ## Failure Path
 

@@ -29,6 +29,10 @@ data.bak.*
 # Worktrees managed by the runtime (regenerated)
 worktrees/
 
+# Dogfood scaffold: the app writes .project-companion/ into managed projects.
+# At this repo's own root it is an incidental dogfooding artifact, not tracked.
+.project-companion/
+
 # Dev fixture: workspace/ has its own embedded git repo (per-project shape).
 # Default project templates will land under templates/ when the chassis work needs them.
 workspace/

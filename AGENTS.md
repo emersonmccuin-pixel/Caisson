@@ -6,6 +6,12 @@ The six priority subsystem architecture handoffs and whole-system synthesis now 
 
 Do not implement refactors unless the user explicitly asks.
 
+## Refactor Execution Model (current, 2026-05-30)
+
+The refactor now runs **live in the working session**, driven by Claude with **subagents** (the Agent tool) doing the plan and build work for each slice. There is no external Workflow-orchestration pipeline; the docs under `refactor plan/orchestration/` are retired and kept for history only.
+
+Per slice: **plan** (subagent, docs only) → **build** (subagent, in-scope code only) → Claude posts a **plain-English in-app test checklist** → the **human browser-tests** the slice on `refactor/auto-pathway` and confirms pass. The human review is the advance gate; the old automated verify/close sessions are retired (automated tests/typechecks still run inside the build as a pre-gate). See `refactor plan/definitive-session-pathway.md` → "How We Run This".
+
 ## Refactor Planning Files
 
 - North star: `refactor plan/target-architecture.md`
@@ -67,12 +73,11 @@ The tracker is the control plane for this workflow. Update `refactor plan/refact
 
 Current status:
 
-- Steps 1-5 above are complete and marked `planned`.
-- Manual Session 9 and slice 001 implementation are complete.
-- The next unchecked manual row is Session 10 in `refactor plan/refactor-session-tracker.md`.
+- All planning artifacts (roadmap, foundation specs, work-item handoff, Phase 0 test plan, slice plans 001-004) exist and are marked `planned`.
+- Slices 001, 002, 003 are implemented and verified. Slice 004 (workflow definition/run/review) is built and awaiting human review.
+- The next unchecked manual row lives in `refactor plan/refactor-session-tracker.md`; trust the tracker, never a hardcoded number.
 - The required long-term order is controlled by `refactor plan/definitive-session-pathway.md`.
-- Session 10 must close slice 001 verification before any slice 002 planning starts.
-- Slice 002 is fixed as `refactor plan/build-slices/002-project-live-outbox.md`; do not swap it for agents, workflows, mailbox, chat, or runtime work.
+- Execution now runs live in-session with subagents and per-slice human review (see "Refactor Execution Model" above), not the retired Workflow pipeline.
 
 ## Refactor Target Decision
 

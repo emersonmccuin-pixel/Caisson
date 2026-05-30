@@ -1,3 +1,5 @@
+> **DEPRECATED (2026-05-30).** The Workflow-driven orchestration described in this file is retired. The refactor now runs live in the working session: Claude dispatches subagents for plan/build and posts a per-slice in-app test checklist; the human does the per-slice browser review. See `refactor plan/definitive-session-pathway.md` → "How We Run This". Kept for history only — do not drive the refactor with the Workflow tool or `refactor-pipeline.workflow.js`.
+
 # Refactor Orchestration Handoff
 
 You (a fresh session) are the orchestrator for the rest of the refactor. This file is your operating
