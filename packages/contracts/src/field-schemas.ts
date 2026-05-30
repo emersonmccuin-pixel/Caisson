@@ -9,7 +9,6 @@ import {
   isLiveEvent,
   isLiveEventFrame,
   type LiveEvent,
-  type LiveEventFrame,
 } from './live-events.ts';
 import { parseErr, parseOk, type ParseResult, type ULID } from './shared.ts';
 
