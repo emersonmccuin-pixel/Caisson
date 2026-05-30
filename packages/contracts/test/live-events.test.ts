@@ -94,6 +94,14 @@ test('live replay query parser validates cursors, type, and clamps limit', () =>
     code: 'VALIDATION',
   });
   assert.deepEqual(parseListLiveEventsQuery({ type: 'work-item.changed' }), {
+    ok: true,
+    value: { includeGlobal: false, limit: 100, type: 'work-item.changed' },
+  });
+  assert.deepEqual(parseListLiveEventsQuery({ type: 'stage.list.changed' }), {
+    ok: true,
+    value: { includeGlobal: false, limit: 100, type: 'stage.list.changed' },
+  });
+  assert.deepEqual(parseListLiveEventsQuery({ type: 'bogus.type' }), {
     ok: false,
     error: 'unsupported live event type',
     code: 'VALIDATION',

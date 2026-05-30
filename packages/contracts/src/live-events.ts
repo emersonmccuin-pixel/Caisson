@@ -1,7 +1,34 @@
 import { parseErr, parseOk, type ParseResult, type ULID } from './shared.ts';
 
 export type LiveEventScope = 'project' | 'global';
-export type LiveEventEntity = 'project';
+export type LiveEventEntity =
+  | 'project'
+  | 'work-item'
+  | 'stage'
+  | 'field-schema'
+  | 'attachment';
+
+/** Canonical live-event type names. Replay accepts these for `type=` filtering. */
+export type LiveEventTypeName =
+  | 'project.changed'
+  | 'work-item.changed'
+  | 'stage.list.changed'
+  | 'field-schema.list.changed'
+  | 'attachment.changed';
+
+const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
+  'project.changed',
+  'work-item.changed',
+  'stage.list.changed',
+  'field-schema.list.changed',
+  'attachment.changed',
+];
+
+export function isLiveEventTypeName(value: unknown): value is LiveEventTypeName {
+  return (
+    typeof value === 'string' && (LIVE_EVENT_TYPE_NAMES as readonly string[]).includes(value)
+  );
+}
 
 export interface LiveEvent<TPayload = unknown> {
   id: ULID;
@@ -26,7 +53,7 @@ export interface ListLiveEventsQuery {
   projectId?: ULID;
   includeGlobal: boolean;
   limit: number;
-  type?: 'project.changed';
+  type?: LiveEventTypeName;
 }
 
 export interface ListLiveEventsResponse {
@@ -94,10 +121,10 @@ export function parseListLiveEventsQuery(input: unknown): ParseResult<ListLiveEv
   }
 
   if (query.type !== undefined) {
-    if (query.type !== 'project.changed') {
+    if (!isLiveEventTypeName(query.type)) {
       return parseErr('unsupported live event type');
     }
-    parsed.type = 'project.changed';
+    parsed.type = query.type;
   }
 
   return parseOk(parsed);
@@ -124,7 +151,13 @@ function isLiveEventScope(value: unknown): value is LiveEventScope {
 }
 
 function isLiveEventEntity(value: unknown): value is LiveEventEntity {
-  return value === 'project';
+  return (
+    value === 'project' ||
+    value === 'work-item' ||
+    value === 'stage' ||
+    value === 'field-schema' ||
+    value === 'attachment'
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

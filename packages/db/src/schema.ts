@@ -83,7 +83,9 @@ export const liveOutbox = sqliteTable(
     scope: text('scope').notNull().$type<'project' | 'global'>(),
     projectId: text('project_id').$type<ULID | null>(),
     type: text('type').notNull(),
-    entity: text('entity').notNull().$type<'project'>(),
+    entity: text('entity')
+      .notNull()
+      .$type<'project' | 'work-item' | 'stage' | 'field-schema' | 'attachment'>(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),
     payload: text('payload', { mode: 'json' })

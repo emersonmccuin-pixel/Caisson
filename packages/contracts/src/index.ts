@@ -1,3 +1,7 @@
 export * from './shared.ts';
 export * from './live-events.ts';
 export * from './projects.ts';
+export * from './work-items.ts';
+export * from './stages.ts';
+export * from './field-schemas.ts';
+export * from './attachments.ts';

@@ -6,7 +6,12 @@ import { newId } from '../id.ts';
 import { liveOutbox } from '../schema.ts';
 
 export type LiveOutboxScope = 'global' | 'project';
-export type LiveOutboxEntity = 'project';
+export type LiveOutboxEntity =
+  | 'project'
+  | 'work-item'
+  | 'stage'
+  | 'field-schema'
+  | 'attachment';
 
 export interface InsertLiveEventDraft<TPayload = unknown> {
   id?: ULID;
