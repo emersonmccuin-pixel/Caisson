@@ -23,6 +23,11 @@ import {
   setOrchestratorSessionTitle,
   workflowRunsV2Repo,
 } from '@pc/db';
+import {
+  reconcileWorkflowRunsOnBoot,
+  RECONCILE_SCAN_STATUSES,
+  WorkflowRunMutationGateway,
+} from '@pc/app-services';
 import { getDataDir } from '@pc/utils';
 
 import {

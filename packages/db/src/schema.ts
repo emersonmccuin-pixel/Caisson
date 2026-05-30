@@ -85,7 +85,16 @@ export const liveOutbox = sqliteTable(
     type: text('type').notNull(),
     entity: text('entity')
       .notNull()
-      .$type<'project' | 'work-item' | 'stage' | 'field-schema' | 'attachment'>(),
+      .$type<
+        | 'project'
+        | 'work-item'
+        | 'stage'
+        | 'field-schema'
+        | 'attachment'
+        | 'workflow-definition'
+        | 'workflow-run'
+        | 'workflow-review'
+      >(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),
     payload: text('payload', { mode: 'json' })

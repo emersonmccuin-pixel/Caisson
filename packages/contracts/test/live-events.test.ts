@@ -50,7 +50,9 @@ test('live event guard enforces cursor and scope/project invariants', () => {
   assert.equal(isLiveEvent({ ...event, cursor: '01' }), false);
   assert.equal(isLiveEvent({ ...event, scope: 'global', projectId: 'p1' }), false);
   assert.equal(isLiveEvent({ ...event, scope: 'project', projectId: null }), false);
-  assert.equal(isLiveEvent({ ...event, entity: 'workflow-run' }), false);
+  assert.equal(isLiveEvent({ ...event, entity: 'not-an-entity' }), false);
+  // slice 004 — workflow entities are now valid live-event entities.
+  assert.equal(isLiveEvent({ ...event, scope: 'project', projectId: 'p1', entity: 'workflow-run' }), true);
 });
 
 test('project.changed live-event guard and frame guard stay narrow', () => {
@@ -100,6 +102,14 @@ test('live replay query parser validates cursors, type, and clamps limit', () =>
   assert.deepEqual(parseListLiveEventsQuery({ type: 'stage.list.changed' }), {
     ok: true,
     value: { includeGlobal: false, limit: 100, type: 'stage.list.changed' },
+  });
+  assert.deepEqual(parseListLiveEventsQuery({ type: 'workflow.run.changed' }), {
+    ok: true,
+    value: { includeGlobal: false, limit: 100, type: 'workflow.run.changed' },
+  });
+  assert.deepEqual(parseListLiveEventsQuery({ type: 'workflow.definition.changed' }), {
+    ok: true,
+    value: { includeGlobal: false, limit: 100, type: 'workflow.definition.changed' },
   });
   assert.deepEqual(parseListLiveEventsQuery({ type: 'bogus.type' }), {
     ok: false,

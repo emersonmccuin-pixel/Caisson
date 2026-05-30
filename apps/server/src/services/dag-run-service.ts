@@ -35,6 +35,13 @@ import {
 } from '@pc/runtime';
 import { DagExecutor, type DagExecutorDeps, type DagNodeContext, type NodeOutcome } from './dag-executor.ts';
 import { announceRunCreated, writeDagAndStatus } from './workflow-run-writer.ts';
+import { WorkflowRunMutationGateway } from '@pc/app-services';
+import {
+  buildLiveEventFrame,
+  buildWorkflowReviewPendingRefetchEnvelope,
+  type WorkflowReviewFlavor,
+  type WorkflowReviewState,
+} from '@pc/contracts';
 import { createAgentWorkItem } from './agent-work-item.ts';
 import { runVerificationOnTerminal } from './agent-verification.ts';
 import { preparePodSpawn } from './pod-spawn.ts';
@@ -64,6 +71,46 @@ function truncateStdout(s: string): string {
 }
 
 export type ChannelPoster = (body: string, source: string) => Promise<void>;
+
+// Slice 004 — durable workflow.review.changed facts via the run gateway. The
+// run-row state still flows through workflow-run-writer; this is the review
+// audit/action surface that mirrors the transient workflow-v2-review-pending.
+const reviewGateway = new WorkflowRunMutationGateway();
+
+function emitReviewFact(
+  opts: { projectId: ULID; broadcast: (event: unknown) => void },
+  input: {
+    runId: ULID;
+    nodeId: string;
+    flavor: WorkflowReviewFlavor;
+    state: WorkflowReviewState;
+    prompt?: string | null;
+    notes?: string;
+  },
+): void {
+  const pub = reviewGateway.commitReviewChange({
+    projectId: opts.projectId,
+    runId: input.runId,
+    nodeId: input.nodeId,
+    flavor: input.flavor,
+    state: input.state,
+    ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+    ...(input.notes !== undefined ? { notes: input.notes } : {}),
+  });
+  opts.broadcast(buildLiveEventFrame(pub.liveEvent));
+  // Legacy compat: only the pending state had a transient broadcast name.
+  if (input.state === 'pending') {
+    opts.broadcast(
+      buildWorkflowReviewPendingRefetchEnvelope({
+        projectId: opts.projectId,
+        runId: input.runId,
+        nodeId: input.nodeId,
+        flavor: input.flavor,
+        prompt: input.prompt ?? null,
+      }),
+    );
+  }
+}
 
 export interface DagRunServiceOptions {
   projectId: ULID;
@@ -618,6 +665,18 @@ export function makeExecutorDeps(
     if (node.kind === 'orchestrator-review') {
       await postChannel(body, 'workflow');
     }
+    // Slice 004 — durable workflow.review.changed (pending) fact + canonical
+    // frame via the gateway. Then the legacy transient broadcast (unchanged
+    // wire shape incl. `bundle`) for existing clients.
+    const reviewPub = reviewGateway.commitReviewChange({
+      projectId: opts.projectId,
+      runId: run.id,
+      nodeId: node.id,
+      flavor,
+      state: 'pending',
+      prompt: node.prompt ?? null,
+    });
+    opts.broadcast(buildLiveEventFrame(reviewPub.liveEvent));
     opts.broadcast({
       type: 'workflow-v2-review-pending',
       projectId: opts.projectId,
@@ -781,5 +840,21 @@ export async function applyV2ReviewDecision(
     rootWorkItemId: run.workItemId,
     worktreePath: run.worktreePath,
   });
-  return exec.onReviewDecision(reviewNodeId, decision);
+  const result = await exec.onReviewDecision(reviewNodeId, decision);
+  // Slice 004 — durable workflow.review.changed (approved/rejected) fact +
+  // canonical frame. The run-state transition itself already fanned out a
+  // workflow.run.changed via the writer during resume.
+  const reviewNode = workflow.nodes.find((n) => n.id === reviewNodeId);
+  const flavor: WorkflowReviewFlavor =
+    reviewNode?.kind === 'orchestrator-review' ? 'orchestrator' : 'human';
+  emitReviewFact(opts, {
+    runId: run.id,
+    nodeId: reviewNodeId,
+    flavor,
+    state: decision.kind === 'approve' ? 'approved' : 'rejected',
+    ...(decision.kind === 'reject' && decision.notes !== undefined
+      ? { notes: decision.notes }
+      : {}),
+  });
+  return result;
 }

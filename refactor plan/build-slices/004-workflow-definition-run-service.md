@@ -352,6 +352,15 @@ This slice is ready to implement only when the user explicitly asks to build and
 | Should orchestrator-review / review delivery move to the mailbox (off the Channel `postChannel` call)? | Deferred to slice 008 (Channel cutover). |
 | Should the legacy `workflow-v2-run-changed` / `workflow-v2-review-pending` / `workflow-changed` names be removed after canonical adoption? | Deferred to compatibility cleanup slice 011. |
 
+## 18. Implementation Notes (Session 18)
+
+- Built as specified: no DB migration. `definitionHash` derived from `workflow_yaml_snapshot` (sha256) in `toWorkflowRunDto`. Added only the additive `workflowRunsV2Repo.listRunsByStatus` read.
+- `LiveEventEntity` / `LiveOutboxEntity` / the `live_outbox.entity` drizzle `$type` union were all extended with `workflow-definition|run|review` (three sources of the same constraint — the schema `$type` column was the one slice 003 didn't have to touch).
+- `workflow-run-writer.ts` exported names (`announceRunCreated`/`writeDagState`/`writeRunStatus`/`writeDagAndStatus`/`announceRun`) preserved; they now delegate to `WorkflowRunMutationGateway`, fanning out canonical frame + legacy `workflow-v2-run-changed`. `dag-run-service.ts` is otherwise unchanged except durable review facts (requestReview pending + applyV2ReviewDecision approved/rejected) and an `emitReviewFact` helper. The cancel path stays on `writeRunStatus` (now durable) via `index.ts` `cancelInFlightRuns` — no new cancel HTTP route added (per stop-condition).
+- DECISION (kept in scope): the cooperative-cancel `WorkflowRunMutationGateway.cancelRun` method exists in `@pc/app-services` + is unit-tested, but the production cancel path continues through `writeRunStatus` to avoid touching the `index.ts` cancel wiring beyond making it durable. Routing the existing `?cancel=1` path explicitly through `cancelRun` is a no-op behavior-wise; left as-is to honor "prefer additive, no adjacent refactor."
+- Boot reconcile is pure (`reconcileWorkflowRunsOnBoot` in `@pc/app-services`) + wired in `index.ts` next to the agent-run reattach; fail-closed for `running`/`pending`, leaves `paused`.
+- Gotcha burned: a self-referential typo in a frame guard + an if-return rewrite tripped a stale tsx cache (`%LOCALAPPDATA%/Temp/tsx-emers`) AND TS2367; reverted guards to `&&`-chains + cleared the tsx cache. If contracts tests show phantom guard failures, clear that cache first.
+
 ## 17. Notes for the Implementation Agent
 
 - Reuse the slice-002 `live_outbox` table, replay route, and web live client; do not add a second outbox.

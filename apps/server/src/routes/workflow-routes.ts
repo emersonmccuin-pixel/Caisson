@@ -22,6 +22,8 @@ import { createHash } from 'node:crypto';
 import type { Hono } from 'hono';
 import {
   getAgentByName,
+  getDb,
+  insertLiveEvent,
   listWorkflowAudit,
   workflowsRepo,
   type WorkflowAuditInput,
@@ -40,6 +42,11 @@ import {
   serializeWorkflowV2,
   validateWorkflowV2,
 } from '@pc/workflows';
+import {
+  buildLiveEventFrame,
+  type WorkflowDefinitionChange,
+} from '@pc/contracts';
+import { toWorkflowDefinitionDto } from '@pc/app-services';
 
 export type WorkflowMutationKind = 'created' | 'updated' | 'deleted';
 
@@ -255,15 +262,53 @@ function deletedEnvelope(row: WorkflowRow): Record<string, unknown> {
   };
 }
 
+/** Slice 004 — durably record a `workflow.definition.changed` fact on the
+ *  slice-002 live_outbox, returning the canonical frame to fan out alongside
+ *  the legacy envelope. Definition events follow the row's scope (global rows
+ *  carry projectId:null and fan to all projects, mirroring broadcastAll). */
+function emitDefinitionFact(row: WorkflowRow, change: WorkflowDefinitionChange): unknown {
+  const scope = row.scope === 'global' ? 'global' : 'project';
+  const projectId = scope === 'global' ? null : row.projectId;
+  const definition = toWorkflowDefinitionDto({
+    id: row.id,
+    slug: row.slug,
+    scope,
+    projectId,
+    name: row.name,
+    displayName: row.displayName,
+    description: row.description,
+    status: row.status === 'invalid' ? 'invalid' : 'active',
+    disabled: row.disabled,
+    yamlHash: row.yamlHash,
+    updatedAt: row.updatedAt,
+  });
+  const liveEvent = getDb().transaction((tx) =>
+    insertLiveEvent(tx, {
+      scope,
+      projectId,
+      type: 'workflow.definition.changed',
+      entity: 'workflow-definition',
+      entityId: row.id,
+      version: null,
+      payload:
+        change === 'deleted' ? { change, workflowId: row.id } : { change, definition },
+    }),
+  );
+  return buildLiveEventFrame(liveEvent);
+}
+
 function emitChanged(
   deps: WorkflowRoutesDeps,
   row: WorkflowRow,
   change: WorkflowMutationKind,
 ): void {
   const env = change === 'deleted' ? deletedEnvelope(row) : changedEnvelope(change, row);
+  const frame = emitDefinitionFact(row, change);
   if (row.scope === 'global') {
+    deps.broadcastAll(frame);
     deps.broadcastAll(env);
   } else if (row.projectId) {
+    deps.broadcastTo(row.projectId, frame);
     deps.broadcastTo(row.projectId, env);
   }
 }

@@ -5,3 +5,5 @@ export * from './work-items.ts';
 export * from './stages.ts';
 export * from './field-schemas.ts';
 export * from './attachments.ts';
+export * from './workflow-definitions.ts';
+export * from './workflow-runs.ts';

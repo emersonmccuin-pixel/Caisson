@@ -7,7 +7,7 @@
 // conversion. Node OUTPUTS live on child work items, not here; this repo only
 // persists DAG bookkeeping (dag_state) + the append-only event log.
 
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { ULID, WorkflowV2 } from '@pc/domain';
 import { getDb } from '../connection.ts';
 import { newId } from '../id.ts';
@@ -111,6 +111,20 @@ export function listRunsByProject(projectId: ULID): WorkflowRunV2Record[] {
     .select()
     .from(workflowRunsV2)
     .where(eq(workflowRunsV2.projectId, projectId))
+    .orderBy(asc(workflowRunsV2.createdAt))
+    .all() as WorkflowRunV2Record[];
+}
+
+/** Slice 004 — additive read for boot reconciliation. Returns all runs whose
+ *  status is in the given set, ordered oldest-first, across every project. */
+export function listRunsByStatus(
+  statuses: readonly WorkflowV2.WorkflowRunStatus[],
+): WorkflowRunV2Record[] {
+  if (statuses.length === 0) return [];
+  return getDb()
+    .select()
+    .from(workflowRunsV2)
+    .where(inArray(workflowRunsV2.status, statuses as string[]))
     .orderBy(asc(workflowRunsV2.createdAt))
     .all() as WorkflowRunV2Record[];
 }
