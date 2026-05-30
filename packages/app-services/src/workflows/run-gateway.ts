@@ -58,7 +58,7 @@ export function buildWorkflowRunChangedDraft(input: {
     projectId: input.projectId,
     type: 'workflow.run.changed',
     entity: 'workflow-run',
-    entityId: input.run.id,
+    entityId: input.run.id as ULID,
     version: input.run.rev,
     payload: { reason: input.reason, run: input.run },
   };

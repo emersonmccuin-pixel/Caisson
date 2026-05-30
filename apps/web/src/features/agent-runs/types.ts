@@ -1,5 +1,11 @@
 import type { ULID } from '@/features/projects/types';
 
+// Slice 005 — the canonical browser-safe agent-run DTO now lives in
+// @pc/contracts. Re-exported here so components can migrate imports gradually;
+// the local AgentRunRecord shape below stays the legacy `agent-run-changed`
+// envelope record (used by the existing useResourceList hook).
+export type { AgentRunDto } from '@pc/contracts';
+
 export type AgentRunStatus =
   | 'queued'
   | 'spawning'

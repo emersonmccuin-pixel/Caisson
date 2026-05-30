@@ -6,7 +6,11 @@ export type LiveEventEntity =
   | 'work-item'
   | 'stage'
   | 'field-schema'
-  | 'attachment';
+  | 'attachment'
+  | 'workflow-definition'
+  | 'workflow-run'
+  | 'workflow-review'
+  | 'agent-run';
 
 /** Canonical live-event type names. Replay accepts these for `type=` filtering. */
 export type LiveEventTypeName =
@@ -14,7 +18,11 @@ export type LiveEventTypeName =
   | 'work-item.changed'
   | 'stage.list.changed'
   | 'field-schema.list.changed'
-  | 'attachment.changed';
+  | 'attachment.changed'
+  | 'workflow.run.changed'
+  | 'workflow.review.changed'
+  | 'workflow.definition.changed'
+  | 'agent.run.changed';
 
 const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'project.changed',
@@ -22,6 +30,10 @@ const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'stage.list.changed',
   'field-schema.list.changed',
   'attachment.changed',
+  'workflow.run.changed',
+  'workflow.review.changed',
+  'workflow.definition.changed',
+  'agent.run.changed',
 ];
 
 export function isLiveEventTypeName(value: unknown): value is LiveEventTypeName {
@@ -156,7 +168,11 @@ function isLiveEventEntity(value: unknown): value is LiveEventEntity {
     value === 'work-item' ||
     value === 'stage' ||
     value === 'field-schema' ||
-    value === 'attachment'
+    value === 'attachment' ||
+    value === 'workflow-definition' ||
+    value === 'workflow-run' ||
+    value === 'workflow-review' ||
+    value === 'agent-run'
   );
 }
 

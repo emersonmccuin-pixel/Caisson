@@ -94,6 +94,7 @@ export const liveOutbox = sqliteTable(
         | 'workflow-definition'
         | 'workflow-run'
         | 'workflow-review'
+        | 'agent-run'
       >(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),

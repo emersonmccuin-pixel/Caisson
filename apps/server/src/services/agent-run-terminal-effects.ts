@@ -22,6 +22,7 @@ import {
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
 import type { ChannelServer } from './channel-server.ts';
 import { enqueueAndPush } from './agent-delivery.ts';
+import { commitAgentRunTerminal } from './agent-run-writer.ts';
 import {
   runVerificationOnTerminal,
   type VerificationDeps,
@@ -85,14 +86,36 @@ export function applyAgentRunTerminalEffects(
         input.failureCause ??
         null;
 
-  (deps.markTerminal ?? defaultMarkAgentRunTerminal)({
-    id: input.runId,
-    status: input.status,
-    result: input.status === 'completed' ? input.result ?? '' : null,
-    failureCause,
-    failureReason,
-    completedAt,
-  });
+  // Slice 005 — the terminal row flip + the durable agent.run.changed fact land
+  // in ONE transaction through the gateway, which re-reads the post-write row
+  // for the correct rev, then we fan out canonical + legacy. When a test injects
+  // a `markTerminal` override (no real DB), fall back to the direct write +
+  // legacy broadcast so the gateway's getDb() path is never touched.
+  if (deps.markTerminal) {
+    deps.markTerminal({
+      id: input.runId,
+      status: input.status,
+      result: input.status === 'completed' ? input.result ?? '' : null,
+      failureCause,
+      failureReason,
+      completedAt,
+    });
+    emitLegacyTerminalBroadcast({ input, row, completedAt, failureCause, failureReason, deps });
+  } else {
+    commitAgentRunTerminal(
+      {
+        runId: input.runId,
+        status: input.status,
+        result: input.status === 'completed' ? input.result ?? '' : null,
+        failureCause,
+        failureReason,
+        completedAt,
+        worktreeDir: input.worktreeDir,
+        startedAt: input.startedAt ?? row.queuedAt,
+      },
+      deps.broadcast ? (event) => deps.broadcast?.(input.projectId, event) : undefined,
+    );
+  }
 
   deps.activeRunRegistry?.unregister(input.runId);
 
@@ -154,6 +177,9 @@ async function finishTerminalEffects(args: {
       }
     : null;
 
+  // Slice 005 — the rail broadcast (durable agent.run.changed) is emitted
+  // SYNCHRONOUSLY by applyAgentRunTerminalEffects through the gateway; this
+  // async tail keeps ONLY verification + the Channel terminal envelope.
   const slug = input.slug ?? project?.slug ?? null;
   if (deps.channelServer && slug) {
     emitTerminalEnvelope({
@@ -171,10 +197,22 @@ async function finishTerminalEffects(args: {
       verification,
     });
   }
+}
 
-  // Read updated row for the rev stamp (row was just updated by markTerminal).
+/** Legacy-only terminal broadcast for the test-injection path (markTerminal
+ *  override + no real DB). Production routes through the gateway. */
+function emitLegacyTerminalBroadcast(args: {
+  input: AgentRunTerminalEffectsInput;
+  row: AgentRunRow;
+  completedAt: number;
+  failureCause: AgentRunFailureCause | null;
+  failureReason: string | null;
+  deps: AgentRunTerminalEffectsDeps;
+}): void {
+  const { input, row, completedAt, failureCause, failureReason, deps } = args;
+  if (!deps.broadcast) return;
   const updatedRow = (deps.getAgentRun ?? defaultGetAgentRunRow)(input.runId);
-  deps.broadcast?.(input.projectId, {
+  deps.broadcast(input.projectId, {
     type: 'agent-run-changed',
     record: {
       runId: input.runId,

@@ -36,7 +36,6 @@ import { resolve } from 'node:path';
 import {
   computePodRevision,
   resolveAgentForDispatch,
-  getAgentRunRow,
   getWorkItem,
   insertAgentRunRow,
   markAgentRunTerminal,
@@ -48,10 +47,10 @@ import {
 } from '@pc/db';
 import type {
   AgentInboxEventKind,
-  AgentRunFailureCause,
   ExpectedOutput,
   ULID,
 } from '@pc/domain';
+import type { AgentRunChangedReason } from '@pc/contracts';
 import {
   AgentRun,
   AgentRunRegistry,
@@ -86,10 +85,8 @@ import {
   runVerificationOnTerminal,
   type VerificationDeps,
 } from './agent-verification.ts';
-import {
-  applyAgentRunTerminalEffects,
-  describeAgentRunFailure,
-} from './agent-run-terminal-effects.ts';
+import { applyAgentRunTerminalEffects } from './agent-run-terminal-effects.ts';
+import { announceAgentRunChange } from './agent-run-writer.ts';
 
 /** Process-wide cap-and-queue registry shared by every dispatch. Lives in
  *  the runtime layer; we hold one singleton in this module so every
@@ -779,10 +776,7 @@ function failHostStart(
     completedAt,
   });
   args.podPrep.cleanup();
-  broadcastAgentRunChanged(args, 'failed', {
-    failureCause: cause,
-    endedAt: completedAt,
-  });
+  broadcastAgentRunChanged(args, 'failed');
   return { ok: false, cause, error };
 }
 
@@ -800,55 +794,53 @@ function broadcastHostRunChanged(
   args: ConstructAndStartArgs,
   snapshot: AgentHostRunSnapshot,
 ): void {
-  broadcastAgentRunChanged(args, snapshot.state, {
-    result:
-      snapshot.terminalResult?.status === 'completed'
-        ? snapshot.terminalResult.result ?? ''
-        : '',
-    failureCause:
-      snapshot.terminalResult?.status === 'completed'
-        ? null
-        : (snapshot.terminalResult?.failureCause as AgentRunFailureCause | null | undefined) ??
-          null,
-    endedAt: snapshot.terminalAt,
-  });
+  broadcastAgentRunChanged(args, snapshot.state);
 }
 
+/** Slice 005 — host-mode broadcast now routes through the gateway, which
+ *  re-reads the POST-write row for the correct rev (closes the host-mode
+ *  stale-rev issue: the record used to be built from a pre-update row). */
 function broadcastAgentRunChanged(
   args: ConstructAndStartArgs,
   status: AgentHostRunSnapshot['state'],
-  extra: {
-    result?: string;
-    failureCause?: AgentRunFailureCause | null;
-    endedAt?: number | null;
-  } = {},
 ): void {
   if (!args.deps.broadcast) return;
-  const currentRev = getAgentRunRow(args.agentRunId)?.rev ?? 0;
-  const record = {
-    runId: args.agentRunId,
-    sessionId: args.ccSessionId,
-    agentName: args.podName,
-    model: 'opus',
-    projectId: args.input.projectId,
-    parentWorkItemId: args.input.parentWorkItemId ?? null,
-    dispatcherSessionId: args.input.dispatcherSessionId,
-    wait: false,
-    worktreeDir: args.input.worktreeDir,
-    startedAt: (args.deps.now ?? Date.now)(),
-    status,
-    result: extra.result ?? '',
-    failureReason: extra.failureCause
-      ? describeAgentRunFailure(extra.failureCause) ?? null
-      : null,
-    failureCause: extra.failureCause ?? null,
-    endedAt: extra.endedAt ?? null,
-    rev: currentRev,
-  };
+  const reason = hostStateToReason(status);
   try {
-    args.deps.broadcast({ type: 'agent-run-changed', record });
+    announceAgentRunChange(
+      {
+        runId: args.agentRunId,
+        reason,
+        worktreeDir: args.input.worktreeDir,
+        startedAt: (args.deps.now ?? Date.now)(),
+      },
+      factoryBroadcast(args),
+    );
   } catch {
     /* best-effort */
+  }
+}
+
+/** Adapt the factory's `(env) => void` broadcast hook to the writer's
+ *  `(event: unknown) => void` shape. */
+function factoryBroadcast(args: ConstructAndStartArgs): ((event: unknown) => void) | undefined {
+  const b = args.deps.broadcast;
+  if (!b) return undefined;
+  return (event: unknown) => b(event as { type: string; [key: string]: unknown });
+}
+
+function hostStateToReason(state: AgentHostRunSnapshot['state']): AgentRunChangedReason {
+  switch (state) {
+    case 'queued':
+    case 'spawning':
+    case 'running':
+    case 'paused':
+    case 'completed':
+    case 'failed':
+    case 'cancelled':
+      return state;
+    default:
+      return 'reconciled';
   }
 }
 
@@ -927,44 +919,25 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
     podRevisionAtDispatch: args.podRevisionAtDispatch,
   });
 
-  // Session 10 — Activity Panel adapter shim. Build a v1-shape AgentRunRecord
-  // envelope on every state transition + emit through the broadcast hook.
-  // Provides the panel with feature parity for v2 dispatches.
+  // Session 10 — Activity Panel adapter shim. Slice 005: the durable fact is
+  // recorded through the AgentRunMutationGateway (one live_outbox row, correct
+  // post-write rev), then fanned out canonical + legacy. The DB status write
+  // already happened on each transition below; this re-reads + announces.
   const startedAt = (args.deps.now ?? Date.now)();
   const broadcastStateChanged = (
     status: 'queued' | 'spawning' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled',
-    extra: { result?: string; failureCause?: AgentRunFailureCause | null; endedAt?: number } = {},
   ): void => {
     if (!args.deps.broadcast) return;
-    // Read rev from DB after each write so the envelope carries the current
-    // monotonic version (enables frontend version-aware discard).
-    const currentRev = getAgentRunRow(args.agentRunId)?.rev ?? 0;
-    const record = {
-      runId: args.agentRunId,
-      sessionId: args.ccSessionId,
-      agentName: args.podName,
-      // Pod-row model lookup isn't load-bearing for the Activity Panel card;
-      // mirror v1's pod-less-spawn fallback so the UI's model pill renders.
-      model: 'opus',
-      projectId: args.input.projectId,
-      parentWorkItemId: args.input.parentWorkItemId ?? null,
-      dispatcherSessionId: args.input.dispatcherSessionId,
-      // v2 dispatches are always async on the wire — the wait=true sync path
-      // was a v1 artifact for nested-agent chains. Match v1's record shape.
-      wait: false,
-      worktreeDir: args.input.worktreeDir,
-      startedAt,
-      status,
-      result: extra.result ?? '',
-      failureReason: extra.failureCause
-        ? describeAgentRunFailure(extra.failureCause) ?? null
-        : null,
-      failureCause: extra.failureCause ?? null,
-      endedAt: extra.endedAt ?? null,
-      rev: currentRev,
-    };
     try {
-      args.deps.broadcast({ type: 'agent-run-changed', record });
+      announceAgentRunChange(
+        {
+          runId: args.agentRunId,
+          reason: status,
+          worktreeDir: args.input.worktreeDir,
+          startedAt,
+        },
+        factoryBroadcast(args),
+      );
     } catch {
       /* best-effort */
     }

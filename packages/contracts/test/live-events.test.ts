@@ -111,6 +111,10 @@ test('live replay query parser validates cursors, type, and clamps limit', () =>
     ok: true,
     value: { includeGlobal: false, limit: 100, type: 'workflow.definition.changed' },
   });
+  assert.deepEqual(parseListLiveEventsQuery({ type: 'agent.run.changed' }), {
+    ok: true,
+    value: { includeGlobal: false, limit: 100, type: 'agent.run.changed' },
+  });
   assert.deepEqual(parseListLiveEventsQuery({ type: 'bogus.type' }), {
     ok: false,
     error: 'unsupported live event type',

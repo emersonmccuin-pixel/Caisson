@@ -497,7 +497,11 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         context: typeof body.context === 'string' ? body.context : null,
         options: Array.isArray(body.options) ? body.options : null,
       },
-      { channelServer: deps.channelServer, slug: project.slug },
+      {
+        channelServer: deps.channelServer,
+        slug: project.slug,
+        broadcast: (env) => deps.broadcastTo(projectId, env),
+      },
     );
 
     if (!result.ok) {
@@ -542,7 +546,11 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
 
       const result = services.answerPendingAsk(
         { pendingAskId, answer, answeredBy },
-        { channelServer: deps.channelServer, slug: project.slug },
+        {
+          channelServer: deps.channelServer,
+          slug: project.slug,
+          broadcast: (env) => deps.broadcastTo(projectId, env),
+        },
       );
 
       if (!result.ok) {
@@ -581,7 +589,10 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
 
       const pendingAskId = c.req.param('askId') as ULID;
-      const result = services.cancelPendingAsk({ pendingAskId }, {});
+      const result = services.cancelPendingAsk(
+        { pendingAskId },
+        { broadcast: (env) => deps.broadcastTo(projectId, env) },
+      );
       if (!result.ok) {
         const statusFor: Record<string, number> = {
           'unknown-pending-ask': 404,

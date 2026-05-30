@@ -124,7 +124,7 @@ export function listRunsByStatus(
   return getDb()
     .select()
     .from(workflowRunsV2)
-    .where(inArray(workflowRunsV2.status, statuses as string[]))
+    .where(inArray(workflowRunsV2.status, statuses as WorkflowV2.WorkflowRunStatus[]))
     .orderBy(asc(workflowRunsV2.createdAt))
     .all() as WorkflowRunV2Record[];
 }

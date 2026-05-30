@@ -11,7 +11,11 @@ export type LiveOutboxEntity =
   | 'work-item'
   | 'stage'
   | 'field-schema'
-  | 'attachment';
+  | 'attachment'
+  | 'workflow-definition'
+  | 'workflow-run'
+  | 'workflow-review'
+  | 'agent-run';
 
 export interface InsertLiveEventDraft<TPayload = unknown> {
   id?: ULID;

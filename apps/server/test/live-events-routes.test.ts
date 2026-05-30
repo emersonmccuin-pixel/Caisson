@@ -117,3 +117,57 @@ test('live event replay route returns project.changed rows after cursor and filt
   assert.deepEqual(body.events.map((event) => event.id), [global.id, scopedP1.id]);
   assert.equal(body.nextCursor, scopedP1.cursor);
 });
+
+test('replay returns project-scoped agent.run.changed after cursor + excludes other projects', async () => {
+  const app = new Hono();
+  registerLiveEventRoutes(app);
+  const p1 = createProject({
+    slug: `ar-p1-${Date.now()}`,
+    name: 'AR P1',
+    stages,
+    folderPath: join(tmpDir, 'ar-p1'),
+  });
+  const p2 = createProject({
+    slug: `ar-p2-${Date.now()}`,
+    name: 'AR P2',
+    stages,
+    folderPath: join(tmpDir, 'ar-p2'),
+  });
+  const after = (await json<{ nextCursor: string | null }>(
+    await app.request('/api/live-events'),
+  )).nextCursor ?? '0';
+
+  const runP1 = insertLiveEvent(getDb(), {
+    scope: 'project',
+    projectId: p1.id,
+    type: 'agent.run.changed',
+    entity: 'agent-run',
+    entityId: 'run-p1',
+    version: 2,
+    payload: { reason: 'running' },
+  });
+  insertLiveEvent(getDb(), {
+    scope: 'project',
+    projectId: p2.id,
+    type: 'agent.run.changed',
+    entity: 'agent-run',
+    entityId: 'run-p2',
+    version: 1,
+    payload: { reason: 'running' },
+  });
+
+  const res = await app.request(
+    `/api/live-events?after=${after}&projectId=${p1.id}&type=agent.run.changed`,
+  );
+  const body = await json<{ ok: true; events: Array<{ id: string; type: string }> }>(res);
+  assert.equal(res.status, 200);
+  assert.deepEqual(body.events.map((e) => e.id), [runP1.id]);
+  assert.equal(body.events[0].type, 'agent.run.changed');
+});
+
+test('replay rejects an unsupported live event type with 400', async () => {
+  const app = new Hono();
+  registerLiveEventRoutes(app);
+  const res = await app.request('/api/live-events?type=agent.bogus');
+  assert.equal(res.status, 400);
+});

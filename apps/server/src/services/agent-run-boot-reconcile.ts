@@ -8,6 +8,8 @@ import {
 } from '@pc/domain';
 import type { AgentHostRunSnapshot } from '@pc/runtime';
 import { jsonlPathFor } from '@pc/runtime';
+
+import { announceAgentRunChange } from './agent-run-writer.ts';
 import {
   getProjectById as defaultGetProjectById,
   hasOpenPendingAskForRun as defaultHasOpenPendingAskForRun,
@@ -73,31 +75,18 @@ export function reconcileAgentRunsOnBoot(
     const legacyReconcile = deps.legacyReconcile;
 
     if (deps.broadcast) {
-      // Announcing path: list rows, bulk-update, broadcast each one so the
-      // right rail reflects the server-restart failure without a refresh.
+      // Announcing path: list rows, bulk-update, then announce each through the
+      // gateway (slice 005) so the durable agent.run.changed (reason:'reconciled')
+      // fact lands in the live_outbox + the right rail reflects the
+      // server-restart failure without a refresh. The row flip already happened
+      // in `listAndReconcile`; `announceAgentRunChange` re-reads for the rev.
       const affectedRows = listAndReconcile(now);
+      const broadcast = deps.broadcast;
       for (const row of affectedRows) {
-        deps.broadcast(row.projectId, {
-          type: 'agent-run-changed',
-          record: {
-            runId: row.id,
-            sessionId: row.ccSessionId,
-            agentName: row.podName,
-            model: 'opus',
-            projectId: row.projectId,
-            parentWorkItemId: row.parentWorkItemId,
-            dispatcherSessionId: row.dispatcherSessionId,
-            wait: false,
-            worktreeDir: '',
-            startedAt: row.queuedAt,
-            status: row.status,
-            result: '',
-            failureReason: row.failureReason,
-            failureCause: row.failureCause,
-            endedAt: row.completedAt,
-            rev: row.rev,
-          },
-        });
+        announceAgentRunChange(
+          { runId: row.id, reason: 'reconciled', startedAt: row.queuedAt },
+          (event) => broadcast(row.projectId, event),
+        );
       }
       const reconciled = affectedRows.length;
       return {

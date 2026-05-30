@@ -38,17 +38,13 @@ import { existsSync } from 'node:fs';
 
 import {
   computePodRevision,
-  createPendingAsk,
   findActiveContinuation,
   getAgentRunRow,
   getPendingAsk,
   getProjectById,
   insertAgentRunRow,
   markAgentRunTerminal,
-  markPendingAskAnswered,
-  markPendingAskCancelled,
   newId,
-  updateAgentRunStatus,
 } from '@pc/db';
 import { jsonlPathFor } from '@pc/runtime';
 import type {
@@ -62,6 +58,12 @@ import { buildAgentEventHeader } from './agent-event-header.ts';
 import { enqueueAndPush } from './agent-delivery.ts';
 import { getActiveRunRegistry, type ActiveRunRegistry } from './agent-active-runs.ts';
 import type { ChannelServer } from './channel-server.ts';
+import {
+  answerAndResumeAgentRun,
+  cancelAgentRun,
+  commitAgentRunTerminal,
+  pauseAgentRun,
+} from './agent-run-writer.ts';
 
 // ──────────────────────────── EXPLICIT PAUSE ──────────────────────────────
 
@@ -93,6 +95,9 @@ export interface PauseResumeDeps {
   sender?: string;
   /** Active-run lookup. Defaults to the process-wide singleton. */
   registry?: ActiveRunRegistry;
+  /** Slice 005 — per-project WS fanout for the durable agent.run.changed fact
+   *  (canonical frame + legacy `agent-run-changed`). Tests can omit (no-op). */
+  broadcast?: (event: unknown) => void;
   /** Test seam: override the "is JSONL still on disk?" check. */
   jsonlExists?: (path: string) => boolean;
   /** Test seam: override now(). */
@@ -128,22 +133,31 @@ export function recordExplicitPause(
   }
 
   const pendingAskId = newId();
-  createPendingAsk({
-    id: pendingAskId,
-    agentRunId: input.agentRunId,
-    ccSessionId: entry.ccSessionId,
-    projectId: entry.projectId,
-    parentWorkItemId: entry.parentWorkItemId,
-    kind: input.kind,
-    promptBody: input.promptBody,
-    context: input.context ?? null,
-    options: input.options ?? null,
-    now,
-  });
 
-  // Mark the run paused (active handle state machine + persisted row).
+  // Slice 005 — write the open ask + the `paused` run transition + the durable
+  // agent.run.changed (reason:'paused', pendingAskId) fact in ONE transaction
+  // through the gateway, then fan out canonical + legacy. The runtime markPaused
+  // + the agent-asks-* delivery stay post-commit (best-effort).
+  pauseAgentRun(
+    {
+      pendingAsk: {
+        id: pendingAskId,
+        agentRunId: input.agentRunId,
+        ccSessionId: entry.ccSessionId,
+        projectId: entry.projectId,
+        parentWorkItemId: entry.parentWorkItemId,
+        kind: input.kind,
+        promptBody: input.promptBody,
+        context: input.context ?? null,
+        options: input.options ?? null,
+        now,
+      },
+    },
+    deps.broadcast,
+  );
+
+  // Mark the run paused in the runtime state machine (post-commit).
   entry.run.markPaused(pendingAskId);
-  updateAgentRunStatus({ id: input.agentRunId, status: 'paused' });
 
   // Deliver the agent-asks-* event to the dispatcher session.
   const kindMap: Record<PendingAskKind, AgentInboxEventKind> = {
@@ -247,21 +261,11 @@ export function answerPendingAsk(
     };
   }
 
-  // Atomic flip — JSONL-replay-safe.
-  const flipped = markPendingAskAnswered({
-    id: ask.id,
-    answer: input.answer,
-    answeredBy: input.answeredBy,
-    now,
-  });
-  if (!flipped) {
-    return {
-      ok: false,
-      error: `pending-ask ${input.pendingAskId} was answered concurrently`,
-      cause: 'already-answered',
-    };
-  }
-
+  // Slice 005 — validate resumability BEFORE the open->answered flip so a
+  // non-resumable answer does NOT strand an answered ask (closes handoff High
+  // issue #1). The atomic `WHERE status='open'` flip then happens inside the
+  // gateway tx (JSONL-replay-safe: a replayed answer is a no-op → emits
+  // nothing).
   const entry = reg.get(ask.agentRunId);
   if (!entry) {
     return {
@@ -285,21 +289,48 @@ export function answerPendingAsk(
     projectId: projectIdForPod,
   });
 
-  // Persist the spawning transition + drift field BEFORE driving the run,
-  // so a crash mid-resume leaves the row in a recoverable state.
-  updateAgentRunStatus({
-    id: ask.agentRunId,
-    status: 'spawning',
-    spawnedAt: now,
-    podRevisionAtResume,
-  });
+  // Atomic flip (open->answered) + persist `spawning` + drift field + the
+  // durable agent.run.changed (reason:'resumed') fact, all in ONE transaction
+  // through the gateway. A no-op flip (concurrent/replayed answer) returns null.
+  const pub = answerAndResumeAgentRun(
+    {
+      pendingAskId: ask.id,
+      agentRunId: ask.agentRunId,
+      answer: input.answer,
+      answeredBy: input.answeredBy,
+      now,
+      podRevisionAtResume,
+      worktreeDir: '',
+    },
+    deps.broadcast,
+  );
+  if (!pub) {
+    return {
+      ok: false,
+      error: `pending-ask ${input.pendingAskId} was answered concurrently`,
+      cause: 'already-answered',
+    };
+  }
 
   // Drive the run. The active handle transitions paused -> spawning ->
   // running and constructs a fresh LowLevelSpawn in resume mode with the
-  // answer as the typed first user turn in in-process mode.
+  // answer as the typed first user turn in in-process mode. A post-flip resume
+  // failure finalizes the run through the gateway to a recoverable terminal
+  // state rather than leaving an answered ask with a stuck run.
   try {
     entry.run.resumeWithAnswer(input.answer);
   } catch (err) {
+    commitAgentRunTerminal(
+      {
+        runId: ask.agentRunId,
+        status: 'failed',
+        result: null,
+        failureCause: 'spawn-error',
+        failureReason: `resume failed: ${(err as Error).message}`,
+        completedAt: (deps.now ?? Date.now)(),
+      },
+      deps.broadcast,
+    );
     return {
       ok: false,
       error: `resume failed: ${(err as Error).message}`,
@@ -336,7 +367,7 @@ export type CancelPendingAskResult =
  *  second cancel returns `already-terminal`. */
 export function cancelPendingAsk(
   input: CancelPendingAskInput,
-  deps: Pick<PauseResumeDeps, 'registry' | 'now'>,
+  deps: Pick<PauseResumeDeps, 'registry' | 'now' | 'broadcast'>,
 ): CancelPendingAskResult {
   const reg = deps.registry ?? getActiveRunRegistry();
   const now = (deps.now ?? Date.now)();
@@ -357,7 +388,20 @@ export function cancelPendingAsk(
     };
   }
 
-  markPendingAskCancelled(ask.id, now);
+  // Slice 005 — finalize the agent_runs row to `cancelled` durably (+ cancel the
+  // open ask) in ONE transaction through the gateway EVEN WHEN no registry
+  // handle exists (phantom paused run — closes handoff High issue #2), then fan
+  // out canonical + legacy. The runtime cancel is best-effort post-commit.
+  cancelAgentRun(
+    {
+      runId: ask.agentRunId,
+      now,
+      failureCause: 'cancelled',
+      failureReason: 'pending ask cancelled',
+      cancelOpenAsk: ask.id,
+    },
+    deps.broadcast,
+  );
 
   const entry = reg.get(ask.agentRunId);
   if (entry) entry.run.cancel();
