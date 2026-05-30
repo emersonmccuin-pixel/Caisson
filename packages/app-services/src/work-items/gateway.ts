@@ -37,7 +37,7 @@ import {
   type InsertLiveEventDraft,
   type LiveOutboxEvent,
 } from '@pc/db';
-import type { FieldSchema, Stage, WorkItem } from '@pc/domain';
+import type { FieldSchema, Stage, ULID as DomainULID, WorkItem } from '@pc/domain';
 import {
   toAttachmentDto,
   toFieldSchemaDto,
@@ -85,10 +85,10 @@ export function buildWorkItemChangedDraft(input: {
   if (input.attachments) payload.attachments = input.attachments;
   return {
     scope: 'project',
-    projectId: input.projectId,
+    projectId: input.projectId as DomainULID,
     type: 'work-item.changed',
     entity: 'work-item',
-    entityId: input.workItem.id,
+    entityId: input.workItem.id as DomainULID,
     version: input.workItem.version,
     payload,
   };
@@ -101,7 +101,7 @@ export function buildStageListChangedDraft(input: {
 }): InsertLiveEventDraft<StageListChangedLivePayload> {
   return {
     scope: 'project',
-    projectId: input.projectId,
+    projectId: input.projectId as DomainULID,
     type: 'stage.list.changed',
     entity: 'stage',
     entityId: null,
@@ -116,7 +116,7 @@ export function buildFieldSchemaListChangedDraft(input: {
 }): InsertLiveEventDraft<FieldSchemaListChangedLivePayload> {
   return {
     scope: 'project',
-    projectId: input.projectId,
+    projectId: input.projectId as DomainULID,
     type: 'field-schema.list.changed',
     entity: 'field-schema',
     entityId: null,
@@ -139,10 +139,10 @@ export function buildAttachmentChangedDraft(input: {
   if (input.attachment) payload.attachment = input.attachment;
   return {
     scope: 'project',
-    projectId: input.projectId,
+    projectId: input.projectId as DomainULID,
     type: 'attachment.changed',
     entity: 'attachment',
-    entityId: input.attachmentId,
+    entityId: input.attachmentId as DomainULID,
     version: null,
     payload,
   };
@@ -226,7 +226,7 @@ export class WorkItemMutationGateway {
     reason: WorkItemMutationReason;
     workItemId: ULID;
   }): ({ workItem: WorkItemDto } & WorkItemChangedPublication) | null {
-    const wi = dbGetWorkItem(input.workItemId);
+    const wi = dbGetWorkItem(input.workItemId as DomainULID);
     if (!wi) return null;
     return this.announceWorkItemChange({
       projectId: input.projectId,

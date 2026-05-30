@@ -71,7 +71,6 @@ export function toStageDto(stage: Stage): StageDto {
     name: stage.name,
     position: stage.order,
   };
-  if (stage.color !== undefined) dto.color = stage.color;
   if (stage.isNew !== undefined) dto.isNew = stage.isNew;
   if (stage.isDone !== undefined) dto.isDone = stage.isDone;
   if (stage.isCancelled !== undefined) dto.isCancelled = stage.isCancelled;
