@@ -248,10 +248,10 @@ export type AnswerPendingAskResult =
  *  AgentRun by typing the answer back through a fresh LowLevelSpawn in
  *  resume mode. Same agent_run_id; the run record continues across the
  *  pause boundary. */
-export function answerPendingAsk(
+export async function answerPendingAsk(
   input: AnswerPendingAskInput,
   deps: PauseResumeDeps,
-): AnswerPendingAskResult {
+): Promise<AnswerPendingAskResult> {
   const reg = deps.registry ?? getActiveRunRegistry();
   const now = (deps.now ?? Date.now)();
 
@@ -334,8 +334,15 @@ export function answerPendingAsk(
   // answer as the typed first user turn in in-process mode. A post-flip resume
   // failure finalizes the run through the gateway to a recoverable terminal
   // state rather than leaving an answered ask with a stuck run.
+  //
+  // Slice 009 OBJ-2 — host path: `resumeWithAnswer` now AWAITS the host command
+  // and reports a `not-resumable` reply (the host run was not actually paused,
+  // so the answer was dropped). On that result we finalize the run here instead
+  // of leaving it stranded `running` for the idle sweep. In-process always
+  // returns `ok` (resumability was pre-validated above).
+  let resume: Awaited<ReturnType<typeof entry.run.resumeWithAnswer>>;
   try {
-    entry.run.resumeWithAnswer(input.answer);
+    resume = await entry.run.resumeWithAnswer(input.answer);
   } catch (err) {
     commitAgentRunTerminal(
       {
@@ -351,6 +358,24 @@ export function answerPendingAsk(
     return {
       ok: false,
       error: `resume failed: ${(err as Error).message}`,
+      cause: 'resume-failed',
+    };
+  }
+  if (!resume.ok) {
+    commitAgentRunTerminal(
+      {
+        runId: ask.agentRunId,
+        status: 'failed',
+        result: null,
+        failureCause: 'spawn-error',
+        failureReason: `resume failed: ${resume.error}`,
+        completedAt: (deps.now ?? Date.now)(),
+      },
+      deps.broadcast,
+    );
+    return {
+      ok: false,
+      error: `resume failed: ${resume.error}`,
       cause: 'resume-failed',
     };
   }

@@ -562,7 +562,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         return c.json({ ok: false, error: 'answeredBy must be orchestrator | user' }, 400);
       }
 
-      const result = services.answerPendingAsk(
+      const result = await services.answerPendingAsk(
         { pendingAskId, answer, answeredBy },
         {
           channelServer: deps.channelServer,

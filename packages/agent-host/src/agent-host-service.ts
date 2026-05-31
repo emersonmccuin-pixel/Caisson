@@ -359,8 +359,41 @@ export class AgentHostService extends EventEmitter {
       );
     }
 
+    // Slice 009 OBJ-2 — `_resumeWithAnswer` silently no-ops if the host-side run
+    // is not `paused` (or is `cancelling`); the answer is then never threaded as
+    // the next user turn and the server, on a stale-snapshot `ok`, leaves the run
+    // stranded `running` until the idle sweep. Observe the state transition: if
+    // the run did not leave `paused`, surface a typed `not-resumable` error so the
+    // server finalizes via `resume-failed` instead of stranding.
+    const stateBefore = entry.run.getState();
+    // SLICE-009 OBJ-2: live-trace needed to confirm paused-state-loss branch — see plan §13.
+    // This gated log is the instrumentation the human review captures (the deep
+    // "keep the host run paused across its own spawn exit" recovery fix is deferred).
+    if (process.env.PC_DEBUG_HOST_RESUME) {
+      console.warn(
+        `[agent-host] answer-pending run=${runId} stateBefore=${stateBefore}`,
+      );
+    }
     entry.run._resumeWithAnswer(text);
+    const stateAfter = entry.run.getState();
     entry.updatedAt = this.now();
+    if (process.env.PC_DEBUG_HOST_RESUME) {
+      console.warn(
+        `[agent-host] answer-pending run=${runId} stateAfter=${stateAfter}`,
+      );
+    }
+
+    // The run transitions paused -> spawning -> ... on a successful resume. If it
+    // is still `paused` after the call, `_resumeWithAnswer` was a no-op (run not
+    // resumable) and the answer was dropped.
+    if (stateAfter === 'paused') {
+      return this.error(
+        'answer-pending',
+        'not-resumable',
+        `run ${runId} was not resumable (state ${stateBefore})`,
+      );
+    }
+
     return {
       ok: true,
       command: 'answer-pending',

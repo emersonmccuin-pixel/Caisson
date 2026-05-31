@@ -198,5 +198,12 @@ export async function sendBracketedPaste(
     }
     await sleep(ECHO_POLL_MS);
   }
+  // Slice 009 OBJ-3 — echo never landed: the bracketed-paste body is sitting
+  // un-submitted in claude.exe's composer. Clear it (Escape, the existing
+  // graceful composer reset used by LowLevelSpawn.interrupt) so it can't glue
+  // onto the next send's paste. Do NOT write `\r` — submitting unverified text
+  // is the anti-criteria this protocol exists to avoid. The caller still treats
+  // the send as failed via the 'echo-timeout' return.
+  if (!deps.isExited()) deps.write('\x1b');
   return 'echo-timeout';
 }

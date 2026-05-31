@@ -108,7 +108,10 @@ export type AgentHostCommandErrorCode =
   | 'run-exists'
   | 'send-failed'
   | 'unsupported'
-  | 'host-shutting-down';
+  | 'host-shutting-down'
+  // Slice 009 OBJ-2 — answer-pending arrived but the host run was not in a
+  // resumable state (`_resumeWithAnswer` no-op), so the answer was not threaded.
+  | 'not-resumable';
 
 export type AgentHostCommandResponse =
   | {

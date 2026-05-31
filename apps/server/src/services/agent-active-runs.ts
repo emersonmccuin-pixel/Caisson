@@ -23,13 +23,22 @@ import type {
   AgentRunState,
 } from '@pc/runtime';
 
+/** Slice 009 OBJ-2 — the outcome of threading an answer into a paused run.
+ *  In-process resume is synchronous and (post pre-validation) always `ok`. The
+ *  host path awaits the host command response and maps a `not-resumable` /
+ *  failed reply so the server can finalize via `resume-failed` instead of
+ *  stranding the run `running`. */
+export type ResumeWithAnswerResult =
+  | { ok: true }
+  | { ok: false; cause: 'not-resumable' | 'host-error'; error: string };
+
 export interface ActiveRunHandle {
   getRecord(): Pick<AgentRunRecord, 'agentRunId'>;
   getState(): AgentRunState;
   cancel(): void;
   notifyMcpHandshake(): void;
   markPaused(askId: string): void;
-  resumeWithAnswer(answer: string): void;
+  resumeWithAnswer(answer: string): Promise<ResumeWithAnswerResult>;
   onTerminal(listener: () => void): void;
 }
 
@@ -40,7 +49,13 @@ export function activeRunHandleForAgentRun(run: AgentRun): ActiveRunHandle {
     cancel: () => run.cancel(),
     notifyMcpHandshake: () => run.notifyMcpHandshake(),
     markPaused: (askId) => run._markPaused(askId),
-    resumeWithAnswer: (answer) => run._resumeWithAnswer(answer),
+    // In-process: `answerPendingAsk` pre-validates `state==='paused'`, so this
+    // drives the resume synchronously; a spawn failure surfaces async through
+    // the run's own terminal path. Always reports `ok` here.
+    resumeWithAnswer: async (answer) => {
+      run._resumeWithAnswer(answer);
+      return { ok: true };
+    },
     onTerminal: (listener) => {
       run.once('terminal', listener);
     },
@@ -102,12 +117,32 @@ export class HostBackedActiveRunHandle implements ActiveRunHandle {
     this.issue({ type: 'mark-paused', runId: this.snapshot.runId, askId });
   }
 
-  resumeWithAnswer(answer: string): void {
-    this.issue({
+  async resumeWithAnswer(answer: string): Promise<ResumeWithAnswerResult> {
+    // Slice 009 OBJ-2 — AWAIT the host command (not fire-and-forget) so the
+    // server can observe a `not-resumable` reply and finalize the run instead of
+    // stranding it `running`. Still applies the returned snapshot on success.
+    const command: AgentHostCommand = {
       type: 'answer-pending',
       runId: this.snapshot.runId,
       text: answer,
-    });
+    };
+    try {
+      const response = await Promise.resolve(this.host.sendCommand(command));
+      if (!response) return { ok: true };
+      if (response.ok) {
+        this.applyCommandResponse(response);
+        return { ok: true };
+      }
+      return {
+        ok: false,
+        cause: response.code === 'not-resumable' ? 'not-resumable' : 'host-error',
+        error: response.error,
+      };
+    } catch (err) {
+      this.reportCommandError(err, command);
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, cause: 'host-error', error: message };
+    }
   }
 
   onTerminal(listener: () => void): void {

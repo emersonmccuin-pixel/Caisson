@@ -363,6 +363,72 @@ channelServer.start();
   }
 }
 
+// ── Slice 009 — mailbox value bindings RELOCATED above the boot handlers ──
+// The boot-reattach / reconcile-sweep / liveness-sweep handlers below apply
+// host terminals and must carry the agent delivery gate + mailbox port. They
+// run AT boot (the reattach is an inline await that can apply a terminal
+// synchronously), so a lazy reference to these bindings would hit the const
+// TDZ. Constructing them here (before :369) removes the hazard. The mailbox
+// ROUTES + worker setInterval + boot sweeps stay at their original sites; only
+// these six value bindings moved up. All closed-over values are available here:
+// broadcastTo (:198), broadcastAll (:207), broadcastSendQueueSnapshot (:217),
+// buildLiveEventFrame/parseMailboxAddress (imported), getMailboxMessage/
+// getMailboxRecipient (imported), resolveProject (hoisted fn :466, called only
+// at delivery time inside these closures).
+const mailboxService = new MailboxService();
+
+// Mailbox `orchestrator-turn` delivery: a ConversationSendService whose deps
+// dispatch by projectId through the project registry. Only `enqueueRuntimeTurn`
+// is exercised by the worker (never a raw send; the queue drains the row).
+const mailboxSendService = new ConversationSendService({
+  getPort: (projectId) => resolveProject(projectId)?.ptySession() ?? null,
+  ensurePort: (projectId) => {
+    const runtime = resolveProject(projectId);
+    if (!runtime) throw new Error(`unknown project: ${projectId}`);
+    return runtime.ensurePty();
+  },
+  ensureActiveSession: (projectId) => {
+    const runtime = resolveProject(projectId);
+    if (!runtime) throw new Error(`unknown project: ${projectId}`);
+    return runtime.ensureActiveSession();
+  },
+  broadcastSendQueueSnapshot,
+});
+const mailboxOrchestratorTurnAdapter = new MailboxOrchestratorTurnAdapter(mailboxSendService);
+
+const mailboxWorker = new MailboxWorker({
+  service: mailboxService,
+  orchestratorTurn: mailboxOrchestratorTurnAdapter,
+  broadcast: (projectId, event) => {
+    if (projectId === null) broadcastAll(event);
+    else broadcastTo(projectId, event);
+  },
+  getMessageProjectId: (messageId) => getMailboxMessage(messageId)?.projectId ?? null,
+  getRecipientAddress: (recipientId) => {
+    const row = getMailboxRecipient(recipientId);
+    if (!row) return null;
+    const parsed = parseMailboxAddress(row.addressJson);
+    return parsed.ok ? parsed.value : null;
+  },
+  getMessageBody: (messageId) => getMailboxMessage(messageId)?.body ?? null,
+});
+
+// ── Slice 008 — Channel→mailbox cutover gate (default channel; reversible) ──
+// Each flow's mode is read from env (PC_DELIVERY_AGENT / _WORKFLOW_REVIEW /
+// _WEBHOOK), defaulting to `channel`. With no env set, delivery is byte-
+// identical to today. The cutover senders enqueue through this port which
+// commits the message + fans out the canonical mailbox.message.changed frame;
+// the slice-007 worker then drains the delivery + fans delivery frames.
+const deliveryRouter = envDeliveryRouter();
+
+function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqueuePublication {
+  const pub = mailboxService.enqueue(input);
+  const frame = buildLiveEventFrame(pub.liveEvent);
+  if (pub.message.projectId === null) broadcastAll(frame);
+  else broadcastTo(pub.message.projectId, frame);
+  return pub;
+}
+
 // Boot-time agent-run reconciliation. Phase C can reattach through an
 // already-connected host client; until Phase D supplies that client, this
 // preserves the legacy idempotent orphan sweep.
@@ -371,6 +437,8 @@ channelServer.start();
     const result = await reattachAgentRunsDuringServerBoot({
       broadcast: broadcastTo,
       channelServer,
+      deliveryRouter,
+      mailboxEnqueue: enqueueMailboxAndFanout,
     });
     if (result.mode === 'host') {
       agentHostClientForDispatch = result.hostClient;
@@ -414,6 +482,8 @@ const agentRunReconcileSweep = setInterval(() => {
         hostClient: client,
         broadcast: broadcastTo,
         channelServer,
+        deliveryRouter,
+        mailboxEnqueue: enqueueMailboxAndFanout,
       });
       if (res.terminalApplied > 0 || res.statusUpdated > 0) {
         console.log(
@@ -443,6 +513,8 @@ const agentRunLivenessSweep = setInterval(() => {
       activeRunRegistry: getActiveRunRegistry(),
       channelServer,
       broadcast: broadcastTo,
+      deliveryRouter,
+      mailboxEnqueue: enqueueMailboxAndFanout,
     });
     if (res.failedDead > 0 || res.failedIdle > 0) {
       console.log(
@@ -474,7 +546,12 @@ registerMcpBridgeRoutes(app, {
 });
 
 // ── Slice 007 — mailbox platform (additive; alongside Channel, no cutover) ──
-const mailboxService = new MailboxService();
+// NOTE (slice 009): the mailbox VALUE bindings (mailboxService,
+// mailboxSendService, mailboxOrchestratorTurnAdapter, mailboxWorker,
+// deliveryRouter, enqueueMailboxAndFanout) were RELOCATED above the boot
+// handlers (~:366) so the boot-reattach/reconcile/liveness handlers can carry
+// the agent delivery gate without a const TDZ. The routes + worker setInterval
+// stay here.
 const pendingInteractionService = new PendingInteractionService();
 const askShadow = new AskShadow({ interactions: pendingInteractionService, broadcastTo });
 
@@ -486,64 +563,12 @@ registerChatBridgeRoutes(app, {
   askShadow,
 });
 
-// Mailbox `orchestrator-turn` delivery: a ConversationSendService whose deps
-// dispatch by projectId through the project registry. Only `enqueueRuntimeTurn`
-// is exercised by the worker (never a raw send; the queue drains the row).
-const mailboxSendService = new ConversationSendService({
-  getPort: (projectId) => resolveProject(projectId)?.ptySession() ?? null,
-  ensurePort: (projectId) => {
-    const runtime = resolveProject(projectId);
-    if (!runtime) throw new Error(`unknown project: ${projectId}`);
-    return runtime.ensurePty();
-  },
-  ensureActiveSession: (projectId) => {
-    const runtime = resolveProject(projectId);
-    if (!runtime) throw new Error(`unknown project: ${projectId}`);
-    return runtime.ensureActiveSession();
-  },
-  broadcastSendQueueSnapshot,
-});
-const mailboxOrchestratorTurnAdapter = new MailboxOrchestratorTurnAdapter(mailboxSendService);
-
-const mailboxWorker = new MailboxWorker({
-  service: mailboxService,
-  orchestratorTurn: mailboxOrchestratorTurnAdapter,
-  broadcast: (projectId, event) => {
-    if (projectId === null) broadcastAll(event);
-    else broadcastTo(projectId, event);
-  },
-  getMessageProjectId: (messageId) => getMailboxMessage(messageId)?.projectId ?? null,
-  getRecipientAddress: (recipientId) => {
-    const row = getMailboxRecipient(recipientId);
-    if (!row) return null;
-    const parsed = parseMailboxAddress(row.addressJson);
-    return parsed.ok ? parsed.value : null;
-  },
-  getMessageBody: (messageId) => getMailboxMessage(messageId)?.body ?? null,
-});
-
 registerMailboxRoutes(app, {
   mailbox: mailboxService,
   interactions: pendingInteractionService,
   broadcastTo,
   broadcastAll,
 });
-
-// ── Slice 008 — Channel→mailbox cutover gate (default channel; reversible) ──
-// Each flow's mode is read from env (PC_DELIVERY_AGENT / _WORKFLOW_REVIEW /
-// _WEBHOOK), defaulting to `channel`. With no env set, delivery is byte-
-// identical to today. The cutover senders enqueue through this port which
-// commits the message + fans out the canonical mailbox.message.changed frame;
-// the slice-007 worker then drains the delivery + fans delivery frames.
-const deliveryRouter = envDeliveryRouter();
-
-function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqueuePublication {
-  const pub = mailboxService.enqueue(input);
-  const frame = buildLiveEventFrame(pub.liveEvent);
-  if (pub.message.projectId === null) broadcastAll(frame);
-  else broadcastTo(pub.message.projectId, frame);
-  return pub;
-}
 
 // Flow B — workflow-review cutover seam. Hoisted so the ProjectRegistry built at
 // boot can reference it; the body runs at workflow-fire time so the const

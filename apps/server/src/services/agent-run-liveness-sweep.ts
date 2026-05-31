@@ -27,6 +27,8 @@ import { jsonlPathFor } from '@pc/runtime';
 
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
 import type { ChannelServer } from './channel-server.ts';
+import type { MailboxEnqueuePort } from './agent-delivery.ts';
+import type { DeliveryRouter } from './delivery-routing.ts';
 import { applyAgentRunTerminalEffects } from './agent-run-terminal-effects.ts';
 import { isProcessAlive as defaultIsProcessAlive, killProcessTree as defaultKill } from './process-control.ts';
 
@@ -38,6 +40,12 @@ const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60_000;
 export interface LivenessSweepDeps {
   activeRunRegistry?: ActiveRunRegistry;
   channelServer?: ChannelServer;
+  /** Slice 009 — per-flow delivery gate (default channel). Forwarded so a
+   *  swept terminal honors the agent gate instead of always taking Channel. */
+  deliveryRouter?: DeliveryRouter;
+  /** Slice 009 — mailbox enqueue port; only consulted when the agent gate
+   *  resolves to `mailbox`. Omit to force the Channel path. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
   broadcast?: (projectId: ULID, msg: unknown) => void;
   now?: () => number;
   idleTimeoutMs?: number;
@@ -140,6 +148,8 @@ function finalize(
     {
       activeRunRegistry: deps.activeRunRegistry,
       channelServer: deps.channelServer,
+      deliveryRouter: deps.deliveryRouter,
+      mailboxEnqueue: deps.mailboxEnqueue,
       broadcast: deps.broadcast,
       now: deps.now,
     },
