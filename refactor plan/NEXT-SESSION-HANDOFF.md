@@ -1,11 +1,27 @@
 # Next Session Handoff — refactor/auto-pathway
 
-**Read this FIRST.** Written 2026-05-31 to resume with fresh context.
+**Read this FIRST.** Updated 2026-05-31 (session: full 001–008 review + 2 fixes + design decisions).
 
 ## Do this session, in order
-1. **Run the full test checklist for ALL slices (001–008) via agents, BEFORE building more.** See "Full checklist" below. Drive the web UI at `http://127.0.0.1:5173` with the **Playwright MCP** (load `mcp__playwright__browser_*` via ToolSearch) + API/`curl` triggers, dispatched as **opus** verification subagents. Report pass/fail per slice. Two browser tabs for propagation checks.
-2. **Discuss the two open design questions** (see "Open design questions").
-3. **Then resume the pathway:** next is **slice 009 (runtime-host split)** — also fixes the logged host-resume bug. plan → build via opus subagents → human review.
+1. **On the gated relaunch, behaviorally confirm the slice-008 host-cutover fix** (`e22456d2`). The fix was unit-proven (`agent-host-terminal-gate.test.ts`, would fail pre-fix) but NOT yet confirmed in the live app. Relaunch `PC_DELIVERY_AGENT=mailbox … pnpm dev:app`, dispatch a real agent, confirm its completion arrives as ONE orchestrator turn via mailbox (`mailbox/deliveries` shows `orchestrator-turn` `accepted`, `agent_delivery_audit` driver=mailbox), no Channel push.
+2. **Then resume the pathway: slice 009 (runtime-host split).** plan → build via opus subagents → human review. 009 also: (a) fixes the logged host-resume answer-strand bug, (b) is the home for the DEFERRED slice-008 recovery-path gate-wiring (boot-reattach/liveness honor the agent gate — needs the boot-order/lazy-port refactor), and (c) is the home for the DEFERRED slice-006 echo-timeout composer recovery (the gluing root in `send-protocol.ts`).
+3. **Q2 (mailbox replaces "Waiting on you") = its own slice AFTER 009.** See decisions below.
+
+## Done this session (2026-05-31)
+- **Full 001–008 checklist run via opus Playwright/API subagents.** Verdicts below.
+- **Slice-008 hotfix `e22456d2`** — host agent completions now honor the mailbox gate (the cutover was silently no-op'ing to Channel for the dominant host path).
+- **Slice-006 re-fix `1f9f4262`** — send queue self-heals the echo-timeout wedge (FIFO fallback when exact-text correlation misses).
+- **Q1 decided + documented** — `refactor plan/mailbox-message-catalog.md` (one universal feed, UI-routed by `kind` later; no schema change).
+
+## 001–008 review verdicts
+- 001 Projects ✅ (defect: project restore has no UI/API path + misleading "restorable" copy; minor setState-in-render warning on archive)
+- 002 Project live outbox ✅ (LIVE propagation)
+- 003 Work items ✅ (LIVE; approve/reject + attachment-create ride the agent-contract flow, no board UI — expected)
+- 004 Workflows ⚠️ (fire/progress/edit ✅ LIVE; **no run-level cancel surface** — killing the agent orphans the parent run; approve/reject untested = cost)
+- 005 Agent runs ⚠️ (dispatch + reconnect ✅; **`/agent-runs/{id}/cancel` 404s for host-backed runs** — host-not-aware family; pause/answer not cheaply forced)
+- 006 Chat/send queue ✅ after re-fix (reconnect + resume ✅; wedge fixed `1f9f4262`; coalesce-while-busy is by design; echo-timeout gluing root deferred → 009)
+- 007 Mailbox ✅ (inbox renders, project + global messages, read/dismiss, pending-interaction shadow open→answered, dead-letter mechanism present; live push intermittent = known)
+- 008 Cutover ✅ after hotfix (webhook→mailbox ✅; agent→mailbox fixed `e22456d2`; workflow-review→mailbox untested = cost)
 
 ## Process (see `definitive-session-pathway.md` → "How We Run This")
 - Live in-session; Claude dispatches **subagents** for plan + build. **Planners AND builds run on opus** — set `model: "opus"` explicitly, never sonnet.
@@ -57,15 +73,19 @@ Two windows (A/B) for propagation. Gates = mailbox for the cutover items.
 
 ## Known deferred defects (also in `refactor-session-tracker.md`)
 - **Host-backed agent resume drops the answer** → slice 009.
+- **Slice-008 recovery-path delivery stays on Channel even under gate=mailbox** (boot-reattach `index.ts:371` + liveness-sweep `442` run before `mailboxService`/`enqueueMailboxAndFanout` at `477`/`541` exist). The LIVE dispatch path is fixed (`e22456d2`); the recovery paths need the boot-order/lazy-port refactor → slice 009.
+- **Slice-006 echo-timeout leaves an un-submitted body in the PTY composer** (`send-protocol.ts` returns without `\r`) — the gluing root. The queue now self-heals (`1f9f4262`); the composer recovery is fenced-off protocol work → slice 009.
+- **004 workflow run has no cancel surface** — killing the sole agent orphans the parent run `running` (compounded by the unwired workflow boot-reconcile). One orphaned run `3VZ9W4EMJN8C` left by the review.
+- **005 `/agent-runs/{id}/cancel` 404s for host-backed/workflow-spawned runs** (route checks only the in-process `activeRunRegistry`; `/kill` works but leaves host compute orphaned `processKilled:false`). Host-not-aware kill family → slice 009.
+- **001 project restore has no UI or API path** despite the Archive dialog saying "restorable from Show archived" (misleading copy + missing feature; archived project recoverable only via DB edit). Minor: setState-in-render warning on project archive.
 - **Workflow boot-reconcile never wired** (slice-004 gap; `reconcileWorkflowRunsOnBoot` imported in `index.ts` but never called).
 - **Test files excluded from `pnpm typecheck`** → `stash@{0}` partial fix / slice 011.
 - **Mailbox live propagation intermittent** — `mailbox.message.changed` WS frame (`fanoutMessage`/`broadcastTo` in `apps/server/src/features/mailbox/routes.ts`) doesn't reliably reach connected tabs; data is always correct on fetch/reload. This is the **priority-#1 "UI refresh / WebSocket / event propagation"** subsystem, not a mailbox-only bug — there's prior WS-staleness history on this shared events stream.
 - **Mailbox inbox doesn't filter dismissed rows** (UX; the hook fetches the unfiltered project inbox).
-- **Global mailbox enqueue route** (`POST /api/mailbox/messages`) needs a server reload to be live (built in `fb70b1b5`).
 
-## Open design questions (user raised 2026-05-31 — discuss + decide where they slot)
-1. **Mailbox as one universal feed now, UI-routed by `kind` later.** Feasible & on-thesis: every message is durably catalogued with a `kind` + recipient/address. Route everything to one inbox now; later filter/subscribe by `kind` to dedicated surfaces (e.g. workflow human-review → a Review surface). Pure UI-layer routing on the durable catalog — no schema change. ACTION: write a short "mailbox message catalog" doc enumerating every `kind` and its eventual UI home.
-2. **Mailbox replaces the "Waiting on you" subsystem.** Plausible & on-thesis (old subsystems → mailbox). "Waiting on you" = actionable mailbox items (pending-interactions + approval-needed). Today the pending-interaction is only a SHADOW (in-memory `/api/ask` resolver still authoritative). Full takeover = make the mailbox the authority, then retire the old panel = a dedicated migration slice. CANDIDATE for the 009–011 range or a new slice; decide sequencing.
+## Open design questions — DECIDED 2026-05-31
+1. **Mailbox as one universal feed, UI-routed by `kind` later — DECIDED YES, documented.** See `refactor plan/mailbox-message-catalog.md` (every `kind` + its eventual UI home; pure UI-layer routing on the durable catalog, no schema change).
+2. **Mailbox replaces "Waiting on you" — DECIDED YES, as its own slice AFTER 009.** Making the mailbox the authority for pending-interactions (retire the in-memory `/api/ask` resolver + the old panel) touches the same ask/resume host boundary slice 009 formalizes, so sequence it post-009 (slot in the 010–011 range or a dedicated slice). `runtime-hook-ask` is the shadow today; this makes it authoritative.
 
 ## Then resume slices
 After the 001–008 review + the design discussion: plan **009 runtime-host/transient-worktrees** (fixes host-resume), then **010 MCP typed client**, then **011 compatibility cleanup** (retire Channel, finish the test-typecheck hygiene from `stash@{0}`, and fold in the mailbox-takeover items above if decided).
