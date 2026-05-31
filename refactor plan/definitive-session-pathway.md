@@ -39,8 +39,9 @@ The refactor runs **live in the working session**, not through an external orche
 | 007 | Phase 8 | `refactor plan/build-slices/007-mailbox-platform.md` | Mailbox contracts, tables, repos, delivery leases, UI inbox, orchestrator-turn worker over send service, tests. |
 | 008 | Phase 9 | `refactor plan/build-slices/008-channel-cutover.md` | Move agent delivery, workflow review, and external webhook delivery from Channel to mailbox. Keep fallback until verification passes. |
 | 009 | Phase 10 | `refactor plan/build-slices/009-runtime-host-transient-worktrees.md` | Split runtime host, transient sessions, and worktree/path-guard seams behind compatibility facade, tests. |
-| 010 | Phase 11 | `refactor plan/build-slices/010-mcp-typed-client-capabilities.md` | MCP typed localhost client, capability registry, migrate tool families after their service contracts exist, tests. |
-| 011 | Phase 12 | `refactor plan/build-slices/011-compatibility-cleanup.md` | Remove obsolete event shapes, compatibility routes, old Channel target paths, and duplicated local types after static-search gates pass. |
+| 010 | New feature | `refactor plan/build-slices/010-areas.md` | Areas (project-scoped focus buckets): new entity + work-item `areaId` FK, `area.changed` event, Focus tab (replaces Dashboard), Kanban/Table left-panel filter + Uncaptured, summary field, thin MCP, tests. |
+| 011 | Phase 11 | `refactor plan/build-slices/011-mcp-typed-client-capabilities.md` | MCP typed localhost client, capability registry, migrate tool families after their service contracts exist, tests. |
+| 012 | Phase 12 | `refactor plan/build-slices/012-compatibility-cleanup.md` | Remove obsolete event shapes, compatibility routes, old Channel target paths, and duplicated local types after static-search gates pass. |
 
 ## Session Path
 
@@ -71,12 +72,15 @@ The refactor runs **live in the working session**, not through an external orche
 | 32 | Plan 009 | Create `009-runtime-host-transient-worktrees.md`. | Slice 009 plan exists and is marked planned. |
 | 33 | Build 009 | Implement only slice 009. End with a slice-009 test checklist. | Runtime host, transient-session, worktree/path-guard characterization tests pass, repo clean. |
 | 34 | Human review 009 | Claude posts a slice-009 test checklist; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 009 passes; slice 009 marked implemented. |
-| 35 | Plan 010 | Create `010-mcp-typed-client-capabilities.md`. | Slice 010 plan exists and is marked planned. |
-| 36 | Build 010 | Implement only slice 010. End with a slice-010 test checklist. | MCP tool family parity, typed client, capability registry tests pass, repo clean. |
-| 37 | Human review 010 | Claude posts a slice-010 test checklist; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 010 passes; slice 010 marked implemented. |
-| 38 | Plan 011 | Create `011-compatibility-cleanup.md`. | Slice 011 plan exists and is marked planned. |
-| 39 | Build 011 | Implement only slice 011. End with a slice-011 test checklist. | Static search gates and integration tests prove removed paths have no active callers, repo clean. |
-| 40 | Human review 011 | Claude posts a final cleanup test checklist; human browser-tests it live. | Human confirms cleanup passes; cleanup marked implemented and no stale target-path references remain. |
+| 35 | Plan 010 (Areas) | Create `010-areas.md`. | Slice 010 plan exists and is marked planned. |
+| 36 | Build 010 (Areas) | Implement only slice 010. End with a slice-010 test checklist. | Area CRUD + work-item assignment, `area.changed` events, Focus tab, Kanban/Table left-panel filter + Uncaptured tests pass, repo clean. |
+| 37 | Human review 010 (Areas) | Claude posts a slice-010 test checklist; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 010 passes; slice 010 marked implemented. |
+| 38 | Plan 011 | Create `011-mcp-typed-client-capabilities.md`. | Slice 011 plan exists and is marked planned. |
+| 39 | Build 011 | Implement only slice 011. End with a slice-011 test checklist. | MCP tool family parity, typed client, capability registry tests pass, repo clean. |
+| 40 | Human review 011 | Claude posts a slice-011 test checklist; human browser-tests it live. Fix-session only if a defect surfaces. Update trackers. | Human confirms slice 011 passes; slice 011 marked implemented. |
+| 41 | Plan 012 | Create `012-compatibility-cleanup.md`. | Slice 012 plan exists and is marked planned. |
+| 42 | Build 012 | Implement only slice 012. End with a slice-012 test checklist. | Static search gates and integration tests prove removed paths have no active callers, repo clean. |
+| 43 | Human review 012 | Claude posts a final cleanup test checklist; human browser-tests it live. | Human confirms cleanup passes; cleanup marked implemented and no stale target-path references remain. |
 
 ## Failure Path
 
