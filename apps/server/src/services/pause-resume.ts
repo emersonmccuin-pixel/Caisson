@@ -55,7 +55,8 @@ import type {
 } from '@pc/domain';
 
 import { buildAgentEventHeader } from './agent-event-header.ts';
-import { enqueueAndPush } from './agent-delivery.ts';
+import { deliverAgentEnvelope, type MailboxEnqueuePort } from './agent-delivery.ts';
+import { envDeliveryRouter, type DeliveryRouter } from './delivery-routing.ts';
 import { getActiveRunRegistry, type ActiveRunRegistry } from './agent-active-runs.ts';
 import type { ChannelServer } from './channel-server.ts';
 import {
@@ -87,6 +88,13 @@ export type RecordExplicitPauseResult =
 
 export interface PauseResumeDeps {
   channelServer: ChannelServer;
+  /** Slice 008 — per-flow delivery gate (default channel). */
+  deliveryRouter?: DeliveryRouter;
+  /** Slice 008 — mailbox enqueue port; consulted only when the agent gate
+   *  resolves to `mailbox`. Omit to force the Channel path. Only the
+   *  agent-asks-* envelope DELIVERY is gated; the pending_asks state +
+   *  agent.run.changed fact (slice 005) are untouched. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
   /** Slug for the channel POST body. Production = `'pc-orchestrator'`. */
   slug: string;
   /** Source for the channel POST body. Production = `'agent'`. */
@@ -178,15 +186,24 @@ export function recordExplicitPause(
     options: input.options ?? null,
   });
 
-  const pushResult = enqueueAndPush(deps.channelServer, {
-    projectId: entry.projectId,
-    pcSessionId: entry.dispatcherSessionId,
-    kind: eventKind,
-    slug: deps.slug,
-    source: deps.source ?? 'agent',
-    body,
-    sender: deps.sender ?? 'pc',
-  });
+  const pushResult = deliverAgentEnvelope(
+    {
+      projectId: entry.projectId,
+      pcSessionId: entry.dispatcherSessionId,
+      kind: eventKind,
+      slug: deps.slug,
+      source: deps.source ?? 'agent',
+      body,
+      sender: deps.sender ?? 'pc',
+      idempotencyKey: `agent-ask:${pendingAskId}`,
+      sourceId: pendingAskId,
+    },
+    {
+      channelServer: deps.channelServer,
+      router: deps.deliveryRouter ?? envDeliveryRouter(),
+      mailboxEnqueue: deps.mailboxEnqueue ?? null,
+    },
+  );
 
   return {
     ok: true,

@@ -79,7 +79,8 @@ import {
   applyHostTerminalSnapshot,
   type AgentHostReattachClient,
 } from './agent-host-reattach.ts';
-import { enqueueAndPush } from './agent-delivery.ts';
+import { deliverAgentEnvelope, type MailboxEnqueuePort } from './agent-delivery.ts';
+import { envDeliveryRouter, type DeliveryRouter } from './delivery-routing.ts';
 import { continueAgent, type ContinueAgentResult } from './pause-resume.ts';
 import {
   runVerificationOnTerminal,
@@ -155,6 +156,11 @@ export interface DispatchContinueAgentInput {
 
 export interface DispatchAgentDeps {
   channelServer: ChannelServer;
+  /** Slice 008 — per-flow delivery gate (default channel). */
+  deliveryRouter?: DeliveryRouter;
+  /** Slice 008 — mailbox enqueue port; consulted only when the agent gate
+   *  resolves to `mailbox`. Omit to force the Channel path. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
   /** Inject for tests. Defaults to the process-wide singletons. */
   runRegistry?: AgentRunRegistry;
   activeRunRegistry?: ActiveRunRegistry;
@@ -1013,22 +1019,31 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
   // works.
   run.on('queued-started', () => {
     const startedAt = Date.now();
-    enqueueAndPush(args.deps.channelServer, {
-      projectId: args.input.projectId,
-      pcSessionId: args.input.dispatcherSessionId,
-      kind: 'agent-queued-started' as AgentInboxEventKind,
-      slug: args.input.slug,
-      source: 'agent',
-      body: buildAgentQueuedStartedBody({
-        runId: args.agentRunId,
-        sessionId: args.ccSessionId,
-        agentName: args.podName,
-        parentWorkItemId: args.input.parentWorkItemId ?? null,
-        queuedAt: startedAt,
-        startedAt,
-      }),
-      sender: 'pc',
-    });
+    deliverAgentEnvelope(
+      {
+        projectId: args.input.projectId,
+        pcSessionId: args.input.dispatcherSessionId,
+        kind: 'agent-queued-started' as AgentInboxEventKind,
+        slug: args.input.slug,
+        source: 'agent',
+        body: buildAgentQueuedStartedBody({
+          runId: args.agentRunId,
+          sessionId: args.ccSessionId,
+          agentName: args.podName,
+          parentWorkItemId: args.input.parentWorkItemId ?? null,
+          queuedAt: startedAt,
+          startedAt,
+        }),
+        sender: 'pc',
+        idempotencyKey: `agent:${args.agentRunId}:agent-queued-started`,
+        sourceId: args.agentRunId,
+      },
+      {
+        channelServer: args.deps.channelServer,
+        router: args.deps.deliveryRouter ?? envDeliveryRouter(),
+        mailboxEnqueue: args.deps.mailboxEnqueue ?? null,
+      },
+    );
   });
 
   // Terminal handling: persist row + run tier-1 verification (Section 26.5) +
@@ -1057,6 +1072,8 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
         {
           activeRunRegistry: activeReg,
           channelServer: args.deps.channelServer,
+          deliveryRouter: args.deps.deliveryRouter ?? envDeliveryRouter(),
+          mailboxEnqueue: args.deps.mailboxEnqueue ?? null,
           broadcast: (_projectId, msg) => {
             args.deps.broadcast?.(msg as { type: string; [key: string]: unknown });
           },

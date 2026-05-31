@@ -20,6 +20,15 @@ import type { SubstituteTemplate } from './typed-substitution.ts';
 export type PostChannel = (body: string) => Promise<void>;
 export type BroadcastFn = (event: unknown) => void;
 
+/** Slice 008 — gated mailbox review delivery for the legacy step dispatcher.
+ *  When present and it returns true, the review prompt was enqueued as a
+ *  mailbox message and `postChannel` is skipped. Absent ⟹ unchanged Channel. */
+export type DeliverReview = (input: {
+  runId: string;
+  nodeId: string;
+  body: string;
+}) => boolean;
+
 export interface OrchestratorReviewStepResult {
   kind: 'sync' | 'async';
   output?: NodeOutput;
@@ -30,6 +39,8 @@ export interface OrchestratorReviewStepDeps {
   substituteTemplate: SubstituteTemplate;
   postChannel: PostChannel;
   broadcast: BroadcastFn;
+  /** Slice 008 — optional gated mailbox delivery (default: Channel via postChannel). */
+  deliverReview?: DeliverReview;
 }
 
 export async function runOrchestratorReviewStep(
@@ -49,17 +60,21 @@ export async function runOrchestratorReviewStep(
     artifact,
     onRevisePrompt,
   });
-  try {
-    await deps.postChannel(body);
-  } catch (err) {
-    return {
-      kind: 'sync',
-      output: {
-        status: 'failed',
-        error: `channel POST failed: ${(err as Error).message}`,
-        completedAt: new Date().toISOString(),
-      },
-    };
+  const deliveredViaMailbox =
+    deps.deliverReview?.({ runId: run.id, nodeId: node.id, body }) ?? false;
+  if (!deliveredViaMailbox) {
+    try {
+      await deps.postChannel(body);
+    } catch (err) {
+      return {
+        kind: 'sync',
+        output: {
+          status: 'failed',
+          error: `channel POST failed: ${(err as Error).message}`,
+          completedAt: new Date().toISOString(),
+        },
+      };
+    }
   }
   deps.broadcast({
     type: 'event',

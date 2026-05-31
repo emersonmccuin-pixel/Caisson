@@ -33,6 +33,14 @@ export interface ChannelServerDeps {
    *  post-restart / post-respawn bridge catches up autonomously without
    *  waiting on a user prompt. Best-effort: handler must not throw. */
   onRegister?: (args: { projectId: ULID; sessionId: string; slug: string }) => void;
+  /** Slice 008 — external-webhook cutover sink. When wired AND the webhook gate
+   *  = `mailbox`, the handler routes the inbound event to this sink (a durable
+   *  mailbox `external-webhook` message) INSTEAD of fanning to the per-CC bridge
+   *  children — no silent drop on a missing registrant. Return true when the
+   *  sink owned delivery (skip the bridge fan-out); false ⟹ unchanged Channel
+   *  fan-out. The `channel-event` UI broadcast (`onEvent`) still fires in BOTH
+   *  positions (it is the UI's view, not the gated delivery). */
+  webhookSink?: (event: ChannelEvent) => boolean;
 }
 
 export interface ChannelEvent {
@@ -89,7 +97,14 @@ export class ChannelServer {
         sender,
         at: Date.now(),
       };
-      this.forwardToProjectChildren(project, event);
+      // Slice 008 — gated webhook delivery. When the sink owns it (gate =
+      // `mailbox`), route to the durable mailbox inbox and SKIP the per-CC
+      // bridge fan-out; otherwise the unchanged fan-to-all-children runs. The
+      // `channel-event` UI broadcast fires in BOTH positions.
+      const sunkToMailbox = this.deps.webhookSink?.(event) ?? false;
+      if (!sunkToMailbox) {
+        this.forwardToProjectChildren(project, event);
+      }
       this.deps.onEvent(project.id, event);
       return c.text('ok', 200);
     });

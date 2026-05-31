@@ -7,6 +7,7 @@ import { getProjectById, listProjects } from '@pc/db';
 
 import { ProjectRuntime, type BroadcastFn } from './project-runtime.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
+import type { WorkflowReviewDelivery } from './dag-run-service.ts';
 
 export interface ProjectRegistryDeps {
   dataDir: string;
@@ -20,6 +21,9 @@ export interface ProjectRegistryDeps {
   getHostClient?: () => AgentHostReattachClient | null;
   /** Factory: produces a broadcast fn pre-bound to the given project id. */
   broadcastFor: (projectId: ULID) => BroadcastFn;
+  /** Slice 008 — injected workflow-review delivery seam, forwarded to every
+   *  ProjectRuntime. Default (absent) keeps the unchanged Channel path. */
+  deliverWorkflowReview?: WorkflowReviewDelivery;
 }
 
 export class ProjectRegistry {
@@ -110,6 +114,9 @@ export class ProjectRegistry {
       channelPort: this.deps.channelPort,
       broadcast: this.deps.broadcastFor(project.id),
       ...(this.deps.getHostClient ? { getHostClient: this.deps.getHostClient } : {}),
+      ...(this.deps.deliverWorkflowReview
+        ? { deliverWorkflowReview: this.deps.deliverWorkflowReview }
+        : {}),
     });
   }
 }

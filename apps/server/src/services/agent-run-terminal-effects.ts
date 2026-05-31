@@ -20,7 +20,8 @@ import {
 } from './agent-event-header.ts';
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
 import type { ChannelServer } from './channel-server.ts';
-import { enqueueAndPush } from './agent-delivery.ts';
+import { deliverAgentEnvelope, type MailboxEnqueuePort } from './agent-delivery.ts';
+import { envDeliveryRouter, type DeliveryRouter } from './delivery-routing.ts';
 import { commitAgentRunTerminal } from './agent-run-writer.ts';
 import {
   runVerificationOnTerminal,
@@ -54,6 +55,11 @@ export interface AgentRunTerminalEffectsInput {
 export interface AgentRunTerminalEffectsDeps {
   activeRunRegistry?: ActiveRunRegistry;
   channelServer?: ChannelServer;
+  /** Slice 008 — per-flow delivery gate (default channel). */
+  deliveryRouter?: DeliveryRouter;
+  /** Slice 008 — mailbox enqueue port; only consulted when the agent gate
+   *  resolves to `mailbox`. Omit to force the Channel path. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
   broadcast?: (projectId: ULID, msg: unknown) => void;
   getAgentRun?: (id: ULID) => AgentRunRow | null;
   markTerminal?: (input: MarkAgentRunTerminalInput) => void;
@@ -183,6 +189,8 @@ async function finishTerminalEffects(args: {
   if (deps.channelServer && slug) {
     emitTerminalEnvelope({
       channelServer: deps.channelServer,
+      router: deps.deliveryRouter ?? envDeliveryRouter(),
+      mailboxEnqueue: deps.mailboxEnqueue ?? null,
       projectId: input.projectId,
       dispatcherSessionId: input.dispatcherSessionId,
       slug,
@@ -236,6 +244,8 @@ function emitLegacyTerminalBroadcast(args: {
 
 interface EmitTerminalArgs {
   channelServer: ChannelServer;
+  router: DeliveryRouter;
+  mailboxEnqueue: MailboxEnqueuePort | null;
   projectId: ULID;
   dispatcherSessionId: string;
   slug: string;
@@ -271,15 +281,24 @@ function emitTerminalEnvelope(args: EmitTerminalArgs): void {
           cause: agentFailureCauseToPayload(args.failureCause, args.terminalStatus),
           verification: args.verification,
         });
-  enqueueAndPush(args.channelServer, {
-    projectId: args.projectId,
-    pcSessionId: args.dispatcherSessionId,
-    kind,
-    slug: args.slug,
-    source: 'agent',
-    body,
-    sender: 'pc',
-  });
+  deliverAgentEnvelope(
+    {
+      projectId: args.projectId,
+      pcSessionId: args.dispatcherSessionId,
+      kind,
+      slug: args.slug,
+      source: 'agent',
+      body,
+      sender: 'pc',
+      idempotencyKey: `agent:${args.runId}:${kind}`,
+      sourceId: args.runId,
+    },
+    {
+      channelServer: args.channelServer,
+      router: args.router,
+      mailboxEnqueue: args.mailboxEnqueue,
+    },
+  );
 }
 
 function terminalFailureCause(

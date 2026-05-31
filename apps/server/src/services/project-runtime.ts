@@ -41,6 +41,7 @@ import {
   fireDagWorkflow,
   applyV2ReviewDecision,
   type DagRunServiceOptions,
+  type WorkflowReviewDelivery,
 } from './dag-run-service.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import { WorkItemService } from './work-item.ts';
@@ -86,6 +87,12 @@ export interface ProjectRuntimeOptions {
    *  trunk's pnpm-managed `node_modules`. */
   trunkPath: string;
   getHostClient?: () => AgentHostReattachClient | null;
+  /** Slice 008 — injected workflow-review delivery seam (friction #1). When
+   *  the workflow-review gate = `mailbox` this routes the review prompt to a
+   *  durable mailbox message instead of `/channel`. Composed in index.ts where
+   *  the mailboxService lives — ProjectRuntime gains ONE function, no mailbox
+   *  ref and no runtime-host change. Absent ⟹ unchanged Channel path. */
+  deliverWorkflowReview?: WorkflowReviewDelivery;
 }
 
 export class ProjectRuntime {
@@ -277,6 +284,7 @@ export class ProjectRuntime {
       sessionDirFor: (pcSessionId) => this.sessionDataPath(pcSessionId),
       broadcast: this.opts.broadcast,
       hostClient: this.opts.getHostClient?.() ?? null,
+      ...(this.opts.deliverWorkflowReview ? { deliverReview: this.opts.deliverWorkflowReview } : {}),
     };
   }
 

@@ -30,6 +30,8 @@ import { recordAgentInvoke as defaultRecordAgentInvoke } from '../../services/ag
 import { checkInvokeDepth as defaultCheckInvokeDepth } from '../../services/invoke-depth.ts';
 import type { ChannelServer } from '../../services/channel-server.ts';
 import type { AgentHostReattachClient } from '../../services/agent-host-reattach.ts';
+import { envDeliveryRouter, type DeliveryRouter } from '../../services/delivery-routing.ts';
+import type { MailboxEnqueuePort } from '../../services/agent-delivery.ts';
 
 interface AgentRunCancelEntry {
   projectId: ULID;
@@ -44,6 +46,11 @@ export interface AgentRunRouteDeps {
   channelServer: ChannelServer;
   broadcastTo(projectId: ULID, msg: unknown): void;
   hostClient?: AgentHostReattachClient | null;
+  /** Slice 008 — per-flow delivery gate (default channel). */
+  deliveryRouter?: DeliveryRouter;
+  /** Slice 008 — mailbox enqueue port; threaded into the factory/terminal/
+   *  pause delivery sites so the agent gate can route to mailbox. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
   getActiveRunRegistry?: () => AgentRunActiveRegistry;
   dispatchFreshAgent?: typeof defaultDispatchFreshAgent;
   dispatchContinueAgent?: typeof defaultDispatchContinueAgent;
@@ -107,6 +114,11 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     checkInvokeDepth: deps.checkInvokeDepth ?? defaultCheckInvokeDepth,
     now: deps.now ?? Date.now,
   };
+
+  // Slice 008 — resolve the delivery gate + mailbox port once; thread into the
+  // factory / terminal / pause delivery sites. Default router = env (channel).
+  const deliveryRouter = deps.deliveryRouter ?? envDeliveryRouter();
+  const mailboxEnqueue = deps.mailboxEnqueue ?? null;
 
   /** Activity Panel snapshot: this project's active agent runs (queued |
    *  spawning | running | paused). Card filtering happens client-side; the
@@ -276,6 +288,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       },
       {
         channelServer: deps.channelServer,
+        deliveryRouter,
+        mailboxEnqueue,
         broadcast: (env) => deps.broadcastTo(projectId, env),
         ...(deps.hostClient ? { hostClient: deps.hostClient } : {}),
       },
@@ -376,6 +390,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       },
       {
         channelServer: deps.channelServer,
+        deliveryRouter,
+        mailboxEnqueue,
         broadcast: (env) => deps.broadcastTo(projectId, env),
         ...(deps.hostClient ? { hostClient: deps.hostClient } : {}),
       },
@@ -499,6 +515,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       },
       {
         channelServer: deps.channelServer,
+        deliveryRouter,
+        mailboxEnqueue,
         slug: project.slug,
         broadcast: (env) => deps.broadcastTo(projectId, env),
       },

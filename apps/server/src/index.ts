@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 import type {
   Project,
@@ -24,6 +25,7 @@ import {
   setOrchestratorSessionJsonlPath,
   setOrchestratorSessionTitle,
   workflowRunsV2Repo,
+  type EnqueueMailboxMessageInput,
 } from '@pc/db';
 import {
   ConversationSendService,
@@ -32,6 +34,7 @@ import {
   reconcileWorkflowRunsOnBoot,
   RECONCILE_SCAN_STATUSES,
   WorkflowRunMutationGateway,
+  type MailboxEnqueuePublication,
 } from '@pc/app-services';
 import { getDataDir } from '@pc/utils';
 
@@ -46,7 +49,8 @@ import { drainPendingForSession } from './services/agent-delivery.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
 import { sweepEphemeralWorkItems } from './services/ephemeral-work-item-sweep.ts';
 import { backfillStageFlags } from './services/stage-flags-backfill.ts';
-import { ChannelServer } from './services/channel-server.ts';
+import { ChannelServer, type ChannelEvent } from './services/channel-server.ts';
+import { envDeliveryRouter } from './services/delivery-routing.ts';
 import { ProjectCreate } from './services/project-create.ts';
 import { ProjectRegistry } from './services/project-registry.ts';
 import type { ProjectRuntime } from './services/project-runtime.ts';
@@ -269,6 +273,11 @@ const projectRegistry = new ProjectRegistry({
   channelPort: CHANNEL_PORT,
   getHostClient: () => agentHostClientForDispatch,
   broadcastFor: (projectId) => (event) => broadcastTo(projectId, event),
+  // Slice 008 — workflow-review cutover seam (friction #1). The closure runs at
+  // workflow-fire time (post-boot), so it safely references the mailbox bindings
+  // declared later in this module. Returns true only when the workflow-review
+  // gate = `mailbox` AND a mailbox port is wired (then `postChannel` is skipped).
+  deliverWorkflowReview: deliverWorkflowReview,
 });
 projectRegistry.loadAll();
 
@@ -294,6 +303,9 @@ const channelServer = new ChannelServer({
       );
     }
   },
+  // Slice 008 — external-webhook cutover sink (gate = PC_DELIVERY_WEBHOOK).
+  // Default (gate=channel) returns false → unchanged fan-to-children.
+  webhookSink: deliverWebhookToMailbox,
 });
 channelServer.start();
 
@@ -516,6 +528,96 @@ registerMailboxRoutes(app, {
   broadcastTo,
   broadcastAll,
 });
+
+// ── Slice 008 — Channel→mailbox cutover gate (default channel; reversible) ──
+// Each flow's mode is read from env (PC_DELIVERY_AGENT / _WORKFLOW_REVIEW /
+// _WEBHOOK), defaulting to `channel`. With no env set, delivery is byte-
+// identical to today. The cutover senders enqueue through this port which
+// commits the message + fans out the canonical mailbox.message.changed frame;
+// the slice-007 worker then drains the delivery + fans delivery frames.
+const deliveryRouter = envDeliveryRouter();
+
+function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqueuePublication {
+  const pub = mailboxService.enqueue(input);
+  const frame = buildLiveEventFrame(pub.liveEvent);
+  if (pub.message.projectId === null) broadcastAll(frame);
+  else broadcastTo(pub.message.projectId, frame);
+  return pub;
+}
+
+// Flow B — workflow-review cutover seam. Hoisted so the ProjectRegistry built at
+// boot can reference it; the body runs at workflow-fire time so the const
+// bindings above are initialised by then. When the gate = `channel` (default)
+// it returns false and the DAG executor keeps the `/channel` postChannel path.
+function deliverWorkflowReview(input: {
+  projectId: ULID;
+  runId: ULID;
+  nodeId: string;
+  flavor: 'human' | 'orchestrator';
+  body: string;
+}): boolean {
+  if (deliveryRouter.mode('workflow-review') !== 'mailbox') return false;
+  enqueueMailboxAndFanout({
+    message: {
+      id: newId(),
+      projectId: input.projectId,
+      kind: 'workflow-review',
+      body: input.body,
+      sourceKind: 'workflow-run-node',
+      sourceId: `${input.runId}:${input.nodeId}`,
+      idempotencyKey: `workflow-review:${input.runId}:${input.nodeId}`,
+    },
+    recipients: [
+      {
+        id: newId(),
+        addressKind: 'active-orchestrator',
+        addressJson: { kind: 'active-orchestrator', projectId: input.projectId },
+        channel: 'orchestrator-turn',
+        deliveryId: newId(),
+      },
+    ],
+    now: Date.now(),
+  });
+  return true;
+}
+
+// Flow C — external-webhook cutover sink. Hoisted so the ChannelServer built at
+// boot can reference it. When the gate = `channel` (default) it returns false →
+// the unchanged fan-to-children path runs. When `mailbox`, the event lands
+// durably in the project inbox (ui-inbox; no silent drop on a missing
+// registrant). Idempotency is best-effort: external `/channel` bodies carry no
+// event id, so we hash slug+source+body and include the arrival timestamp.
+function deliverWebhookToMailbox(event: ChannelEvent): boolean {
+  if (deliveryRouter.mode('webhook') !== 'mailbox') return false;
+  const hash = createHash('sha256')
+    .update(`${event.slug} ${event.source} ${event.body}`)
+    .digest('hex')
+    .slice(0, 16);
+  enqueueMailboxAndFanout({
+    message: {
+      id: newId(),
+      projectId: event.projectId,
+      kind: 'external-webhook',
+      subject: `${event.source} webhook`,
+      body: event.body,
+      payload: { slug: event.slug, source: event.source, sender: event.sender, at: event.at },
+      sourceKind: 'external-webhook',
+      sourceId: event.source,
+      idempotencyKey: `webhook:${event.slug}:${event.source}:${hash}:${String(event.at)}`,
+    },
+    recipients: [
+      {
+        id: newId(),
+        addressKind: 'project-inbox',
+        addressJson: { kind: 'project-inbox', projectId: event.projectId },
+        channel: 'ui-inbox',
+        deliveryId: newId(),
+      },
+    ],
+    now: Date.now(),
+  });
+  return true;
+}
 
 // Lease-driven delivery drain. Single in-process worker; the lease keeps the
 // model restart-safe. Unref'd so it never blocks shutdown.
@@ -808,6 +910,11 @@ registerAgentRunRoutes(app, {
   channelServer,
   broadcastTo,
   hostClient: agentHostClientForDispatch,
+  // Slice 008 — gated agent delivery. Default env router resolves to `channel`
+  // unless PC_DELIVERY_AGENT=mailbox is set; the port enqueues + fans out the
+  // mailbox message frame (the worker then drains delivery + fans delivery frames).
+  deliveryRouter,
+  mailboxEnqueue: enqueueMailboxAndFanout,
 });
 
 registerStatuslineRoutes(app, { broadcastTo });

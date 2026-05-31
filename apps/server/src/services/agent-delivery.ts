@@ -25,10 +25,14 @@ import {
   enqueueInboxRow,
   listPendingForSession,
   markInboxDelivered,
+  newId,
+  type EnqueueMailboxMessageInput,
 } from '@pc/db';
 import type { AgentInboxEventKind, AgentInboxRow, ULID } from '@pc/domain';
+import type { MailboxMessageKind } from '@pc/contracts';
 
 import type { ChannelServer } from './channel-server.ts';
+import type { DeliveryRouter } from './delivery-routing.ts';
 
 export type DeliveryTransportMode = 'hybrid' | 'inbox-only' | 'channel-only';
 
@@ -174,4 +178,91 @@ export function drainPendingForSession(
     }
   }
   return { drained, attempted };
+}
+
+// ──────────────────────── Slice 008 — gated agent delivery ────────────────────
+//
+// The cutover gate (PC_DELIVERY_AGENT) chooses ONE path per emit:
+//   - 'channel'  : the unchanged `enqueueAndPush(channelServer, …)` (default).
+//   - 'mailbox'  : MailboxService.enqueue with an `orchestrator-session` recipient
+//                  + `orchestrator-turn` channel + a stable idempotency key. The
+//                  slice-007 worker delivers exactly one runtime turn per event.
+//
+// Channel is NOT deleted; it remains the default + fallback. The mailbox path
+// never touches the per-CC bridge — it delivers a runtime turn via the send
+// facade. State surfaces (the durable agent.run.changed fact, pending_asks) are
+// owned by slice 005 and are NOT gated here — only the envelope DELIVERY is.
+
+/** A narrow mailbox enqueue port (the slice-007 MailboxService.enqueue). Kept
+ *  structural so this module imports no app-services value. */
+export type MailboxEnqueuePort = (input: EnqueueMailboxMessageInput) => unknown;
+
+/** Map the agent inbox event kind onto the mailbox message kind (spec §7). */
+function mailboxMessageKindFor(kind: AgentInboxEventKind): MailboxMessageKind {
+  switch (kind) {
+    case 'agent-asks-orchestrator':
+    case 'agent-asks-user':
+      return 'agent-question';
+    case 'agent-approval-request':
+      return 'agent-approval';
+    default:
+      return 'agent-terminal';
+  }
+}
+
+export interface DeliverAgentEnvelopeInput extends EnqueueAndPushInput {
+  /** Stable per-event idempotency key for the mailbox path:
+   *  `agent:${runId}:${eventKind}` for terminal/queued-started, or
+   *  `agent-ask:${pendingAskId}` for asks. Unused on the channel path. */
+  idempotencyKey: string;
+  /** Source ref for the mailbox message (runId or pendingAskId). */
+  sourceId?: string | null;
+}
+
+export interface DeliverAgentEnvelopeDeps {
+  channelServer: ChannelServer;
+  router: DeliveryRouter;
+  /** Present only when the agent gate may resolve to `mailbox`. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
+  now?: () => number;
+}
+
+/** Route ONE agent delivery envelope through the gate. When the gate resolves
+ *  to `mailbox` (and a mailbox port is wired) the envelope is enqueued as a
+ *  mailbox message to the dispatcher's orchestrator session; otherwise the
+ *  existing `enqueueAndPush` Channel path runs unchanged. */
+export function deliverAgentEnvelope(
+  input: DeliverAgentEnvelopeInput,
+  deps: DeliverAgentEnvelopeDeps,
+): EnqueueAndPushResult {
+  if (deps.router.mode('agent') === 'mailbox' && deps.mailboxEnqueue) {
+    deps.mailboxEnqueue({
+      message: {
+        id: newId(),
+        projectId: input.projectId,
+        kind: mailboxMessageKindFor(input.kind),
+        body: input.body,
+        sourceKind: 'agent',
+        sourceId: input.sourceId ?? null,
+        idempotencyKey: input.idempotencyKey,
+      },
+      recipients: [
+        {
+          id: newId(),
+          addressKind: 'orchestrator-session',
+          addressJson: {
+            kind: 'orchestrator-session',
+            projectId: input.projectId,
+            sessionId: input.pcSessionId,
+          },
+          channel: 'orchestrator-turn',
+          deliveryId: newId(),
+        },
+      ],
+      now: (deps.now ?? Date.now)(),
+    });
+    // Mailbox path: the worker drains the delivery; no Channel push fired.
+    return { inboxId: null, channelDelivered: false };
+  }
+  return enqueueAndPush(deps.channelServer, input);
 }

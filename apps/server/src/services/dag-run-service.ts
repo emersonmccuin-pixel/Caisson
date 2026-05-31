@@ -72,6 +72,22 @@ function truncateStdout(s: string): string {
 
 export type ChannelPoster = (body: string, source: string) => Promise<void>;
 
+/** Slice 008 — workflow-review delivery seam. When the workflow-review gate
+ *  resolves to `mailbox`, the DAG executor calls this instead of `postChannel`
+ *  to enqueue a durable `workflow-review` mailbox message (active-orchestrator
+ *  + orchestrator-turn). When it returns `false` (no port / gate=channel) the
+ *  caller falls back to `postChannel`. Injected from index.ts where the
+ *  mailboxService lives — ProjectRuntime never gains a mailbox ref. The
+ *  slice-004 workflow.review.changed fact fires regardless (it is state, not
+ *  delivery). */
+export type WorkflowReviewDelivery = (input: {
+  projectId: ULID;
+  runId: ULID;
+  nodeId: string;
+  flavor: WorkflowReviewFlavor;
+  body: string;
+}) => boolean;
+
 // Slice 004 — durable workflow.review.changed facts via the run gateway. The
 // run-row state still flows through workflow-run-writer; this is the review
 // audit/action surface that mirrors the transient workflow-v2-review-pending.
@@ -132,6 +148,10 @@ export interface DagRunServiceOptions {
   verify?: Verifier;
   exec?: CommandExec;
   postChannel?: ChannelPoster;
+  /** Slice 008 — gated mailbox review delivery. When present and it returns
+   *  true, the review prompt was enqueued as a mailbox message and `postChannel`
+   *  is skipped. Default (absent) keeps the unchanged Channel path. */
+  deliverReview?: WorkflowReviewDelivery;
 }
 
 const liveSpawner: Spawner = (req) =>
@@ -663,7 +683,21 @@ export function makeExecutorDeps(
       `${node.prompt ?? 'Please review the work below.'}\n\n${summary}\n\n` +
       `Approve: pc_complete_node-equivalent (v2 review endpoint) · Reject sends it back.`;
     if (node.kind === 'orchestrator-review') {
-      await postChannel(body, 'workflow');
+      // Slice 008 — gated delivery. When the workflow-review gate = `mailbox`
+      // and a delivery seam is wired, the review prompt is enqueued as a
+      // durable mailbox message (active-orchestrator + orchestrator-turn);
+      // otherwise the unchanged `postChannel` Channel path runs.
+      const deliveredViaMailbox =
+        opts.deliverReview?.({
+          projectId: opts.projectId,
+          runId: run.id,
+          nodeId: node.id,
+          flavor,
+          body,
+        }) ?? false;
+      if (!deliveredViaMailbox) {
+        await postChannel(body, 'workflow');
+      }
     }
     // Slice 004 — durable workflow.review.changed (pending) fact + canonical
     // frame via the gateway. Then the legacy transient broadcast (unchanged
