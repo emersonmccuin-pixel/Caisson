@@ -105,9 +105,11 @@ test('sendUserTurn: no pty available -> no-session', async () => {
   if (!r.ok) assert.equal(r.status, 'no-session');
 });
 
-test('enqueueRuntimeTurn: idempotent by (sessionId, clientMessageId) and never raw-sends', async () => {
+test('enqueueRuntimeTurn: idempotent by (sessionId, clientMessageId) and never bypasses the queue', async () => {
   const sends: string[] = [];
-  const h = mkHarness({ state: 'ready', sends });
+  // Busy: nothing drains, so we can observe the pure enqueue/idempotency
+  // behavior decoupled from the (now-wired) ready-state drain.
+  const h = mkHarness({ state: 'busy', sends });
   const first = h.service.enqueueRuntimeTurn({
     projectId: h.projectId,
     sessionId: h.sessionId,
@@ -117,8 +119,10 @@ test('enqueueRuntimeTurn: idempotent by (sessionId, clientMessageId) and never r
     sourceRef: 'msg-1',
   });
   assert.equal(first.created, true);
-  // no raw send happened even though state is 'ready'
+  // The facade never raw-sends — it enqueues and the drain loop delivers. Busy
+  // ⟹ no drain ⟹ no send yet.
   assert.deepEqual(sends, []);
+  assert.ok(first.row.status.startsWith('queued_'));
   // replay returns the SAME row, no new insert
   const replay = h.service.enqueueRuntimeTurn({
     projectId: h.projectId,
@@ -129,6 +133,32 @@ test('enqueueRuntimeTurn: idempotent by (sessionId, clientMessageId) and never r
   });
   assert.equal(replay.created, false);
   assert.equal(replay.row.id, first.row.id);
+});
+
+test('enqueueRuntimeTurn: drains immediately when the PTY is already idle (drain-on-idle race)', async () => {
+  // Slice-009 regression. A mailbox/system turn enqueued AFTER the busy→ready
+  // edge (PTY already idle) used to sit queued forever — the state-transition
+  // drain had already fired on an empty queue, and enqueueRuntimeTurn (unlike
+  // sendUserTurn) never kicked its own drain. Now a ready PTY drains the turn
+  // on enqueue.
+  const sends: string[] = [];
+  const h = mkHarness({ state: 'ready', sends });
+  const res = h.service.enqueueRuntimeTurn({
+    projectId: h.projectId,
+    sessionId: h.sessionId,
+    clientMessageId: 'mb-idle',
+    text: 'agent result',
+    source: 'mailbox',
+  });
+  assert.equal(res.created, true);
+  // The drain is kicked fire-and-forget; the in-test async port pushes during
+  // the first synchronous slice, but give the microtask queue a tick to settle
+  // before asserting the durable terminal state.
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(sends, ['agent result']);
+  const visible = h.service.listVisibleTurns(h.sessionId);
+  assert.equal(visible.filter((r) => r.status === 'delivered_to_pty').length, 1);
+  assert.equal(visible.filter((r) => r.status.startsWith('queued_')).length, 0);
 });
 
 test('observeUserJsonl: marks the first FIFO delivered match observed_in_jsonl once', async () => {

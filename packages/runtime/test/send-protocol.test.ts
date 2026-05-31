@@ -86,19 +86,23 @@ test('echo-ack: paste + echo lands → Enter sent → ok', async () => {
   assert.equal(deps.writes[1], '\r');
 });
 
-// SLICE-009 OBJ-3 — on echo-timeout the protocol now CLEARS the un-submitted
-// composer body with Escape (\x1b), the existing graceful composer reset, so a
-// partially-pasted body cannot glue onto the next send's paste. It still does
-// NOT write \r (submitting unverified text is the anti-criteria) and still
-// returns 'echo-timeout' so the caller treats the send as failed.
-test('echo-ack: never lands → echo-timeout, writes Escape (clear), NOT Enter', async () => {
+// SLICE-009 OBJ-3 (rev) — on echo-timeout the protocol CLEARS the un-submitted
+// composer body with a DOUBLE Escape. CC's Esc clear is a double-press
+// (useDoublePress, 800ms window): a single Esc only arms an "Esc again to
+// clear" notification and leaves the body, which is why the original single-Esc
+// glued onto the next send. Two `\x1b` trigger the real clear, emptying the
+// whole composer regardless of line count. It still does NOT write \r
+// (submitting unverified text is the anti-criteria) and still returns
+// 'echo-timeout' so the caller treats the send as failed.
+test('echo-ack: never lands → echo-timeout, double-Escape (clear), NOT Enter', async () => {
   const deps = makeDeps();
   // Buffer stays empty — no echo.
   const result = await sendBracketedPaste(deps, 'Reply with only OK.', 150);
   assert.equal(result, 'echo-timeout');
-  assert.equal(deps.writes.length, 2); // paste + composer-clear (Escape)
+  assert.equal(deps.writes.length, 3); // paste + two composer-clear Escapes
   assert.match(deps.writes[0], /^\x1b\[200~/);
-  assert.equal(deps.writes[1], '\x1b', 'echo-timeout clears the composer with Escape');
+  assert.equal(deps.writes[1], '\x1b', 'first Escape arms the double-press');
+  assert.equal(deps.writes[2], '\x1b', 'second Escape triggers the real clear');
   assert.ok(!deps.writes.includes('\r'), 'echo-timeout must NEVER submit (\\r)');
 });
 
@@ -180,7 +184,7 @@ test('echo-ack: probe is anchored to the post-write tail', async () => {
   deps.buffer.value = 'Reply with only — leftover from a prior render';
   // No new echo lands → expect timeout because the leading slice is in the
   // pre-write portion of the buffer, not the post-write tail. On timeout the
-  // composer is cleared with Escape (slice-009 OBJ-3), not submitted.
+  // composer is cleared with a double-Escape (slice-009 OBJ-3), not submitted.
   const result = await sendBracketedPaste(deps, 'Reply with only OK', 150);
   assert.equal(result, 'echo-timeout');
   assert.equal(deps.writes[deps.writes.length - 1], '\x1b');

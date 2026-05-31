@@ -191,6 +191,14 @@ export class ConversationSendService {
       status: queuedStatusForState(state, hasBacklog),
     });
     this.deps.broadcastSendQueueSnapshot(input.projectId, input.sessionId);
+    // Drain-on-idle race (slice 009): the PTY state→ready handler fires
+    // `deliverNextQueuedTurn` on the busy→ready edge, but a mailbox/system turn
+    // enqueued AFTER that edge (PTY already idle) misses it and would sit
+    // queued forever — only the next user send would drain it. `sendUserTurn`
+    // already kicks a drain when ready; mirror it here so the row delivers
+    // immediately. (Status label is `queued_busy` even when ready — it's the
+    // default queued label, not evidence the PTY is busy.)
+    if (state === 'ready') this.deliverNextQueuedTurn(input.projectId);
     return { row, created: true };
   }
 

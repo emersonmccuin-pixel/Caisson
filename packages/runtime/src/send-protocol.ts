@@ -46,6 +46,11 @@ const ECHO_POLL_MS = 25;
 const ECHO_PROBE_LEN = 12;
 const ECHO_WORD_SCAN_LEN = 160;
 const ECHO_MIN_WORD_LEN = 3;
+/** Gap between the two echo-timeout clear Escapes. CC's composer clear is a
+ *  double-press (useDoublePress, 800ms window): the two `\x1b` must arrive as
+ *  distinct keypress events but well inside that window. A small gap also lets
+ *  the cleared composer render before the next drain pastes. */
+const ECHO_CLEAR_SETTLE_MS = 40;
 
 const defaultSleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -198,12 +203,26 @@ export async function sendBracketedPaste(
     }
     await sleep(ECHO_POLL_MS);
   }
-  // Slice 009 OBJ-3 — echo never landed: the bracketed-paste body is sitting
-  // un-submitted in claude.exe's composer. Clear it (Escape, the existing
-  // graceful composer reset used by LowLevelSpawn.interrupt) so it can't glue
-  // onto the next send's paste. Do NOT write `\r` — submitting unverified text
-  // is the anti-criteria this protocol exists to avoid. The caller still treats
-  // the send as failed via the 'echo-timeout' return.
-  if (!deps.isExited()) deps.write('\x1b');
+  // Slice 009 OBJ-3 (rev) — echo never landed: the bracketed-paste body is
+  // sitting un-submitted in claude.exe's composer. Clear it so it can't glue
+  // onto the next send's paste. A SINGLE Escape does NOT clear — CC's Esc is a
+  // double-press (leaked CC src/hooks/useTextInput.ts handleEscape →
+  // useDoublePress, 800ms window): the first Esc only arms an "Esc again to
+  // clear" notification, which is exactly why the shipped single-Esc still
+  // glued. Send a DOUBLE Escape (within the window, with a settle gap so they
+  // parse as two keypresses) to trigger the real clear (onClearInput +
+  // onChange('')), which empties the WHOLE composer regardless of line count —
+  // Ctrl-U (killToLineStart) only clears to the current line start and would
+  // leave earlier lines of a multi-line paste. Do NOT write `\r` — submitting
+  // unverified text is the anti-criteria this protocol exists to avoid. The
+  // caller still treats the send as failed via the 'echo-timeout' return.
+  if (!deps.isExited()) {
+    deps.write('\x1b');
+    await sleep(ECHO_CLEAR_SETTLE_MS);
+    if (!deps.isExited()) {
+      deps.write('\x1b');
+      await sleep(ECHO_CLEAR_SETTLE_MS);
+    }
+  }
   return 'echo-timeout';
 }
