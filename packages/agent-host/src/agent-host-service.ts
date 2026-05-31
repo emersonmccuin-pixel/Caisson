@@ -366,22 +366,9 @@ export class AgentHostService extends EventEmitter {
     // the run did not leave `paused`, surface a typed `not-resumable` error so the
     // server finalizes via `resume-failed` instead of stranding.
     const stateBefore = entry.run.getState();
-    // SLICE-009 OBJ-2: live-trace needed to confirm paused-state-loss branch — see plan §13.
-    // This gated log is the instrumentation the human review captures (the deep
-    // "keep the host run paused across its own spawn exit" recovery fix is deferred).
-    if (process.env.PC_DEBUG_HOST_RESUME) {
-      console.warn(
-        `[agent-host] answer-pending run=${runId} stateBefore=${stateBefore}`,
-      );
-    }
     entry.run._resumeWithAnswer(text);
     const stateAfter = entry.run.getState();
     entry.updatedAt = this.now();
-    if (process.env.PC_DEBUG_HOST_RESUME) {
-      console.warn(
-        `[agent-host] answer-pending run=${runId} stateAfter=${stateAfter}`,
-      );
-    }
 
     // The run transitions paused -> spawning -> ... on a successful resume. If it
     // is still `paused` after the call, `_resumeWithAnswer` was a no-op (run not

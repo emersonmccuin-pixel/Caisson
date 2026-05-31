@@ -12,7 +12,9 @@ Live-traced the OBJ-2 host-resume path (the one open item) and found it **UNREAC
 
 **Slice 009 = DONE** (OBJ-1/2/2A/3 all landed + verified). **Do NEXT: slice 010 (Areas)** — plan `build-slices/010-areas.md` exists, marked planned. Session-tracker row 35.
 
-**Still deferred (separate, NOT slice 009):** host-not-aware `/cancel` 404 for some runs (missing-handle, not fixed by 2A — `/kill`+`/inspect` already read the DB row); OBJ-2 deep paused-state-loss recovery instrumentation (`PC_DEBUG_HOST_RESUME`) stays in place. The broader runtime-host interface extraction + the full state-propagation outbox/`changes`/cursor build remain slice 011 / the ADR migration.
+**Verified airtight this session:** OBJ-1 (agent→mailbox) confirmed live from the DB — the test run's completion + ask both landed in `mailbox_messages`, zero new `agent_inbox` rows; OBJ-3 (echo-timeout composer recovery) confirmed by the `send-protocol` unit test (`echo-ack never lands → double-Escape, NOT Enter`, runtime 13/13) AND a UI rapid-fire (ALPHA/BRAVO/CHARLIE → three discrete in-order `observed_in_jsonl` send-queue rows, no gluing). The `PC_DEBUG_HOST_RESUME` instrumentation has been REMOVED (the not-resumable typed-error logic stays).
+
+**Still deferred (separate, NOT slice 009):** host-not-aware `/cancel` 404 for some runs (missing-handle, not fixed by 2A — `/kill`+`/inspect` already read the DB row). The broader runtime-host interface extraction + the full state-propagation outbox/`changes`/cursor build remain slice 011 / the ADR migration.
 
 **Stack note:** the gated `pnpm dev:app` is LIVE on 4040/5173/8788 and was reloaded this session via `/api/dev/restart` (force, to clear 2 phantom stale registry entries) so it runs the OBJ-2A source. Don't blindly relaunch; check first. Never restart unasked.
 
