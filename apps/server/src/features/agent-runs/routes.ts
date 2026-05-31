@@ -13,6 +13,7 @@ import {
   getProjectById,
   listActiveAgentRunsForProject,
   listAgentRunsForSession,
+  listProjectVisibleAgents,
 } from '@pc/db';
 
 import {
@@ -229,6 +230,24 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     }
     const result = inspectAgentRun(runId);
     return c.json(result, result.ok ? 200 : 404);
+  });
+
+  /** `pc_list_agents` HTTP surface — the orchestrator's live roster lookup.
+   *  Returns the agents dispatchable inside this project: project-scope pods +
+   *  built-in (stock) globals, via the shared `listProjectVisibleAgents` (same
+   *  path/rule as `{{AVAILABLE_AGENTS}}` and the Agents-tab route). Global
+   *  user-created pods are excluded. Shape matches the slim parser in
+   *  `pc_list_agents` ({ globals: [{ name, def: { description, model, tools } }],
+   *  overrides, projectOnly }); post-17e everything lives in `globals`. */
+  app.get('/api/projects/:projectId/agents', (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const project = getProjectById(projectId);
+    if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+    const globals = listProjectVisibleAgents(projectId).map((a) => ({
+      name: a.name,
+      def: { description: a.description, model: a.model, tools: a.tools },
+    }));
+    return c.json({ ok: true, globals, overrides: [], projectOnly: [] });
   });
 
   /** `pc_invoke_agent` HTTP surface. Every spawn goes through the `AgentRun`
