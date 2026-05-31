@@ -47,8 +47,11 @@ import {
   newId,
 } from '@pc/db';
 import { jsonlPathFor } from '@pc/runtime';
+import type { AgentRunState } from '@pc/runtime';
 import type {
   AgentInboxEventKind,
+  AgentRunRow,
+  AgentRunStatus,
   PendingAskKind,
   PendingAskOption,
   ULID,
@@ -103,6 +106,16 @@ export interface PauseResumeDeps {
   sender?: string;
   /** Active-run lookup. Defaults to the process-wide singleton. */
   registry?: ActiveRunRegistry;
+  /** OBJ-2A — read the RECONCILED DB row status for the pause/resume gates
+   *  instead of the (unreliably-fed) in-memory handle snapshot. Default
+   *  `@pc/db` getAgentRunRow. */
+  getAgentRun?: (id: ULID) => AgentRunRow | null;
+  /** OBJ-2A — optional ON-DEMAND host level-read. When the DB row is
+   *  non-terminal but not yet running/paused (the early-ask race before the
+   *  first 15s reconcile sweep), the gate awaits a fresh host round-trip and
+   *  prefers it. Production wires a host-client-backed reader; in-process
+   *  callers omit it (the DB row is authoritative there). */
+  hostRunState?: (id: ULID) => Promise<AgentRunState | null>;
   /** Slice 005 — per-project WS fanout for the durable agent.run.changed fact
    *  (canonical frame + legacy `agent-run-changed`). Tests can omit (no-op). */
   broadcast?: (event: unknown) => void;
@@ -131,11 +144,28 @@ export async function recordExplicitPause(
     };
   }
 
-  const runState = entry.run.getState();
+  // OBJ-2A — DECIDE on the RECONCILED DB row, not the in-memory handle. The
+  // handle snapshot is a third projection fed only by the unreliable event
+  // stream (ADR violation); for a fresh host-backed run it can sit at
+  // queued/spawning long after the row reached `running`. Keep `entry` above
+  // for IDENTITY/metadata + markPaused delivery; only the state DECISION moves.
+  const row = (deps.getAgentRun ?? getAgentRunRow)(input.agentRunId);
+  let runState: AgentRunStatus | AgentRunState | null = row?.status ?? null;
+  // Early-ask race: row still queued/spawning before the first sweep tick. Do a
+  // single on-demand host level-read and prefer it (reconcile-on-demand).
+  if (
+    runState !== 'running' &&
+    runState !== 'paused' &&
+    !isTerminalStatus(runState) &&
+    deps.hostRunState
+  ) {
+    const hostState = await deps.hostRunState(input.agentRunId);
+    if (hostState) runState = hostState;
+  }
   if (runState !== 'running') {
     return {
       ok: false,
-      error: `run ${input.agentRunId} is ${runState}, not running`,
+      error: `run ${input.agentRunId} is ${runState ?? 'unknown'}, not running`,
       cause: 'wrong-state',
     };
   }
@@ -296,10 +326,14 @@ export async function answerPendingAsk(
       cause: 'unknown-run',
     };
   }
-  if (entry.run.getState() !== 'paused') {
+  // OBJ-2A — gate on the RECONCILED DB row status, not the handle snapshot
+  // (same unreconciled-projection class as the pause gate). `entry` is still
+  // required to drive the resume command below.
+  const resumeRow = (deps.getAgentRun ?? getAgentRunRow)(ask.agentRunId);
+  if ((resumeRow?.status ?? null) !== 'paused') {
     return {
       ok: false,
-      error: `agent run ${ask.agentRunId} is ${entry.run.getState()}, not paused`,
+      error: `agent run ${ask.agentRunId} is ${resumeRow?.status ?? 'unknown'}, not paused`,
       cause: 'wrong-state',
     };
   }
@@ -607,6 +641,14 @@ export function continueAgent(
 }
 
 // ──────────────────────────── HELPERS ─────────────────────────────────────
+
+/** Terminal statuses — used by the pause gate to skip the on-demand host
+ *  level-read for an already-finished run. */
+function isTerminalStatus(
+  status: AgentRunStatus | AgentRunState | null,
+): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
 
 /** Determine the pod scope at the project level. Pods can be project-scoped
  *  or global; we look up at dispatch time and remember which we found. For

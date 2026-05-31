@@ -43,6 +43,8 @@ Files/functions to touch:
 
 ### OBJECTIVE 2 — host-backed agent resume drops the answer
 
+> **Sequencing (added 2026-05-31):** OBJ-2A (below, appended to this doc) MUST land before OBJ-2. The pause→answer→resume path OBJ-2 fixes is UNREACHABLE for fresh host-backed runs today: the explicit-pause gate (`recordExplicitPause`, `pause-resume.ts:134-135`) reads the in-memory handle snapshot, which never advances to `running` for a fresh dispatch, so the ask is permanently `409 wrong-state` and the run never reaches `paused`. OBJ-2's markPaused-await fix (commit 7e2c511b) is downstream of a gate that never opens. Build 2A first.
+
 Answering a paused host-backed run flips the ask to `answered` (durable layer correct) and fires a resume spawn, but the answer is never delivered as the agent's next user turn; the run sits idle until the liveness sweep fails it. In-process resume works.
 
 Call chain (verified):
@@ -275,3 +277,184 @@ Stop and return to planning if implementation requires any of:
 - Touched-package tests + full `pnpm typecheck` green (tests run directly; test files type-checked via temp tsconfig).
 - The broader runtime-host/transient-worktree split + the host-not-aware cancel family remain deferred (011 / separate).
 - Tracker marks this build-slice artifact `planned`.
+
+---
+
+## OBJECTIVE 2A — pause/state gates must read RECONCILED truth, not the in-memory handle (PRECEDES OBJ-2)
+
+Added 2026-05-31 after a live trace. **Sequenced BEFORE OBJ-2** — OBJ-2's resume path is unreachable until 2A lands.
+
+### 2A.0 The confirmed bug (live, 2026-05-31)
+
+Dispatched a stock host-backed `researcher` told to call `pc_ask_user`. The agent called the tool (8× — its OWN LLM-level retries, not the tool's; the tool does NOT retry on 409, `agent-runs.ts:543-546`). Every call returned `409 wrong-state` ("run is queued, not running"). The `agent_runs` row reached `running` within ~3s (confirmed by polling `data/pc.sqlite`), driven ONLY by the 15s reconcile sweep (`[agent-runs] reconcile sweep: status=1`). No `pending_asks` row was ever created; the run completed without ever pausing.
+
+Root cause (verified):
+- `recordExplicitPause` gates the pause on `entry.run.getState()` (`pause-resume.ts:134-135`) — for a host-backed run this reads `HostBackedActiveRunHandle.snapshot.state` (`agent-active-runs.ts:101-103`).
+- For a FRESH host-backed dispatch that in-memory snapshot is seeded `queued`/`spawning` at construction (`agent-run-factory.ts:671`, from the `start-run` response snapshot) and is advanced to `running` ONLY by the factory's per-dispatch `run-state` subscription (`agent-run-factory.ts:630-632`, `handle.applySnapshot(event.run)`). That subscription did NOT land `running` for this run.
+- The DB row reached `running` via the periodic sweep `reconcileAgentRunsAgainstHost` (`agent-host-reattach.ts:185-220`), which updates the DB row + broadcasts (`:204-216`) but NEVER calls `applySnapshot` on the registered handle — it is not even passed the registry (`index.ts:481-486` omits `activeRunRegistry`). Same blind spot in `applyAgentHostEvent`'s `run-state` case (`agent-host-reattach.ts:238-249`).
+- Two candidate reasons the factory subscription dropped `running` (a fix robust to both is required, so we do NOT need to disambiguate to ship 2A): **(a)** the host's pushed `run-state` events are not reliably delivered to that subscription in the live stack; **(b)** init-order race — `handle` is `let`-null at `agent-run-factory.ts:593`, assigned only at `:671` AFTER `await hostClient.sendCommand(start-run)` (`:637`); the `onEvent` callback guards `if (handle && event.type==='run-state')` (`:630`), so any `run-state` (incl. `running`) that fires during the `await sendCommand` window is dropped for the handle.
+
+This is a textbook ADR violation (`archive/docs/state-propagation-decision.md` §"Core principles"): the in-memory handle snapshot is a THIRD projection, READ at a correctness-critical gate (`:134`) yet FED ONLY by the unreliable latency channel (the event subscription). Test from the ADR: *would a dropped message leave a permanently-wrong value?* — yes (permanent `409`, run never pauses). So the gate must sit behind RECONCILE, not the event stream.
+
+### 2A.1 Read-site inventory (every consumer of in-memory run state)
+
+Searched: `getActiveRunRegistry`, `entry.run.getState()`, `.run.getState()`, `HostBackedActiveRunHandle`, `activeRunHandleForAgentRun`, `reg.get(...).getState`. Production sites only (test/archive excluded):
+
+**Correctness-critical state-read gates (the targets — read state to DECIDE):**
+| Site | file:line | Reads | Verdict |
+|---|---|---|---|
+| `recordExplicitPause` pause gate | `pause-resume.ts:134-135` | `entry.run.getState() !== 'running'` → `wrong-state` reject | **THE bug.** Must read reconciled truth. |
+| `answerPendingAsk` resume gate | `pause-resume.ts:299-304` | `entry.run.getState() !== 'paused'` → `wrong-state` reject | Same class. For host-backed, the handle snapshot was forced to `paused` by `markPaused` (`agent-active-runs.ts:116-122` optimistic set) so today it usually passes — but it is the SAME unreconciled projection; fix it too for coherence. |
+
+**Command sites (read the handle for IDENTITY / to ISSUE a command — NOT a state gate; keep as-is):**
+| Site | file:line | Use |
+|---|---|---|
+| `cancelPendingAsk` | `pause-resume.ts:453-454` | `entry.run.cancel()` — command, no state read |
+| `/agent-runs/:runId/cancel` route | `agent-runs/routes.ts:188-194` | registry lookup → `entry.run.cancel()`; 404 if no handle (this is the host-not-aware 404 — see §2A.7) |
+| `/api/internal/mcp-handshake` | `mcp-bridge/routes.ts:90-93` | `getByCcSession` → `notifyMcpHandshake()` — command |
+| `dev-controls` count | `dev-controls/routes.ts:16` | `registry.list().length` — display |
+
+**Host-side (different process — NOT the in-memory server handle; out of scope):**
+| Site | file:line | Note |
+|---|---|---|
+| `agent-host-service.ts answerPending` | `:368,:378` | host-side `AgentRun.getState()` — already the OBJ-2 mechanism (typed `not-resumable`), correct as-is |
+
+**Handle-snapshot WRITERS (who keeps `HostBackedActiveRunHandle.snapshot` current — the demotion context):**
+| Writer | file:line | Writes handle? |
+|---|---|---|
+| Factory per-dispatch subscription | `agent-run-factory.ts:622,630-632` | YES (`run-state`/`run-terminal`) — the unreliable channel |
+| Boot reattach subscription | `agent-host-reattach.ts:148-151` | YES, but via a LOCAL `handles` map (`:107`), only for boot-registered runs — NOT factory-dispatched ones, and NOT the registry |
+| Reconcile sweep | `agent-host-reattach.ts:204-216` | **NO** — DB + broadcast only |
+| `applyAgentHostEvent` run-state | `agent-host-reattach.ts:238-249` | **NO** — DB + broadcast only |
+| `markPaused` (optimistic) | `agent-active-runs.ts:116-122` | YES (local, to `paused`) |
+| command responses | `agent-active-runs.ts:135,154,198-201` | YES (on mark-paused/answer/cancel acks) |
+
+Non-run `.getState()` matches (`project-runtime`, `interactive-session`, `send-service`, `transient-sessions`, `runtime-host/*`, web stores) are PTY/session/zustand — unrelated, excluded.
+
+### 2A.2 Mechanism decision
+
+**Recommended: Option C (combined, minimal) — demote the handle from state authority AT THE GATES + keep the sweep handle-coherent as cheap convenience.** Concretely:
+
+- **C-gate (the load-bearing half):** both gates read the RECONCILED DB row, not the handle.
+  - `recordExplicitPause` (`pause-resume.ts:134`): replace `entry.run.getState()` with `getAgentRunRow(input.agentRunId).status` (add a `getAgentRun` test seam to `PauseResumeDeps`, defaulting to `@pc/db` `getAgentRunRow`, mirroring `agent-host-reattach`'s seam pattern). Gate on the DB status.
+  - **Freshness for the early-ask race:** the sweep is 15s (`AGENT_RUN_RECONCILE_SWEEP_MS`, `index.ts:472`), so an immediate ask can still see a stale `queued`/`spawning` row before the first tick. Per the ADR's "reconcile triggered on demand": when the DB row is non-terminal-but-not-yet-`running`/`paused` AND a host client is present, do a single ON-DEMAND host level-read for THIS run before deciding — refresh + re-read via the host client (`list-runs` refresh then `hostClient.listRuns()` find-by-runId, the same primitive the sweep uses), and if the host says `running`, treat it as `running` (optionally write-through the DB row so the next read is coherent). This converts "wait up to 15s" into "decide now from authority." Inject the host level-read as an optional dep (`hostRunState?: (runId) => AgentRunState | null`) so the unit tests stay host-free and in-process callers omit it.
+  - `answerPendingAsk` (`pause-resume.ts:299`): same swap to the reconciled row status `=== 'paused'`.
+- **C-coherence (cheap, no gate depends on it):** make the sweep + `applyAgentHostEvent` run-state case ALSO re-seed the registered handle, so display/`getState()` callers and the OBJ-2 markPaused path see a fresh snapshot. Pass `activeRunRegistry` into `reconcileAgentRunsAgainstHost` (it already threads `AgentHostReattachDeps` which HAS `activeRunRegistry`; the `index.ts:481` call just omits it) and, in the non-terminal `shouldUpdateFromHost` branch (`:204-216`) and `applyAgentHostEvent` run-state branch (`:238-249`), call `deps.activeRunRegistry?.get(row.id)?.run` → if it is a `HostBackedActiveRunHandle`, `applySnapshot(hostRun)`. **No gate reads this** — it is convenience only; correctness lives entirely in C-gate. (Type note: `ActiveRunHandle` has no `applySnapshot`; guard with `instanceof HostBackedActiveRunHandle` or add an optional `applySnapshot?` to the interface — prefer the `instanceof` guard to avoid widening the interface.)
+- **Also close the factory init-order race (cheap, belt-and-suspenders):** after `handle` is assigned (`agent-run-factory.ts:671`), the handle is seeded from the START-RUN response snapshot only. Add: immediately re-seed from the latest known host snapshot for that run (the subscription could buffer events fired during the `await` and replay once `handle` is non-null — minimal change: capture `run-state` events into a local `let latestSnapshot` in the closure even when `handle` is null, then `handle.applySnapshot(latestSnapshot)` right after assignment). This removes reason (b). Reason (a) is then covered by C-coherence (the sweep re-seeds) + C-gate (the gate doesn't depend on the handle at all). Keep this strictly additive.
+
+**Why C over A or B:**
+- **Option A alone (gates read DB only, no handle coherence):** correct for the gates and ADR-pure, but leaves `HostBackedActiveRunHandle.snapshot` permanently stale for any display/`getState()` reader and for the OBJ-2 markPaused optimistic flow — a latent foot-gun the next slice re-trips. A is the *core* of C; C just adds the cheap coherence so the handle isn't a known-lie.
+- **Option B alone (handle-coherence only, gates still read handle):** keeps the handle AS the authority and merely adds more writers to it. This is "harden the unreliable channel" — exactly what the ADR rejects ("vs. just hardening the event stream … still edge-triggered; a bad-enough blip loses the transition forever"). A dropped sweep tick or a registry miss re-opens the bug. Rejected as authority.
+- **Option C:** gates read reconciled truth (the row, kept correct by the sweep that already exists) = ADR "single owner / reconcile-is-correctness"; the handle keeps IDENTITY + COMMAND capability and a best-effort fresh snapshot, but is NEVER a gate authority. Contained: no DB migration, no `changes`/cursor build, no runtime-host interface extraction.
+
+### 2A.3 Exact touch points
+
+```text
+apps/server/src/services/pause-resume.ts
+  - PauseResumeDeps (:89): add
+      getAgentRun?: (id: ULID) => AgentRunRow | null;          // default @pc/db getAgentRunRow
+      hostRunState?: (id: ULID) => AgentRunState | null;       // optional on-demand host level-read; omit in-process
+  - recordExplicitPause (:134-141): read reconciled status:
+      before: const runState = entry.run.getState();
+      after : const row = (deps.getAgentRun ?? getAgentRunRow)(input.agentRunId);
+              let runState: AgentRunStatus | null = row?.status ?? null;
+              if (runState !== 'running' && runState !== 'paused' && deps.hostRunState) {
+                const hostState = deps.hostRunState(input.agentRunId);  // on-demand reconcile
+                if (hostState) runState = hostState;
+              }
+              if (runState !== 'running') return { ok:false, cause:'wrong-state', ... };
+    (Keep the existing `reg.get` for the IDENTITY/metadata the pause body needs — entry.ccSessionId,
+     projectId, podName, dispatcherSessionId, parentWorkItemId — but DECIDE on the row, not the handle.
+     If `entry` is missing but the row is `running`, that is a separate phantom case: keep returning
+     `unknown-run` for now — the registry handle is still required to deliver the pause + markPaused.)
+  - answerPendingAsk (:299-304): swap entry.run.getState() !== 'paused' to the reconciled row status.
+
+apps/server/src/services/agent-host-reattach.ts
+  - reconcileAgentRunsAgainstHost non-terminal branch (:204-216): after the DB update + broadcast, also
+      if (deps.activeRunRegistry) {
+        const h = deps.activeRunRegistry.get(row.id)?.run;
+        if (h instanceof HostBackedActiveRunHandle) h.applySnapshot(hostRun);
+      }
+  - applyAgentHostEvent run-state branch (:238-249): same handle re-seed (convenience only).
+    (HostBackedActiveRunHandle is already imported here, :25.)
+
+apps/server/src/index.ts
+  - reconcile-sweep call (:481-486): add activeRunRegistry: getActiveRunRegistry() to the deps object
+    (getActiveRunRegistry already imported + used at :513). NOTE: index.ts carries a stray NUL byte
+    (grep flags it "binary") — edit surgically; verify `git diff --check`.
+
+apps/server/src/services/agent-run-factory.ts (close the init-order race — additive)
+  - In the onEvent closure (:603-633): capture run-state snapshots even while handle is null
+    (let latestRunStateSnapshot: AgentHostRunSnapshot | null), and after handle assignment (:671)
+    apply the latest captured snapshot: if (latestRunStateSnapshot) handle.applySnapshot(latestRunStateSnapshot).
+    Strictly additive; do not change the terminal path.
+```
+
+No change to `agent-active-runs.ts` (the handle KEEPS `applySnapshot`/`getState` — they just stop being gate authorities). No host-side change. No contract change. No DB migration.
+
+### 2A.4 The early-ask sub-case (agent asks as its very first action)
+
+An agent that calls `pc_ask_user` immediately races `queued→running`. With C-gate:
+- If the reconciled row (or the on-demand host level-read) says `running` → gate opens, pause proceeds. The on-demand level-read (§2A.2 C-gate) makes this the common outcome even before the first 15s sweep tick, because the host has already driven the run `running` by the time the MCP tool POSTs.
+- If the run is GENUINELY not yet `running` (still `queued`/`spawning` — the spawn truly hasn't started): the gate must return a **transient, retryable** signal, NOT a permanent reject. Today `recordExplicitPause` returns `cause:'wrong-state'` → the route maps it `409` (`agent-runs/routes.ts:547`) and the MCP tool surfaces `isError` with NO retry (`agent-runs.ts:543-546`). The agent's only recourse is its own LLM-level re-call (what we saw 8×). **Decision: keep the 409 wrong-state contract (don't widen the error union this slice), BUT the on-demand level-read makes a true-not-running the only case that still 409s, and that case IS legitimately transient** — the run will be `running` within a spawn cycle. Optionally (P1, note as open): add a single bounded server-side retry inside `recordExplicitPause` (re-read after a short delay) so the agent doesn't have to. Recommend NOT adding tool-level retry this slice (the agent re-call already works once the gate reads authority); leave the 409 as the transient signal and document that an immediate-ask now resolves on the first agent re-call instead of never.
+
+### 2A.5 Tests (unit; `pnpm typecheck` EXCLUDES `test/**`)
+
+| Priority | Test | Purpose |
+|---|---|---|
+| P0 | `apps/server/test/agent-pause-resume.test.ts` (extend; archive copy exists) | `recordExplicitPause` opens the gate when the DB row is `running` even though the registry handle still reports `queued`/`spawning` (the exact live bug). Reject only when the reconciled state is truly not `running`. |
+| P0 | same | On-demand path: row says `spawning`, injected `hostRunState` returns `running` → gate opens; `hostRunState` returns `spawning` → still 409 wrong-state. |
+| P0 | same | `answerPendingAsk` resume gate reads the reconciled row `paused`, not the handle. |
+| P0 | `apps/server/test/agent-host-reattach.test.ts` (extend; archive copy exists) | `reconcileAgentRunsAgainstHost` with a registered `HostBackedActiveRunHandle` re-seeds the handle snapshot to `running` on a non-terminal sweep (C-coherence). |
+| P1 | `apps/server/test/agent-active-runs.test.ts` (extend) | Factory init-order race: a `run-state:running` event fired BEFORE handle assignment is applied to the handle once assigned (no longer dropped). |
+
+Type-check new/extended test files via a temporary per-package `tsconfig.testcheck.json` (include `test/`), then remove it — `pnpm typecheck` will not catch test-file type errors.
+
+### 2A.6 Verification
+
+Automated (run from repo root; do NOT trust the IDE diagnostics feed):
+```powershell
+pnpm --filter @pc/server typecheck
+pnpm typecheck
+git diff --check        # confirm the index.ts NUL byte wasn't damaged
+pnpm --filter @pc/server test
+```
+
+Live re-test (the exact test that found the bug; requires a human `pnpm dev:app` relaunch — the build agent does NOT restart anything):
+- `PC_DEBUG_HOST_RESUME=1 pnpm dev:app` (background; host emits to `apps/server/.dev-logs/server-<date>.log`).
+- `POST /api/projects/01KS1358GYAQFG8BW9ERSB2J7C/agents/researcher/invoke` with input instructing an IMMEDIATE `pc_ask_user` (and to retry once on `wrong-state`).
+- Inspect `data/pc.sqlite`: `agent_runs` row reaches `running`; a `pending_asks` row IS created (open); after the answer, the row resumes and reaches `completed` (NOT stranded `running`, NOT failed by the idle sweep).
+- Inspect the JSONL transcript: the agent paused, received the answer as its next user turn, and continued.
+- Capture the `PC_DEBUG_HOST_RESUME` trace (host `answer-pending stateBefore/stateAfter`) to confirm the host run was genuinely `paused` at answer time.
+- **Pass:** run reaches `paused`, `pending_asks` row created, answering resumes + completes.
+
+### 2A.7 Host-not-aware cancel/kill/inspect (handoff-deferred) — fixed for free?
+
+**Partially, and only `/cancel`.** `/cancel` (`agent-runs/routes.ts:188-189`) 404s when there is no registry handle for the run. Demoting the GATE doesn't change `/cancel` — it does not read `getState()`, it requires the handle to ISSUE `cancel()`. BUT the C-coherence half (re-seeding registered host handles) does NOT create handles where none exist; the `/cancel` 404 for host-backed runs is a MISSING-HANDLE problem (factory-dispatched host runs ARE registered at `agent-run-factory.ts:678`, so a live host run SHOULD have a handle — the 404 the handoff flags is likely for workflow-spawned / boot-orphaned runs, a different registration gap). `/kill` and `/inspect` already read the DB row directly (`routes.ts:206,226`), so they are unaffected by the handle and already host-agnostic. **Conclusion: the cancel/kill/inspect family is NOT fixed for free by 2A and remains a SEPARATE deferred item** (slice 011 / the host-not-aware kill family). 2A only fixes the pause/resume STATE GATES. Note it; do not pull it in.
+
+### 2A.8 Rollback
+
+- C-gate: revert the two gate reads to `entry.run.getState()`; drop the `getAgentRun`/`hostRunState` deps. Returns to today's (broken-but-known) behavior.
+- C-coherence: remove the two `applySnapshot` re-seeds + the `activeRunRegistry` arg at `index.ts`. Pure removal; no state change.
+- Factory race fix: remove the `latestRunStateSnapshot` capture + post-assignment apply. Additive-only revert.
+- No DB migration, no contract change — nothing else to reverse.
+
+### 2A.9 Stop conditions
+
+Stop and return to planning if the fix appears to require any of:
+- A DB migration / table alter / `rev` backfill / the per-entity `rev` write-door (that's ADR step 2 / slice 011).
+- The full outbox / `changes` table / global `version` / WS cursor catch-up build (ADR steps 6-7 / slice 011).
+- A runtime-host interface extraction / transient-session adapter / worktree-path-guard facade (nominal 009 → slice 011).
+- Adding `GET /host/runs` epoch+rev+pid-start-time level-read endpoint or the reconnect/backoff stream hardening (ADR steps 1/3 — the on-demand level-read here reuses the EXISTING `list-runs` + `listRuns()` primitives; do NOT build the new endpoint).
+- Changing pause/answer/cancel STATE semantics or `pending_asks` (slice 005) — only the GATE's state SOURCE changes.
+- Restarting/killing any dev process.
+
+### 2A.10 Acceptance criteria
+
+- A fresh host-backed agent that calls `pc_ask_user` immediately reaches `paused` and creates a `pending_asks` row (no permanent `409 wrong-state`); the live re-test (§2A.6) passes end-to-end (pause → answer → resume → `completed`).
+- `recordExplicitPause` and `answerPendingAsk` decide on the reconciled DB row (+ optional on-demand host level-read), NOT `HostBackedActiveRunHandle.snapshot`.
+- The reconcile sweep + `applyAgentHostEvent` run-state case re-seed a registered host handle so it is no longer a stale lie (convenience; no gate depends on it).
+- The factory init-order race (run-state during the start-run await) no longer drops the handle's `running`.
+- No DB migration, no contract change, no new host endpoint; the host-not-aware cancel/kill/inspect family remains separately deferred (§2A.7).
+- Touched-package tests + full `pnpm typecheck` green; `git diff --check` clean (index.ts NUL byte intact).
+- OBJ-2A is sequenced and built BEFORE OBJ-2.

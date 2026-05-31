@@ -591,6 +591,11 @@ async function startHostBackedRun(
       ? { type: 'start-run' as const, request: buildHostStartRunRequest(args) }
       : { type: 'resume-run' as const, request: buildHostResumeRunRequest(args) };
   let handle: HostBackedActiveRunHandle | null = null;
+  // OBJ-2A — close the init-order race: a `run-state` (incl. `running`) fired
+  // during the `await sendCommand` window below lands before `handle` is
+  // assigned. Capture the latest snapshot even while null, then replay it onto
+  // the handle right after assignment so the start-run seed isn't left stale.
+  let latestRunStateSnapshot: AgentHostRunSnapshot | null = null;
   let unsubscribe: (() => void) | void;
   const fail = (
     cause: 'host-unavailable' | 'host-protocol-error',
@@ -627,8 +632,9 @@ async function startHostBackedRun(
       activeRunRegistry: activeReg,
       broadcast: broadcastForFactory(args),
     });
-    if (handle && event.type === 'run-state') {
-      handle.applySnapshot(event.run);
+    if (event.type === 'run-state') {
+      latestRunStateSnapshot = event.run;
+      if (handle) handle.applySnapshot(event.run);
     }
   });
 
@@ -675,6 +681,9 @@ async function startHostBackedRun(
       );
     },
   });
+  // OBJ-2A — replay any run-state captured during the sendCommand await onto the
+  // freshly-assigned handle (the start-run response seeds queued/spawning only).
+  if (latestRunStateSnapshot) handle.applySnapshot(latestRunStateSnapshot);
   activeReg.register({
     run: handle,
     projectId: args.input.projectId,

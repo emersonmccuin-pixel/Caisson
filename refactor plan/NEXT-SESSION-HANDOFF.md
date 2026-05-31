@@ -1,6 +1,24 @@
 # Next Session Handoff — refactor/auto-pathway
 
-## LATEST SESSION (2026-05-31 cont.) — agent scoping + pc_ask_user universal + pc_list_agents fixed
+## LATEST SESSION (2026-05-31) — SLICE 009 CLOSED via OBJ-2A (host-resume now works end-to-end)
+Live-traced the OBJ-2 host-resume path (the one open item) and found it **UNREACHABLE**: a fresh host-backed agent calling `pc_ask_user` was rejected `409 wrong-state` forever. Root cause = `recordExplicitPause` gated on the in-memory `HostBackedActiveRunHandle.snapshot.state`, which never advances to `running` live — only the 15s reconcile sweep updated the DB row, NOT the handle (textbook violation of the state-propagation ADR: a third projection read at a correctness gate, fed only by the unreliable event stream). The shipped OBJ-2 markPaused-await fix (7e2c511b) sat downstream of a gate that never opened.
+
+**Fixed via new OBJ-2A** (plan `build-slices/009-runtime-host-transient-worktrees.md` §"OBJECTIVE 2A"; opus plan+build subagents, gates self-verified):
+- Pause/resume gates (`recordExplicitPause`, `answerPendingAsk` in `pause-resume.ts`) now decide on the **reconciled DB row** (`getAgentRunRow`) + an optional **on-demand host `list-runs` level-read** (wired in `agent-runs/routes.ts`) that closes the early-ask race — NOT the in-memory handle. The handle keeps identity + command capability only (demoted from state authority).
+- `reconcileAgentRunsAgainstHost` + `applyAgentHostEvent` run-state now re-seed a registered `HostBackedActiveRunHandle` (convenience; `index.ts` passes `activeRunRegistry` into the sweep).
+- Factory init-order race closed (`agent-run-factory.ts`): a `run-state` fired during the start-run `await` is captured and replayed onto the handle after assignment.
+- No DB migration, no contract change. Tests: `apps/server/test/agent-pause-resume.test.ts` + `agent-host-reattach.test.ts`. Gates self-run: full `pnpm typecheck` exit 0; `@pc/server` 81/81; `git diff --check` clean.
+- **LIVE-VERIFIED on the UI** (gated stack reloaded via `/api/dev/restart`): orchestrator dispatched `researcher` → it called `pc_ask_user` → run `01KT05CWFVB684ME6WM1MHF9KY` reached `paused` (gate OPENED — the bug) → answered "marmalade" in chat → resumed → `completed` cleanly.
+
+**Slice 009 = DONE** (OBJ-1/2/2A/3 all landed + verified). **Do NEXT: slice 010 (Areas)** — plan `build-slices/010-areas.md` exists, marked planned. Session-tracker row 35.
+
+**Still deferred (separate, NOT slice 009):** host-not-aware `/cancel` 404 for some runs (missing-handle, not fixed by 2A — `/kill`+`/inspect` already read the DB row); OBJ-2 deep paused-state-loss recovery instrumentation (`PC_DEBUG_HOST_RESUME`) stays in place. The broader runtime-host interface extraction + the full state-propagation outbox/`changes`/cursor build remain slice 011 / the ADR migration.
+
+**Stack note:** the gated `pnpm dev:app` is LIVE on 4040/5173/8788 and was reloaded this session via `/api/dev/restart` (force, to clear 2 phantom stale registry entries) so it runs the OBJ-2A source. Don't blindly relaunch; check first. Never restart unasked.
+
+---
+
+## PRIOR SESSION (2026-05-31) — agent scoping + pc_ask_user universal + pc_list_agents fixed
 Investigated the slice-009 OBJ-2 blocker ("haiku pod echoed instead of asking"). Root cause confirmed: there **is** a real user-created global pod named `haiku` (created 2026-05-23) and it genuinely **lacked `pc_ask_user`** in its kit — the prior handoff note was right; my first reframe was wrong. Three commits landed + live-verified against a reloaded gated stack:
 - **`a05e2a24`** — (1) `pc_ask_user` added to `REQUIRED_AGENT_TOOLS` (`packages/domain/src/tool-catalog.ts`) so EVERY agent (incl. user-created pods that omit it) gets it force-merged at create/update/materialize. (2) **Orchestrator agent scoping**: new single-source policy in `@pc/db` — `isProjectDispatchable` + `listProjectVisibleAgents` (project-scope pods + built-in/stock globals ONLY; global user-created pods excluded — user must copy one in via Add agent). `{{AVAILABLE_AGENTS}}` (`pod-variable-renderers.ts`), the Agents-tab list route (`pod-routes.ts`), and `resolveAgentForDispatch` (`pods.ts`) all route through that one rule.
 - **`f54f03a4`** — wired the previously-DEAD `GET /api/projects/:id/agents` route (the `pc_list_agents` live roster lookup, was 404 every time → orchestrator silently fell back to spawn config) through the same `listProjectVisibleAgents`. Now 200 + scoped.

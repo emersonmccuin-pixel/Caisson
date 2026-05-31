@@ -212,6 +212,11 @@ export function reconcileAgentRunsAgainstHost(
         type: 'agent-run-changed',
         record: agentRunRecordFor(row, hostRun),
       });
+      // OBJ-2A C-coherence — re-seed a registered host handle so display /
+      // getState() readers + the OBJ-2 markPaused path see a fresh snapshot.
+      // Convenience only; no gate reads the handle (those read the DB row).
+      const h = deps.activeRunRegistry?.get(row.id)?.run;
+      if (h instanceof HostBackedActiveRunHandle) h.applySnapshot(hostRun);
       statusUpdated += 1;
     }
   }
@@ -246,6 +251,9 @@ export function applyAgentHostEvent(
           type: 'agent-run-changed',
           record: agentRunRecordFor(row, event.run),
         });
+        // OBJ-2A C-coherence — re-seed a registered host handle (convenience).
+        const h = deps.activeRunRegistry?.get(row.id)?.run;
+        if (h instanceof HostBackedActiveRunHandle) h.applySnapshot(event.run);
         return { statusUpdated: 1, terminalApplied: 0, jsonlBroadcast: 0 };
       }
       return emptyResult();

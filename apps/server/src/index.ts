@@ -480,6 +480,7 @@ const agentRunReconcileSweep = setInterval(() => {
       await client.sendCommand({ type: 'list-runs' });
       const res = reconcileAgentRunsAgainstHost({
         hostClient: client,
+        activeRunRegistry: getActiveRunRegistry(),
         broadcast: broadcastTo,
         channelServer,
         deliveryRouter,

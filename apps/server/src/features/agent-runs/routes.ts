@@ -7,7 +7,12 @@ import type {
   PendingAskOption,
   ULID,
 } from '@pc/domain';
-import { AgentRunJsonlTailer, jsonlPathFor, type AgentRunJsonlEvent } from '@pc/runtime';
+import {
+  AgentRunJsonlTailer,
+  jsonlPathFor,
+  type AgentRunJsonlEvent,
+  type AgentRunState,
+} from '@pc/runtime';
 import {
   getAgentRunRow,
   getProjectById,
@@ -120,6 +125,20 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
   // factory / terminal / pause delivery sites. Default router = env (channel).
   const deliveryRouter = deps.deliveryRouter ?? envDeliveryRouter();
   const mailboxEnqueue = deps.mailboxEnqueue ?? null;
+
+  // OBJ-2A — on-demand host level-read for the pause gate. Refreshes the host's
+  // run cache (the same `list-runs` primitive the reconcile sweep uses) then
+  // re-reads THIS run, so an immediate `pc_ask_user` decides from authority
+  // instead of waiting up to 15s for the next sweep tick. Only meaningful when
+  // a host client exists; the pause call wires it conditionally.
+  const hostClient = deps.hostClient ?? null;
+  const hostRunStateReader = async (id: ULID): Promise<AgentRunState | null> => {
+    if (!hostClient) return null;
+    // `list-runs` refresh + find-by-runId — the SAME primitive the reconcile
+    // sweep uses (index.ts), staying on the AgentHostReattachClient interface.
+    await hostClient.sendCommand({ type: 'list-runs' });
+    return hostClient.listRuns().find((r) => r.runId === id)?.state ?? null;
+  };
 
   /** Activity Panel snapshot: this project's active agent runs (queued |
    *  spawning | running | paused). Card filtering happens client-side; the
@@ -538,6 +557,10 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         mailboxEnqueue,
         slug: project.slug,
         broadcast: (env) => deps.broadcastTo(projectId, env),
+        // OBJ-2A — on-demand host level-read closes the early-ask race: a fresh
+        // host round-trip when the DB row is still queued/spawning. Only wired
+        // when an out-of-process host client is present; in-process omits it.
+        ...(deps.hostClient ? { hostRunState: hostRunStateReader } : {}),
       },
     );
 
