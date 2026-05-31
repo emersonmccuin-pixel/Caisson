@@ -19,6 +19,7 @@ import {
 } from '@/features/agent-runs/client';
 import type { V2RunStatus, V2RunSummary } from '@/features/workflows/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
+import { MailboxInbox } from '@/features/mailbox/MailboxInbox';
 import { useProjectAgentRuns } from '@/hooks/use-project-agent-runs';
 import { useProjectWorkflowV2Runs } from '@/hooks/use-project-workflow-v2-runs';
 import { useActiveCenterTab } from '@/store/active-center-tab';
@@ -125,6 +126,7 @@ export function ActivityPanel({
         </div>
       ) : (
         <div className="flex flex-1 flex-col overflow-y-auto">
+          <MailboxRegion project={project} events={events} />
           <RunningAgentsRegion
             project={project}
             runs={agentRuns}
@@ -329,6 +331,25 @@ function RunningWorkflowCard({
         </div>
       </button>
     </li>
+  );
+}
+
+function MailboxRegion({
+  project,
+  events,
+}: {
+  project: Project;
+  events: WsEnvelope[];
+}) {
+  // Slice 007 — the project inbox surface. Lists recipients (unread/actioned),
+  // renders the answer/dismiss action form, and refetches live on the canonical
+  // mailbox.* / pending-interaction.changed frames (the hook owns the refetch).
+  return (
+    <RegionShell title="Inbox">
+      <div className="px-3 pb-2 text-[12px] text-foreground [&_.mailbox-inbox]:space-y-1.5 [&_.mailbox-inbox__row]:rounded [&_.mailbox-inbox__row]:border [&_.mailbox-inbox__row]:border-border [&_.mailbox-inbox__row]:bg-card [&_.mailbox-inbox__row]:p-2 [&_.mailbox-inbox--empty]:py-1 [&_.mailbox-inbox--empty]:text-[11px] [&_.mailbox-inbox--empty]:italic [&_.mailbox-inbox--empty]:text-muted-foreground/70 [&_button]:mr-1 [&_button]:border [&_button]:border-border [&_button]:bg-card [&_button]:px-1.5 [&_button]:py-0.5 [&_button]:text-[10px] [&_button]:uppercase [&_button]:tracking-wider [&_button]:text-muted-foreground [&_input]:mr-1 [&_input]:border [&_input]:border-border [&_input]:bg-background [&_input]:px-1 [&_input]:py-0.5 [&_input]:text-[11px]">
+        <MailboxInbox scope={{ projectId: project.id }} events={events} />
+      </div>
+    </RegionShell>
   );
 }
 

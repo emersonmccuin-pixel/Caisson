@@ -139,36 +139,63 @@ test('delivery inspector returns deliveries; bad request is 400', async () => {
   assert.equal(bad.status, 400);
 });
 
-test('global inbox lists project-less user-inbox messages', async () => {
-  const { app } = makeApp();
-  // app-level enqueue uses a project route in this slice; a project-less message
-  // is created by enqueuing with a user-inbox address whose projectId is null. We
-  // exercise the global LIST against a message inserted via the service directly.
-  const service = new MailboxService();
-  const messageId = newId();
-  service.enqueue({
-    message: {
-      id: messageId,
-      projectId: null,
+test('app-level enqueue with a project-less user-inbox recipient → global inbox', async () => {
+  const { app, broadcasts } = makeApp();
+  const enq = await app.request('/api/mailbox/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
       kind: 'system-notice',
       body: 'global hello',
-      sourceKind: 'system',
       idempotencyKey: `g-${Date.now()}`,
-    },
-    recipients: [
-      {
-        id: newId(),
-        addressKind: 'user-inbox',
-        addressJson: { kind: 'user-inbox', userId: 'local-user', projectId: null },
-        channel: 'ui-inbox',
-        deliveryId: newId(),
-      },
-    ],
-    now: Date.now(),
+      recipients: [
+        { address: { kind: 'user-inbox', userId: 'local-user', projectId: null }, channel: 'ui-inbox' },
+      ],
+    }),
   });
+  assert.equal(enq.status, 200);
+  const enqBody = await json<{ ok: boolean; message: { projectId: string | null } }>(enq);
+  assert.equal(enqBody.ok, true);
+  // The message is stored project-less so it lands in the global inbox…
+  assert.equal(enqBody.message.projectId, null);
+  // …and fanned out on the global (project-less) channel.
+  assert.ok(broadcasts.some((b) => b.projectId === null));
+
   const list = await app.request('/api/mailbox');
   const body = await json<{ items: { message: { body: string } }[] }>(list);
   assert.ok(body.items.some((i) => i.message.body === 'global hello'));
+});
+
+test('app-level enqueue derives projectId from a project-bound recipient', async () => {
+  const { app } = makeApp();
+  const project = createProject({
+    slug: `mbx-derive-${Date.now()}`,
+    name: 'Mailbox Derive',
+    stages,
+    folderPath: join(tmpDir, 'mbx-derive'),
+  });
+  const enq = await app.request('/api/mailbox/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      kind: 'system-notice',
+      body: 'scoped via app route',
+      idempotencyKey: `d-${Date.now()}`,
+      recipients: [{ address: { kind: 'project-inbox', projectId: project.id }, channel: 'ui-inbox' }],
+    }),
+  });
+  const enqBody = await json<{ message: { projectId: string | null } }>(enq);
+  assert.equal(enqBody.message.projectId, project.id);
+  // It is NOT in the global inbox…
+  const global = await app.request('/api/mailbox');
+  assert.ok(!(await json<{ items: { message: { body: string } }[] }>(global)).items.some(
+    (i) => i.message.body === 'scoped via app route',
+  ));
+  // …but IS in the project inbox.
+  const proj = await app.request(`/api/projects/${project.id}/mailbox`);
+  assert.ok((await json<{ items: { message: { body: string } }[] }>(proj)).items.some(
+    (i) => i.message.body === 'scoped via app route',
+  ));
 });
 
 test('answer a pending interaction route (404 unknown, 200 ok, 409 already terminal)', async () => {

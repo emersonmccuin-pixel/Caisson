@@ -17,9 +17,11 @@ import type {
 } from '@pc/app-services';
 import {
   buildLiveEventFrame,
+  mailboxAddressProjectId,
   parseEnqueueMailboxMessageRequest,
   parseListMailboxQuery,
   parseAnswerPendingInteractionRequest,
+  type EnqueueMailboxMessageRequest,
   type MailboxAddress,
 } from '@pc/contracts';
 import {
@@ -71,17 +73,15 @@ export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
     deps.broadcastTo(pub.interaction.projectId, buildLiveEventFrame(pub.liveEvent));
   };
 
-  // ── Enqueue (project-scoped). NEW route; idempotent by key. ────────────────
-  app.post('/api/projects/:projectId/mailbox/messages', async (c) => {
-    const projectId = c.req.param('projectId') as ULID;
-    const parsed = parseEnqueueMailboxMessageRequest(await safeJson(c));
-    if (!parsed.ok) return c.json({ ok: false, error: parsed.error }, 400);
-    const req = parsed.value;
-    const messageId = newId();
-    const ts = now();
+  // Shared enqueue. The message's projectId is DERIVED from its recipient
+  // addresses (the live-event scope invariant is `global ⟺ projectId IS NULL`),
+  // NOT hardcoded from any path param — a `user-inbox`/project-less recipient
+  // yields a global (`projectId:null`) message that lands in `/api/mailbox`.
+  const enqueue = (req: EnqueueMailboxMessageRequest): MailboxEnqueuePublication => {
+    const projectId = deriveMessageProjectId(req);
     const pub = deps.mailbox.enqueue({
       message: {
-        id: messageId,
+        id: newId(),
         projectId,
         kind: req.kind,
         subject: req.subject ?? null,
@@ -99,16 +99,36 @@ export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
         channel: r.channel,
         deliveryId: newId(),
       })),
-      now: ts,
+      now: now(),
     });
     fanoutMessage(pub);
-    return c.json({
-      ok: true,
-      created: pub.created,
-      message: toMailboxMessageDto(pub.message),
-      recipients: pub.recipients.map(toMailboxRecipientDto),
-      deliveries: pub.deliveries.map(toMailboxDeliveryDto),
-    });
+    return pub;
+  };
+
+  const enqueueResponse = (pub: MailboxEnqueuePublication) => ({
+    ok: true as const,
+    created: pub.created,
+    message: toMailboxMessageDto(pub.message),
+    recipients: pub.recipients.map(toMailboxRecipientDto),
+    deliveries: pub.deliveries.map(toMailboxDeliveryDto),
+  });
+
+  // ── Enqueue (project-scoped). NEW route; idempotent by key. ────────────────
+  // Kept for callers that already know the project; recipients still drive the
+  // message's stored projectId (so a project-less recipient is still global).
+  app.post('/api/projects/:projectId/mailbox/messages', async (c) => {
+    const parsed = parseEnqueueMailboxMessageRequest(await safeJson(c));
+    if (!parsed.ok) return c.json({ ok: false, error: parsed.error }, 400);
+    return c.json(enqueueResponse(enqueue(parsed.value)));
+  });
+
+  // ── Enqueue (app-level / unscoped). The ONLY path that can create a global
+  // (`projectId:null`) message — used for the single-user inbox. The message's
+  // scope comes from its recipient addresses. ────────────────────────────────
+  app.post('/api/mailbox/messages', async (c) => {
+    const parsed = parseEnqueueMailboxMessageRequest(await safeJson(c));
+    if (!parsed.ok) return c.json({ ok: false, error: parsed.error }, 400);
+    return c.json(enqueueResponse(enqueue(parsed.value)));
   });
 
   // ── Project inbox list. ─────────────────────────────────────────────────────
@@ -200,6 +220,18 @@ function filterInbox(
       recipient: toMailboxRecipientDto(r.recipient),
       message: toMailboxMessageDto(r.message!),
     }));
+}
+
+/** A message has ONE projectId; recipients can target multiple addresses. The
+ *  message is project-bound iff some recipient carries a project context; a set
+ *  of purely project-less recipients (e.g. a `user-inbox` with projectId:null)
+ *  yields a global message. The first project context wins. */
+function deriveMessageProjectId(req: EnqueueMailboxMessageRequest): ULID | null {
+  for (const r of req.recipients) {
+    const pid = mailboxAddressProjectId(r.address);
+    if (pid !== null) return pid as ULID;
+  }
+  return null;
 }
 
 async function safeJson(c: { req: { json: <T>() => Promise<T> } }): Promise<unknown> {
