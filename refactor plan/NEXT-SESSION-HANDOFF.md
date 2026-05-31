@@ -3,8 +3,8 @@
 **Read this FIRST.** Updated 2026-05-31 (session: full 001–008 review + 2 fixes + design decisions).
 
 ## Do this session, in order
-1. **On the gated relaunch, behaviorally confirm the slice-008 host-cutover fix** (`e22456d2`). The fix was unit-proven (`agent-host-terminal-gate.test.ts`, would fail pre-fix) but NOT yet confirmed in the live app. Relaunch `PC_DELIVERY_AGENT=mailbox … pnpm dev:app`, dispatch a real agent, confirm its completion arrives as ONE orchestrator turn via mailbox (`mailbox/deliveries` shows `orchestrator-turn` `accepted`, `agent_delivery_audit` driver=mailbox), no Channel push.
-2. **Then resume the pathway: slice 009 (runtime-host split).** plan → build via opus subagents → human review. 009 also: (a) fixes the logged host-resume answer-strand bug, (b) is the home for the DEFERRED slice-008 recovery-path gate-wiring (boot-reattach/liveness honor the agent gate — needs the boot-order/lazy-port refactor), and (c) is the home for the DEFERRED slice-006 echo-timeout composer recovery (the gluing root in `send-protocol.ts`).
+1. **Slice 009 (runtime-host split) — LEAD objective is now the agent→mailbox boot-order fix.** The slice-008 behavioral verify (2026-05-31, gated relaunch) FAILED end-to-end: a dispatched agent's completion STILL routed to Channel (`agent_inbox` row, not mailbox) even though the gate was confirmed mailbox (the webhook flow landed in mailbox in the same stack). Root cause: the boot-wired host-terminal handlers — `reattachAgentRunsDuringServerBoot` (`index.ts:371`), the `reconcileAgentRunsAgainstHost` interval sweep (`413`), `sweepAgentRunLiveness` (`442`) — all run BEFORE `mailboxService`/`enqueueMailboxAndFanout` (`477`/`540`), so they carry NO mailbox port and apply terminals via Channel, winning the idempotency race against the factory's now-gated handler. The slice-008 hotfix (`e22456d2`, factory `606/687` + `applyHostTerminalSnapshot`) is correct + unit-proven + NECESSARY but INSUFFICIENT alone. 009 must wire the agent gate into those boot handlers (construct `mailboxService` earlier OR pass a lazy `() => enqueueMailboxAndFanout` — note `mailboxService` is a `const`, so a boot-time direct reference hits TDZ; design it). Verify by re-dispatching → one orchestrator turn via mailbox, no `agent_inbox` row.
+2. **009 also:** (a) fixes the logged host-resume answer-strand bug, (b) the DEFERRED slice-006 echo-timeout composer recovery (gluing root in `send-protocol.ts`).
 3. **Q2 (mailbox replaces "Waiting on you") = its own slice AFTER 009.** See decisions below.
 
 ## Done this session (2026-05-31)
@@ -21,7 +21,7 @@
 - 005 Agent runs ⚠️ (dispatch + reconnect ✅; **`/agent-runs/{id}/cancel` 404s for host-backed runs** — host-not-aware family; pause/answer not cheaply forced)
 - 006 Chat/send queue ✅ after re-fix (reconnect + resume ✅; wedge fixed `1f9f4262`; coalesce-while-busy is by design; echo-timeout gluing root deferred → 009)
 - 007 Mailbox ✅ (inbox renders, project + global messages, read/dismiss, pending-interaction shadow open→answered, dead-letter mechanism present; live push intermittent = known)
-- 008 Cutover ✅ after hotfix (webhook→mailbox ✅; agent→mailbox fixed `e22456d2`; workflow-review→mailbox untested = cost)
+- 008 Cutover ⚠️ webhook→mailbox ✅; **agent→mailbox NOT working end-to-end** — hotfix `e22456d2` is necessary but the boot-wired host handlers (reattach/sweep/liveness) intercept terminals to Channel → needs the boot-order gate-wiring (slice-009 lead objective); workflow-review→mailbox untested = cost
 
 ## Process (see `definitive-session-pathway.md` → "How We Run This")
 - Live in-session; Claude dispatches **subagents** for plan + build. **Planners AND builds run on opus** — set `model: "opus"` explicitly, never sonnet.
@@ -73,7 +73,7 @@ Two windows (A/B) for propagation. Gates = mailbox for the cutover items.
 
 ## Known deferred defects (also in `refactor-session-tracker.md`)
 - **Host-backed agent resume drops the answer** → slice 009.
-- **Slice-008 recovery-path delivery stays on Channel even under gate=mailbox** (boot-reattach `index.ts:371` + liveness-sweep `442` run before `mailboxService`/`enqueueMailboxAndFanout` at `477`/`541` exist). The LIVE dispatch path is fixed (`e22456d2`); the recovery paths need the boot-order/lazy-port refactor → slice 009.
+- **Slice-008 agent→mailbox cutover not working end-to-end (CONFIRMED behaviorally 2026-05-31).** The boot-wired host-terminal handlers — boot-reattach (`index.ts:371`), the `reconcileAgentRunsAgainstHost` interval sweep (`413`), liveness-sweep (`442`) — run before `mailboxService`/`enqueueMailboxAndFanout` (`477`/`540`), carry NO port, and intercept LIVE host terminals to Channel (winning the idempotency race vs the factory's gated handler). NOT just recovery — this is the primary host-terminal path. Hotfix `e22456d2` is necessary but insufficient; the boot-order gate-wiring is the **slice-009 lead objective**.
 - **Slice-006 echo-timeout leaves an un-submitted body in the PTY composer** (`send-protocol.ts` returns without `\r`) — the gluing root. The queue now self-heals (`1f9f4262`); the composer recovery is fenced-off protocol work → slice 009.
 - **004 workflow run has no cancel surface** — killing the sole agent orphans the parent run `running` (compounded by the unwired workflow boot-reconcile). One orphaned run `3VZ9W4EMJN8C` left by the review.
 - **005 `/agent-runs/{id}/cancel` 404s for host-backed/workflow-spawned runs** (route checks only the in-process `activeRunRegistry`; `/kill` works but leaves host compute orphaned `processKilled:false`). Host-not-aware kill family → slice 009.
