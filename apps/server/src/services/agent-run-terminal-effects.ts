@@ -6,10 +6,12 @@ import {
   type AgentRunRow,
   type Project,
   type ULID,
+  type WorkItem,
 } from '@pc/domain';
 import {
   getAgentRunRow as defaultGetAgentRunRow,
   getProjectById as defaultGetProjectById,
+  getWorkItem as defaultGetWorkItem,
   type MarkAgentRunTerminalInput,
 } from '@pc/db';
 
@@ -62,6 +64,9 @@ export interface AgentRunTerminalEffectsDeps {
   mailboxEnqueue?: MailboxEnqueuePort | null;
   broadcast?: (projectId: ULID, msg: unknown) => void;
   getAgentRun?: (id: ULID) => AgentRunRow | null;
+  /** Resolve a work item (default: real repo). Used to surface the contract
+   *  deliverable as the completion result when the agent left no free-text. */
+  getWorkItem?: (id: ULID) => WorkItem | null;
   markTerminal?: (input: MarkAgentRunTerminalInput) => void;
   verifyOnTerminal?: typeof runVerificationOnTerminal;
   verificationDeps?: VerificationDeps;
@@ -182,6 +187,19 @@ async function finishTerminalEffects(args: {
       }
     : null;
 
+  // Contract dispatches (work-item-as-contract): the agent reports its
+  // deliverable INTO the work item and typically completes via tool calls, so
+  // the free-text `result` (last assistant text) is empty. The completion event
+  // would then read "Result: (no output)" and the orchestrator has nothing to
+  // surface. Fall back to the work item's deliverable (body) so the envelope
+  // carries the actual output. Only for completed contract runs with no text.
+  let result = input.result ?? '';
+  if (input.status === 'completed' && result.trim() === '' && workItemId) {
+    const wi = (deps.getWorkItem ?? defaultGetWorkItem)(workItemId);
+    const deliverable = wi?.body?.trim();
+    if (deliverable) result = deliverable;
+  }
+
   // Slice 005 — the rail broadcast (durable agent.run.changed) is emitted
   // SYNCHRONOUSLY by applyAgentRunTerminalEffects through the gateway; this
   // async tail keeps ONLY verification + the Channel terminal envelope.
@@ -199,7 +217,7 @@ async function finishTerminalEffects(args: {
       podName: input.podName,
       parentWorkItemId: row.parentWorkItemId,
       terminalStatus: input.status,
-      result: input.result ?? '',
+      result,
       failureCause,
       verification,
     });

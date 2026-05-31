@@ -16,6 +16,9 @@ const { closeDb, createProject, getAgentRunRow, insertAgentRunRow, newId, runMig
 const { applyHostTerminalSnapshot, reconcileAgentRunsAgainstHost } = await import(
   '../src/services/agent-host-reattach.ts'
 );
+const { applyAgentRunTerminalEffects } = await import(
+  '../src/services/agent-run-terminal-effects.ts'
+);
 const { reattachAgentRunsDuringServerBoot } = await import(
   '../src/services/agent-run-server-boot.ts'
 );
@@ -288,6 +291,71 @@ test('liveness-sweep finalize: port OMITTED falls back to Channel (documents bug
 
   assert.equal(mb.calls.length, 0, 'no port => no mailbox enqueue');
   assert.equal(emits.length, 1, 'no port => Channel fallback');
+});
+
+// SLICE-009 content-capture — work-item-as-contract dispatches: the agent
+// reports its deliverable INTO the work item and completes via tool calls, so
+// the free-text result is empty. The completion envelope must surface the work
+// item's deliverable (body) instead of "(no output)" so the orchestrator has
+// something to relay.
+test('completed contract dispatch with empty result surfaces the work-item deliverable, not (no output)', async () => {
+  const wiId = newId();
+  const project = createProject({
+    slug: `htg-deliverable-${Date.now()}`,
+    name: 'deliverable',
+    stages,
+    folderPath: join(tmpDir, `htg-deliverable-${Date.now()}`),
+  });
+  const runId = newId();
+  insertAgentRunRow({
+    id: runId,
+    projectId: project.id,
+    podName: 'haiku',
+    dispatcherSessionId: 'disp-1',
+    ccSessionId: 'cc-1',
+    status: 'running',
+    input: 'Begin.',
+    parentWorkItemId: wiId,
+    queuedAt: Date.now(),
+  });
+  const { cs, emits } = fakeChannelServer();
+  const mb = fakeMailbox();
+
+  applyAgentRunTerminalEffects(
+    {
+      runId,
+      ccSessionId: 'cc-1',
+      podName: 'haiku',
+      projectId: project.id,
+      dispatcherSessionId: 'disp-1',
+      parentWorkItemId: wiId,
+      worktreeDir: join(tmpDir, 'wt'),
+      status: 'completed',
+      result: '', // agent reported into the work item; no trailing assistant text
+      workItemId: wiId,
+    },
+    {
+      channelServer: cs as never,
+      deliveryRouter: fixedDeliveryRouter({ agent: 'mailbox' }),
+      mailboxEnqueue: mb.port,
+      // Deliverable lives in the work item body; verification stubbed passed.
+      getWorkItem: () => ({ body: 'DONE' }) as never,
+      verifyOnTerminal: (async () => ({
+        workItemId: wiId,
+        verificationStatus: 'passed',
+        verificationTier: 'auto',
+        notes: null,
+      })) as never,
+      broadcast: () => {},
+    },
+  );
+  await new Promise((r) => setTimeout(r, 150));
+
+  assert.equal(mb.calls.length, 1, 'completion enqueues a mailbox turn');
+  const body = (mb.calls[0]!.message as { body: string }).body;
+  assert.ok(body.includes('DONE'), 'surfaces the work item deliverable');
+  assert.ok(!body.includes('(no output)'), 'must not read (no output) when a deliverable exists');
+  void emits;
 });
 
 test('host terminal under gate=channel rides Channel; NO mailbox enqueue', async () => {
