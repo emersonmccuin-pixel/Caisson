@@ -263,18 +263,31 @@ export function markNextDeliveredOrchestratorSendObservedInJsonl(
   sessionId: ULID,
   text: string,
 ): OrchestratorSendQueueRow | undefined {
-  const row = getDb()
-    .select()
-    .from(orchestratorSendQueue)
-    .where(
-      and(
-        eq(orchestratorSendQueue.sessionId, sessionId),
-        eq(orchestratorSendQueue.status, 'delivered_to_pty'),
-        eq(orchestratorSendQueue.text, text),
-      ),
-    )
-    .orderBy(asc(orchestratorSendQueue.createdAt))
-    .get() as QueueRow | undefined;
+  const delivered = and(
+    eq(orchestratorSendQueue.sessionId, sessionId),
+    eq(orchestratorSendQueue.status, 'delivered_to_pty'),
+  );
+  // Primary: correlate the delivered row by exact jsonl-user text. Fallback:
+  // the oldest delivered_to_pty row for the session. After an echo-timeout the
+  // un-submitted body glues onto the next send (send-protocol returns without
+  // writing `\r`), so CC's jsonl text diverges from every stored row's text and
+  // the exact match misses — which used to strand the row at delivered_to_pty
+  // forever (the permanent "RUNTIME QUEUE 1" wedge). Delivery is single-flight
+  // (one delivered_to_pty row at a time), so advancing the oldest delivered row
+  // is FIFO-correct and lets the queue self-heal even when the text diverges.
+  const row =
+    (getDb()
+      .select()
+      .from(orchestratorSendQueue)
+      .where(and(delivered, eq(orchestratorSendQueue.text, text)))
+      .orderBy(asc(orchestratorSendQueue.createdAt), asc(orchestratorSendQueue.id))
+      .get() as QueueRow | undefined) ??
+    (getDb()
+      .select()
+      .from(orchestratorSendQueue)
+      .where(delivered)
+      .orderBy(asc(orchestratorSendQueue.createdAt), asc(orchestratorSendQueue.id))
+      .get() as QueueRow | undefined);
   if (!row) return undefined;
 
   const now = Date.now();
