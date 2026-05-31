@@ -207,31 +207,46 @@ export class ConversationSendService {
   }
 
   async deliverNextQueuedTurnOnce(projectId: ULID, sessionId: ULID): Promise<void> {
-    const active = getActiveOrchestratorSession(projectId);
-    if (!active || active.id !== sessionId) return;
-    const port = this.deps.getPort(projectId);
-    if (!port || port.getState() !== 'ready') {
+    // Drain loop. A SUCCESSFUL delivery returns immediately so the queue then
+    // advances one-at-a-time as each `jsonl-user` echo correlates the delivered
+    // row (FIFO). A FAILED delivery (e.g. echo-timeout) produces NO jsonl-user
+    // event to re-trigger the drain, so we mark the head failed and CONTINUE to
+    // the next queued row — otherwise one bad turn wedges the rest of the queue.
+    for (;;) {
+      const active = getActiveOrchestratorSession(projectId);
+      if (!active || active.id !== sessionId) return;
+      const port = this.deps.getPort(projectId);
+      if (!port || port.getState() !== 'ready') {
+        this.deps.broadcastSendQueueSnapshot(projectId, active.id);
+        return;
+      }
+      const [next] = listQueuedOrchestratorSendsForSession(active.id);
+      if (!next) {
+        this.deps.broadcastSendQueueSnapshot(projectId, active.id);
+        return;
+      }
+      markOrchestratorSendDelivering(next.id);
       this.deps.broadcastSendQueueSnapshot(projectId, active.id);
-      return;
-    }
-    const [next] = listQueuedOrchestratorSendsForSession(active.id);
-    if (!next) {
+      let delivered = false;
+      try {
+        const result = await port.send(next.text);
+        if (result === 'ok') {
+          markOrchestratorSendDelivered(next.id);
+          delivered = true;
+        } else {
+          markOrchestratorSendFailed(next.id, `send returned ${result}`);
+        }
+      } catch (err) {
+        markOrchestratorSendFailed(
+          next.id,
+          err instanceof Error ? err.message : 'Failed to deliver queued prompt',
+        );
+      }
       this.deps.broadcastSendQueueSnapshot(projectId, active.id);
-      return;
+      // Success: wait for the jsonl-user correlation to drain the next.
+      // Failure: keep draining so the queue recovers instead of wedging.
+      if (delivered) return;
     }
-    markOrchestratorSendDelivering(next.id);
-    this.deps.broadcastSendQueueSnapshot(projectId, active.id);
-    try {
-      const result = await port.send(next.text);
-      if (result === 'ok') markOrchestratorSendDelivered(next.id);
-      else markOrchestratorSendFailed(next.id, `send returned ${result}`);
-    } catch (err) {
-      markOrchestratorSendFailed(
-        next.id,
-        err instanceof Error ? err.message : 'Failed to deliver queued prompt',
-      );
-    }
-    this.deps.broadcastSendQueueSnapshot(projectId, active.id);
   }
 
   /** Correlate a parsed `jsonl-user` event to its originating queued send (the

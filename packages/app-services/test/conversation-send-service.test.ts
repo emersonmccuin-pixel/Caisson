@@ -176,6 +176,71 @@ test('listVisibleTurns surfaces open + failed rows', async () => {
   assert.equal(visible.length, 2);
 });
 
+test('deliverNextQueuedTurnOnce: an echo-timeout failure does NOT wedge the queue — it marks the head failed and drains the next', async () => {
+  // Regression for slice-006 live defect: while the orchestrator was busy the
+  // user queued several turns; delivery of the head returned echo-timeout
+  // (non-ok). Pre-fix the drain stopped, stranding the remaining queued turns
+  // (footer stuck on "N queued prompt pending"). The drain must instead mark the
+  // head failed and CONTINUE to the next queued row.
+  const sends: string[] = [];
+  let calls = 0;
+  let state = 'busy';
+  const port: RuntimeTurnPort = {
+    getState: () => state,
+    send: async (text) => {
+      calls += 1;
+      // First delivered turn echo-times-out; everything after sends ok.
+      if (calls === 1) return 'echo-timeout';
+      sends.push(text);
+      return 'ok';
+    },
+  };
+  // Build the harness busy so all turns enqueue, then flip ready and drain.
+  const h = mkHarness({ port });
+  await h.service.sendUserTurn({ projectId: h.projectId, text: 'testing', clientMessageId: 'cm1' });
+  await h.service.sendUserTurn({ projectId: h.projectId, text: 'testing', clientMessageId: 'cm2' });
+  await h.service.sendUserTurn({ projectId: h.projectId, text: 'okay', clientMessageId: 'cm3' });
+  state = 'ready';
+
+  await h.service.deliverNextQueuedTurnOnce(h.projectId, h.sessionId);
+
+  const visible = h.service.listVisibleTurns(h.sessionId);
+  const failed = visible.filter((r) => r.status === 'failed');
+  const delivered = visible.filter((r) => r.status === 'delivered_to_pty');
+  const stillQueued = visible.filter((r) => r.status.startsWith('queued_'));
+
+  // The head failed; the queue did NOT wedge — the next turn was delivered and
+  // a success stops the loop pending its jsonl-user correlation.
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0]!.text, 'testing');
+  assert.equal(failed[0]!.failureReason, 'send returned echo-timeout');
+  assert.equal(delivered.length, 1);
+  // exactly one queued turn remains (drain stopped on the first SUCCESS, FIFO).
+  assert.equal(stillQueued.length, 1);
+  // Discrete turns stay discrete rows — no concatenation/glue at the queue layer.
+  assert.deepEqual(sends, ['testing']);
+});
+
+test('deliverNextQueuedTurnOnce: a queue of nothing-but-failures fully drains (no wedge) and ends with no open rows', async () => {
+  let state = 'busy';
+  const port: RuntimeTurnPort = {
+    getState: () => state,
+    send: async () => 'echo-timeout',
+  };
+  const h = mkHarness({ port });
+  await h.service.sendUserTurn({ projectId: h.projectId, text: 'a', clientMessageId: 'cm1' });
+  await h.service.sendUserTurn({ projectId: h.projectId, text: 'b', clientMessageId: 'cm2' });
+  state = 'ready';
+
+  await h.service.deliverNextQueuedTurnOnce(h.projectId, h.sessionId);
+
+  const visible = h.service.listVisibleTurns(h.sessionId);
+  // both turns terminalized failed; nothing left queued/delivering (no wedge).
+  assert.equal(visible.filter((r) => r.status === 'failed').length, 2);
+  assert.equal(visible.filter((r) => r.status.startsWith('queued_')).length, 0);
+  assert.equal(visible.filter((r) => r.status === 'delivering').length, 0);
+});
+
 test('deliverNextQueuedTurnOnce delivers exactly one queued row when ready', async () => {
   const sends: string[] = [];
   const h = mkHarness({ state: 'busy', sends });

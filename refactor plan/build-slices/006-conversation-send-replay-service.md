@@ -5,6 +5,11 @@
 > Sections §4.6, §4.7, §7 (`/api/ask` shadow), §9 (pending-interaction lifecycle), §10 (the `pending_interactions` table), and the §16 ask-shadow open question are **deferred to slice 007** alongside the mailbox/pending-interactions platform.
 > `/api/ask` semantics, the in-memory blocking resolver, and `chat-bridges/routes.ts` are **untouched** this slice. The parse-only `runtime-hook-ask.ts` wire-mirror contract still ships (additive, browser-safe, no DB) so 007 can adopt it without re-deriving the wire.
 
+> **Fix: send-queue drain/coalesce/echo-recovery (fix session after Session 24 human review).**
+> Human review reproduced a wedge: while the orchestrator was busy, rapid discrete sends queued; delivery of a head turn returned `echo-timeout` and the drain stopped, stranding the remaining queued prompts (`N queued prompt pending` stuck) — they only moved on the next user send.
+> **Root cause:** `deliverNextQueuedPromptOnce` (live path, via `pty-handlers` state→ready) and the facade `ConversationSendService.deliverNextQueuedTurnOnce` delivered exactly ONE row then returned. On SUCCESS the queue advances correctly one-at-a-time via the `jsonl-user` FIFO correlation; on a FAILURE there is NO `jsonl-user` event to re-trigger the drain, so the queue wedged. The observed no-separator `testingOKay` glue was a downstream PTY-composer artifact of `echo-timeout` (the bracketed paste is written but `\r` is never sent, leaving text in Claude's composer); the queue itself never concatenates — discrete sends are discrete rows.
+> **Fix (slice-006 queue scope only):** both drain loops now mark the head `failed` and CONTINUE to the next queued row on non-ok/throw, returning only after a SUCCESS (preserving the FIFO single-flight-pending-jsonl on success). The PTY echo-ack protocol (`sendBracketedPaste`/`SendResult`) is UNTOUCHED. Regression tests: `packages/app-services/test/conversation-send-service.test.ts` (facade echo-timeout recovery + all-failures drain) and new `apps/server/test/orchestrator-send-queue-delivery.test.ts` (live-path echo-timeout recovery + all-failures drain). Gates: app-services 53 / server 25 pass; `pnpm typecheck` exit 0; `git diff --check` clean.
+
 ## 1. Baseline and Decision
 
 | Field | Value |
