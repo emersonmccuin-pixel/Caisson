@@ -145,7 +145,9 @@ export function listOpenOrchestratorSendsForSession(
         inArray(orchestratorSendQueue.status, OPEN_STATUSES),
       ),
     )
-    .orderBy(asc(orchestratorSendQueue.createdAt))
+    // Stable FIFO: created_at can tie under rapid sends (same ms); the monotonic
+    // ULID id is the insertion-order tiebreaker so ordering is deterministic.
+    .orderBy(asc(orchestratorSendQueue.createdAt), asc(orchestratorSendQueue.id))
     .all() as QueueRow[];
   return rows.map(toDomain);
 }
@@ -194,7 +196,9 @@ export function listVisibleOrchestratorSendsForSession(
         inArray(orchestratorSendQueue.status, VISIBLE_STATUSES),
       ),
     )
-    .orderBy(asc(orchestratorSendQueue.createdAt))
+    // Stable FIFO: created_at can tie under rapid sends (same ms); the monotonic
+    // ULID id is the insertion-order tiebreaker so ordering is deterministic.
+    .orderBy(asc(orchestratorSendQueue.createdAt), asc(orchestratorSendQueue.id))
     .all() as QueueRow[];
   return rows.map(toDomain);
 }
@@ -211,7 +215,9 @@ export function listQueuedOrchestratorSendsForSession(
         inArray(orchestratorSendQueue.status, QUEUED_STATUSES),
       ),
     )
-    .orderBy(asc(orchestratorSendQueue.createdAt))
+    // Stable FIFO: created_at can tie under rapid sends (same ms); the monotonic
+    // ULID id is the insertion-order tiebreaker so ordering is deterministic.
+    .orderBy(asc(orchestratorSendQueue.createdAt), asc(orchestratorSendQueue.id))
     .all() as QueueRow[];
   return rows.map(toDomain);
 }
