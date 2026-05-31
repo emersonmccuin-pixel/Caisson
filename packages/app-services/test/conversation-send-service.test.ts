@@ -36,7 +36,7 @@ interface Harness {
   setState(state: string): void;
 }
 
-function mkHarness(opts: { state?: string; port?: RuntimeTurnPort | null; sends?: string[] } = {}): Harness {
+function mkHarness(opts: { state?: string; port?: RuntimeTurnPort | null; sends?: string[]; sleep?: (ms: number) => Promise<void> } = {}): Harness {
   const project = createProject({
     slug: `conv-${newId()}`,
     name: 'Conv',
@@ -63,6 +63,7 @@ function mkHarness(opts: { state?: string; port?: RuntimeTurnPort | null; sends?
     },
     ensureActiveSession: () => session,
     broadcastSendQueueSnapshot: (projectId, sessionId) => snapshots.push({ projectId, sessionId }),
+    sleep: opts.sleep ?? (() => Promise.resolve()),
   });
   return { service, projectId: project.id, sessionId: session.id, snapshots, setState: (s) => { state = s; } };
 }
@@ -270,6 +271,80 @@ test('deliverNextQueuedTurnOnce: a queue of nothing-but-failures fully drains (n
   assert.equal(visible.filter((r) => r.status === 'failed').length, 2);
   assert.equal(visible.filter((r) => r.status.startsWith('queued_')).length, 0);
   assert.equal(visible.filter((r) => r.status === 'delivering').length, 0);
+});
+
+test('mailbox-sourced turn that echo-times-out is RE-QUEUED and retried (recovers, not lost)', async () => {
+  // Slice-009: an agent-completion mailbox turn whose paste echo-times-out was
+  // silently lost — the mailbox delivery is already `accepted`, so nothing
+  // retried it. Now an `mb:` row re-queues and retries with backoff.
+  const sends: string[] = [];
+  let state = 'busy';
+  let calls = 0;
+  const port: RuntimeTurnPort = {
+    getState: () => state,
+    send: async (text) => {
+      calls += 1;
+      if (calls === 1) return 'echo-timeout'; // first attempt fails transiently
+      sends.push(text);
+      return 'ok';
+    },
+  };
+  const h = mkHarness({ port }); // fast no-op sleep
+  // Mailbox/system entry (mb: prefix) — enqueued while busy so it just queues.
+  h.service.enqueueRuntimeTurn({
+    projectId: h.projectId,
+    sessionId: h.sessionId,
+    clientMessageId: 'mb:delivery-1',
+    text: 'agent result: DONE',
+    source: 'mailbox',
+  });
+  state = 'ready';
+  await h.service.deliverNextQueuedTurnOnce(h.projectId, h.sessionId);
+
+  assert.equal(calls, 2, 'retried once after the echo-timeout');
+  assert.deepEqual(sends, ['agent result: DONE'], 'the retry delivered the turn');
+  const row = h.service.listVisibleTurns(h.sessionId)[0]!;
+  assert.equal(row.status, 'delivered_to_pty');
+  assert.equal(row.deliveryAttempts, 2);
+});
+
+test('mailbox-sourced turn that keeps failing stops after the retry cap (no infinite loop)', async () => {
+  let state = 'busy';
+  const port: RuntimeTurnPort = { getState: () => state, send: async () => 'echo-timeout' };
+  const h = mkHarness({ port });
+  // Enqueue while busy so the ready-state auto-drain doesn't race our explicit
+  // single drain below.
+  h.service.enqueueRuntimeTurn({
+    projectId: h.projectId,
+    sessionId: h.sessionId,
+    clientMessageId: 'mb:delivery-2',
+    text: 'never lands',
+    source: 'mailbox',
+  });
+  state = 'ready';
+  await h.service.deliverNextQueuedTurnOnce(h.projectId, h.sessionId);
+  const row = h.service.listVisibleTurns(h.sessionId)[0]!;
+  assert.equal(row.status, 'failed', 'gives up after the cap');
+  assert.equal(row.deliveryAttempts, 3, 'exactly MAILBOX_RETRY_MAX_ATTEMPTS tries');
+});
+
+test('USER-sourced echo-timeout is NOT auto-retried (has a Retry affordance)', async () => {
+  let calls = 0;
+  let state = 'busy';
+  const port: RuntimeTurnPort = {
+    getState: () => state,
+    send: async () => {
+      calls += 1;
+      return 'echo-timeout';
+    },
+  };
+  const h = mkHarness({ port });
+  await h.service.sendUserTurn({ projectId: h.projectId, text: 'hi', clientMessageId: 'user-cm1' });
+  state = 'ready';
+  await h.service.deliverNextQueuedTurnOnce(h.projectId, h.sessionId);
+  assert.equal(calls, 1, 'user turns are tried once, not auto-retried');
+  const row = h.service.listVisibleTurns(h.sessionId)[0]!;
+  assert.equal(row.status, 'failed');
 });
 
 test('deliverNextQueuedTurnOnce delivers exactly one queued row when ready', async () => {

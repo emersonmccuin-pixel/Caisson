@@ -167,6 +167,27 @@ test('echo-ack: accepts lossy ConPTY cursor repaint when enough body words echo'
   assert.equal(deps.writes[1], '\r');
 });
 
+// SLICE-009 — CC renders a multi-line / >800-char bracketed paste as a
+// "[Pasted text #N +L lines]" ref placeholder in the composer instead of the
+// literal text (PromptInput.tsx onTextPaste). The literal echo probe can never
+// match it, so a structured agent-completion `[pc:agent-event …]` turn used to
+// always echo-timeout and silently vanish. The placeholder IS proof the paste
+// landed; on Enter, CC expands the ref to the full content. Accept it as a
+// match and submit.
+test('echo-ack: multi-line body echoed as a Pasted-text-ref placeholder → ok + Enter', async () => {
+  const deps = makeDeps();
+  const body =
+    '[pc:agent-event kind=agent-completed version=1]\n[runId: 01KSZX3DF3M8GB]\nresult: DONE\nmore: lines';
+  // CC shows ONLY the placeholder ref in the composer, never the literal body.
+  setTimeout(() => {
+    deps.buffer.value += '\x1b[2K> [Pasted text #1 +3 lines]';
+  }, 10);
+  const result = await sendBracketedPaste(deps, body, 1000);
+  assert.equal(result, 'ok', 'placeholder ref counts as a landed paste');
+  assert.equal(deps.writes[0], `\x1b[200~${body}\x1b[201~`);
+  assert.equal(deps.writes[1], '\r', 'submits so CC expands the ref to full content');
+});
+
 test('echo-ack: empty body returns ok immediately and still sends Enter', async () => {
   const deps = makeDeps();
   // Empty body → probe is empty → match is trivially true → Enter sent.

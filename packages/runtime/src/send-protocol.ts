@@ -148,11 +148,26 @@ export class TimedBracketedPasteQueue {
 function echoMatched(body: string, tail: string): boolean {
   const normalizedBody = collapseAnsiToWhitespace(body);
   const normalizedTail = collapseAnsiToWhitespace(tail);
+  const compactTail = normalizedTail.replace(/\s+/g, '').toLowerCase();
+
+  // CC replaces a multi-line (> ~2 lines) or > 800-char bracketed paste with a
+  // "[Pasted text #N +L lines]" REF placeholder in the composer instead of
+  // echoing the literal text (leaked CC PromptInput.tsx onTextPaste:
+  // `text.length > PASTE_THRESHOLD(800) || numLines > maxLines(<=2)`). The
+  // literal probe below can NEVER match that placeholder, so any structured /
+  // multi-line body — e.g. an agent-completion `[pc:agent-event …]` turn —
+  // would always echo-timeout and the turn would be lost. The placeholder
+  // appearing in the post-send tail IS proof the paste landed; on Enter, CC
+  // expands the ref back to the full content (history.ts expandPastedTextRefs),
+  // so submitting is correct. "Pasted text #" is CC's stable, distinctive
+  // marker; the tail is anchored AFTER our paste write so this is our own
+  // placeholder, not a stale one.
+  if (compactTail.includes('pastedtext#')) return true;
+
   const probe = normalizedBody.slice(0, ECHO_PROBE_LEN);
   if (probe.length === 0 || normalizedTail.includes(probe)) return true;
 
   const compactProbe = probe.replace(/\s+/g, '').toLowerCase();
-  const compactTail = normalizedTail.replace(/\s+/g, '').toLowerCase();
   if (compactProbe.length >= ECHO_MIN_WORD_LEN && compactTail.includes(compactProbe)) {
     return true;
   }

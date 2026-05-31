@@ -57,6 +57,23 @@ export interface ConversationSendDeps {
   /** Emit the `session-changed` + `session-replay` envelopes when a user turn
    *  first mints the active session (mirrors the existing handlePromptSend). */
   onSessionEnsured?(projectId: ULID, session: OrchestratorSession): void;
+  /** Sleep override (backoff between mailbox-turn retries). Default setTimeout. */
+  sleep?(ms: number): Promise<void>;
+}
+
+/** A mailbox/system turn whose delivery transiently fails (echo-timeout) is
+ *  silently lost otherwise — the mailbox delivery is already marked `accepted`
+ *  (a send-queue row exists), so nothing retries it. Re-queue + retry the head
+ *  a few times with a short backoff so an agent result actually surfaces. The
+ *  cap bounds the single-flight hold; backoff lets the composer settle. */
+const MAILBOX_RETRY_MAX_ATTEMPTS = 3;
+const MAILBOX_RETRY_BACKOFF_MS = 1500;
+
+/** Mailbox/system turns carry the `mb:` client-message-id prefix (see
+ *  mailboxClientMessageId). User turns do not — they show a Retry affordance,
+ *  so they are never auto-retried here. */
+function isMailboxSourced(clientMessageId: string): boolean {
+  return clientMessageId.startsWith('mb:');
 }
 
 export type SendUserTurnResult =
@@ -75,9 +92,11 @@ function queuedStatusForState(
 export class ConversationSendService {
   private readonly deps: ConversationSendDeps;
   private readonly deliveryInFlight = new Set<ULID>();
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(deps: ConversationSendDeps) {
     this.deps = deps;
+    this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
   /** The `handlePromptSend` policy: ensure an active session, then direct-send
@@ -235,12 +254,27 @@ export class ConversationSendService {
       }
       markOrchestratorSendDelivering(next.id);
       this.deps.broadcastSendQueueSnapshot(projectId, active.id);
+      // markOrchestratorSendDelivering bumped deliveryAttempts to this value.
+      const attemptsMade = next.deliveryAttempts + 1;
       let delivered = false;
+      let retrying = false;
       try {
         const result = await port.send(next.text);
         if (result === 'ok') {
           markOrchestratorSendDelivered(next.id);
           delivered = true;
+        } else if (
+          result === 'echo-timeout' &&
+          isMailboxSourced(next.clientMessageId) &&
+          attemptsMade < MAILBOX_RETRY_MAX_ATTEMPTS
+        ) {
+          // Transient: re-queue the mailbox/system head and retry after a short
+          // backoff so an agent result isn't silently dropped. FIFO position is
+          // preserved (the row keeps its original createdAt). markFailed →
+          // retry is the only requeue path (retry requires status 'failed').
+          markOrchestratorSendFailed(next.id, `send returned ${result}`);
+          retryFailedOrchestratorSend(next.id, active.id, 'queued_busy');
+          retrying = true;
         } else {
           markOrchestratorSendFailed(next.id, `send returned ${result}`);
         }
@@ -252,8 +286,10 @@ export class ConversationSendService {
       }
       this.deps.broadcastSendQueueSnapshot(projectId, active.id);
       // Success: wait for the jsonl-user correlation to drain the next.
-      // Failure: keep draining so the queue recovers instead of wedging.
+      // Retry: back off, then loop to re-attempt the same (re-queued) head.
+      // Other failure: keep draining so the queue recovers instead of wedging.
       if (delivered) return;
+      if (retrying) await this.sleep(MAILBOX_RETRY_BACKOFF_MS);
     }
   }
 
