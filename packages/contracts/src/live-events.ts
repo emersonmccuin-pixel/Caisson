@@ -10,7 +10,9 @@ export type LiveEventEntity =
   | 'workflow-definition'
   | 'workflow-run'
   | 'workflow-review'
-  | 'agent-run';
+  | 'agent-run'
+  | 'mailbox-message'
+  | 'pending-interaction';
 
 /** Canonical live-event type names. Replay accepts these for `type=` filtering. */
 export type LiveEventTypeName =
@@ -22,7 +24,10 @@ export type LiveEventTypeName =
   | 'workflow.run.changed'
   | 'workflow.review.changed'
   | 'workflow.definition.changed'
-  | 'agent.run.changed';
+  | 'agent.run.changed'
+  | 'mailbox.message.changed'
+  | 'mailbox.delivery.changed'
+  | 'pending-interaction.changed';
 
 const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'project.changed',
@@ -34,6 +39,9 @@ const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'workflow.review.changed',
   'workflow.definition.changed',
   'agent.run.changed',
+  'mailbox.message.changed',
+  'mailbox.delivery.changed',
+  'pending-interaction.changed',
 ];
 
 export function isLiveEventTypeName(value: unknown): value is LiveEventTypeName {
@@ -172,7 +180,9 @@ function isLiveEventEntity(value: unknown): value is LiveEventEntity {
     value === 'workflow-definition' ||
     value === 'workflow-run' ||
     value === 'workflow-review' ||
-    value === 'agent-run'
+    value === 'agent-run' ||
+    value === 'mailbox-message' ||
+    value === 'pending-interaction'
   );
 }
 

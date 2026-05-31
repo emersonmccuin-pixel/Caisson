@@ -173,3 +173,85 @@ test('replay rejects an unsupported live event type with 400', async () => {
   const res = await app.request('/api/live-events?type=agent.bogus');
   assert.equal(res.status, 400);
 });
+
+test('replay returns project-scoped mailbox.message.changed + a global user-inbox message', async () => {
+  const app = new Hono();
+  registerLiveEventRoutes(app);
+  const p1 = createProject({
+    slug: `mbx-p1-${Date.now()}`,
+    name: 'MBX P1',
+    stages,
+    folderPath: join(tmpDir, 'mbx-evt-p1'),
+  });
+  const p2 = createProject({
+    slug: `mbx-p2-${Date.now()}`,
+    name: 'MBX P2',
+    stages,
+    folderPath: join(tmpDir, 'mbx-evt-p2'),
+  });
+  const after = (await json<{ nextCursor: string | null }>(await app.request('/api/live-events'))).nextCursor ?? '0';
+
+  const globalMsg = insertLiveEvent(getDb(), {
+    scope: 'global',
+    projectId: null,
+    type: 'mailbox.message.changed',
+    entity: 'mailbox-message',
+    entityId: 'm-global' as ULID,
+    version: null,
+    payload: { messageId: 'm-global', kind: 'system-notice', recipientSummary: { total: 1, unread: 1, actionable: 0 } },
+  });
+  const p1Msg = insertLiveEvent(getDb(), {
+    scope: 'project',
+    projectId: p1.id,
+    type: 'mailbox.message.changed',
+    entity: 'mailbox-message',
+    entityId: 'm-p1' as ULID,
+    version: null,
+    payload: { messageId: 'm-p1', kind: 'system-notice', recipientSummary: { total: 1, unread: 0, actionable: 0 } },
+  });
+  insertLiveEvent(getDb(), {
+    scope: 'project',
+    projectId: p2.id,
+    type: 'mailbox.message.changed',
+    entity: 'mailbox-message',
+    entityId: 'm-p2' as ULID,
+    version: null,
+    payload: { messageId: 'm-p2', kind: 'system-notice', recipientSummary: { total: 1, unread: 1, actionable: 0 } },
+  });
+
+  // Project replay (includeGlobal) returns global + p1 only — never p2.
+  const scoped = await app.request(
+    `/api/live-events?after=${after}&projectId=${p1.id}&includeGlobal=1&type=mailbox.message.changed`,
+  );
+  const scopedBody = await json<{ events: { id: string }[] }>(scoped);
+  assert.deepEqual(scopedBody.events.map((e) => e.id), [globalMsg.id, p1Msg.id]);
+
+  // Global-only replay (no projectId) returns the global user-inbox message only.
+  const globalReplay = await app.request(`/api/live-events?after=${after}&type=mailbox.message.changed`);
+  const globalBody = await json<{ events: { id: string }[] }>(globalReplay);
+  assert.deepEqual(globalBody.events.map((e) => e.id), [globalMsg.id]);
+});
+
+test('replay returns project-scoped pending-interaction.changed', async () => {
+  const app = new Hono();
+  registerLiveEventRoutes(app);
+  const p1 = createProject({
+    slug: `pi-p1-${Date.now()}`,
+    name: 'PI P1',
+    stages,
+    folderPath: join(tmpDir, 'pi-p1'),
+  });
+  const after = (await json<{ nextCursor: string | null }>(await app.request('/api/live-events'))).nextCursor ?? '0';
+  const evt = insertLiveEvent(getDb(), {
+    scope: 'project',
+    projectId: p1.id,
+    type: 'pending-interaction.changed',
+    entity: 'pending-interaction',
+    entityId: 'i1' as ULID,
+    version: 2,
+    payload: { interactionId: 'i1', kind: 'runtime-hook-ask', status: 'answered', version: 2 },
+  });
+  const res = await app.request(`/api/live-events?after=${after}&projectId=${p1.id}&type=pending-interaction.changed`);
+  const body = await json<{ events: { id: string }[] }>(res);
+  assert.deepEqual(body.events.map((e) => e.id), [evt.id]);
+});

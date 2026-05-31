@@ -10,9 +10,11 @@ import type {
   Project,
   ULID,
 } from '@pc/domain';
-import { buildLiveEventFrame } from '@pc/contracts';
+import { buildLiveEventFrame, parseMailboxAddress } from '@pc/contracts';
 import {
   getActiveOrchestratorSession,
+  getMailboxMessage,
+  getMailboxRecipient,
   insertPostTurnSummary,
   getProjectById,
   listProjects,
@@ -24,6 +26,9 @@ import {
   workflowRunsV2Repo,
 } from '@pc/db';
 import {
+  ConversationSendService,
+  MailboxService,
+  PendingInteractionService,
   reconcileWorkflowRunsOnBoot,
   RECONCILE_SCAN_STATUSES,
   WorkflowRunMutationGateway,
@@ -73,6 +78,10 @@ import {
   createPendingAskStore,
   registerChatBridgeRoutes,
 } from './features/chat-bridges/routes.ts';
+import { registerMailboxRoutes } from './features/mailbox/routes.ts';
+import { MailboxOrchestratorTurnAdapter } from './services/mailbox-orchestrator-turn-adapter.ts';
+import { MailboxWorker } from './services/mailbox-worker.ts';
+import { AskShadow, sweepOrphanedPendingInteractions } from './services/ask-shadow.ts';
 import { registerPodRoutes } from './routes/pod-routes.ts';
 import { registerWorkflowRoutes } from './routes/workflow-routes.ts';
 import { seedOrchestratorPodIfMissing } from './services/orchestrator-pod-seed.ts';
@@ -452,12 +461,84 @@ registerMcpBridgeRoutes(app, {
   getHostClient: () => agentHostClientForDispatch,
 });
 
+// ── Slice 007 — mailbox platform (additive; alongside Channel, no cutover) ──
+const mailboxService = new MailboxService();
+const pendingInteractionService = new PendingInteractionService();
+const askShadow = new AskShadow({ interactions: pendingInteractionService, broadcastTo });
+
 registerChatBridgeRoutes(app, {
   broadcastTo,
   pendingAsks,
   resolveProject,
   channelPort: CHANNEL_PORT,
+  askShadow,
 });
+
+// Mailbox `orchestrator-turn` delivery: a ConversationSendService whose deps
+// dispatch by projectId through the project registry. Only `enqueueRuntimeTurn`
+// is exercised by the worker (never a raw send; the queue drains the row).
+const mailboxSendService = new ConversationSendService({
+  getPort: (projectId) => resolveProject(projectId)?.ptySession() ?? null,
+  ensurePort: (projectId) => {
+    const runtime = resolveProject(projectId);
+    if (!runtime) throw new Error(`unknown project: ${projectId}`);
+    return runtime.ensurePty();
+  },
+  ensureActiveSession: (projectId) => {
+    const runtime = resolveProject(projectId);
+    if (!runtime) throw new Error(`unknown project: ${projectId}`);
+    return runtime.ensureActiveSession();
+  },
+  broadcastSendQueueSnapshot,
+});
+const mailboxOrchestratorTurnAdapter = new MailboxOrchestratorTurnAdapter(mailboxSendService);
+
+const mailboxWorker = new MailboxWorker({
+  service: mailboxService,
+  orchestratorTurn: mailboxOrchestratorTurnAdapter,
+  broadcast: (projectId, event) => {
+    if (projectId === null) broadcastAll(event);
+    else broadcastTo(projectId, event);
+  },
+  getMessageProjectId: (messageId) => getMailboxMessage(messageId)?.projectId ?? null,
+  getRecipientAddress: (recipientId) => {
+    const row = getMailboxRecipient(recipientId);
+    if (!row) return null;
+    const parsed = parseMailboxAddress(row.addressJson);
+    return parsed.ok ? parsed.value : null;
+  },
+  getMessageBody: (messageId) => getMailboxMessage(messageId)?.body ?? null,
+});
+
+registerMailboxRoutes(app, {
+  mailbox: mailboxService,
+  interactions: pendingInteractionService,
+  broadcastTo,
+  broadcastAll,
+});
+
+// Lease-driven delivery drain. Single in-process worker; the lease keeps the
+// model restart-safe. Unref'd so it never blocks shutdown.
+const MAILBOX_WORKER_SWEEP_MS = 1000;
+const mailboxWorkerSweep = setInterval(() => {
+  try {
+    mailboxWorker.runOnce();
+  } catch (err) {
+    console.warn('[mailbox] worker pass failed:', (err as Error).message);
+  }
+}, MAILBOX_WORKER_SWEEP_MS);
+if (typeof mailboxWorkerSweep.unref === 'function') mailboxWorkerSweep.unref();
+
+// Boot-sweep orphaned `open` ask-shadow rows to `expired` (a lost /api/ask
+// connection cannot be unblocked). Inspectable, not a resume.
+{
+  try {
+    const swept = sweepOrphanedPendingInteractions();
+    if (swept > 0) console.log(`[mailbox] swept ${swept} orphaned pending interaction(s) to expired`);
+  } catch (err) {
+    console.warn('[mailbox] pending-interaction boot sweep failed:', (err as Error).message);
+  }
+}
 
 /**
  * Listens on the `jsonl-event` channel for the first `jsonl-user` envelope of
@@ -813,12 +894,15 @@ registerRuntimeHostWebSocketServer<ReturnType<ProjectRuntime['ensurePty']>, Proj
   broadcastSendQueueSnapshot,
   ensureOrchestratorPty,
   resolvePendingAsk: (id, answer) => {
-    pendingAsks.resolve(id, answer);
+    const resolved = pendingAsks.resolve(id, answer);
+    // Slice 007 — terminalize the durable ask-shadow `answered` (side write).
+    if (resolved) askShadow.onResolved(id, answer);
   },
 });
 
 function gracefulShutdown(): void {
   clearInterval(agentRunReconcileSweep);
+  clearInterval(mailboxWorkerSweep);
   projectRegistry.shutdownAll();
   channelServer.shutdown();
 }

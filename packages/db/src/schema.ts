@@ -95,6 +95,8 @@ export const liveOutbox = sqliteTable(
         | 'workflow-run'
         | 'workflow-review'
         | 'agent-run'
+        | 'mailbox-message'
+        | 'pending-interaction'
       >(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),
@@ -844,5 +846,154 @@ export const postTurnSummaries = sqliteTable(
   (t) => [
     index('post_turn_summaries_project_idx').on(t.projectId, t.createdAt),
     index('post_turn_summaries_session_idx').on(t.sessionId, t.timestamp),
+  ],
+);
+
+// ── Slice 007 — mailbox platform + pending interactions ──────────────────────
+//
+// FIRST real schema migration of the refactor (migration 0036). All six tables
+// are additive CREATE-only and inert until the mailbox worker/routes are wired;
+// they run ALONGSIDE Channel/agent_inbox (no cutover this slice). Project
+// references are soft (no FK) — a project-less message (global user-inbox) is
+// valid. JSON columns are `text({ mode:'json' })` in schema.ts but plain `text`
+// in 0036_mailbox_platform.sql (mirrors live_outbox.payload). Every column here
+// MUST appear verbatim in the SQL or assertSchemaIntact() fails on a fresh boot.
+
+/** General cross-system ask/review/approval state (separate from delivery). */
+export const pendingInteractions = sqliteTable(
+  'pending_interactions',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    /** Soft project reference (no FK); always non-null in the DTO. */
+    projectId: text('project_id').notNull().$type<ULID>(),
+    kind: text('kind').notNull(),
+    status: text('status').notNull().default('open'),
+    sourceKind: text('source_kind').notNull(),
+    sourceId: text('source_id').notNull(),
+    sourceRef: text('source_ref', { mode: 'json' }).$type<Record<string, unknown> | null>(),
+    prompt: text('prompt').notNull(),
+    context: text('context'),
+    options: text('options', { mode: 'json' }).$type<{ value: string; label: string }[] | null>(),
+    answerBody: text('answer_body'),
+    answeredBy: text('answered_by').$type<'orchestrator' | 'user' | null>(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    answeredAt: integer('answered_at'),
+    cancelledAt: integer('cancelled_at'),
+    expiresAt: integer('expires_at'),
+    /** Monotonic write counter for live-event stale-update guards. */
+    version: integer('version').notNull().default(1),
+  },
+  (t) => [
+    index('pending_interactions_project_idx').on(t.projectId, t.status, t.createdAt),
+    index('pending_interactions_source_idx').on(t.sourceKind, t.sourceId),
+    index('pending_interactions_kind_idx').on(t.kind, t.status),
+  ],
+);
+
+/** A durable mailbox message. `idempotency_key` dedupes replayed sources. */
+export const mailboxMessages = sqliteTable(
+  'mailbox_messages',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    /** Soft project reference (no FK); null for the global user-inbox. */
+    projectId: text('project_id').$type<ULID | null>(),
+    kind: text('kind').notNull(),
+    subject: text('subject'),
+    body: text('body').notNull(),
+    payload: text('payload', { mode: 'json' }).notNull().default(sql`'{}'`).$type<Record<string, unknown>>(),
+    sourceKind: text('source_kind').notNull(),
+    sourceId: text('source_id'),
+    interactionId: text('interaction_id').$type<ULID | null>(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    expiresAt: integer('expires_at'),
+  },
+  (t) => [
+    uniqueIndex('mailbox_messages_idempotency_idx').on(t.idempotencyKey),
+    index('mailbox_messages_project_idx').on(t.projectId, t.createdAt),
+  ],
+);
+
+/** Per-recipient address + UI read/action/dismiss state (NOT delivery state). */
+export const mailboxRecipients = sqliteTable(
+  'mailbox_recipients',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    messageId: text('message_id').notNull().$type<ULID>(),
+    addressKind: text('address_kind').notNull(),
+    addressJson: text('address_json', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
+    readAt: integer('read_at'),
+    actionedAt: integer('actioned_at'),
+    dismissedAt: integer('dismissed_at'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [
+    index('mailbox_recipients_message_idx').on(t.addressKind, t.messageId),
+    index('mailbox_recipients_unread_idx').on(t.addressKind, t.readAt),
+  ],
+);
+
+/** Delivery lease/ack/retry/dead-letter state per (message, recipient, channel). */
+export const mailboxDeliveries = sqliteTable(
+  'mailbox_deliveries',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    messageId: text('message_id').notNull().$type<ULID>(),
+    recipientId: text('recipient_id').notNull().$type<ULID>(),
+    channel: text('channel').notNull(),
+    status: text('status').notNull().default('pending'),
+    leaseOwner: text('lease_owner'),
+    leaseExpiresAt: integer('lease_expires_at'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: integer('next_attempt_at'),
+    targetRefKind: text('target_ref_kind'),
+    targetRefId: text('target_ref_id'),
+    lastError: text('last_error'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    acceptedAt: integer('accepted_at'),
+    failedAt: integer('failed_at'),
+  },
+  (t) => [
+    index('mailbox_deliveries_status_idx').on(t.status, t.nextAttemptAt),
+    index('mailbox_deliveries_recipient_idx').on(t.recipientId, t.status),
+    index('mailbox_deliveries_target_idx').on(t.targetRefKind, t.targetRefId),
+  ],
+);
+
+/** Terminal dead-letter audit for exhausted/non-retryable deliveries. */
+export const mailboxDeadLetters = sqliteTable(
+  'mailbox_dead_letters',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    messageId: text('message_id').notNull().$type<ULID>(),
+    recipientId: text('recipient_id').$type<ULID | null>(),
+    deliveryId: text('delivery_id').$type<ULID | null>(),
+    reason: text('reason').notNull(),
+    lastError: text('last_error'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [index('mailbox_dead_letters_message_idx').on(t.messageId)],
+);
+
+/** Append-only mailbox action audit. */
+export const mailboxAudit = sqliteTable(
+  'mailbox_audit',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    messageId: text('message_id').$type<ULID | null>(),
+    recipientId: text('recipient_id').$type<ULID | null>(),
+    deliveryId: text('delivery_id').$type<ULID | null>(),
+    action: text('action').notNull(),
+    actorKind: text('actor_kind').notNull(),
+    actorId: text('actor_id'),
+    details: text('details', { mode: 'json' }).$type<Record<string, unknown> | null>(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [
+    index('mailbox_audit_message_idx').on(t.messageId, t.createdAt),
+    index('mailbox_audit_delivery_idx').on(t.deliveryId, t.createdAt),
   ],
 );

@@ -115,6 +115,19 @@ test('live replay query parser validates cursors, type, and clamps limit', () =>
     ok: true,
     value: { includeGlobal: false, limit: 100, type: 'agent.run.changed' },
   });
+  // slice 007 — mailbox + pending-interaction type names accepted by replay.
+  assert.deepEqual(parseListLiveEventsQuery({ type: 'mailbox.message.changed' }), {
+    ok: true,
+    value: { includeGlobal: false, limit: 100, type: 'mailbox.message.changed' },
+  });
+  assert.deepEqual(parseListLiveEventsQuery({ type: 'mailbox.delivery.changed' }), {
+    ok: true,
+    value: { includeGlobal: false, limit: 100, type: 'mailbox.delivery.changed' },
+  });
+  assert.deepEqual(parseListLiveEventsQuery({ type: 'pending-interaction.changed' }), {
+    ok: true,
+    value: { includeGlobal: false, limit: 100, type: 'pending-interaction.changed' },
+  });
   assert.deepEqual(parseListLiveEventsQuery({ type: 'bogus.type' }), {
     ok: false,
     error: 'unsupported live event type',

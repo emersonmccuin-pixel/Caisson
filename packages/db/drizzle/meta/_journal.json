@@ -253,6 +253,13 @@
       "when": 1781481600000,
       "tag": "0035_live_outbox",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1781568000000,
+      "tag": "0036_mailbox_platform",
+      "breakpoints": true
     }
   ]
 }

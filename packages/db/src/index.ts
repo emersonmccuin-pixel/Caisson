@@ -283,3 +283,55 @@ export type {
   OrchestratorSendQueueStatus,
   RecordDeliveredOrchestratorSendInput,
 } from './repos/orchestrator-send-queue.ts';
+
+// Slice 007 — mailbox + pending-interaction repos (additive; alongside Channel).
+export {
+  acquireDeliveryLease,
+  enqueueMailboxMessage,
+  getMailboxDelivery,
+  getMailboxMessage,
+  getMailboxMessageByIdempotencyKey,
+  getMailboxRecipient,
+  listAuditForMessage,
+  listDeadLettersForMessage,
+  listDeliveriesForMessage,
+  listDeliveriesForProject,
+  listDueDeliveries,
+  listRecipientsForInbox,
+  listRecipientsForMessage,
+  markDeliveryAccepted,
+  markDeliveryDeadLettered,
+  markDeliveryRetrying,
+  markRecipientActioned,
+  markRecipientDismissed,
+  markRecipientRead,
+  writeAudit,
+} from './repos/mailbox.ts';
+export type {
+  EnqueueMailboxMessageInput,
+  EnqueueMailboxMessageResult,
+  EnqueueMailboxRecipientRow,
+  MailboxAuditRow,
+  MailboxDeadLetterRow,
+  MailboxDeliveryRow,
+  MailboxMessageRow,
+  MailboxRecipientRow,
+  WriteAuditInput,
+} from './repos/mailbox.ts';
+
+export {
+  answerPendingInteraction,
+  cancelPendingInteraction,
+  createPendingInteraction,
+  expireOpenPendingInteractions,
+  expirePendingInteraction,
+  findOpenPendingInteractionBySource,
+  getPendingInteraction,
+  listOpenPendingInteractions,
+  listPendingInteractionsForProject,
+} from './repos/pending-interactions.ts';
+export type {
+  AnswerPendingInteractionInput,
+  CreatePendingInteractionInput,
+  PendingInteractionRow,
+} from './repos/pending-interactions.ts';

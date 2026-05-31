@@ -15,7 +15,9 @@ export type LiveOutboxEntity =
   | 'workflow-definition'
   | 'workflow-run'
   | 'workflow-review'
-  | 'agent-run';
+  | 'agent-run'
+  | 'mailbox-message'
+  | 'pending-interaction';
 
 export interface InsertLiveEventDraft<TPayload = unknown> {
   id?: ULID;
