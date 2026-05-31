@@ -1,5 +1,19 @@
 # Next Session Handoff — refactor/auto-pathway
 
+## LATEST SESSION (2026-05-31 cont.) — agent scoping + pc_ask_user universal + pc_list_agents fixed
+Investigated the slice-009 OBJ-2 blocker ("haiku pod echoed instead of asking"). Root cause confirmed: there **is** a real user-created global pod named `haiku` (created 2026-05-23) and it genuinely **lacked `pc_ask_user`** in its kit — the prior handoff note was right; my first reframe was wrong. Three commits landed + live-verified against a reloaded gated stack:
+- **`a05e2a24`** — (1) `pc_ask_user` added to `REQUIRED_AGENT_TOOLS` (`packages/domain/src/tool-catalog.ts`) so EVERY agent (incl. user-created pods that omit it) gets it force-merged at create/update/materialize. (2) **Orchestrator agent scoping**: new single-source policy in `@pc/db` — `isProjectDispatchable` + `listProjectVisibleAgents` (project-scope pods + built-in/stock globals ONLY; global user-created pods excluded — user must copy one in via Add agent). `{{AVAILABLE_AGENTS}}` (`pod-variable-renderers.ts`), the Agents-tab list route (`pod-routes.ts`), and `resolveAgentForDispatch` (`pods.ts`) all route through that one rule.
+- **`f54f03a4`** — wired the previously-DEAD `GET /api/projects/:id/agents` route (the `pc_list_agents` live roster lookup, was 404 every time → orchestrator silently fell back to spawn config) through the same `listProjectVisibleAgents`. Now 200 + scoped.
+- **Live-verified** (UI agent via Playwright, reloaded server): Agents tab + orchestrator both exclude `haiku`/custom globals; orchestrator live roster lookup now succeeds instead of 404-falling-back; built-ins + project pods present. Gates: typecheck green, `@pc/server` 72/72, `@pc/db` 23/23.
+
+**This UNBLOCKS the slice-009 OBJ-2 live trace** (the only thing left to close slice 009): pc_ask_user is now universal AND we can dispatch stock pods, so a host-backed agent can be driven to pause→answer→resume. **Do NEXT:** dispatch a stock agent told to call `pc_ask_user` → it pauses → answer it → confirm it RESUMES + completes (not stranded `running`) → capture the `PC_DEBUG_HOST_RESUME` trace the gated stack emits. Then mark slice 009 implemented.
+
+**Tier-1 verifier gap (the "complete despite no side-effect" finding) → addressed by planned slices 013/014** (`build-slices/013-agent-contracts-first-class.md` + `refactor plan docs/agent-contracts-and-deliverables.md`). It's a design gap, NOT a bug: `runVerificationOnTerminal` (`agent-verification.ts:163`) flips empty-AC contracts straight to `complete`/`passed` by design ("trust the agent's end-of-turn signal"), and there's no predicate that can assert a runtime side-effect (e.g. "pc_ask_user was called"). Don't hot-patch it — it's covered by 013/014.
+
+**Stack note:** gated `pnpm dev:app` (PC_DELIVERY_*=mailbox, PC_DEBUG_HOST_RESUME=1) on 4040/5173/8788, reloaded twice this session via `POST /api/dev/restart` (exit-75 → supervisor respawn) so it runs the new source. Don't blindly relaunch; check first. Never restart unasked.
+
+---
+
 **Read this FIRST.** Updated 2026-05-31 (session: slice-009 live review + full channels feasibility investigation → decision: commit to the PTY-input message-inbox; channels not ready).
 
 ## DECISION (2026-05-31): PTY-input message inbox is the path; channels are NOT ready
