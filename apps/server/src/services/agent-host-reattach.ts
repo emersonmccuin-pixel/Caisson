@@ -34,6 +34,8 @@ import {
 import {
   applyAgentRunTerminalEffects,
 } from './agent-run-terminal-effects.ts';
+import type { DeliveryRouter } from './delivery-routing.ts';
+import type { MailboxEnqueuePort } from './agent-delivery.ts';
 import {
   runVerificationOnTerminal,
   type VerificationDeps,
@@ -62,6 +64,13 @@ export interface AgentHostReattachDeps {
   jsonlExists?: (path: string) => boolean;
   broadcast?: (projectId: ULID, msg: unknown) => void;
   channelServer?: ChannelServer;
+  /** Slice 008 — per-flow delivery gate (default channel). Forwarded to the
+   *  terminal-effects envelope so host completions honor the agent gate. */
+  deliveryRouter?: DeliveryRouter;
+  /** Slice 008 — mailbox enqueue port; only consulted when the agent gate
+   *  resolves to `mailbox`. Boot-time recovery paths omit it (the port is not
+   *  yet constructed at boot — see slice 009), so they stay on Channel. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
   verifyOnTerminal?: typeof runVerificationOnTerminal;
   verificationDeps?: VerificationDeps;
   terminalCleanup?: () => void;
@@ -294,6 +303,8 @@ export function applyHostTerminalSnapshot(
     {
       activeRunRegistry: deps.activeRunRegistry,
       channelServer: deps.channelServer,
+      deliveryRouter: deps.deliveryRouter,
+      mailboxEnqueue: deps.mailboxEnqueue,
       broadcast: deps.broadcast,
       getAgentRun: deps.getAgentRun,
       markTerminal: deps.markTerminal,
