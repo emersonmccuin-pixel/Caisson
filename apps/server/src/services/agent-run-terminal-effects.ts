@@ -10,7 +10,6 @@ import {
 import {
   getAgentRunRow as defaultGetAgentRunRow,
   getProjectById as defaultGetProjectById,
-  markAgentRunTerminal as defaultMarkAgentRunTerminal,
   type MarkAgentRunTerminalInput,
 } from '@pc/db';
 
@@ -148,7 +147,7 @@ async function finishTerminalEffects(args: {
   failureReason: string | null;
   deps: AgentRunTerminalEffectsDeps;
 }): Promise<void> {
-  const { input, row, completedAt, failureCause, failureReason, deps } = args;
+  const { input, row, failureCause, failureReason, deps } = args;
   const project = safeGetProject(input.projectId);
   const workItemId = input.workItemId !== undefined ? input.workItemId : row.parentWorkItemId;
 

@@ -8,6 +8,11 @@ Note: "Session 9" here means the ninth manual refactor workflow session, not roa
 
 The required long-term path is `refactor plan/definitive-session-pathway.md`. Do not choose a different next slice unless the user explicitly changes that pathway.
 
+## Known deferred defects (carry into the named slice)
+
+- **Host-backed agent resume drops the answer (→ slice 009, runtime-host).** Answering a paused agent that runs in the always-on out-of-process host flips the ask to `answered` and fires a resume spawn, but the answer is never threaded in as the agent's next user turn (`agent-run.ts::runSpawnPhase('resume', answer)` send on the host side), so the run sits idle and strands `running` until the liveness sweep fails it. The slice-005 DURABLE layer is correct (atomic ask flip + facts propagate); the hole is the host PTY resume-send. In-process resume works. Found in slice-005 human review 2026-05-30. Fix when slice 009 formalizes the runtime-host boundary, or sooner as a dedicated hotfix if answering host agents is needed in the live app.
+- **Test files are excluded from `pnpm typecheck`** (`apps/server/tsconfig.json` includes only `src/**`), so type errors in `test/*.ts` pass the build gate (tsx runs tests untyped). Surfaced 3 `string`→`ULID` errors in `live-events-routes.test.ts` (fixed 2026-05-30). Consider widening the typecheck include / adding a test tsconfig in slice-011 cleanup.
+
 | Done | Session | Artifact | Prompt | Completion Notes |
 |---|---:|---|---|---|
 | [x] | 1 | `refactor plan/implementation-roadmap.md` | `Follow AGENTS.md. Create refactor plan/implementation-roadmap.md from the tracker and holistic synthesis. Do not change implementation code. Update the tracker.` | Created the implementation roadmap; marked the artifact `planned` in `refactor-tracker.md`. |

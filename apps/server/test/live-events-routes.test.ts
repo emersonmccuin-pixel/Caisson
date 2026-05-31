@@ -6,6 +6,8 @@ import { join } from 'node:path';
 
 import { Hono } from 'hono';
 
+import type { ULID } from '@pc/domain';
+
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-live-events-routes-'));
 process.env.PC_DATA_DIR = tmpDir;
 
@@ -46,7 +48,7 @@ test('live event replay route validates query and handles no-cursor high-water',
     projectId: null,
     type: 'project.changed',
     entity: 'project',
-    entityId: 'p1',
+    entityId: 'p1' as ULID,
     version: null,
     payload: { reason: 'created', projectIdChanged: 'p1' },
   });
@@ -142,7 +144,7 @@ test('replay returns project-scoped agent.run.changed after cursor + excludes ot
     projectId: p1.id,
     type: 'agent.run.changed',
     entity: 'agent-run',
-    entityId: 'run-p1',
+    entityId: 'run-p1' as ULID,
     version: 2,
     payload: { reason: 'running' },
   });
@@ -151,7 +153,7 @@ test('replay returns project-scoped agent.run.changed after cursor + excludes ot
     projectId: p2.id,
     type: 'agent.run.changed',
     entity: 'agent-run',
-    entityId: 'run-p2',
+    entityId: 'run-p2' as ULID,
     version: 1,
     payload: { reason: 'running' },
   });
