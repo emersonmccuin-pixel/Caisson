@@ -9,3 +9,7 @@ export * from './workflow-definitions.ts';
 export * from './workflow-runs.ts';
 export * from './pending-asks.ts';
 export * from './agent-runs.ts';
+export * from './conversations.ts';
+export * from './runtime-transcript.ts';
+export * from './runtime-send-queue.ts';
+export * from './runtime-hook-ask.ts';

@@ -1,5 +1,10 @@
 # 006 Conversation / Send / Replay Service
 
+> **Resolved (build, Session 24, 2026-05-30): pending-interaction ask-shadow DEFERRED to slice 007.**
+> The human decided slice 006 ships **ZERO database migrations** and makes **no schema changes**.
+> Sections §4.6, §4.7, §7 (`/api/ask` shadow), §9 (pending-interaction lifecycle), §10 (the `pending_interactions` table), and the §16 ask-shadow open question are **deferred to slice 007** alongside the mailbox/pending-interactions platform.
+> `/api/ask` semantics, the in-memory blocking resolver, and `chat-bridges/routes.ts` are **untouched** this slice. The parse-only `runtime-hook-ask.ts` wire-mirror contract still ships (additive, browser-safe, no DB) so 007 can adopt it without re-deriving the wire.
+
 ## 1. Baseline and Decision
 
 | Field | Value |
@@ -358,7 +363,7 @@ This slice is ready to implement only when the user explicitly asks to build and
 |---|---|
 | Should the transcript DTO mirror the current `ReplayEnvelope` exactly, or adopt the spec's richer `TranscriptEventDto` (projectId/conversationKind/conversationId/createdAt)? | Resolved for v1: mirror the existing wire exactly (byte-identical responses). Widen only when a cross-kind transcript table lands (later slice). |
 | First after-seq route shape: new `/conversations/*` routes, or `?afterSeq=` on the existing `/sessions/:id/events`? | Resolved for v1: add `?afterSeq=` to the existing route (additive, lowest risk). New `/conversations/*` routes wait for the cross-kind convergence. |
-| Add the `pending_interactions` shadow (one additive table) this slice, or defer the ask shadow to slice 007? | Open — STOP and confirm. Default leans to adding the additive table now (the foundation spec's Phase 7 includes the ask shadow), but it is the only schema change in the slice; deferring keeps slice 006 strictly no-migration. |
+| Add the `pending_interactions` shadow (one additive table) this slice, or defer the ask shadow to slice 007? | **Resolved (human decision, build Session 24): DEFER the durable pending-interaction shadow + its `pending_interactions` table to slice 007.** Slice 006 ships zero migrations / no schema change; `/api/ask` is untouched. The parse-only `runtime-hook-ask` wire-mirror contract still ships. |
 | Keep the optional low-frequency `conversation.session.changed`/`conversation.send-queue.changed` outbox nudges, or leave the slice read/facade-only? | Resolved for v1: leave them OUT unless they add clear value without expanding the diff — the pathway line for 006 does not mention live events, and the spec forbids transcript-on-outbox. If kept, they are refetch-only nudges with legacy projections. |
 | Should `enqueueRuntimeTurn`'s `source`/`sourceRef` be persisted on the send-queue row? | Resolved for v1: recorded by the facade for the mailbox target ref, but the queue row shape stays unchanged (no migration on `orchestrator_send_queue`); mailbox owns the target-ref store (slice 007). |
 | Should agent/subagent transcript reads converge onto the transcript-read contract this slice? | Resolved for v1: read-contract mapping only, and only if it does not touch the live agent fanout layer; otherwise defer and note. Storage convergence is later. |

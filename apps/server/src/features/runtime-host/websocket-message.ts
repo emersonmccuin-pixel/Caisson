@@ -1,18 +1,10 @@
 import type { OrchestratorSession, ULID } from '@pc/domain';
-import {
-  enqueueOrchestratorSend,
-  getActiveOrchestratorSession,
-  hasOpenOrchestratorSendsForSession,
-  newId,
-  recordDeliveredOrchestratorSend,
-} from '@pc/db';
 
 import {
-  deliverNextQueuedPrompt,
   publicSendQueueItem,
-  queuedStatusForState,
   type PublicSendQueueItem,
 } from '../../services/orchestrator-send-queue-delivery.ts';
+import { conversationSendServiceFor } from '../../services/conversation-send.ts';
 import { forwardTerminalInput } from '../../services/terminal-mode.ts';
 import { loadRuntimeSessionReplay, sessionReplayPayload } from './routes.ts';
 
@@ -195,88 +187,38 @@ async function handlePromptSend<
     });
     return;
   }
-  const clientMessageId =
-    typeof msg.clientMessageId === 'string' && msg.clientMessageId
-      ? msg.clientMessageId
-      : newId();
-  let active = getActiveOrchestratorSession(projectId);
-  if (!active) {
-    active = runtime.ensureActiveSession();
-    broadcastTo(projectId, { type: 'session-changed', session: active });
-    broadcastTo(projectId, sessionReplayPayload(loadRuntimeSessionReplay(runtime, active.id)));
-    broadcastSendQueueSnapshot(projectId, active.id);
-  }
-  let live = runtime.ptySession();
-  if (!live) {
-    try {
-      live = ensureOrchestratorPty(projectId, runtime);
-    } catch (err) {
-      sendAck(msg.clientMessageId, {
-        ok: false,
-        status: 'no-session',
-        error: err instanceof Error
-          ? err.message
-          : 'No live orchestrator session is attached',
-      });
-      return;
-    }
-  }
-  const state = live.getState();
-  const hasBacklog = hasOpenOrchestratorSendsForSession(active.id);
-  if (state !== 'ready' || hasBacklog) {
-    try {
-      const row = enqueueOrchestratorSend({
-        projectId,
-        sessionId: active.id,
-        clientMessageId,
-        text: msg.text,
-        status: queuedStatusForState(state, hasBacklog),
-      });
-      sendAck(msg.clientMessageId, {
-        ok: true,
-        status: 'queued',
-        queueItem: publicSendQueueItem(row),
-      });
-      broadcastSendQueueSnapshot(projectId, active.id);
-      if (state === 'ready') {
-        deliverNextQueuedPrompt(projectId, runtime, broadcastSendQueueSnapshot);
-      }
-    } catch (err) {
-      sendAck(msg.clientMessageId, {
-        ok: false,
-        status: 'error',
-        error: err instanceof Error ? err.message : 'Failed to queue prompt',
-      });
-    }
-    return;
-  }
-  try {
-    const result = await live.send(msg.text);
-    if (result !== 'ok') {
-      sendAck(msg.clientMessageId, {
-        ok: false,
-        status: 'error',
-        error: `send returned ${result}`,
-      });
-      return;
-    }
-    const row = recordDeliveredOrchestratorSend({
-      projectId,
-      sessionId: active.id,
-      clientMessageId,
-      text: msg.text,
-    });
+
+  // The handlePromptSend policy (ensure session, direct-vs-enqueue, drain) now
+  // lives in the ConversationSendService facade. The WS adapter keeps owning the
+  // send-ack wire shape + the session-ensured envelopes (session-changed /
+  // session-replay), which are emitted via onSessionEnsured below.
+  const service = conversationSendServiceFor({
+    runtime,
+    ensurePort: () => ensureOrchestratorPty(projectId, runtime),
+    broadcastSendQueueSnapshot,
+    onSessionEnsured: (id, session) => {
+      broadcastTo(id, { type: 'session-changed', session });
+      broadcastTo(id, sessionReplayPayload(loadRuntimeSessionReplay(runtime, session.id)));
+    },
+  });
+
+  const result = await service.sendUserTurn({
+    projectId,
+    clientMessageId: typeof msg.clientMessageId === 'string' ? msg.clientMessageId : undefined,
+    text: msg.text,
+  });
+
+  if (result.ok) {
     sendAck(msg.clientMessageId, {
       ok: true,
-      status: 'received',
-      queueItem: publicSendQueueItem(row),
+      status: result.status,
+      queueItem: publicSendQueueItem(result.row),
     });
-    broadcastSendQueueSnapshot(projectId, active.id);
-  } catch (err) {
-    sendAck(msg.clientMessageId, {
-      ok: false,
-      status: 'error',
-      error: err instanceof Error ? err.message : 'Failed to send prompt',
-    });
+    return;
   }
+  sendAck(msg.clientMessageId, {
+    ok: false,
+    status: result.status,
+    error: result.error,
+  });
 }

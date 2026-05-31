@@ -2,20 +2,15 @@ import type { Hono } from 'hono';
 import type { OrchestratorSession, ULID } from '@pc/domain';
 import {
   cancelOpenOrchestratorSendsForSession,
-  cancelQueuedOrchestratorSend,
   getActiveOrchestratorSession,
   getOrchestratorSendQueueRow,
   getOrchestratorSession,
   hasOpenOrchestratorSendsForSession,
   listOrchestratorSessionsForProject,
-  retryFailedOrchestratorSend,
 } from '@pc/db';
 
-import {
-  deliverNextQueuedPrompt,
-  publicSendQueueItem,
-  queuedStatusForState,
-} from '../../services/orchestrator-send-queue-delivery.ts';
+import { publicSendQueueItem } from '../../services/orchestrator-send-queue-delivery.ts';
+import { conversationSendServiceFor } from '../../services/conversation-send.ts';
 import type {
   PublicRuntimeSnapshot,
   RuntimeSnapshotRuntime,
@@ -25,10 +20,12 @@ import {
   readTerminalTranscriptTail,
   type TerminalTranscriptRuntime,
 } from '../../services/terminal-mode.ts';
+import { type SessionReplayCheckpoint } from '../../services/session-replay.ts';
+import { parseTranscriptAfterSeqQuery } from '@pc/contracts';
 import {
-  loadSessionReplayCheckpoint,
-  type SessionReplayCheckpoint,
-} from '../../services/session-replay.ts';
+  loadConversationReplayCheckpoint,
+  loadConversationReplayCheckpointAfter,
+} from '../../services/conversation-replay.ts';
 
 export interface RuntimeHostPtySession {
   getState(): string;
@@ -62,7 +59,7 @@ export function loadRuntimeSessionReplay(
   runtime: Pick<RuntimeHostRuntime, 'sessionDataPath'>,
   sessionId: ULID,
 ): SessionReplayCheckpoint {
-  return loadSessionReplayCheckpoint(runtime.sessionDataPath(sessionId), sessionId);
+  return loadConversationReplayCheckpoint(runtime, sessionId);
 }
 
 export function sessionReplayPayload(replay: SessionReplayCheckpoint): {
@@ -85,6 +82,26 @@ function broadcastSessionReplay(
   replay: SessionReplayCheckpoint,
 ): void {
   deps.broadcastTo(projectId, sessionReplayPayload(replay));
+}
+
+/** Build the slice-006 send facade for the cancel/retry routes. These routes
+ *  never ensure a session (the guards run first), so `ensureActiveSession` is a
+ *  throwing stub. The PTY is reached through the runtime's `ptySession()`. */
+function sendServiceFor(
+  deps: RuntimeHostRoutesDeps,
+  projectId: ULID,
+  runtime: RuntimeHostRuntime,
+) {
+  return conversationSendServiceFor({
+    runtime: {
+      ensureActiveSession: () => {
+        throw new Error('cancel/retry does not ensure a session');
+      },
+      ptySession: () => runtime.ptySession(),
+    },
+    ensurePort: () => deps.ensureOrchestratorPty(projectId, runtime),
+    broadcastSendQueueSnapshot: deps.broadcastSendQueueSnapshot,
+  });
 }
 
 export function registerRuntimeHostRoutes(app: Hono, deps: RuntimeHostRoutesDeps): void {
@@ -147,7 +164,21 @@ export function registerRuntimeHostRoutes(app: Hono, deps: RuntimeHostRoutesDeps
     const sessionId = c.req.param('sessionId') as ULID;
     const runtime = deps.resolveProject(id);
     if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
-    const replay = loadRuntimeSessionReplay(runtime, sessionId);
+    // Additive ?afterSeq=&limit= read: returns only rows with seq > afterSeq
+    // using the per-session transcript seq cursor (NOT the global live-outbox
+    // cursor). With no afterSeq the response is the unchanged full checkpoint.
+    const afterSeqQuery = parseTranscriptAfterSeqQuery({
+      afterSeq: c.req.query('afterSeq'),
+      limit: c.req.query('limit'),
+    });
+    const replay = afterSeqQuery
+      ? loadConversationReplayCheckpointAfter(
+          runtime,
+          sessionId,
+          afterSeqQuery.afterSeq,
+          afterSeqQuery.limit,
+        )
+      : loadRuntimeSessionReplay(runtime, sessionId);
     return c.json({
       ok: true,
       sessionId: replay.sessionId,
@@ -270,7 +301,12 @@ export function registerRuntimeHostRoutes(app: Hono, deps: RuntimeHostRoutesDeps
       return c.json({ ok: false, error: 'Queued prompt not found' }, 404);
     }
 
-    const cancelled = cancelQueuedOrchestratorSend(sendId, active.id, 'user cancelled');
+    const sendService = sendServiceFor(deps, id, runtime);
+    const cancelled = sendService.cancelQueuedTurn({
+      sendId,
+      sessionId: active.id,
+      reason: 'user cancelled',
+    });
     if (!cancelled) {
       return c.json({
         ok: false,
@@ -315,18 +351,20 @@ export function registerRuntimeHostRoutes(app: Hono, deps: RuntimeHostRoutesDeps
 
     const state = live.getState();
     const hasBacklog = hasOpenOrchestratorSendsForSession(active.id);
-    const retried = retryFailedOrchestratorSend(
+    const sendService = sendServiceFor(deps, id, runtime);
+    const retried = sendService.retryFailedTurn({
       sendId,
-      active.id,
-      queuedStatusForState(state, hasBacklog),
-    );
+      sessionId: active.id,
+      state,
+      hasBacklog,
+    });
     if (!retried) {
       return c.json({ ok: false, error: 'Failed prompt could not be retried' }, 409);
     }
 
     deps.broadcastSendQueueSnapshot(id, active.id);
     if (state === 'ready') {
-      deliverNextQueuedPrompt(id, runtime, deps.broadcastSendQueueSnapshot);
+      sendService.deliverNextQueuedTurn(id);
     }
     return c.json({ ok: true, item: publicSendQueueItem(retried) });
   });

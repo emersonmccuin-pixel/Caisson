@@ -90,4 +90,26 @@ export const runtimeApi = {
     getJson<{ ok: true; sessionId?: ULID; highWaterSeq?: number; events: SessionReplayItem[] }>(
       `/api/projects/${projectId}/sessions/${sessionId}/events`,
     ).then((r) => r.events),
+
+  /** Additive after-seq replay: fetch only transcript rows with seq > afterSeq
+   *  (the per-session transcript cursor, NOT the global live-outbox cursor).
+   *  Used to catch a chat up after a reconnect without re-pulling the full
+   *  checkpoint. Rows dedupe by `id`/`seq` in the chat reducer. */
+  getSessionEventsAfter: (
+    projectId: ULID,
+    sessionId: ULID,
+    afterSeq: number,
+    limit?: number,
+  ) => {
+    const params = new URLSearchParams({ afterSeq: String(afterSeq) });
+    if (limit !== undefined) params.set('limit', String(limit));
+    return getJson<{
+      ok: true;
+      sessionId?: ULID;
+      highWaterSeq?: number;
+      events: SessionReplayItem[];
+    }>(
+      `/api/projects/${projectId}/sessions/${sessionId}/events?${params.toString()}`,
+    );
+  },
 };

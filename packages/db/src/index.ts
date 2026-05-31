@@ -264,6 +264,7 @@ export {
   cancelOpenOrchestratorSendsForSession,
   cancelQueuedOrchestratorSend,
   enqueueOrchestratorSend,
+  getOrchestratorSendByClientMessageId,
   getOrchestratorSendQueueRow,
   hasOpenOrchestratorSendsForSession,
   listOpenOrchestratorSendsForSession,

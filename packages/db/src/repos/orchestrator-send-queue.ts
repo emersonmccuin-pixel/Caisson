@@ -161,6 +161,27 @@ export function getOrchestratorSendQueueRow(
   return row ? toDomain(row) : undefined;
 }
 
+/** Look up a send row by its `(sessionId, clientMessageId)` idempotency key
+ *  (the existing unique index). Used by the slice-006 `enqueueRuntimeTurn`
+ *  facade so a mailbox/system replay returns the existing row instead of
+ *  double-enqueuing. */
+export function getOrchestratorSendByClientMessageId(
+  sessionId: ULID,
+  clientMessageId: string,
+): OrchestratorSendQueueRow | undefined {
+  const row = getDb()
+    .select()
+    .from(orchestratorSendQueue)
+    .where(
+      and(
+        eq(orchestratorSendQueue.sessionId, sessionId),
+        eq(orchestratorSendQueue.clientMessageId, clientMessageId),
+      ),
+    )
+    .get() as QueueRow | undefined;
+  return row ? toDomain(row) : undefined;
+}
+
 export function listVisibleOrchestratorSendsForSession(
   sessionId: ULID,
 ): OrchestratorSendQueueRow[] {
