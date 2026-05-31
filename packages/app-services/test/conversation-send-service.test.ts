@@ -4,6 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { ULID } from '@pc/domain';
+
 import type { RuntimeTurnPort } from '../src/conversations/index.ts';
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-conv-send-'));
@@ -13,7 +15,6 @@ const {
   closeDb,
   createOrchestratorSession,
   createProject,
-  getOrchestratorSendQueueRow,
   newId,
   runMigrations,
 } = await import('@pc/db');
@@ -29,8 +30,8 @@ const stages = [{ id: 'todo', name: 'Todo', order: 0 }];
 
 interface Harness {
   service: InstanceType<typeof ConversationSendService>;
-  projectId: string;
-  sessionId: string;
+  projectId: ULID;
+  sessionId: ULID;
   snapshots: Array<{ projectId: string; sessionId: string }>;
   setState(state: string): void;
 }
@@ -158,7 +159,7 @@ test('cancelQueuedTurn only cancels queued; retryFailedTurn only retries failed'
   const h = mkHarness({ state: 'busy' });
   const queued = await h.service.sendUserTurn({ projectId: h.projectId, text: 'q', clientMessageId: 'cm1' });
   assert.equal(queued.ok && queued.row.status, 'queued_busy');
-  const sendId = queued.ok ? queued.row.id : '';
+  const sendId = (queued.ok ? queued.row.id : '') as ULID;
 
   const cancelled = h.service.cancelQueuedTurn({ sendId, sessionId: h.sessionId, reason: 'user cancelled' });
   assert.equal(cancelled?.status, 'cancelled');
