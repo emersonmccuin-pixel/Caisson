@@ -115,10 +115,10 @@ export interface PauseResumeDeps {
 /** Pause a running AgentRun in response to a pc_ask_* tool call. Mints a
  *  pending_asks_v2 row, flips the run paused, delivers the agent-asks-*
  *  event to the dispatcher's session through the hybrid transport. */
-export function recordExplicitPause(
+export async function recordExplicitPause(
   input: RecordExplicitPauseInput,
   deps: PauseResumeDeps,
-): RecordExplicitPauseResult {
+): Promise<RecordExplicitPauseResult> {
   const reg = deps.registry ?? getActiveRunRegistry();
   const now = (deps.now ?? Date.now)();
 
@@ -164,8 +164,13 @@ export function recordExplicitPause(
     deps.broadcast,
   );
 
-  // Mark the run paused in the runtime state machine (post-commit).
-  entry.run.markPaused(pendingAskId);
+  // Mark the run paused in the runtime state machine (post-commit). AWAIT it:
+  // for host-backed runs this blocks on the host applying `paused` before we
+  // return — and thus before the agent's pc_ask_* tool call returns and the
+  // agent ends its turn. Without the await the host would tail the turn-end and
+  // complete the run before the fire-and-forget mark-paused landed, dropping
+  // the answer (slice 009 OBJ-2). In-process markPaused is synchronous.
+  await entry.run.markPaused(pendingAskId);
 
   // Deliver the agent-asks-* event to the dispatcher session.
   const kindMap: Record<PendingAskKind, AgentInboxEventKind> = {

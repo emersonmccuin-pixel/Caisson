@@ -37,7 +37,12 @@ export interface ActiveRunHandle {
   getState(): AgentRunState;
   cancel(): void;
   notifyMcpHandshake(): void;
-  markPaused(askId: string): void;
+  /** Flip the run to paused. Host-backed runs AWAIT the host ack (slice 009
+   *  OBJ-2): the explicit-pause caller must not let the agent's `pc_ask_*` tool
+   *  return — and the agent end its turn — until the HOST run is actually
+   *  paused, else the host tails the turn-end and completes the run before the
+   *  fire-and-forget mark-paused lands, dropping the eventual answer. */
+  markPaused(askId: string): void | Promise<void>;
   resumeWithAnswer(answer: string): Promise<ResumeWithAnswerResult>;
   onTerminal(listener: () => void): void;
 }
@@ -108,13 +113,29 @@ export class HostBackedActiveRunHandle implements ActiveRunHandle {
     });
   }
 
-  markPaused(askId: string): void {
+  async markPaused(askId: string): Promise<void> {
+    // Optimistic local snapshot so a non-awaiting getState() reads paused.
     this.snapshot = {
       ...this.snapshot,
       state: 'paused',
       updatedAt: this.now(),
     };
-    this.issue({ type: 'mark-paused', runId: this.snapshot.runId, askId });
+    // Slice 009 OBJ-2 — AWAIT the host ack (was fire-and-forget). The caller
+    // (recordExplicitPause) blocks the agent's pc_ask_* tool response on this,
+    // so the host run is genuinely `paused` before the agent ends its turn.
+    // Otherwise the host tails the turn-end and toTerminal('completed')s the run
+    // while mark-paused is still in flight, and the answer later no-ops.
+    const command: AgentHostCommand = {
+      type: 'mark-paused',
+      runId: this.snapshot.runId,
+      askId,
+    };
+    try {
+      const response = await Promise.resolve(this.host.sendCommand(command));
+      if (response && response.ok) this.applyCommandResponse(response);
+    } catch (err) {
+      this.reportCommandError(err, command);
+    }
   }
 
   async resumeWithAnswer(answer: string): Promise<ResumeWithAnswerResult> {

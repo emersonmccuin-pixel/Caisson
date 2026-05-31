@@ -33,7 +33,7 @@ const {
   newId,
 } = await import('@pc/db');
 const { ActiveRunRegistry } = await import('../src/services/agent-active-runs.ts');
-const { answerPendingAsk } = await import('../src/services/pause-resume.ts');
+const { answerPendingAsk, recordExplicitPause } = await import('../src/services/pause-resume.ts');
 
 const stages = [{ id: 'backlog', name: 'Backlog', order: 0 }];
 
@@ -137,6 +137,65 @@ test('host not-resumable resume → answerPendingAsk maps to resume-failed and F
   assert.deepEqual(handle.resumeCalls, ['do X'], 'the answer was sent to the host once');
   const row = getAgentRunRow(runId)!;
   assert.equal(row.status, 'failed', 'a non-resumable resume must NOT strand the run running');
+});
+
+// SLICE-009 OBJ-2 (race fix) — the ROOT of "answering a paused host agent drops
+// the answer": recordExplicitPause used to fire mark-paused fire-and-forget and
+// return immediately, so the agent's pc_ask_* tool returned and the agent ended
+// its turn BEFORE the host paused — the host then tailed the turn-end and
+// completed the run, and the later answer no-op'd. Fix: recordExplicitPause now
+// AWAITS markPaused, so for a host run it cannot return until the host has
+// actually paused. This test pins that ordering guarantee.
+test('recordExplicitPause does not resolve until the host mark-paused is acked', async () => {
+  const reg = new ActiveRunRegistry();
+  const runId = newId();
+  const ccSessionId = `cc-${runId}`;
+  insertAgentRunRow({
+    id: runId,
+    projectId,
+    podName: 'builder',
+    dispatcherSessionId: 'disp-1',
+    ccSessionId,
+    status: 'running',
+    input: 'go',
+    queuedAt: Date.now(),
+  });
+
+  let releasePause!: () => void;
+  const pauseGate = new Promise<void>((r) => {
+    releasePause = r;
+  });
+  let markPausedAwaited = false;
+  const handle: ActiveRunHandle = {
+    getRecord: () => ({ agentRunId: runId }),
+    getState: () => 'running',
+    cancel() {},
+    notifyMcpHandshake() {},
+    markPaused: async () => {
+      markPausedAwaited = true;
+      await pauseGate; // simulates the host round-trip
+    },
+    resumeWithAnswer: async () => ({ ok: true }),
+    onTerminal() {},
+  };
+  reg.register({ run: handle, projectId, dispatcherSessionId: 'disp-1', ccSessionId, podName: 'builder' });
+
+  let resolved = false;
+  const pending = recordExplicitPause(
+    { agentRunId: runId, kind: 'user', promptBody: 'A or B?', context: null, options: null },
+    { registry: reg, broadcast: () => {}, channelServer: { emitToSession: () => true } as never, slug: 'resume-result' },
+  ).then((r) => {
+    resolved = true;
+    return r;
+  });
+
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(markPausedAwaited, true, 'markPaused was invoked');
+  assert.equal(resolved, false, 'must NOT resolve while the host pause is still in flight');
+
+  releasePause();
+  const result = await pending;
+  assert.equal(result.ok, true, 'resolves once the host has paused');
 });
 
 test('resumable host resume → answerPendingAsk succeeds and does NOT finalize', async () => {

@@ -505,7 +505,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       }
     }
 
-    const result = services.recordExplicitPause(
+    const result = await services.recordExplicitPause(
       {
         agentRunId,
         kind,
