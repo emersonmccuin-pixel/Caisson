@@ -37,6 +37,7 @@ import {
   getSecret,
   listAgentAudit,
   listAgents,
+  listProjectVisibleAgents,
   listKnowledge,
   listMcpServers,
   listSecrets,
@@ -259,13 +260,13 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
   app.get('/api/agents/pods', (c) => {
     const qs = new URL(c.req.url).searchParams;
     const projectId = qs.get('projectId') as ULID | null;
-    // When a projectId is present: fetch project-scope + all globals then
-    // exclude global user-created pods (origin='user-created', scope='global').
-    // Stock globals (origin='stock') remain visible as the Built-in panel.
+    // With a projectId: project-scope pods + built-in (stock) globals only
+    // (shared `listProjectVisibleAgents` — same path/rule as the orchestrator's
+    // {{AVAILABLE_AGENTS}}; global user-created pods are excluded from the
+    // project view). Without one: the global management surface shows ALL
+    // globals so the user can manage / copy them.
     const pods = projectId
-      ? listAgents({ projectId, includeGlobals: true }).filter(
-          (p) => p.scope === 'project' || p.origin === 'stock',
-        )
+      ? listProjectVisibleAgents(projectId)
       : listAgents({ scope: 'global' });
     const detectDrift = deps.detectStockPodDrift;
     const annotated = pods.map((p) => ({

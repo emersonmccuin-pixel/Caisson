@@ -1074,6 +1074,28 @@ export function deleteMcpServer(id: ULID, audit: AuditInput): boolean {
  *  Section 22.1 — the 2026-05-25 codebase review found this was the
  *  load-bearing place where project-scoped pods became invisible at spawn.
  *  Stabilization pass switched it from "global only" to "project wins". */
+/** THE policy: which agents a project may see and dispatch — its own
+ *  project-scope pods + built-in (stock) globals. A global USER-CREATED pod is
+ *  excluded; the user must copy it into the project (Add agent / clone) to use
+ *  it, so the orchestrator can never reach a custom global it wasn't given.
+ *  Single source of truth shared by `listProjectVisibleAgents`,
+ *  `resolveAgentForDispatch`, the `{{AVAILABLE_AGENTS}}` prompt var, and the
+ *  Agents-tab list route. */
+export function isProjectDispatchable(agent: PodAgentRow): boolean {
+  return agent.scope === 'project' || agent.origin === 'stock';
+}
+
+/** The agents visible/usable inside a project: project-scope pods + stock
+ *  globals (see `isProjectDispatchable`). With no `projectId`, returns stock
+ *  globals only. Both the orchestrator's available-agents list and the
+ *  project agents-list route call this — one path, one rule. */
+export function listProjectVisibleAgents(projectId?: ULID | null): PodAgentRow[] {
+  const rows = projectId
+    ? listAgents({ projectId, includeGlobals: true })
+    : listAgents({ scope: 'global' });
+  return rows.filter(isProjectDispatchable);
+}
+
 export function resolveAgentForDispatch(
   name: string,
   projectId?: ULID | null,
@@ -1082,7 +1104,8 @@ export function resolveAgentForDispatch(
     const project = getAgentByName({ name, scope: 'project', projectId });
     if (project) return project;
   }
-  return getAgentByName({ name, scope: 'global' });
+  const global = getAgentByName({ name, scope: 'global' });
+  return global && isProjectDispatchable(global) ? global : null;
 }
 
 /** Read the full pod the materialiser (17a.3) needs to render `.md` +

@@ -412,10 +412,13 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
 
 const BY_SLUG = new Map(TOOL_CATALOG.map((e) => [e.slug, e]));
 
-/** Work-item tools every agent ALWAYS has. The contract loop (Section 26)
- *  needs these on every dispatched agent — `pc_get_work_item` to fetch the
+/** Tools every agent ALWAYS has. The contract loop (Section 26) needs the
+ *  work-item tools on every dispatched agent — `pc_get_work_item` to fetch the
  *  assignment, `pc_update_work_item` to persist body deliverables that satisfy
  *  body-based predicates, `pc_attach_to_work_item` to land long reports.
+ *  `pc_ask_user` is also required: any agent that hits ambiguity must be able
+ *  to escalate to the human (and the host-resume path depends on it) — a
+ *  user-created pod must not be able to omit it.
  *
  *  Enforcement is layered:
  *    1. `createAgent` + `updateAgent` repos union-merge these into the row's
@@ -429,6 +432,7 @@ export const REQUIRED_AGENT_TOOLS: readonly string[] = [
   'mcp__pc-rig__pc_get_work_item',
   'mcp__pc-rig__pc_update_work_item',
   'mcp__pc-rig__pc_attach_to_work_item',
+  'mcp__pc-rig__pc_ask_user',
 ] as const;
 
 /** Union the required WI tools into an arbitrary tools list. Preserves order

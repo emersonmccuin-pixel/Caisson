@@ -22,7 +22,7 @@
 // DB-backed variables here as the need arises — one variable per use case,
 // no general-purpose templating.
 
-import { listAgents } from '@pc/db';
+import { listProjectVisibleAgents } from '@pc/db';
 import type { ULID } from '@pc/domain';
 
 /** Format the full agent roster the orchestrator (or any other pod opting in
@@ -30,9 +30,10 @@ import type { ULID } from '@pc/domain';
  *  user-created; alphabetical within each group. Returns an empty string when
  *  no agents are live (rare — implies the seed didn't run). */
 export function renderAvailableAgents(projectId: ULID | null | undefined): string {
-  const rows = projectId
-    ? listAgents({ projectId, includeGlobals: true })
-    : listAgents({ scope: 'global' });
+  // Project pods + built-in (stock) agents only — same path/rule as the
+  // Agents-tab list route. Global user-created pods are NOT discoverable here;
+  // the user must copy one into the project (Add agent) to make it usable.
+  const rows = listProjectVisibleAgents(projectId);
   if (rows.length === 0) return '';
 
   // Sort: stock first (alpha), then user-created (alpha).
