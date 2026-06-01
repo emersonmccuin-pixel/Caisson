@@ -1,4 +1,5 @@
 import { request as httpRequest } from 'node:http';
+import { TypedLocalhostClient } from '../client/typed-client.ts';
 
 export interface ServerResponse {
   status: number;
@@ -32,6 +33,10 @@ export interface ToolContext {
   deleteServer: (path: string) => Promise<ServerResponse>;
   resolveWorkItemIdViaServer: (idOrCallsign: string) => Promise<string | null>;
   withRichLinkHint: (text: string) => ToolResult;
+  /** Slice 011 — typed localhost client over the raw helpers above. Parses
+   *  responses through `@pc/contracts` DTO guards; always preserves the raw
+   *  `{ status, body }` so handlers emit byte-identical text. */
+  client: TypedLocalhostClient;
 }
 
 interface ToolContextOptions {
@@ -131,6 +136,22 @@ export function createToolContext(options: ToolContextOptions): ToolContext {
     }
   };
 
+  const postServer = (path: string, body: unknown) =>
+    httpWithBody(options.serverPort, 'POST', path, body);
+  const putServer = (path: string, body: unknown) =>
+    httpWithBody(options.serverPort, 'PUT', path, body);
+  const patchServer = (path: string, body: unknown) =>
+    httpWithBody(options.serverPort, 'PATCH', path, body);
+  const deleteServer = (path: string) => httpWithoutBody(options.serverPort, 'DELETE', path);
+
+  const client = new TypedLocalhostClient({
+    postServer,
+    putServer,
+    getServer,
+    patchServer,
+    deleteServer,
+  });
+
   return {
     projectId: options.projectId,
     agentSessionId: options.agentSessionId,
@@ -140,14 +161,15 @@ export function createToolContext(options: ToolContextOptions): ToolContext {
     agentParentWorkItemId: options.agentParentWorkItemId,
     agentInvokeDepth: options.agentInvokeDepth,
     projectPath,
-    postServer: (path, body) => httpWithBody(options.serverPort, 'POST', path, body),
-    putServer: (path, body) => httpWithBody(options.serverPort, 'PUT', path, body),
+    postServer,
+    putServer,
     getServer,
-    patchServer: (path, body) => httpWithBody(options.serverPort, 'PATCH', path, body),
-    deleteServer: (path) => httpWithoutBody(options.serverPort, 'DELETE', path),
+    patchServer,
+    deleteServer,
     resolveWorkItemIdViaServer,
     withRichLinkHint: (text) => ({
       content: [{ type: 'text', text }, { type: 'text', text: RICH_LINK_HINT }],
     }),
+    client,
   };
 }
