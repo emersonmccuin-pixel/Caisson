@@ -21,25 +21,39 @@ at all — it derives from the identity-keyed store. There is no positional curs
 to fall out of sync, so the old staleness failure mode is gone by construction. The
 committed spike already proved the exact session-rebuild case on Kanban.
 
-## B. NOT YET live-verified
+## B. Active-session test — PASSED (after a server restart re-discovered the host)
 
-- **Active-agent mid-replay repro** (the plan §5 strict bar): dispatch an agent so the
-  chat timeline checkpoints/replays while a `useResourceList` view (Running agents) is
-  mounted, and confirm the run appears/transitions live. **BLOCKED — see D (host).**
+Dispatched a `writer` agent via `POST …/agents/writer/invoke` (host reachable after the
+restart). All live, no reload:
+- **agent-run appeared live as "running"** in the Running agents panel (the NEW
+  `useResourceList` agent-run path) during the active session.
+- **work-item (probe C) appeared live in the Table WHILE the agent ran** (work-item
+  `useResourceList` under the active-agent condition — the exact case that used to go
+  stale).
+- **agent-run dropped live on terminal**: the writer wouldn't self-complete a trivial
+  one-word task (still "running" at ~90s, rev=3 — the known host-dispatch idle issue,
+  separate from slice 018), so it was `/cancel`-led → terminal → it disappeared from
+  Running agents live (dropOnTerminal branch).
+
+**VERDICT: slice 018 live-verified.** Both `useResourceList` entities (agent-run +
+work-item) propagate live during an active agent session; the old positional-cursor
+staleness is gone.
 
 ## C. Console-error enumeration (the "don't just ignore" pass)
 
 Captured via `browser_console_messages level=error all=true` across the whole session.
 
 ### C1. REAL — log for fixing
-1. **`GET /api/live-events?after=…` → 500 (observed ONCE, not reproducible).**
-   - Route `apps/server/src/features/live-events/routes.ts:38` returns 500 for any
-     non-`LiveEventCursorError` thrown by `listLiveEventsAfter`. On retry it now returns
-     200 `resetRequired:true`. Most plausible cause = transient SQLite contention during
-     the relay's 5-min `pruneLiveOutbox` (concurrent write/read).
-   - **Impact: low** — the client's reconnect epoch-bump full-reload still fires, so the
-     UI was not left stale. **Fix rec:** wrap the read to degrade to `resetRequired`
-     (or retry-once) on a transient DB error instead of 500. Priority: low.
+1. **`GET /api/live-events?after=…` → 500 — server-BOOT-window transient.**
+   - Reproduced TWICE, both in the ~1s window right after a server (re)start, when the
+     client's reconnect fires the catch-up request at a not-yet-ready server. Once boot
+     settled it returns 200 (`after=208`→200, `after=1`→200 `resetRequired`). `/api/dev/status`
+     500'd in the same window and also cleared. Route `live-events/routes.ts:38` returns
+     500 for any non-`LiveEventCursorError` from `listLiveEventsAfter`.
+   - **Impact: low** — boot-window only; the client's reconnect epoch-bump full-reload
+     fires anyway, so the UI is not left stale. **Fix rec:** during boot, return 503
+     (retryable) rather than 500, or have the client treat a catch-up 5xx as "retry after
+     backoff". Priority: low.
 2. **Server does NOT re-discover the agent host after the host restarts → permanent
    "host-unavailable" until the SERVER restarts.**
    - Host was healthy this session (pid 8308, `http://127.0.0.1:55117/health` → 200,
