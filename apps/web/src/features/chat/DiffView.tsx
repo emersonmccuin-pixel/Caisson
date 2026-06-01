@@ -59,11 +59,11 @@ export function DiffView({
 
             if (row.type === 'add') {
               return (
-                <div key={idx} className="flex bg-success/10">
-                  <span className="w-8 shrink-0 select-none px-1 text-right text-[10px] text-success/50">
+                <div key={idx} className="flex border-l-2 border-success bg-success/20">
+                  <span className="w-8 shrink-0 select-none px-1 text-right text-[10px] text-success/70">
                     {row.newLineNo}
                   </span>
-                  <span className="w-5 shrink-0 select-none text-center text-[10px] text-success">
+                  <span className="w-5 shrink-0 select-none text-center text-[10px] font-bold text-success">
                     +
                   </span>
                   <span className="whitespace-pre px-1 text-foreground">{row.text}</span>
@@ -73,21 +73,23 @@ export function DiffView({
 
             if (row.type === 'remove') {
               return (
-                <div key={idx} className="flex bg-destructive/10">
-                  <span className="w-8 shrink-0 select-none px-1 text-right text-[10px] text-destructive/50">
+                <div key={idx} className="flex border-l-2 border-destructive bg-destructive/20">
+                  <span className="w-8 shrink-0 select-none px-1 text-right text-[10px] text-destructive/70">
                     {row.oldLineNo}
                   </span>
-                  <span className="w-5 shrink-0 select-none text-center text-[10px] text-destructive">
+                  <span className="w-5 shrink-0 select-none text-center text-[10px] font-bold text-destructive">
                     −
                   </span>
-                  <span className="whitespace-pre px-1 text-foreground">{row.text}</span>
+                  <span className="whitespace-pre px-1 text-foreground/80 line-through decoration-destructive/40">
+                    {row.text}
+                  </span>
                 </div>
               );
             }
 
             // context
             return (
-              <div key={idx} className="flex">
+              <div key={idx} className="flex border-l-2 border-transparent">
                 <span className="w-8 shrink-0 select-none px-1 text-right text-[10px] text-muted-foreground/40">
                   {row.oldLineNo}
                 </span>
