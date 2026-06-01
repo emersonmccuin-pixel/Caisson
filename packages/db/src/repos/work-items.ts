@@ -668,8 +668,8 @@ export function applyAgentVerification(
 /** Section 26.6 — point-write of `assignedAgentRunId`. Called from the
  *  agent-run dispatch path right after the AgentRun row is inserted so the
  *  contract WI always points at the latest producer run. Continuations
- *  overwrite; reject (`pc_reject_work_item`) reads this field to know which
- *  run to wake with feedback. No version bump — this is dispatch-time
+ *  overwrite; reject (`pc_resolve_work_item` decision="reject") reads this
+ *  field to know which run to wake. No version bump — this is dispatch-time
  *  bookkeeping, not a user-visible mutation. */
 export function setAssignedAgentRunId(
   id: ULID,

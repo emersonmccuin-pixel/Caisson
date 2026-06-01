@@ -1,4 +1,5 @@
-// Section 26.6 — `pc_approve_work_item` / `pc_reject_work_item` service helpers.
+// Section 26.6 — approve / reject service helpers (the /approve + /reject
+// routes the merged `pc_resolve_work_item` MCP tool delegates to).
 //
 // Both verbs target tier-2/3 verification holds parked by Section 26.5 in
 // `awaiting-verification` + `verification_status: 'pending'`. They are

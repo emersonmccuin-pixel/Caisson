@@ -37,7 +37,7 @@ function stageForMcp(s: McpStage): {
 }
 
 async function listStages(
-  toolName: 'pc_get_stages' | 'pc_list_stages',
+  toolName: 'pc_list_stages',
   ctx: ToolContext,
 ): Promise<ToolResult> {
   try {
@@ -78,9 +78,6 @@ export async function handleProjectConfigTool(
   ctx: ToolContext,
 ): Promise<ToolResult | null> {
   switch (name) {
-    case 'pc_get_stages':
-      return listStages('pc_get_stages', ctx);
-
     case 'pc_write_claude_md': {
       const content = typeof args.content === 'string' ? args.content : '';
       if (!content.trim()) {

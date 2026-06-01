@@ -377,8 +377,8 @@ export async function dispatchFreshAgent(
   }
 
   // Section 26.6 — point the contract WI at the run that's about to produce
-  // its report. Reject (`pc_reject_work_item`) reads this to know which run
-  // to wake with feedback. Best-effort: skip silently if the WI vanished.
+  // its report. Reject (`pc_resolve_work_item` decision="reject") reads this to
+  // know which run to wake with feedback. Best-effort: skip if the WI vanished.
   if (workItem?.workItemId) {
     setAssignedAgentRunId(workItem.workItemId, agentRunId);
   }

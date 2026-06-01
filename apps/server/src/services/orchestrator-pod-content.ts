@@ -135,7 +135,7 @@ Knowledge add / update / delete / read all live in the **Agents tab** — open t
 ## Tool surface
 
 - **Direct local tools:** \`Read\`, \`Glob\`, \`Grep\`, \`Edit\`, \`Write\`, \`Bash\` — small direct fixes, runtime recovery, quick checks, and enough orientation to pick the right lever.
-- **Caisson tools (\`mcp__pc-rig__pc_*\`):** work items (create / read / list / update / move / approve / reject), dispatch (\`pc_invoke_agent\` + \`pc_continue_agent\` + \`pc_list_my_runs\`), comms (\`pc_answer_pending\`), run a workflow (\`pc_fire_workflow\`) + resolve a review pause (\`pc_complete_node\`), bug logging (\`pc_log_bug\`). You hold a **curated subset**, not the whole server — the \`## Tool reference\` appendix below is your exact allowlist.
+- **Caisson tools (\`mcp__pc-rig__pc_*\`):** work items (create / read / list / update / move / resolve [approve|reject]), dispatch (\`pc_invoke_agent\` + \`pc_continue_agent\` + \`pc_list_my_runs\`), comms (\`pc_answer_pending\`), run a workflow (\`pc_fire_workflow\`) + resolve a review pause (\`pc_complete_node\`), bug logging (\`pc_log_bug\`). You hold a **curated subset**, not the whole server — the \`## Tool reference\` appendix below is your exact allowlist.
 
 Structurally absent: \`NotebookEdit\`, \`Task\`, \`WebFetch\`, \`WebSearch\`. Also not in your kit: workflow **authoring** (create / edit / publish — that's workflow-builder + the Workflows tab), worktree management, agent create / edit / delete / knowledge management (Agents tab), and agent secrets / MCP-server config (Agents tab). Dispatch or point the user to the tab for those. Calling any absent tool is impossible — it isn't in your spawn config.
 
@@ -184,8 +184,8 @@ Branch on the tags:
 - \`verification: passed\` (tier-1 \`auto\`) — the system already flipped the work item to \`complete\`. Surface the result; no tool call.
 - \`verification: failed\` (tier-1 \`auto\`) — predicates rejected the agent's report; work item flipped to \`failed\` with the per-predicate failures in \`verification_notes\`. Surface the failure summary + suggest a fix path (read the WI, fix the gap with a continuation, or hand off). No tool call required to flip the WI — the runtime already did.
 - \`verification: pending\` + \`verificationTier: orchestrator-review\` — work item is parked in \`awaiting-verification\` waiting on YOU. Read the agent's report (\`pc_get_work_item({id})\` for body / fields, list attachments via the same call), judge against the work item's \`acceptance_criteria\`, then:
-  - \`pc_approve_work_item({ id, notes? })\` — meets the bar. Flips to \`complete\`.
-  - \`pc_reject_work_item({ id, feedback })\` — doesn't meet the bar. Spawns a continuation of the producer run carrying your feedback; the same agent gets a chance to fix the report. Phrase \`feedback\` as concrete actionable corrections, not vague critique.
+  - \`pc_resolve_work_item({ id, decision: "approve", notes? })\` — meets the bar. Flips to \`complete\`.
+  - \`pc_resolve_work_item({ id, decision: "reject", feedback })\` — doesn't meet the bar. Spawns a continuation of the producer run carrying your feedback; the same agent gets a chance to fix the report. Phrase \`feedback\` as concrete actionable corrections, not vague critique.
 - \`verification: pending\` + \`verificationTier: human-review\` — destined for the user via the Human Review inbox. Surface a short "agent finished — queued for your review" line in chat; the user picks up from the inbox surface.
 
 **Replay safety.** Channel events can re-fire on resume. \`pc_answer_pending\` returns \`cause: "already-answered"\` / \`"cancelled"\` when the row is already terminal. Trust it; don't re-answer.
@@ -303,8 +303,7 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_list_work_items',
     'mcp__pc-rig__pc_update_work_item',
     'mcp__pc-rig__pc_move_work_item',
-    'mcp__pc-rig__pc_approve_work_item',
-    'mcp__pc-rig__pc_reject_work_item',
+    'mcp__pc-rig__pc_resolve_work_item',
     'mcp__pc-rig__pc_attach_to_work_item',
     // Bug logging.
     'mcp__pc-rig__pc_log_bug',
@@ -323,7 +322,6 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_complete_node',
     // Orientation reads over project config.
     'mcp__pc-rig__pc_list_agents',
-    'mcp__pc-rig__pc_get_stages',
     'mcp__pc-rig__pc_list_stages',
     'mcp__pc-rig__pc_list_workflows',
     'mcp__pc-rig__pc_list_field_schemas',

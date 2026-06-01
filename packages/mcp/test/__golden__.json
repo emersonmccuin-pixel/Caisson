@@ -97,43 +97,35 @@
       }
     },
     {
-      "name": "pc_approve_work_item",
-      "description": "Approve a tier-2/3 agent work item that's parked in `awaiting-verification`. Flips the work item to `complete` + `verification_status: 'passed'`. Use after reading the agent's report (body / attachments / fields via pc_get_work_item) when the work meets the bar. Optional `notes` get persisted on the work item as `verificationNotes` + an audit-logged history entry. The producer agent run is already terminal — no further dispatch is triggered. `id` accepts ULID or callsign (e.g. `pc-2.1`). Fails 404 if the id is unknown, 400 if it's not an agent contract, 409 if it isn't currently awaiting verification.",
+      "name": "pc_resolve_work_item",
+      "description": "Resolve a tier-2/3 agent work item parked in `awaiting-verification` — approve or reject in one tool. `decision: \"approve\"` flips it to `complete` + `verification_status: 'passed'` (optional `notes` persist as `verificationNotes` + an audit-logged history entry); the producer run is already terminal, no further dispatch. `decision: \"reject\"` flips it to `in-progress` + `verification_status: 'failed'` with `feedback` in `verificationNotes`, then spawns a continuation of the producer's run (Section 21 `pc_continue_agent` primitive) so the SAME agent retries with the feedback in scope — `feedback` is REQUIRED + non-empty when rejecting. Read the agent's report (body / attachments / fields via pc_get_work_item) before deciding. `id` accepts ULID or callsign (e.g. `pc-2.1`). Fails 404 if the id is unknown, 400 if it's not an agent contract or feedback is missing on reject, 409 if it isn't currently awaiting verification.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "id": {
             "type": "string",
             "description": "work item id (ULID or callsign like pc-2.1)"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject"
+            ],
+            "description": "approve → flips to complete; reject → wakes the producer agent with feedback to retry"
           },
           "notes": {
             "type": "string",
-            "description": "optional reviewer note — persists on the work item + history"
-          }
-        },
-        "required": [
-          "id"
-        ]
-      }
-    },
-    {
-      "name": "pc_reject_work_item",
-      "description": "Reject a tier-2/3 agent work item that's parked in `awaiting-verification` and wake the producer agent with feedback. Flips the work item to `in-progress` + `verification_status: 'failed'` with the feedback in `verificationNotes`, then spawns a continuation of the producer's agent run (via the Section 21 `pc_continue_agent` primitive) so the same agent gets the feedback in its conversation and tries again. Returns `{ ok, workItem, continuation: { ok, runId, sessionId, agentName, status, continues } }` so you can track the new run. `id` accepts ULID or callsign (e.g. `pc-2.1`). `feedback` is required + non-empty. Fails 404 if the id is unknown, 400 if it's not an agent contract or feedback is missing, 409 if it isn't currently awaiting verification or has no assigned agent run.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "work item id (ULID or callsign like pc-2.1)"
+            "description": "approve only: optional reviewer note — persists on the work item + history"
           },
           "feedback": {
             "type": "string",
-            "description": "free-form rejection feedback — what's wrong, what the agent should do differently. Becomes the agent's next user message on resume."
+            "description": "reject only (REQUIRED): what's wrong + what the agent should do differently. Becomes the agent's next user message on resume."
           }
         },
         "required": [
           "id",
-          "feedback"
+          "decision"
         ]
       }
     },
@@ -296,8 +288,8 @@
       }
     },
     {
-      "name": "pc_update_agent_prompt",
-      "description": "Replace an agent's system prompt body. Most-used edit path: 'make orchestrator terser', 'teach researcher to cite sources'. Audits as actor='orchestrator'. Stock-pod prompts (orchestrator/researcher/...) are editable — be deliberate; danger-zone editing in the UI is gated for a reason. Accepts either { id } or { name }. Triggers restart-on-edit for any live session.",
+      "name": "pc_update_agent",
+      "description": "Update an agent pod's prompt and/or scalar settings in one call. Pass only the fields you want to change — any of: `prompt` (system prompt body), `newName` (rename, kebab-case), `description`, `model`, `effort`, `maxTurns`, `tools` (full allowlist), `outputDestination`. At least one mutating field is required. Audits as actor='orchestrator'; multi-field updates audit under a shared change-set. Stock-pod prompts (orchestrator/researcher/...) are editable — be deliberate; danger-zone editing in the UI is gated for a reason. Triggers restart-on-edit for any live session. Accepts either { id } or { name }.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -311,31 +303,7 @@
           },
           "prompt": {
             "type": "string",
-            "description": "the new system prompt body (markdown)"
-          },
-          "reason": {
-            "type": "string",
-            "description": "optional one-line audit reason"
-          }
-        },
-        "required": [
-          "prompt"
-        ]
-      }
-    },
-    {
-      "name": "pc_update_agent_settings",
-      "description": "Update an agent's scalar settings: model, effort, maxTurns, tools, outputDestination, description, or name. Pass only the fields you want to change. For prompt edits use pc_update_agent_prompt instead. Audits as actor='orchestrator'; multi-field updates audit under a shared change-set. Accepts either { id } or { name }.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "pod ULID id (mutually exclusive with name)"
-          },
-          "name": {
-            "type": "string",
-            "description": "pod name (looked up if id absent)"
+            "description": "new system prompt body (markdown)"
           },
           "newName": {
             "type": "string",
@@ -764,14 +732,6 @@
     {
       "name": "pc_read_workflow_draft",
       "description": "Section 19.9 — read the current v2 workflow-builder draft for this session. Use this at the start of edit-mode, or any time you suspect the user has dragged nodes / wired edges in the visualizer since your last `pc_save_workflow_draft` write (sync-model-A — the user can edit the graph between your turns). Returns { ok: true, def: <current draft or null> } if a draft exists; { ok: true, def: null } if none. PC_SESSION_ID env is the implicit scope.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {}
-      }
-    },
-    {
-      "name": "pc_get_stages",
-      "description": "Section 19.9 — list the project's stages live from the server. Use this BEFORE asking the user which stage should trigger a v2 workflow (`stage-on-entry` trigger). Returns { ok: true, stages: [{ id, name, order, isDone?, isCancelled?, isNew? }, ...] }. Stage `id` is what goes into `triggers[].stage` — never use the name. Use the flags for semantic roles. (Equivalent to `pc_list_stages`; kept under the locked Section 19 name.)",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -1390,15 +1350,13 @@
   "pcRigToolNames": [
     "mcp__pc-rig__pc_create_work_item",
     "mcp__pc-rig__pc_create_agent_work_item",
-    "mcp__pc-rig__pc_approve_work_item",
-    "mcp__pc-rig__pc_reject_work_item",
+    "mcp__pc-rig__pc_resolve_work_item",
     "mcp__pc-rig__pc_log_bug",
     "mcp__pc-rig__pc_move_work_item",
     "mcp__pc-rig__pc_update_work_item",
     "mcp__pc-rig__pc_create_agent",
     "mcp__pc-rig__pc_get_agent",
-    "mcp__pc-rig__pc_update_agent_prompt",
-    "mcp__pc-rig__pc_update_agent_settings",
+    "mcp__pc-rig__pc_update_agent",
     "mcp__pc-rig__pc_delete_agent",
     "mcp__pc-rig__pc_create_knowledge",
     "mcp__pc-rig__pc_update_knowledge",
@@ -1414,7 +1372,6 @@
     "mcp__pc-rig__pc_list_areas",
     "mcp__pc-rig__pc_save_workflow_draft",
     "mcp__pc-rig__pc_read_workflow_draft",
-    "mcp__pc-rig__pc_get_stages",
     "mcp__pc-rig__pc_publish_workflow",
     "mcp__pc-rig__pc_write_claude_md",
     "mcp__pc-rig__pc_list_stages",
@@ -1497,6 +1454,12 @@
       "source": "cc-builtin"
     },
     {
+      "slug": "AskUserQuestion",
+      "label": "Ask the user a question (CC built-in)",
+      "description": "CC built-in: pause and surface a question to the user during a workflow-builder session.",
+      "source": "cc-builtin"
+    },
+    {
       "slug": "mcp__pc-rig__pc_create_work_item",
       "label": "Create work item",
       "description": "Make a new card in one of the project's stages.",
@@ -1509,21 +1472,15 @@
       "source": "pc-rig"
     },
     {
+      "slug": "mcp__pc-rig__pc_resolve_work_item",
+      "label": "Resolve agent work item",
+      "description": "Approve or reject a tier-2/3 agent contract in awaiting-verification (reject wakes the agent to retry).",
+      "source": "pc-rig"
+    },
+    {
       "slug": "mcp__pc-rig__pc_log_bug",
       "label": "Log a bug",
       "description": "File a bug to the user's PC dogfood tracker.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_approve_work_item",
-      "label": "Approve agent work item",
-      "description": "Approve a tier-2/3 agent contract sitting in awaiting-verification — flips to complete.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_reject_work_item",
-      "label": "Reject agent work item",
-      "description": "Reject a tier-2/3 agent contract with feedback — wakes the agent via continuation to retry.",
       "source": "pc-rig"
     },
     {
@@ -1539,198 +1496,6 @@
       "source": "pc-rig"
     },
     {
-      "slug": "mcp__pc-rig__pc_get_work_item",
-      "label": "Read a work item",
-      "description": "Fetch a card's full content + fields.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_list_work_items",
-      "label": "List work items",
-      "description": "Find cards in this project by stage / parent / archive-state.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_attach_to_work_item",
-      "label": "Attach run to work item",
-      "description": "Bind the current dispatch to a specific card.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_node_failed",
-      "label": "Signal node failure",
-      "description": "Signal a hard failure from a workflow agent node so the spawner closes it as agent-self-failed.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_fire_workflow",
-      "label": "Fire a workflow",
-      "description": "Trigger a workflow by slug or ULID; returns the new runId + root work item id.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_complete_node",
-      "label": "Complete review node (orchestrator)",
-      "description": "Submit an approve or reject decision for a workflow run paused at an orchestrator-review node.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_create_workflow",
-      "label": "Create a workflow",
-      "description": "Create a new v2 workflow definition (YAML or graph object) in the project.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_update_workflow",
-      "label": "Update a workflow",
-      "description": "Replace or patch an existing workflow definition by DB ULID.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_delete_workflow",
-      "label": "Delete a workflow",
-      "description": "Soft-delete a workflow by DB ULID; cancels in-flight runs when forced.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_get_workflow",
-      "label": "Read a workflow",
-      "description": "Fetch a single workflow row by DB ULID or slug.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_replace_stages",
-      "label": "Replace project stages",
-      "description": "Replace the project's stage definitions in bulk (destructive — use with caution).",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_replace_field_schemas",
-      "label": "Replace field schemas",
-      "description": "Replace the project's custom work-item field schemas in bulk.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "AskUserQuestion",
-      "label": "Ask the user a question (CC built-in)",
-      "description": "CC built-in: pause and surface a question to the user during a workflow-builder session.",
-      "source": "cc-builtin"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_save_workflow_draft",
-      "label": "Save workflow draft",
-      "description": "Push the in-progress draft so the visualizer renders the workflow forming.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_read_workflow_draft",
-      "label": "Read workflow draft",
-      "description": "Read the current draft back (the user can drag nodes between your turns).",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_get_stages",
-      "label": "Get project stages (v2)",
-      "description": "List the project's stages for stage-on-entry triggers.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_publish_workflow",
-      "label": "Publish workflow",
-      "description": "Commit the v2 workflow to the project DB (overwrite by slug).",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_list_stages",
-      "label": "List project stages",
-      "description": "List the project's stages by id + label.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_list_agents",
-      "label": "List available agents",
-      "description": "List every pod the project can dispatch.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_list_workflows",
-      "label": "List workflows",
-      "description": "List the project's workflows.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_list_field_schemas",
-      "label": "List field schemas",
-      "description": "List the project's per-stage card field schemas.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_list_areas",
-      "label": "List areas",
-      "description": "List the project's Areas (focus buckets) + their work-item counts.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_write_claude_md",
-      "label": "Write project's CLAUDE.md",
-      "description": "Author or replace the project's CLAUDE.md.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_invoke_agent",
-      "label": "Dispatch another agent",
-      "description": "Spawn another pod by name with an input prompt.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_ask_orchestrator",
-      "label": "Ask the orchestrator",
-      "description": "Pause and ask the project orchestrator a question.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_ask_user",
-      "label": "Ask the user",
-      "description": "Pause and ask the human user a question (via orchestrator).",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_request_approval",
-      "label": "Request approval",
-      "description": "Pause and request explicit approval before proceeding.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_answer_pending",
-      "label": "Answer a pending ask",
-      "description": "Reply to an earlier ask-orchestrator / ask-user / approval.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_continue_agent",
-      "label": "Continue an agent run",
-      "description": "Resume a terminal AgentRun with a follow-up input.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_list_my_runs",
-      "label": "List my agent runs",
-      "description": "List recent agent runs YOU dispatched (scoped to caller's session).",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_inspect_agent_run",
-      "label": "Inspect an agent run",
-      "description": "Peek a run: status, pid liveness, idle age, last action.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_kill_agent_run",
-      "label": "Kill an agent run",
-      "description": "Force-end a run — kills the OS process + finalizes the row (works on phantoms).",
-      "source": "pc-rig"
-    },
-    {
       "slug": "mcp__pc-rig__pc_create_agent",
       "label": "Create an agent pod",
       "description": "Author a new agent pod row (use for fresh-design flows).",
@@ -1743,15 +1508,9 @@
       "source": "pc-rig"
     },
     {
-      "slug": "mcp__pc-rig__pc_update_agent_prompt",
-      "label": "Update an agent's prompt",
-      "description": "Replace a pod's system prompt body.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_update_agent_settings",
-      "label": "Update an agent's settings",
-      "description": "Change model / tools / effort / output destination etc.",
+      "slug": "mcp__pc-rig__pc_update_agent",
+      "label": "Update an agent",
+      "description": "Edit a pod's prompt, model, tools, effort, name, or output destination.",
       "source": "pc-rig"
     },
     {
@@ -1813,6 +1572,186 @@
       "label": "Read an agent's change history",
       "description": "Inspect a pod's audit log (who changed what, when).",
       "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_get_work_item",
+      "label": "Read a work item",
+      "description": "Fetch a card's full content + fields.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_list_work_items",
+      "label": "List work items",
+      "description": "Find cards in this project by stage / parent / archive-state.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_list_areas",
+      "label": "List areas",
+      "description": "List the project's Areas (focus buckets) + their work-item counts.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_save_workflow_draft",
+      "label": "Save workflow draft",
+      "description": "Push the in-progress draft so the visualizer renders the workflow forming.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_read_workflow_draft",
+      "label": "Read workflow draft",
+      "description": "Read the current draft back (the user can drag nodes between your turns).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_publish_workflow",
+      "label": "Publish workflow",
+      "description": "Commit the v2 workflow to the project DB (overwrite by slug).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_write_claude_md",
+      "label": "Write project's CLAUDE.md",
+      "description": "Author or replace the project's CLAUDE.md.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_list_stages",
+      "label": "List project stages",
+      "description": "List the project's stages by id + label.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_list_agents",
+      "label": "List available agents",
+      "description": "List every pod the project can dispatch.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_list_workflows",
+      "label": "List workflows",
+      "description": "List the project's workflows.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_fire_workflow",
+      "label": "Fire a workflow",
+      "description": "Trigger a workflow by slug or ULID; returns the new runId + root work item id.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_complete_node",
+      "label": "Complete review node (orchestrator)",
+      "description": "Submit an approve or reject decision for a workflow run paused at an orchestrator-review node.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_node_failed",
+      "label": "Signal node failure",
+      "description": "Signal a hard failure from a workflow agent node so the spawner closes it as agent-self-failed.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_list_field_schemas",
+      "label": "List field schemas",
+      "description": "List the project's per-stage card field schemas.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_create_workflow",
+      "label": "Create a workflow",
+      "description": "Create a new v2 workflow definition (YAML or graph object) in the project.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_update_workflow",
+      "label": "Update a workflow",
+      "description": "Replace or patch an existing workflow definition by DB ULID.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_delete_workflow",
+      "label": "Delete a workflow",
+      "description": "Soft-delete a workflow by DB ULID; cancels in-flight runs when forced.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_get_workflow",
+      "label": "Read a workflow",
+      "description": "Fetch a single workflow row by DB ULID or slug.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_replace_stages",
+      "label": "Replace project stages",
+      "description": "Replace the project's stage definitions in bulk (destructive — use with caution).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_replace_field_schemas",
+      "label": "Replace field schemas",
+      "description": "Replace the project's custom work-item field schemas in bulk.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_attach_to_work_item",
+      "label": "Attach run to work item",
+      "description": "Bind the current dispatch to a specific card.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_invoke_agent",
+      "label": "Dispatch another agent",
+      "description": "Spawn another pod by name with an input prompt.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_continue_agent",
+      "label": "Continue an agent run",
+      "description": "Resume a terminal AgentRun with a follow-up input.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_list_my_runs",
+      "label": "List my agent runs",
+      "description": "List recent agent runs YOU dispatched (scoped to caller's session).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_inspect_agent_run",
+      "label": "Inspect an agent run",
+      "description": "Peek a run: status, pid liveness, idle age, last action.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_kill_agent_run",
+      "label": "Kill an agent run",
+      "description": "Force-end a run — kills the OS process + finalizes the row (works on phantoms).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_ask_orchestrator",
+      "label": "Ask the orchestrator",
+      "description": "Pause and ask the project orchestrator a question.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_ask_user",
+      "label": "Ask the user",
+      "description": "Pause and ask the human user a question (via orchestrator).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_request_approval",
+      "label": "Request approval",
+      "description": "Pause and request explicit approval before proceeding.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_answer_pending",
+      "label": "Answer a pending ask",
+      "description": "Reply to an earlier ask-orchestrator / ask-user / approval.",
+      "source": "pc-rig"
     }
   ],
   "capabilities": {
@@ -1822,10 +1761,7 @@
     "pc_create_agent_work_item": {
       "family": "work-item"
     },
-    "pc_approve_work_item": {
-      "family": "work-item"
-    },
-    "pc_reject_work_item": {
+    "pc_resolve_work_item": {
       "family": "work-item"
     },
     "pc_log_bug": {
@@ -1837,79 +1773,13 @@
     "pc_update_work_item": {
       "family": "work-item"
     },
-    "pc_get_work_item": {
-      "family": "work-item"
-    },
-    "pc_list_work_items": {
-      "family": "work-item"
-    },
-    "pc_list_areas": {
-      "family": "work-item"
-    },
-    "pc_attach_to_work_item": {
-      "family": "work-item"
-    },
-    "pc_get_stages": {
-      "family": "project"
-    },
-    "pc_write_claude_md": {
-      "family": "project"
-    },
-    "pc_list_stages": {
-      "family": "project"
-    },
-    "pc_list_field_schemas": {
-      "family": "project"
-    },
-    "pc_replace_stages": {
-      "family": "project"
-    },
-    "pc_replace_field_schemas": {
-      "family": "project"
-    },
-    "pc_save_workflow_draft": {
-      "family": "workflow"
-    },
-    "pc_read_workflow_draft": {
-      "family": "workflow"
-    },
-    "pc_publish_workflow": {
-      "family": "workflow"
-    },
-    "pc_list_workflows": {
-      "family": "workflow"
-    },
-    "pc_fire_workflow": {
-      "family": "workflow"
-    },
-    "pc_complete_node": {
-      "family": "workflow"
-    },
-    "pc_node_failed": {
-      "family": "none"
-    },
-    "pc_create_workflow": {
-      "family": "workflow"
-    },
-    "pc_update_workflow": {
-      "family": "workflow"
-    },
-    "pc_delete_workflow": {
-      "family": "workflow"
-    },
-    "pc_get_workflow": {
-      "family": "workflow"
-    },
     "pc_create_agent": {
       "family": "agent"
     },
     "pc_get_agent": {
       "family": "agent"
     },
-    "pc_update_agent_prompt": {
-      "family": "agent"
-    },
-    "pc_update_agent_settings": {
+    "pc_update_agent": {
       "family": "agent"
     },
     "pc_delete_agent": {
@@ -1942,8 +1812,68 @@
     "pc_list_agent_audit": {
       "family": "agent"
     },
+    "pc_get_work_item": {
+      "family": "work-item"
+    },
+    "pc_list_work_items": {
+      "family": "work-item"
+    },
+    "pc_list_areas": {
+      "family": "work-item"
+    },
+    "pc_save_workflow_draft": {
+      "family": "workflow"
+    },
+    "pc_read_workflow_draft": {
+      "family": "workflow"
+    },
+    "pc_publish_workflow": {
+      "family": "workflow"
+    },
+    "pc_write_claude_md": {
+      "family": "project"
+    },
+    "pc_list_stages": {
+      "family": "project"
+    },
     "pc_list_agents": {
       "family": "agent"
+    },
+    "pc_list_workflows": {
+      "family": "workflow"
+    },
+    "pc_fire_workflow": {
+      "family": "workflow"
+    },
+    "pc_complete_node": {
+      "family": "workflow"
+    },
+    "pc_node_failed": {
+      "family": "none"
+    },
+    "pc_list_field_schemas": {
+      "family": "project"
+    },
+    "pc_create_workflow": {
+      "family": "workflow"
+    },
+    "pc_update_workflow": {
+      "family": "workflow"
+    },
+    "pc_delete_workflow": {
+      "family": "workflow"
+    },
+    "pc_get_workflow": {
+      "family": "workflow"
+    },
+    "pc_replace_stages": {
+      "family": "project"
+    },
+    "pc_replace_field_schemas": {
+      "family": "project"
+    },
+    "pc_attach_to_work_item": {
+      "family": "work-item"
     },
     "pc_invoke_agent": {
       "family": "agent-run"

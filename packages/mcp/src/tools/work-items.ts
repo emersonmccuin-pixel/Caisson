@@ -118,106 +118,82 @@ export async function handleWorkItemTool(
       }
     }
 
-    case 'pc_approve_work_item': {
+    case 'pc_resolve_work_item': {
       const ref = typeof args.id === 'string' ? args.id.trim() : '';
-      if (!ref) {
-        return {
-          content: [{ type: 'text', text: 'pc_approve_work_item: id required' }],
-          isError: true,
-        };
-      }
-      if (!ctx.projectId) {
-        return {
-          content: [{ type: 'text', text: 'pc_approve_work_item: PC_PROJECT_ID not set' }],
-          isError: true,
-        };
-      }
-      const id = await ctx.resolveWorkItemIdViaServer(ref);
-      if (!id) {
-        return {
-          content: [{ type: 'text', text: `pc_approve_work_item: unknown work item: ${ref}` }],
-          isError: true,
-        };
-      }
-      const payload: Record<string, unknown> = {};
-      if (typeof args.notes === 'string') payload.notes = args.notes;
-      try {
-        const res = await ctx.postServer(
-          `/api/projects/${ctx.projectId}/work-items/${encodeURIComponent(id)}/approve`,
-          payload,
-        );
-        if (res.status >= 200 && res.status < 300) {
-          return { content: [{ type: 'text', text: res.body }] };
-        }
-        return {
-          content: [
-            { type: 'text', text: `pc_approve_work_item failed (${res.status}): ${res.body}` },
-          ],
-          isError: true,
-        };
-      } catch (err) {
-        return {
-          content: [
-            { type: 'text', text: `pc_approve_work_item failed: ${(err as Error).message}` },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    case 'pc_reject_work_item': {
-      const ref = typeof args.id === 'string' ? args.id.trim() : '';
-      const feedback = typeof args.feedback === 'string' ? args.feedback : '';
-      if (!ref || !feedback.trim()) {
-        return {
-          content: [
-            { type: 'text', text: 'pc_reject_work_item: id and non-empty feedback required' },
-          ],
-          isError: true,
-        };
-      }
-      if (!ctx.projectId) {
-        return {
-          content: [{ type: 'text', text: 'pc_reject_work_item: PC_PROJECT_ID not set' }],
-          isError: true,
-        };
-      }
-      if (!ctx.dispatcherSessionId) {
+      const decision =
+        args.decision === 'approve' || args.decision === 'reject' ? args.decision : '';
+      if (!ref || !decision) {
         return {
           content: [
             {
               type: 'text',
-              text: 'pc_reject_work_item: PC_SESSION_ID / PC_DISPATCHER_SESSION_ID not set',
+              text: 'pc_resolve_work_item: id and decision ("approve" | "reject") required',
             },
           ],
           isError: true,
         };
       }
+      if (!ctx.projectId) {
+        return {
+          content: [{ type: 'text', text: 'pc_resolve_work_item: PC_PROJECT_ID not set' }],
+          isError: true,
+        };
+      }
+      const feedback = typeof args.feedback === 'string' ? args.feedback : '';
+      if (decision === 'reject') {
+        if (!feedback.trim()) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'pc_resolve_work_item: non-empty feedback required when decision="reject"',
+              },
+            ],
+            isError: true,
+          };
+        }
+        if (!ctx.dispatcherSessionId) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'pc_resolve_work_item: PC_SESSION_ID / PC_DISPATCHER_SESSION_ID not set (required for reject)',
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
       const id = await ctx.resolveWorkItemIdViaServer(ref);
       if (!id) {
         return {
-          content: [{ type: 'text', text: `pc_reject_work_item: unknown work item: ${ref}` }],
+          content: [{ type: 'text', text: `pc_resolve_work_item: unknown work item: ${ref}` }],
           isError: true,
         };
       }
       try {
-        const res = await ctx.postServer(
-          `/api/projects/${ctx.projectId}/work-items/${encodeURIComponent(id)}/reject`,
-          { feedback, dispatcherSessionId: ctx.dispatcherSessionId },
-        );
+        const base = `/api/projects/${ctx.projectId}/work-items/${encodeURIComponent(id)}`;
+        const path = decision === 'approve' ? `${base}/approve` : `${base}/reject`;
+        const payload: Record<string, unknown> =
+          decision === 'approve'
+            ? typeof args.notes === 'string'
+              ? { notes: args.notes }
+              : {}
+            : { feedback, dispatcherSessionId: ctx.dispatcherSessionId };
+        const res = await ctx.postServer(path, payload);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }
         return {
           content: [
-            { type: 'text', text: `pc_reject_work_item failed (${res.status}): ${res.body}` },
+            { type: 'text', text: `pc_resolve_work_item failed (${res.status}): ${res.body}` },
           ],
           isError: true,
         };
       } catch (err) {
         return {
           content: [
-            { type: 'text', text: `pc_reject_work_item failed: ${(err as Error).message}` },
+            { type: 'text', text: `pc_resolve_work_item failed: ${(err as Error).message}` },
           ],
           isError: true,
         };

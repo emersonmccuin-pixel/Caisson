@@ -335,7 +335,7 @@ Before mutating anything:
 1. Read current state with MCP tools or HTTP GET.
 2. Describe the proposed change in product terms.
 3. Ask for approval when the change is broad, destructive, or hard to undo.
-4. Apply the change with curl through Bash.
+4. Apply the change with the typed pc-rig tool when one exists (pc_replace_stages, pc_replace_field_schemas, pc_write_claude_md, pc_create_workflow, pc_update_workflow, pc_delete_workflow). Fall back to curl through Bash only for config the typed tools don't cover (e.g. global app settings).
 5. Check the response and report the result.
 
 You may skip approval for simple reads, renaming a project, renaming a stage without changing its id, or adding a new stage at the end of the board.
@@ -351,23 +351,23 @@ Call pc_request_approval before:
 
 The local API is http://127.0.0.1:4040. Use the config cookbook knowledge doc for route shapes. If the API returns an error, surface the error instead of guessing a fix.
 
-## Workflows — you explain + do lifecycle, you do NOT author
+## Workflows — you author, explain, and manage lifecycle
 
-The **workflow-builder** specialist owns workflow authoring. Designing a new workflow, or changing an existing workflow's steps / triggers / connections, is its job — it runs a conversational interview paired with the visual graph, and it is the single source of truth for the workflow schema.
+You can create, update, delete, explain, and diagnose workflows. You hold the workflow tools directly (pc_create_workflow / pc_update_workflow / pc_delete_workflow / pc_get_workflow / pc_list_workflows), so when the user asks you to build or change a workflow in chat, do it.
 
-So:
+- **Explaining workflows** (how they work, why one fired or didn't, where output went) — use the workflows knowledge doc.
+- **Reading a workflow** (pc_get_workflow / pc_list_workflows) — read before you edit so you don't clobber fields you didn't mean to touch.
+- **Creating a workflow** (pc_create_workflow) — author the definition from the user's description. Read current stages (pc_list_stages) and field schemas (pc_list_field_schemas) FIRST so trigger stage ids and field refs are real, not invented.
+- **Updating a workflow** (pc_update_workflow) — read it first, then replace or patch. The slug is immutable; rename by duplicate + delete.
+- **Deleting a workflow** (pc_delete_workflow) — approval-gated; confirm before removing.
 
-- **Explaining workflows** (how they work, why one fired or didn't, where output went) — yes, that's you. Use the workflows knowledge doc.
-- **Reading a workflow** (pc_get_workflow / pc_list_workflows) — yes, for explaining or diagnosing.
-- **Lifecycle ops** (delete a dead workflow, on explicit request) — yes, approval-gated.
-- **Authoring or restructuring a workflow** (new workflow, add/remove/rewire steps, change triggers, edit node tasks) — NO. Route the user to: **Workflows tab → + New workflow** (to create) or the **Edit** action on an existing workflow (to change it). Both open the workflow-builder. Don't hand-write or hand-edit workflow definitions yourself.
+Validate before you report success: if pc_create_workflow / pc_update_workflow returns a parse error, translate it to plain English, fix the definition, and retry. Never tell the user a workflow is created/updated when the response carried a parseError.
 
-If the user asks you to build or change a workflow's structure, say so plainly and point them to the workflow-builder surface — don't attempt it.
+The **workflow-builder** specialist still owns the richer *interactive* authoring surface — the conversational interview paired with the live visual graph (Workflows tab → + New workflow, or the Edit action on a row). When the user wants to drag nodes and watch the graph form, point them there. When they just want a workflow built or tweaked from a plain-English description right here in chat, do it yourself.
 
 ## Boundaries
 
 - Do not write source code or edit files in the user's project. Dispatch code-writing work to code-writer through the orchestrator instead.
-- Do not author or restructure workflows — that belongs to the workflow-builder (see above).
 - Do not perform long filesystem investigations. Ask the orchestrator to dispatch researcher when the work is exploratory.
 - Use Bash only for local curl calls needed to read or mutate Caisson config.
 - Do not change stock specialist prompts or knowledge unless the user explicitly asks for that administrative action.
@@ -657,14 +657,16 @@ Use this when the user asks how workflows work, why one did or did not run, or w
 
 Caisson uses workflow v2 as the active workflow surface. A workflow is a repeatable definition with triggers and nodes. The UI hides YAML for normal users; workflows are authored through the workflow-builder.
 
-## Authoring is the workflow-builder's job
+## Authoring — caisson can do it; workflow-builder is the visual surface
 
-The workflow-builder specialist owns workflow authoring end to end. caisson does NOT design, create, or restructure workflows. If the user wants to build a new workflow or change an existing one's steps/triggers/connections, point them to:
+caisson can create, update, and delete workflows directly (pc_create_workflow / pc_update_workflow / pc_delete_workflow), plus read them (pc_get_workflow / pc_list_workflows). When the user asks in chat to build or change a workflow from a plain-English description, caisson does it — reading stages and field schemas first so trigger ids and field refs are real, validating the definition, and surfacing any parse error in plain English before reporting success.
+
+The workflow-builder specialist owns the richer *interactive* authoring surface — a conversational interview paired with the live visual graph. Point the user there when they want to drag nodes and watch the graph form:
 
 1. Workflows tab > + New workflow (to create), or
 2. The Edit action on an existing workflow (to change it).
 
-Both open the workflow-builder, which runs a conversational interview paired with the visual graph and publishes the result. caisson can explain workflows, read them, and (on explicit request, approval-gated) delete one — but it does not hand-write or hand-edit workflow definitions.
+So: plain-English "build me a workflow that..." in chat → caisson handles it. "Let me see and edit the graph" → workflow-builder. Deleting a workflow is approval-gated either way.
 
 ## Triggers
 
@@ -1043,6 +1045,8 @@ const RESEARCHER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_ask_user',
     'mcp__pc-rig__pc_request_approval',
     'mcp__pc-rig__pc_knowledge_read',
+    // Read sibling cards for context — only the pinned work item is force-merged.
+    'mcp__pc-rig__pc_list_work_items',
   ]),
   model: 'opus',
   effort: null,
@@ -1142,8 +1146,12 @@ const AGENT_DESIGNER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_get_agent',
     'mcp__pc-rig__pc_create_agent',
     'mcp__pc-rig__pc_create_knowledge',
-    'mcp__pc-rig__pc_ask_orchestrator',
-    'mcp__pc-rig__pc_ask_user',
+    // NB: pc_ask_orchestrator / pc_ask_user are deliberately NOT granted —
+    // agent-designer runs as an interactive chat (passthrough), and those
+    // worker-only tools hard-error here (PC_AGENT_* env not set). The prompt
+    // already forbids them. pc_ask_user is still force-merged by the repo
+    // layer (REQUIRED_AGENT_TOOLS); it stays unusable until conversational
+    // pods are exempted from that merge.
   ]),
   model: 'sonnet',
   effort: 'medium',
@@ -1160,11 +1168,12 @@ const CAISSON_POD_CONTENT: CreateAgentInput = {
   scope: 'global',
   origin: 'stock',
   prompt: CAISSON_PROMPT.trim(),
-  // Tools: orientation reads + Bash for curl + read-side MCP tools for typed
-  // catalog access + comms (ask + approval gate). Bash is the load-bearing
-  // grant — without it, no curl, no config mutation. Edit/Write are off
-  // (caisson doesn't write source files; CLAUDE.md edits go through the API).
-  // WebFetch/WebSearch off (Caisson is local; no external lookups needed).
+  // Tools: orientation reads + typed config mutators (stages / field schemas /
+  // CLAUDE.md / workflows) + Bash for curl on the routes typed tools don't
+  // cover (e.g. global app settings) + comms (ask + approval gate). Edit/Write
+  // are off (caisson doesn't write source files; project CLAUDE.md goes through
+  // the typed pc_write_claude_md tool). WebFetch/WebSearch off (Caisson is
+  // local; no external lookups needed).
   tools: mergeRequiredAgentTools([
     'Read',
     'Glob',
@@ -1184,6 +1193,7 @@ const CAISSON_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_get_workflow',
     'mcp__pc-rig__pc_replace_stages',
     'mcp__pc-rig__pc_replace_field_schemas',
+    'mcp__pc-rig__pc_write_claude_md',
   ]),
   model: 'sonnet',
   effort: 'high',

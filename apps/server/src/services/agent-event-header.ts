@@ -214,7 +214,7 @@ function describeVerificationForPrompt(agentName: string, v: VerificationBlock):
     case 'failed':
       return `The ${agentName} agent finished BUT tier-1 verification failed on work item ${v.workItemId}. Surface the failure to the user; review the predicate failures (verificationNotes tag) and decide whether to retry / fix / drop.`;
     case 'pending':
-      return `The ${agentName} agent finished and work item ${v.workItemId} is awaiting ${v.tier} verification. Read the work item body, decide whether the contract was met, then call pc_approve_work_item or pc_reject_work_item.`;
+      return `The ${agentName} agent finished and work item ${v.workItemId} is awaiting ${v.tier} verification. Read the work item body, decide whether the contract was met, then call pc_resolve_work_item with decision "approve" or "reject".`;
   }
 }
 

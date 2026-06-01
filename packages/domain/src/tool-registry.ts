@@ -153,49 +153,38 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
-    "name": "pc_approve_work_item",
+    "name": "pc_resolve_work_item",
     "family": "work-item",
-    "label": "Approve agent work item",
-    "description": "Approve a tier-2/3 agent work item that's parked in `awaiting-verification`. Flips the work item to `complete` + `verification_status: 'passed'`. Use after reading the agent's report (body / attachments / fields via pc_get_work_item) when the work meets the bar. Optional `notes` get persisted on the work item as `verificationNotes` + an audit-logged history entry. The producer agent run is already terminal — no further dispatch is triggered. `id` accepts ULID or callsign (e.g. `pc-2.1`). Fails 404 if the id is unknown, 400 if it's not an agent contract, 409 if it isn't currently awaiting verification.",
-    "catalogDescription": "Approve a tier-2/3 agent contract sitting in awaiting-verification — flips to complete.",
+    "label": "Resolve agent work item",
+    "description": "Resolve a tier-2/3 agent work item parked in `awaiting-verification` — approve or reject in one tool. `decision: \"approve\"` flips it to `complete` + `verification_status: 'passed'` (optional `notes` persist as `verificationNotes` + an audit-logged history entry); the producer run is already terminal, no further dispatch. `decision: \"reject\"` flips it to `in-progress` + `verification_status: 'failed'` with `feedback` in `verificationNotes`, then spawns a continuation of the producer's run (Section 21 `pc_continue_agent` primitive) so the SAME agent retries with the feedback in scope — `feedback` is REQUIRED + non-empty when rejecting. Read the agent's report (body / attachments / fields via pc_get_work_item) before deciding. `id` accepts ULID or callsign (e.g. `pc-2.1`). Fails 404 if the id is unknown, 400 if it's not an agent contract or feedback is missing on reject, 409 if it isn't currently awaiting verification.",
+    "catalogDescription": "Approve or reject a tier-2/3 agent contract in awaiting-verification (reject wakes the agent to retry).",
     "inputSchema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
           "description": "work item id (ULID or callsign like pc-2.1)"
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "reject"
+          ],
+          "description": "approve → flips to complete; reject → wakes the producer agent with feedback to retry"
         },
         "notes": {
           "type": "string",
-          "description": "optional reviewer note — persists on the work item + history"
-        }
-      },
-      "required": [
-        "id"
-      ]
-    }
-  },
-  {
-    "name": "pc_reject_work_item",
-    "family": "work-item",
-    "label": "Reject agent work item",
-    "description": "Reject a tier-2/3 agent work item that's parked in `awaiting-verification` and wake the producer agent with feedback. Flips the work item to `in-progress` + `verification_status: 'failed'` with the feedback in `verificationNotes`, then spawns a continuation of the producer's agent run (via the Section 21 `pc_continue_agent` primitive) so the same agent gets the feedback in its conversation and tries again. Returns `{ ok, workItem, continuation: { ok, runId, sessionId, agentName, status, continues } }` so you can track the new run. `id` accepts ULID or callsign (e.g. `pc-2.1`). `feedback` is required + non-empty. Fails 404 if the id is unknown, 400 if it's not an agent contract or feedback is missing, 409 if it isn't currently awaiting verification or has no assigned agent run.",
-    "catalogDescription": "Reject a tier-2/3 agent contract with feedback — wakes the agent via continuation to retry.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "work item id (ULID or callsign like pc-2.1)"
+          "description": "approve only: optional reviewer note — persists on the work item + history"
         },
         "feedback": {
           "type": "string",
-          "description": "free-form rejection feedback — what's wrong, what the agent should do differently. Becomes the agent's next user message on resume."
+          "description": "reject only (REQUIRED): what's wrong + what the agent should do differently. Becomes the agent's next user message on resume."
         }
       },
       "required": [
         "id",
-        "feedback"
+        "decision"
       ]
     }
   },
@@ -373,11 +362,11 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
-    "name": "pc_update_agent_prompt",
+    "name": "pc_update_agent",
     "family": "agent",
-    "label": "Update an agent's prompt",
-    "description": "Replace an agent's system prompt body. Most-used edit path: 'make orchestrator terser', 'teach researcher to cite sources'. Audits as actor='orchestrator'. Stock-pod prompts (orchestrator/researcher/...) are editable — be deliberate; danger-zone editing in the UI is gated for a reason. Accepts either { id } or { name }. Triggers restart-on-edit for any live session.",
-    "catalogDescription": "Replace a pod's system prompt body.",
+    "label": "Update an agent",
+    "description": "Update an agent pod's prompt and/or scalar settings in one call. Pass only the fields you want to change — any of: `prompt` (system prompt body), `newName` (rename, kebab-case), `description`, `model`, `effort`, `maxTurns`, `tools` (full allowlist), `outputDestination`. At least one mutating field is required. Audits as actor='orchestrator'; multi-field updates audit under a shared change-set. Stock-pod prompts (orchestrator/researcher/...) are editable — be deliberate; danger-zone editing in the UI is gated for a reason. Triggers restart-on-edit for any live session. Accepts either { id } or { name }.",
+    "catalogDescription": "Edit a pod's prompt, model, tools, effort, name, or output destination.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -391,34 +380,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "prompt": {
           "type": "string",
-          "description": "the new system prompt body (markdown)"
-        },
-        "reason": {
-          "type": "string",
-          "description": "optional one-line audit reason"
-        }
-      },
-      "required": [
-        "prompt"
-      ]
-    }
-  },
-  {
-    "name": "pc_update_agent_settings",
-    "family": "agent",
-    "label": "Update an agent's settings",
-    "description": "Update an agent's scalar settings: model, effort, maxTurns, tools, outputDestination, description, or name. Pass only the fields you want to change. For prompt edits use pc_update_agent_prompt instead. Audits as actor='orchestrator'; multi-field updates audit under a shared change-set. Accepts either { id } or { name }.",
-    "catalogDescription": "Change model / tools / effort / output destination etc.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "pod ULID id (mutually exclusive with name)"
-        },
-        "name": {
-          "type": "string",
-          "description": "pod name (looked up if id absent)"
+          "description": "new system prompt body (markdown)"
         },
         "newName": {
           "type": "string",
@@ -892,17 +854,6 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "label": "Read workflow draft",
     "description": "Section 19.9 — read the current v2 workflow-builder draft for this session. Use this at the start of edit-mode, or any time you suspect the user has dragged nodes / wired edges in the visualizer since your last `pc_save_workflow_draft` write (sync-model-A — the user can edit the graph between your turns). Returns { ok: true, def: <current draft or null> } if a draft exists; { ok: true, def: null } if none. PC_SESSION_ID env is the implicit scope.",
     "catalogDescription": "Read the current draft back (the user can drag nodes between your turns).",
-    "inputSchema": {
-      "type": "object",
-      "properties": {}
-    }
-  },
-  {
-    "name": "pc_get_stages",
-    "family": "project",
-    "label": "Get project stages (v2)",
-    "description": "Section 19.9 — list the project's stages live from the server. Use this BEFORE asking the user which stage should trigger a v2 workflow (`stage-on-entry` trigger). Returns { ok: true, stages: [{ id, name, order, isDone?, isCancelled?, isNew? }, ...] }. Stage `id` is what goes into `triggers[].stage` — never use the name. Use the flags for semantic roles. (Equivalent to `pc_list_stages`; kept under the locked Section 19 name.)",
-    "catalogDescription": "List the project's stages for stage-on-entry triggers.",
     "inputSchema": {
       "type": "object",
       "properties": {}

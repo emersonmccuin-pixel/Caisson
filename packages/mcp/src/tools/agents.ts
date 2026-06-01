@@ -191,64 +191,23 @@ export async function handleAgentTool(
       }
     }
 
-    case 'pc_update_agent_prompt': {
-      const prompt = typeof args.prompt === 'string' ? args.prompt : '';
-      if (typeof args.prompt !== 'string') {
-        return {
-          content: [{ type: 'text', text: 'pc_update_agent_prompt: prompt required (string)' }],
-          isError: true,
-        };
-      }
+    case 'pc_update_agent': {
       try {
         const id = await resolvePodId(args, ctx);
         if (!id.ok) {
           return {
-            content: [{ type: 'text', text: `pc_update_agent_prompt: ${id.error}` }],
+            content: [{ type: 'text', text: `pc_update_agent: ${id.error}` }],
             isError: true,
           };
         }
-        const payload: Record<string, unknown> = {
-          prompt,
-          actor: 'orchestrator',
-          reason: typeof args.reason === 'string' && args.reason.trim().length > 0
-            ? args.reason.trim()
-            : 'mcp-edit-prompt',
-        };
-        const res = await ctx.patchServer(`/api/agents/pods/${encodeURIComponent(id.id)}`, payload);
-        if (res.status >= 200 && res.status < 300) {
-          return { content: [{ type: 'text', text: res.body }] };
-        }
-        return {
-          content: [
-            { type: 'text', text: `pc_update_agent_prompt failed (${res.status}): ${res.body}` },
-          ],
-          isError: true,
-        };
-      } catch (err) {
-        return {
-          content: [
-            { type: 'text', text: `pc_update_agent_prompt failed: ${(err as Error).message}` },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    case 'pc_update_agent_settings': {
-      try {
-        const id = await resolvePodId(args, ctx);
-        if (!id.ok) {
-          return {
-            content: [{ type: 'text', text: `pc_update_agent_settings: ${id.error}` }],
-            isError: true,
-          };
-        }
+        // Unified prompt + settings edit — both halves PATCH the same pod route.
         const payload: Record<string, unknown> = {
           actor: 'orchestrator',
           reason: typeof args.reason === 'string' && args.reason.trim().length > 0
             ? args.reason.trim()
-            : 'mcp-edit-settings',
+            : 'mcp-edit-agent',
         };
+        if (typeof args.prompt === 'string') payload.prompt = args.prompt;
         if (typeof args.newName === 'string') payload.name = args.newName.trim();
         if (typeof args.description === 'string') payload.description = args.description;
         if (typeof args.model === 'string') payload.model = args.model;
@@ -268,7 +227,7 @@ export async function handleAgentTool(
             content: [
               {
                 type: 'text',
-                text: 'pc_update_agent_settings: at least one setting field required (newName / description / model / effort / maxTurns / tools / outputDestination)',
+                text: 'pc_update_agent: at least one field required (prompt / newName / description / model / effort / maxTurns / tools / outputDestination)',
               },
             ],
             isError: true,
@@ -280,14 +239,14 @@ export async function handleAgentTool(
         }
         return {
           content: [
-            { type: 'text', text: `pc_update_agent_settings failed (${res.status}): ${res.body}` },
+            { type: 'text', text: `pc_update_agent failed (${res.status}): ${res.body}` },
           ],
           isError: true,
         };
       } catch (err) {
         return {
           content: [
-            { type: 'text', text: `pc_update_agent_settings failed: ${(err as Error).message}` },
+            { type: 'text', text: `pc_update_agent failed: ${(err as Error).message}` },
           ],
           isError: true,
         };
