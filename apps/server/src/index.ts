@@ -11,7 +11,7 @@ import type {
   Project,
   ULID,
 } from '@pc/domain';
-import { buildLiveEventFrame, parseMailboxAddress } from '@pc/contracts';
+import { parseMailboxAddress } from '@pc/contracts';
 import {
   getActiveOrchestratorSession,
   getMailboxMessage,
@@ -385,7 +385,7 @@ channelServer.start();
 // ROUTES + worker setInterval + boot sweeps stay at their original sites; only
 // these six value bindings moved up. All closed-over values are available here:
 // broadcastTo (:198), broadcastAll (:207), broadcastSendQueueSnapshot (:217),
-// buildLiveEventFrame/parseMailboxAddress (imported), getMailboxMessage/
+// parseMailboxAddress (imported), getMailboxMessage/
 // getMailboxRecipient (imported), resolveProject (hoisted fn :466, called only
 // at delivery time inside these closures).
 const mailboxService = new MailboxService();
@@ -861,8 +861,12 @@ registerProjectRoutes(app, {
   refreshProject: (project) => projectRegistry.refresh(project as unknown as Project),
   removeProject: (projectId) => projectRegistry.remove(projectId),
   resolveProject,
-  publishProjectChanged: (legacyEvent, liveEvent) => {
-    broadcastAll(buildLiveEventFrame(liveEvent));
+  publishProjectChanged: (legacyEvent, _liveEvent) => {
+    // Slice 015b — the relay delivers the canonical `project.changed` frame.
+    // The mutation gateways write the global-scope outbox row in-txn
+    // (`projects.ts` `projectChanged(...)`); the relay's global `broadcastAll`
+    // fans the identical frame to every socket on its drain tick. No hand
+    // frame-fanout here. The legacy refetch envelope stays until 015c.
     broadcastAll(legacyEvent);
   },
 });
