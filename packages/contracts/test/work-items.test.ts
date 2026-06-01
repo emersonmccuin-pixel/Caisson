@@ -230,7 +230,8 @@ test('attachment + field-schema DTO guards and requests', () => {
     projectId: 'p1',
     type: 'field-schema.list.changed',
     entity: 'field-schema' as const,
-    entityId: null,
+    // T3.2b Q1-A — keyed by projectId (was null) so it enters the live store.
+    entityId: 'p1',
     version: null,
     createdAt: 1,
     payload: {
@@ -249,6 +250,8 @@ test('attachment + field-schema DTO guards and requests', () => {
     },
   };
   assert.equal(isFieldSchemaListChangedLiveEvent(fsEvent), true);
+  // T3.2b Q1-A — the guard now requires a string entityId; null is rejected.
+  assert.equal(isFieldSchemaListChangedLiveEvent({ ...fsEvent, entityId: null }), false);
 
   const attEvent = {
     id: 'e4',

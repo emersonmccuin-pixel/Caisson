@@ -9,7 +9,6 @@
 //    + position, horizontal scroll affordance (fade + chevrons on overflow).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { isAreaChangedLiveEventFrame } from '@pc/contracts';
 import {
   DndContext,
   DragOverlay,
@@ -46,7 +45,8 @@ import { applyFilters } from './work-items/filter-sort';
 import { WorkItemsToolbar } from './work-items/WorkItemsToolbar';
 import { useWorkItemsView } from '@/store/work-items-view';
 import { useProjectAreas } from '@/hooks/use-project-areas';
-import { useLiveWorkItems } from '@/store/live-store';
+import { useLiveEvents, useLiveWorkItems } from '@/store/live-store';
+import { hasNewDeletedAreaFrame } from '@/features/areas/area-live-events';
 
 interface KanbanBoardProps {
   project: Project;
@@ -169,27 +169,15 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
     });
   }, [liveWorkItems]);
 
-  // Slice 010 carry-forward — deleting an Area reassigns its items to
-  // Uncaptured WITHOUT per-item work-item.changed facts. Refetch the work-item
-  // list on a `deleted` area frame so areaId on the affected cards reconciles.
-  const areaDeleteLastIdx = useRef(0);
+  // T3.2b — deleting an Area reassigns its items to Uncaptured WITHOUT per-item
+  // work-item.changed facts. Refetch the work-item list on a NEW `deleted` area
+  // frame so areaId on the affected cards reconciles. Driven off the identity-
+  // keyed live store, version-keyed so it fires once per new deleted frame.
+  const areaEvents = useLiveEvents('area', project.id);
+  const areaSeenRef = useRef<Map<string, number | string>>(new Map());
   useEffect(() => {
-    if (events.length < areaDeleteLastIdx.current) areaDeleteLastIdx.current = 0;
-    const start = areaDeleteLastIdx.current;
-    areaDeleteLastIdx.current = events.length;
-    if (start >= events.length) return;
-    for (let i = start; i < events.length; i++) {
-      const env = events[i];
-      if (
-        isAreaChangedLiveEventFrame(env) &&
-        env.event.projectId === project.id &&
-        env.event.payload.reason === 'deleted'
-      ) {
-        refetch();
-        break;
-      }
-    }
-  }, [events, project.id, refetch]);
+    if (hasNewDeletedAreaFrame(areaEvents, areaSeenRef.current)) refetch();
+  }, [areaEvents, refetch]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),

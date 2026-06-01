@@ -152,6 +152,10 @@ test('commitFieldSchemaListChange emits one field-schema.list.changed fact', () 
   assert.equal(inserted.length, 1);
   assert.equal(isFieldSchemaListChangedLiveEvent(result.liveEvent), true);
   assert.equal(result.legacyEvent.type, 'field-schemas-changed');
+  // T3.2b Q1-A — the draft is keyed by projectId (was null) so it enters the
+  // client live store.
+  assert.equal(inserted[0]!.entityId, 'p1');
+  assert.equal(result.liveEvent.entityId, 'p1');
 });
 
 test('commitAttachmentChange emits one attachment.changed fact for create + delete', () => {

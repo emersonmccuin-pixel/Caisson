@@ -11,14 +11,14 @@ import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
-import { isLiveEventFrame, isWorkItemChangedLiveEventFrame } from '@pc/contracts';
-
 import type { Project } from '@/features/projects/client';
 import type { Area } from '@/features/areas/client';
 import { WORK_ITEM_TYPES, WorkItemConflictError, WorkItemFieldValidationError, workItemsApi, type Attachment, type FieldSchema, type WorkItem, type WorkItemPatch, type WorkItemType } from '@/features/work-items/client';
 import { attachmentChangedFromLiveFrame } from '@/features/work-items/attachment-live-events';
+import { latestFieldSchemas, workItemHistoryRows } from '@/features/work-items/work-item-live-events';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useProjectAreas } from '@/hooks/use-project-areas';
+import { useLiveEvents } from '@/store/live-store';
 import { TypedFieldEditor } from './TypedFieldEditor';
 
 type TabId = 'overview' | 'children' | 'attachments' | 'activity';
@@ -138,26 +138,13 @@ export function WorkItemDetailModal({
     };
   }, [project.id]);
 
-  // Scan every new envelope since the last processed index — not just the
-  // last one — so a schema change buried in a batched flush isn't missed.
-  // Walk newest-first within the new range so the latest snapshot wins.
-  const schemaLastIdx = useRef(0);
+  // T3.2b — field-schema changes off the identity-keyed live store (Q1-A keyed
+  // the frame by projectId so it enters the store). Latest-by-cursor wins.
+  const schemaEvents = useLiveEvents('field-schema', project.id);
   useEffect(() => {
-    if (events.length < schemaLastIdx.current) schemaLastIdx.current = 0;
-    const start = schemaLastIdx.current;
-    schemaLastIdx.current = events.length;
-    if (start >= events.length) return;
-    for (let i = events.length - 1; i >= start; i--) {
-      const env = events[i];
-      // Slice 015b — canonical relay `field-schema.list.changed` frame.
-      if (!isLiveEventFrame(env) || env.event.entity !== 'field-schema') continue;
-      const schemas = (env.event.payload as { schemas?: unknown }).schemas;
-      if (Array.isArray(schemas)) {
-        setFieldSchemas(schemas as FieldSchema[]);
-        break;
-      }
-    }
-  }, [events]);
+    const schemas = latestFieldSchemas(schemaEvents);
+    if (schemas) setFieldSchemas(schemas);
+  }, [schemaEvents]);
 
   // Re-sync when the parent passes us a new (or refreshed) work item.
   // - Different id: parent breadcrumb switched targets — reset everything.
@@ -1060,6 +1047,9 @@ function ActivityTab({
 }) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  // T3.2b — work-item history rows off the live store (rebuild-proof), filtered
+  // to this open item. Replaces the positional `events[]` scan in the memo.
+  const wiEvents = useLiveEvents('work-item', projectId);
 
   const refetchAttachments = () => {
     workItemsApi.listAttachments(projectId, workItem.id)
@@ -1142,18 +1132,10 @@ function ActivityTab({
         text: entry.note ?? entry.kind,
       });
     }
-    // Live broadcasts captured this session that reference this work item.
-    for (const env of events) {
-      if (isWorkItemChangedLiveEventFrame(env)) {
-        const wi = env.event.payload.workItem as WorkItem | undefined;
-        if (wi?.id === workItem.id) {
-          out.push({
-            ts: wi.updatedAt,
-            actor: 'edit',
-            text: `updated · v${wi.version}`,
-          });
-        }
-      }
+    // T3.2b — live work-item edits this session, off the live store, filtered to
+    // this item.
+    for (const row of workItemHistoryRows(wiEvents, workItem.id)) {
+      out.push(row);
     }
     // Newest first; dedupe by (ts + text).
     out.sort((a, b) => b.ts - a.ts);
@@ -1164,7 +1146,7 @@ function ActivityTab({
       seen.add(k);
       return true;
     });
-  }, [workItem, attachments, events, stageNameById]);
+  }, [workItem, attachments, wiEvents, stageNameById]);
 
   if (err) {
     return (

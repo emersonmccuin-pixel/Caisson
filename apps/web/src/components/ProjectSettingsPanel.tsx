@@ -9,9 +9,9 @@
 // matrix) and depends on shapes that don't exist on the trunk yet. This is
 // the minimal panel matching the trunk's endpoints.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
-import { isLiveEventFrame } from '@pc/contracts';
+import { useLiveEntitySignature } from '@/store/live-store';
 
 import { projectsApi, type Project } from '@/features/projects/client';
 import { projectContextApi } from '@/features/project-context/client';
@@ -311,7 +311,6 @@ function SetupWizardNag({
   const [needs, setNeeds] = useState<boolean | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [wizardOpen, setWizardOpen] = useState(false);
-  const processedRef = useRef(0);
 
   // Initial probe + reprobe on project switch.
   useEffect(() => {
@@ -330,28 +329,17 @@ function SetupWizardNag({
     };
   }, [project.id]);
 
-  // Re-probe on project-claude-md-changed.
+  // T3.2b — re-probe on a project-claude-md change, keyed off the identity-keyed
+  // live store signature (rebuild-proof; flips only on a genuine change).
+  const claudeMdSig = useLiveEntitySignature('project-claude-md', project.id);
   useEffect(() => {
-    const start = events.length >= processedRef.current ? processedRef.current : 0;
-    const end = events.length;
-    processedRef.current = end;
-    for (let i = start; i < end; i++) {
-      const env = events[i];
-      if (!env) continue;
-      // Slice 015b — canonical relay project.claude-md.changed frame.
-      if (
-        isLiveEventFrame(env) &&
-        env.event.entity === 'project-claude-md' &&
-        env.event.projectId === project.id
-      ) {
-        projectContextApi.getClaudeMdStatus(project.id)
-          .then((s) => setNeeds(!s.exists || s.empty))
-          .catch(() => {
-            /* leave stale */
-          });
-      }
-    }
-  }, [events, project.id]);
+    if (!claudeMdSig) return;
+    projectContextApi.getClaudeMdStatus(project.id)
+      .then((s) => setNeeds(!s.exists || s.empty))
+      .catch(() => {
+        /* leave stale */
+      });
+  }, [claudeMdSig, project.id]);
 
   if (needs !== true || dismissed) {
     return (

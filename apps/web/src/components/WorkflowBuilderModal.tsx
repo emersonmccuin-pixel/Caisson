@@ -26,7 +26,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { WorkflowV2 } from '@pc/domain';
-import { isWorkflowDefinitionChangedLiveEventFrame } from '@pc/contracts';
+import { isWorkflowDefinitionChangedLivePayload } from '@pc/contracts';
 
 import type { OrchestratorSurfacePreference } from '@/features/settings/client';
 import { transientSessionsApi } from '@/features/transient-sessions/client';
@@ -34,6 +34,8 @@ import {
   isTransientSessionState,
   mergeTransientSessionState,
 } from '@/features/transient-sessions/events';
+import { shouldCloseWorkflowBuilder } from '@/features/workflows/live-events';
+import { useLiveEvents } from '@/store/live-store';
 import type { WsEnvelope, WsOutbound } from '@/features/runtime/ws-types';
 import { WorkflowBuilderChat, type WorkflowBuilderState } from './WorkflowBuilderChat';
 import { WorkflowGraphV2 } from './WorkflowGraphV2';
@@ -159,23 +161,31 @@ export function WorkflowBuilderModal({
         if (d.def && typeof d.def === 'object') {
           setDraftDef(d.def);
         }
-      } else if (isWorkflowDefinitionChangedLiveEventFrame(env)) {
-        const { change, definition } = env.event.payload;
-        if (change === 'deleted') continue;
-        const changedSlug = definition?.slug;
-        if (isEditMode && editingRef.current) {
-          // In edit mode, only the row we're editing closes the modal.
-          if (changedSlug && changedSlug !== editingRef.current.id) continue;
-          if (change !== 'updated' && change !== 'created') continue;
-        } else {
-          // In new mode, close on the create.
-          if (change !== 'created') continue;
-        }
-        closeRef.current();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, sessionId]);
+
+  // T3.2b — close the modal on the DB-backed workflow-definition change, off the
+  // identity-keyed live store (rebuild-proof). Version-keyed so we evaluate each
+  // NEW frame once. The transient builder-* envelopes stay on the events scan.
+  const defEvents = useLiveEvents('workflow-definition', projectId);
+  const defSeenRef = useRef<Map<string, number | string>>(new Map());
+  useEffect(() => {
+    for (const ev of defEvents) {
+      if (!ev.entityId) continue;
+      const marker = ev.version ?? ev.cursor;
+      if (defSeenRef.current.get(ev.entityId) === marker) continue;
+      defSeenRef.current.set(ev.entityId, marker);
+      if (!isWorkflowDefinitionChangedLivePayload(ev.payload)) continue;
+      const editingId = isEditMode && editingRef.current ? editingRef.current.id : null;
+      if (shouldCloseWorkflowBuilder(ev.payload, editingId)) {
+        closeRef.current();
+        return;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defEvents]);
 
   // Push user drags / wires back into the server-side draft store so the
   // agent's next turn sees them. The WS broadcast that follows will re-set

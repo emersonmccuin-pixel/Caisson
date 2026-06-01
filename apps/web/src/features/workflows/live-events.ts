@@ -116,6 +116,23 @@ export function scanWorkflowLiveEvents(
   return { runs, reviewPending, definitionChanged, latestCursor };
 }
 
+/** T3.2b — WorkflowBuilderModal close decision for one workflow-definition
+ *  payload. Skip `deleted`. Edit mode: close only when the slug matches the row
+ *  being edited AND the change is created/updated. New mode: close on `created`. */
+export function shouldCloseWorkflowBuilder(
+  payload: { change: 'created' | 'updated' | 'deleted'; definition?: { slug?: string } },
+  editingId: string | null,
+): boolean {
+  const { change } = payload;
+  if (change === 'deleted') return false;
+  const changedSlug = payload.definition?.slug;
+  if (editingId !== null) {
+    if (changedSlug && changedSlug !== editingId) return false;
+    return change === 'updated' || change === 'created';
+  }
+  return change === 'created';
+}
+
 function reviewChangedFromUnknown(value: unknown) {
   if (isWorkflowReviewChangedLiveEvent(value)) return value;
   if (isWorkflowReviewChangedLiveEventFrame(value)) return value.event;

@@ -7,11 +7,12 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { isPodChangedLiveEventFrame } from '@pc/contracts';
 import type { Project, ULID } from '@/features/projects/client';
 import { agentsApi, resolveModelLabel, type Pod, type PodBundle } from '@/features/agents/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useProjectPods } from '@/hooks/use-project-pods';
+import { useLiveEvents } from '@/store/live-store';
+import { hasNewPodFrameFor } from '@/features/agents/pod-live-events';
 import { formatToolLabel } from '@/lib/tool-labels';
 import { Markdown } from './Markdown';
 import { ContextTab } from './agents/ContextTab';
@@ -148,7 +149,7 @@ export function AgentsList({ project, events }: AgentsListProps) {
           {selectedPod ? (
             <DetailPane
               pod={selectedPod}
-              events={events}
+              projectId={project.id}
               onEdit={() => setDetailModalPodId(selectedPod.id)}
               onPromoted={() => void refetch()}
               onDeleted={() => {
@@ -332,13 +333,13 @@ function ListRow({
 
 function DetailPane({
   pod,
-  events,
+  projectId,
   onEdit,
   onPromoted,
   onDeleted,
 }: {
   pod: Pod;
-  events: WsEnvelope[];
+  projectId: string;
   onEdit: () => void;
   onPromoted: () => void;
   onDeleted: () => void;
@@ -394,26 +395,16 @@ function DetailPane({
     };
   }, [pod.id]);
 
-  // Refetch bundle when a pod.changed relay frame says THIS pod changed
-  // (typically a nested mutation — knowledge add/edit/delete from elsewhere).
-  // Scan every new envelope since the last processed index — not just the last
-  // one — so a frame buried in a batched flush isn't missed (UI spine).
-  const bundleLastIdx = useRef(0);
+  // T3.2b — refetch the bundle when a NEW `pod` frame off the identity-keyed
+  // live store says THIS pod changed (typically a nested mutation — knowledge
+  // add/edit/delete from elsewhere). The selector unions global-scope pods so a
+  // stock/global pod change still reloads. Version-keyed → fires once per frame.
+  const podEvents = useLiveEvents('pod', projectId);
+  const podSeenRef = useRef<Map<string, number | string>>(new Map());
   useEffect(() => {
-    if (events.length < bundleLastIdx.current) bundleLastIdx.current = 0;
-    const start = bundleLastIdx.current;
-    bundleLastIdx.current = events.length;
-    if (start >= events.length) return;
-    for (let i = start; i < events.length; i++) {
-      const env = events[i];
-      if (!env || !isPodChangedLiveEventFrame(env)) continue;
-      if (env.event.payload.podId === pod.id) {
-        void loadBundle();
-        break;
-      }
-    }
+    if (hasNewPodFrameFor(podEvents, pod.id, podSeenRef.current)) void loadBundle();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events]);
+  }, [podEvents, pod.id]);
 
   const stats = useMemo(() => {
     return {

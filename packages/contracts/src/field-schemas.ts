@@ -61,7 +61,9 @@ export type FieldSchemaListChangedLiveEvent = LiveEvent<FieldSchemaListChangedLi
   entity: 'field-schema';
   scope: 'project';
   projectId: ULID;
-  entityId: null;
+  // Q1-A (T3.2b): keyed by projectId (per-project singleton list) so the frame
+  // enters the identity-keyed live store.
+  entityId: ULID;
 };
 
 export function isFieldSchemaType(value: unknown): value is FieldSchemaType {
@@ -147,7 +149,7 @@ export function isFieldSchemaListChangedLiveEvent(
     value.entity === 'field-schema' &&
     value.scope === 'project' &&
     typeof value.projectId === 'string' &&
-    value.entityId === null &&
+    typeof value.entityId === 'string' &&
     isFieldSchemaListChangedLivePayload(value.payload)
   );
 }

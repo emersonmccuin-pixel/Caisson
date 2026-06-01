@@ -164,7 +164,7 @@ export function Shell({
           />
         )}
         {activeProject && (
-          <ChatWorkItemModalMount project={activeProject} events={wsEvents} />
+          <ChatWorkItemModalMount project={activeProject} />
         )}
         {activeProject && <AttachmentLightboxMount projectId={activeProject.id} />}
         <RichLinkPreviewCard />

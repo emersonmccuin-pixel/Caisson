@@ -8,8 +8,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { isAreaChangedLiveEventFrame } from '@pc/contracts';
-
 import type { Project } from '@/features/projects/client';
 import { type WorkItem, type WorkItemType } from '@/features/work-items/client';
 import { WORK_ITEM_STATUS_DOT_CLASS, WORK_ITEM_STATUS_LABEL } from '@/features/work-items/status';
@@ -17,6 +15,8 @@ import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useWorkItemsView } from '@/store/work-items-view';
 import { useProjectWorkItems } from '@/hooks/use-project-work-items';
 import { useProjectAreas } from '@/hooks/use-project-areas';
+import { useLiveEvents } from '@/store/live-store';
+import { hasNewDeletedAreaFrame } from '@/features/areas/area-live-events';
 import { WorkItemDetailModal } from './WorkItemDetailModal';
 import { WorkItemsToolbar } from './WorkItemsToolbar';
 import { AreaFilterRail } from './AreaFilterRail';
@@ -79,26 +79,14 @@ export function WorkItemsTable({ project, events, onOpenInspector }: Props) {
     [items],
   );
 
-  // Slice 010 carry-forward — refetch on a `deleted` area frame so items that
-  // fell back to Uncaptured reconcile (no per-item work-item.changed fact).
-  const areaDeleteLastIdx = useRef(0);
+  // T3.2b — refetch on a NEW `deleted` area frame so items that fell back to
+  // Uncaptured reconcile (no per-item work-item.changed fact). Off the identity-
+  // keyed live store, version-keyed so it fires once per new deleted frame.
+  const areaEvents = useLiveEvents('area', project.id);
+  const areaSeenRef = useRef<Map<string, number | string>>(new Map());
   useEffect(() => {
-    if (events.length < areaDeleteLastIdx.current) areaDeleteLastIdx.current = 0;
-    const start = areaDeleteLastIdx.current;
-    areaDeleteLastIdx.current = events.length;
-    if (start >= events.length) return;
-    for (let i = start; i < events.length; i++) {
-      const env = events[i];
-      if (
-        isAreaChangedLiveEventFrame(env) &&
-        env.event.projectId === project.id &&
-        env.event.payload.reason === 'deleted'
-      ) {
-        refetch();
-        break;
-      }
-    }
-  }, [events, project.id, refetch]);
+    if (hasNewDeletedAreaFrame(areaEvents, areaSeenRef.current)) refetch();
+  }, [areaEvents, refetch]);
 
   // Section 38 — "Parent items only" toggle hides child items (parentId != null).
   // Slice 010 — rail counts use the visibility-filtered (but not area-filtered)

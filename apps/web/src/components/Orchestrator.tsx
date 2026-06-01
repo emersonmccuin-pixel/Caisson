@@ -7,11 +7,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
-import { isLiveEventFrame } from '@pc/contracts';
+import { useLiveEvents } from '@/store/live-store';
 
 import type { Project } from '@/features/projects/client';
 import type { OrchestratorSurfacePreference } from '@/features/settings/client';
 import { runtimeApi, type OrchestratorRuntimeHealth, type OrchestratorRuntimeSnapshot, type OrchestratorSession, type SessionTransitionResponse } from '@/features/runtime/client';
+import { latestSessionFromTitleEvents } from '@/features/runtime/session-title-live-events';
 import {
   latestTerminalInputFailure,
   orchestratorInputCapabilities,
@@ -299,6 +300,8 @@ export function Orchestrator({
       cancelled = true;
     };
   }, [project.id]);
+  // `session-changed` is a chat-LIFECYCLE envelope (not a relay fact) — keep it
+  // on the events scan.
   useEffect(() => {
     for (let i = events.length - 1; i >= 0; i--) {
       const e = events[i]!;
@@ -306,16 +309,15 @@ export function Orchestrator({
         setSession((e as WsEnvelope & { session: OrchestratorSession }).session);
         break;
       }
-      // Slice 015b — canonical relay session.title.changed frame.
-      if (isLiveEventFrame(e) && e.event.entity === 'session-title') {
-        const session = (e.event.payload as { session?: OrchestratorSession }).session;
-        if (session) {
-          setSession(session);
-          break;
-        }
-      }
     }
   }, [events]);
+  // T3.2b — session title (a relay fact) off the identity-keyed live store;
+  // latest-by-cursor wins. Separate from the session-changed lifecycle above.
+  const titleEvents = useLiveEvents('session-title', project.id);
+  useEffect(() => {
+    const session = latestSessionFromTitleEvents(titleEvents);
+    if (session) setSession(session);
+  }, [titleEvents]);
   useEffect(() => {
     for (let i = events.length - 1; i >= 0; i--) {
       const e = events[i]!;

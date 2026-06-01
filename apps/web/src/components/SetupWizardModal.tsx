@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { isLiveEventFrame } from '@pc/contracts';
+import { useLiveEntitySignature } from '@/store/live-store';
 
 import { transientInputCapabilities } from '@/features/chat/runtimeState';
 import { transientSessionsApi } from '@/features/transient-sessions/client';
@@ -64,6 +64,8 @@ export function SetupWizardModal({ projectId, events, onClose }: SetupWizardModa
     };
   }, [projectId]);
 
+  // Transient setup-wizard envelopes (state / exit) STAY on the events scan —
+  // they are not relay live-event facts (T3.2b keeps these; full removal is T3.3).
   useEffect(() => {
     const start = events.length >= processedRef.current ? processedRef.current : 0;
     const end = events.length;
@@ -80,17 +82,26 @@ export function SetupWizardModal({ projectId, events, onClose }: SetupWizardModa
       } else if (env.type === 'setup-wizard-exit') {
         if (!belongsToTransientSession(env, sessionId)) continue;
         setState('exited');
-      } else if (
-        // Slice 015b — canonical relay project.claude-md.changed frame.
-        isLiveEventFrame(env) &&
-        env.event.entity === 'project-claude-md' &&
-        env.event.projectId === projectId
-      ) {
-        closeRef.current();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, sessionId]);
+
+  // T3.2b — auto-close when CLAUDE.md gets written, off the identity-keyed live
+  // store signature. Q2: capture the baseline at mount so a pre-existing frame
+  // doesn't close the wizard immediately; only close when the signature CHANGES.
+  const claudeMdSig = useLiveEntitySignature('project-claude-md', projectId);
+  const claudeMdBaselineRef = useRef<string | null>(null);
+  if (claudeMdBaselineRef.current === null) claudeMdBaselineRef.current = claudeMdSig;
+  useEffect(() => {
+    if (claudeMdBaselineRef.current === null) {
+      claudeMdBaselineRef.current = claudeMdSig;
+      return;
+    }
+    if (claudeMdSig !== claudeMdBaselineRef.current) {
+      closeRef.current();
+    }
+  }, [claudeMdSig]);
 
   const adapted = useMemo(
     () =>

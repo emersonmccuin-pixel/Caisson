@@ -119,7 +119,10 @@ export function buildFieldSchemaListChangedDraft(input: {
     projectId: input.projectId as DomainULID,
     type: 'field-schema.list.changed',
     entity: 'field-schema',
-    entityId: null,
+    // Q1-A (T3.2b): field schemas are a per-project singleton list; key the
+    // frame by projectId (natural key, mirrors project-claude-md) so it enters
+    // the identity-keyed live store and reaches WorkItemDetailModal.
+    entityId: input.projectId as DomainULID,
     version: null,
     payload: { schemas: input.schemas, reason: 'replaced' },
   };

@@ -12,12 +12,12 @@ import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
-import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
-
 import type { Project, Stage } from '@/features/projects/client';
 import { useProjectAreas } from '@/hooks/use-project-areas';
 import { WorkItemConflictError, workItemsApi, type Attachment, type WorkItem, type WorkItemStatus, type WorkItemType } from '@/features/work-items/client';
 import { attachmentChangedFromLiveFrame } from '@/features/work-items/attachment-live-events';
+import { workItemHistoryRows } from '@/features/work-items/work-item-live-events';
+import { useLiveEntitySignature, useLiveEvents } from '@/store/live-store';
 import {
   WORK_ITEM_STATUS_GLYPH,
   WORK_ITEM_STATUS_GROUP_ORDER,
@@ -161,7 +161,6 @@ export function InitiativeInspector({
           <ChildrenTab
             project={project}
             parent={workItem}
-            events={events}
             onNavigate={onNavigate}
           />
         ) : tab === 'activity' ? (
@@ -337,12 +336,10 @@ const TYPE_CHIP: Record<
 function ChildrenTab({
   project,
   parent,
-  events,
   onNavigate,
 }: {
   project: Project;
   parent: WorkItem;
-  events: WsEnvelope[];
   onNavigate: (wi: WorkItem) => void;
 }) {
   const [items, setItems] = useState<WorkItem[]>([]);
@@ -359,23 +356,12 @@ function ChildrenTab({
     refetch();
   }, [refetch]);
 
-  // Live refresh on server-broadcast changes. Scan every new envelope since
-  // the last processed index — not just the last one — so a change buried in
-  // a batched flush isn't missed (UI spine).
-  const wiLastIdx = useRef(0);
+  // T3.2b — refetch children on any work-item change, keyed off the live store
+  // signature (rebuild-proof; flips only on a genuine change).
+  const wiSig = useLiveEntitySignature('work-item', project.id);
   useEffect(() => {
-    if (events.length < wiLastIdx.current) wiLastIdx.current = 0;
-    const start = wiLastIdx.current;
-    wiLastIdx.current = events.length;
-    if (start >= events.length) return;
-    for (let i = start; i < events.length; i++) {
-      // Slice 015b — canonical relay `work-item.changed` frame.
-      if (isWorkItemChangedLiveEventFrame(events[i])) {
-        refetch();
-        break;
-      }
-    }
-  }, [events, refetch]);
+    if (wiSig) refetch();
+  }, [wiSig, refetch]);
 
   const children = useMemo(
     () => items.filter((i) => i.parentId === parent.id),
@@ -685,6 +671,10 @@ function ActivityTab({
   const [attachments, setAttachments] = useState<
     { id: string; createdAt: number; name: string; kind: string; runId: string | null; createdBySessionId: string | null }[]
   >([]);
+  // T3.2b — live work-item history rows off the live store (rebuild-proof),
+  // filtered to this item. #5 keeps the children refetch on the signature; this
+  // list selector is distinct (Q5).
+  const wiHistoryEvents = useLiveEvents('work-item', project.id);
 
   useEffect(() => {
     let alive = true;
@@ -761,19 +751,13 @@ function ActivityTab({
         text: 'Archived',
       });
     }
-    for (const env of events) {
-      if (isWorkItemChangedLiveEventFrame(env)) {
-        const wi = env.event.payload.workItem as WorkItem | undefined;
-        if (wi?.id === workItem.id) {
-          const change = 'updated';
-          out.push({
-            ts: wi.updatedAt,
-            actor: 'human',
-            actorLabel: 'edit',
-            text: `${change} · v${wi.version}`,
-          });
-        }
-      }
+    for (const row of workItemHistoryRows(wiHistoryEvents, workItem.id)) {
+      out.push({
+        ts: row.ts,
+        actor: 'human',
+        actorLabel: 'edit',
+        text: row.text,
+      });
     }
     out.sort((a, b) => b.ts - a.ts);
     const seen = new Set<string>();
@@ -783,7 +767,7 @@ function ActivityTab({
       seen.add(key);
       return true;
     });
-  }, [workItem, attachments, events, stageNameById]);
+  }, [workItem, attachments, wiHistoryEvents, stageNameById]);
 
   const grouped = useMemo(() => groupByDay(rows), [rows]);
 

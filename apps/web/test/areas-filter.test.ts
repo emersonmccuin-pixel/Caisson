@@ -109,8 +109,10 @@ test('a non-area frame is rejected', () => {
 });
 
 test('deleted carry-forward gate: only fires on this project + reason deleted', () => {
-  // The exact branch added to Kanban/Table: frame is area.changed, projectId
-  // matches, reason === 'deleted'.
+  // Contract-level guard check. T3.2b moved Kanban/Table onto the live store
+  // (`hasNewDeletedAreaFrame`, pinned in area-live-events.test.ts); the store's
+  // project-scope selector applies the project filter, so this only asserts the
+  // guard + reason discrimination still hold.
   const matches = (f: unknown, projectId: string) =>
     isAreaChangedLiveEventFrame(f) &&
     f.event.projectId === projectId &&

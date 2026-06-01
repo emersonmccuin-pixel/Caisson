@@ -5,22 +5,19 @@
 // Distinct from KanbanBoard's local modal; both can technically be open at
 // once but the user has to actively click in both places to trigger it.
 
-import { useEffect, useRef, useState } from 'react';
-
-import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
+import { useEffect, useState } from 'react';
 
 import type { Project } from '@/features/projects/client';
 import { workItemsApi, type WorkItem } from '@/features/work-items/client';
-import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useChatWorkItemModal } from '@/store/chat-work-item-modal';
+import { useLiveEntitySignature } from '@/store/live-store';
 import { WorkItemDetailModal } from './work-items/WorkItemDetailModal';
 
 interface ChatWorkItemModalMountProps {
   project: Project;
-  events: WsEnvelope[];
 }
 
-export function ChatWorkItemModalMount({ project, events }: ChatWorkItemModalMountProps) {
+export function ChatWorkItemModalMount({ project }: ChatWorkItemModalMountProps) {
   const workItemId = useChatWorkItemModal((s) => s.workItemId);
   const open = useChatWorkItemModal((s) => s.open);
   const close = useChatWorkItemModal((s) => s.close);
@@ -48,28 +45,16 @@ export function ChatWorkItemModalMount({ project, events }: ChatWorkItemModalMou
     };
   }, [workItemId, project.id]);
 
-  // Live refresh on work-item-changed envelopes while modal is open. Scan
-  // every new envelope since the last processed index — not just the last
-  // one — so a change buried in a batched flush isn't missed (UI spine).
-  const lastIdxRef = useRef(0);
+  // T3.2b — live refresh of the open item off the identity-keyed live store
+  // signature (rebuild-proof), gated on the modal being open. Refetches the full
+  // list once per genuine work-item change.
+  const wiSig = useLiveEntitySignature('work-item', project.id);
   useEffect(() => {
-    if (events.length < lastIdxRef.current) lastIdxRef.current = 0;
-    const start = lastIdxRef.current;
-    lastIdxRef.current = events.length;
-    if (!workItemId || start >= events.length) return;
-    let changed = false;
-    for (let i = start; i < events.length; i++) {
-      // Slice 015b — canonical relay `work-item.changed` frame.
-      if (isWorkItemChangedLiveEventFrame(events[i])) {
-        changed = true;
-        break;
-      }
-    }
-    if (!changed) return;
+    if (!workItemId || !wiSig) return;
     workItemsApi.workItems(project.id)
       .then(setItems)
       .catch(() => {});
-  }, [events, workItemId, project.id]);
+  }, [wiSig, workItemId, project.id]);
 
   if (!workItemId) return null;
 
@@ -125,7 +110,11 @@ export function ChatWorkItemModalMount({ project, events }: ChatWorkItemModalMou
       workItem={item}
       project={project}
       items={items}
-      events={events}
+      // T3.2b — this mount no longer threads the chat events array; the modal's
+      // own live reads (field-schema/work-item history) now come from the live
+      // store. Its remaining transient `events` scans (attachment refresh) are
+      // migrated in T3.3; pass an empty array until then.
+      events={[]}
       onClose={close}
       onSwitchItem={(id) => open(id)}
       onItemCreated={(wi) =>
