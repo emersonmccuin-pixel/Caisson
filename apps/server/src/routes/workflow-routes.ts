@@ -2,8 +2,14 @@
 //
 // Mirrors pod-routes.ts: rail-friendly list (globals ∪ project rows),
 // detail-view get, scalar create/update, soft-delete with in-flight guard,
-// promote-to-global, duplicate, fire-by-id, audit log. Every mutating route
-// emits `workflow-changed` so the rail + activity panel rerender.
+// promote-to-global, duplicate, fire-by-id, audit log.
+//
+// Slice 015b — every mutating route now ONLY writes a `workflow.definition.changed`
+// row to the slice-002 `live_outbox` inside its DB txn (`emitDefinitionFact`).
+// The slice-015a relay drains that committed row to the subscribed sockets; the
+// web `useProjectWorkflows` hook refetches on the relay frame (entity
+// `workflow-definition`). The legacy hand-fanned `workflow-changed` envelopes +
+// frame double-emit are gone — delivery flows through the door only.
 //
 // Validation: bodies may carry either `def: object` (the workflow graph) or
 // `yaml: string` (raw editor). Both flow through the same parse + validate +
@@ -42,21 +48,12 @@ import {
   serializeWorkflowV2,
   validateWorkflowV2,
 } from '@pc/workflows';
-import {
-  buildLiveEventFrame,
-  type WorkflowDefinitionChange,
-} from '@pc/contracts';
+import type { WorkflowDefinitionChange } from '@pc/contracts';
 import { toWorkflowDefinitionDto } from '@pc/app-services';
 
 export type WorkflowMutationKind = 'created' | 'updated' | 'deleted';
 
 export interface WorkflowRoutesDeps {
-  /** Tag a `workflow-changed` envelope at the project's WS. Used for
-   *  project-scope rows. */
-  broadcastTo: (projectId: ULID, msg: unknown) => void;
-  /** Fan a `workflow-changed` envelope to every connected project (globals
-   *  are visible to all projects via the rail's "Global" section). */
-  broadcastAll: (msg: unknown) => void;
   /** Count in-flight v2 runs for a (projectId, workflowSlug) pair. Blocks
    *  soft-delete unless the caller passes `?cancel=1`. Repo dependency
    *  injected so tests can stub it without dragging the runs table in. */
@@ -243,30 +240,13 @@ function normaliseDef(input: {
   };
 }
 
-/** Envelope shape for `workflow-changed`. Mirrors `pod-changed`. */
-function changedEnvelope(
-  change: WorkflowMutationKind,
-  row: WorkflowRow,
-): Record<string, unknown> {
-  return { type: 'workflow-changed', change, workflow: row };
-}
-
-function deletedEnvelope(row: WorkflowRow): Record<string, unknown> {
-  return {
-    type: 'workflow-changed',
-    change: 'deleted',
-    workflowId: row.id,
-    slug: row.slug,
-    scope: row.scope,
-    projectId: row.projectId,
-  };
-}
-
-/** Slice 004 — durably record a `workflow.definition.changed` fact on the
- *  slice-002 live_outbox, returning the canonical frame to fan out alongside
- *  the legacy envelope. Definition events follow the row's scope (global rows
- *  carry projectId:null and fan to all projects, mirroring broadcastAll). */
-function emitDefinitionFact(row: WorkflowRow, change: WorkflowDefinitionChange): unknown {
+/** Slice 015b — durably record a `workflow.definition.changed` fact on the
+ *  slice-002 `live_outbox` inside its own txn. The slice-015a relay drains the
+ *  committed row and fans the canonical frame to subscribed sockets (global
+ *  rows carry projectId:null and fan to all projects); the web hook refetches on
+ *  the relay frame. This is the ONLY delivery path — the old hand-fanned frame +
+ *  `workflow-changed` envelope are deleted. */
+function emitDefinitionFact(row: WorkflowRow, change: WorkflowDefinitionChange): void {
   const scope = row.scope === 'global' ? 'global' : 'project';
   const projectId = scope === 'global' ? null : row.projectId;
   const definition = toWorkflowDefinitionDto({
@@ -282,7 +262,7 @@ function emitDefinitionFact(row: WorkflowRow, change: WorkflowDefinitionChange):
     yamlHash: row.yamlHash,
     updatedAt: row.updatedAt,
   });
-  const liveEvent = getDb().transaction((tx) =>
+  getDb().transaction((tx) =>
     insertLiveEvent(tx, {
       scope,
       projectId,
@@ -294,23 +274,10 @@ function emitDefinitionFact(row: WorkflowRow, change: WorkflowDefinitionChange):
         change === 'deleted' ? { change, workflowId: row.id } : { change, definition },
     }),
   );
-  return buildLiveEventFrame(liveEvent);
 }
 
-function emitChanged(
-  deps: WorkflowRoutesDeps,
-  row: WorkflowRow,
-  change: WorkflowMutationKind,
-): void {
-  const env = change === 'deleted' ? deletedEnvelope(row) : changedEnvelope(change, row);
-  const frame = emitDefinitionFact(row, change);
-  if (row.scope === 'global') {
-    deps.broadcastAll(frame);
-    deps.broadcastAll(env);
-  } else if (row.projectId) {
-    deps.broadcastTo(row.projectId, frame);
-    deps.broadcastTo(row.projectId, env);
-  }
+function emitChanged(row: WorkflowRow, change: WorkflowMutationKind): void {
+  emitDefinitionFact(row, change);
 }
 
 /** Verify that every `agent` node in `def` references a live project-scoped
@@ -524,7 +491,7 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
       const status = /required|invalid|UNIQUE/i.test(msg) ? 400 : 500;
       return c.json({ ok: false, error: msg }, status);
     }
-    emitChanged(deps, row, 'created');
+    emitChanged(row, 'created');
     return c.json({ ok: true, workflow: row }, 201);
   });
 
@@ -632,7 +599,7 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
       return c.json({ ok: false, error: (err as Error).message }, 400);
     }
     if (!updated) return c.json({ ok: false, error: `unknown workflow: ${id}` }, 404);
-    emitChanged(deps, updated, 'updated');
+    emitChanged(updated, 'updated');
     return c.json({ ok: true, workflow: updated });
   });
 
@@ -681,7 +648,7 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
       auditFromQuery(qs, 'user', 'ui-delete'),
     );
     if (!deleted) return c.json({ ok: false, error: `unknown workflow: ${id}` }, 404);
-    emitChanged(deps, deleted, 'deleted');
+    emitChanged(deleted, 'deleted');
     return c.json({ ok: true });
   });
 
@@ -746,12 +713,12 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
       return c.json({ ok: false, error: msg }, 400);
     }
     if (!row) return c.json({ ok: false, error: `unknown workflow: ${id}` }, 404);
-    // Promote moves the row from per-project visibility to global. Notify
-    // the source project AND every project (globals show everywhere).
-    if (existing.projectId) {
-      deps.broadcastTo(existing.projectId, deletedEnvelope(existing));
-    }
-    deps.broadcastAll(changedEnvelope('created', row));
+    // Promote moves the row from per-project visibility to global. Door it:
+    // a `deleted` fact to the source project (the old project-scoped row drops
+    // from that project's rail) + a `created` fact on the now-global row (fans
+    // to all projects). The relay delivers both; the web hook refetches.
+    if (existing.projectId) emitDefinitionFact(existing, 'deleted');
+    emitChanged(row, 'created');
     return c.json({ ok: true, workflow: row });
   });
 
@@ -800,7 +767,7 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
       }
       return c.json({ ok: false, error: msg }, 400);
     }
-    emitChanged(deps, row, 'created');
+    emitChanged(row, 'created');
     return c.json({ ok: true, workflow: row }, 201);
   });
 

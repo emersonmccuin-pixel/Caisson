@@ -885,8 +885,6 @@ registerLiveEventRoutes(app);
  *  `/api/projects/:projectId/workflow-v2/*` GET endpoints survive only as
  *  read-only compat for the existing web client (19.18 rewires). */
 registerWorkflowRoutes(app, {
-  broadcastTo,
-  broadcastAll,
   countInFlightRuns: (projectId, slug) => {
     const runs = workflowRunsV2Repo.listRunsByProject(projectId);
     return runs.filter(

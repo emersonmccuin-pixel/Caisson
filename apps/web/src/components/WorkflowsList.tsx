@@ -1016,11 +1016,11 @@ function YamlTab({ row, onSaved }: { row: WorkflowRow; onSaved: () => void }) {
       if (updated.status === 'invalid') {
         setError(updated.parseError ?? 'Workflow is invalid.');
       }
-      // Belt-and-suspenders: WS `workflow-changed` envelope is the primary
-      // refresh path, but if the WS reconnects between Save firing and the
-      // envelope arriving, the list-level row stays stale. A direct refetch
-      // here keeps the rail + detail header in lockstep with the persisted
-      // row regardless of WS reliability.
+      // Belt-and-suspenders: the relay `workflow.definition.changed` frame is
+      // the primary refresh path, but if the WS reconnects between Save firing
+      // and the frame arriving, the list-level row stays stale. A direct
+      // refetch here keeps the rail + detail header in lockstep with the
+      // persisted row regardless of WS reliability.
       onSaved();
     } catch (e) {
       setError((e as Error).message);

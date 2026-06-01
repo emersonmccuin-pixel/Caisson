@@ -1,33 +1,25 @@
 // Section 19.18 — Project workflows hook (mirrors `use-project-pods.ts`).
 //
 // Reads the DB-backed `/api/workflows?projectId=…` surface (globals ∪
-// project-scope rows for the active project) and applies `workflow-changed`
-// envelopes as deltas.
+// project-scope rows for the active project).
 //
-// Envelope shapes (server emits both forms — see workflow-routes.ts:238-255):
-//   { type: 'workflow-changed', change: 'created' | 'updated', workflow: WorkflowRow }
-//   { type: 'workflow-changed', change: 'deleted', workflowId, slug, scope, projectId }
-//
-// Visibility filter: globals are visible to every project; project-scope rows
-// are only kept when projectId matches. Cross-project envelopes from
-// `broadcastAll` (used for global mutations) still need the projectId check.
+// Slice 015b — definition changes now arrive ONLY via the canonical relay
+// `live-event` frame (entity `workflow-definition`, `workflow.definition.changed`,
+// drained from the in-txn `live_outbox` row). The legacy `workflow-changed`
+// envelope + its delta-apply path are gone. Defs refetch HTTP truth on any
+// matching frame (refetch-on-change: the list endpoint already applies the
+// project-visibility filter — globals ∪ this project's rows — so no per-frame
+// scope guard is needed). The relay frame's scope (project vs global → all) is
+// honored by which sockets receive it; a global def frame carries projectId
+// null and reaches every project, which is exactly the refetch trigger we want.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+
+import { isWorkflowDefinitionChangedLiveEventFrame } from '@pc/contracts';
 
 import type { Project, ULID } from '@/features/projects/client';
 import { workflowsApi, type WorkflowRow } from '@/features/workflows/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
-
-interface WorkflowChangedEnvelope extends WsEnvelope {
-  type: 'workflow-changed';
-  change: 'created' | 'updated' | 'deleted';
-  workflow?: WorkflowRow;
-  workflowId?: ULID;
-  slug?: string;
-  scope?: 'global' | 'project';
-  // `projectId` on the envelope is the broadcast tag (the WS connection's
-  // project); the workflow row's own scope/projectId carries visibility.
-}
 
 export function useProjectWorkflows(
   project: Project | null,
@@ -63,36 +55,16 @@ export function useProjectWorkflows(
     const start = lastProcessedIdx.current;
     if (start >= events.length) return;
 
-    const upserts: WorkflowRow[] = [];
-    const deletes: ULID[] = [];
-
+    let sawDefinitionChange = false;
     for (let i = start; i < events.length; i++) {
       const env = events[i];
-      if (!env || env.type !== 'workflow-changed') continue;
-      const e = env as WorkflowChangedEnvelope;
-      if (e.change === 'deleted') {
-        if (e.workflowId) deletes.push(e.workflowId);
-        continue;
-      }
-      if (!e.workflow) continue;
-      // Filter to rows visible to this project: globals + this project's
-      // project-scope rows. The server uses broadcastAll for global mutations,
-      // so other projects' rows would otherwise leak in.
-      if (e.workflow.scope === 'global' || e.workflow.projectId === project.id) {
-        upserts.push(e.workflow);
-      } else if (e.workflow.scope === 'project' && e.workflow.projectId !== project.id) {
-        // Cross-project row — ignore. Defensive (broadcastTo should keep them
-        // scoped, but a malformed envelope shouldn't pollute our map).
-      }
+      if (isWorkflowDefinitionChangedLiveEventFrame(env)) sawDefinitionChange = true;
     }
     lastProcessedIdx.current = events.length;
 
-    if (upserts.length > 0 || deletes.length > 0) {
-      setMap((prev) => {
-        const next = new Map(prev);
-        for (const w of upserts) next.set(w.id, w);
-        for (const id of deletes) next.delete(id);
-        return next;
+    if (sawDefinitionChange) {
+      void workflowsApi.listWorkflowRows(project.id).then((list) => {
+        setMap(new Map(list.map((w) => [w.id, w])));
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
