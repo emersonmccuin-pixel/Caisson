@@ -13,53 +13,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import {
-  AGENT_MANAGEMENT_TOOLS,
-  ANSWER_PENDING_TOOL,
-  APPROVE_WORK_ITEM_TOOL,
-  ASK_ORCHESTRATOR_TOOL,
-  ASK_USER_TOOL,
-  ATTACH_TO_WORK_ITEM_TOOL,
-  COMPLETE_NODE_TOOL,
-  CONTINUE_AGENT_TOOL,
-  CREATE_AGENT_WORK_ITEM_TOOL,
-  CREATE_WORKFLOW_TOOL,
-  CREATE_WORK_ITEM_TOOL,
-  DELETE_WORKFLOW_TOOL,
-  FIRE_WORKFLOW_TOOL,
-  GET_STAGES_TOOL,
-  GET_WORKFLOW_TOOL,
-  GET_WORK_ITEM_TOOL,
-  INSPECT_AGENT_RUN_TOOL,
-  INVOKE_AGENT_TOOL,
-  KILL_AGENT_RUN_TOOL,
-  LIST_AGENTS_TOOL,
-  LIST_AREAS_TOOL,
-  LIST_FIELD_SCHEMAS_TOOL,
-  LIST_MY_RUNS_TOOL,
-  LIST_STAGES_TOOL,
-  LIST_WORKFLOWS_TOOL,
-  LIST_WORK_ITEMS_TOOL,
-  LOG_BUG_TOOL,
-  MOVE_WORK_ITEM_TOOL,
-  NODE_FAILED_TOOL,
-  PUBLISH_WORKFLOW_TOOL,
-  READ_WORKFLOW_DRAFT_TOOL,
-  REJECT_WORK_ITEM_TOOL,
-  REPLACE_FIELD_SCHEMAS_TOOL,
-  REPLACE_STAGES_TOOL,
-  REQUEST_APPROVAL_TOOL,
-  SAVE_WORKFLOW_DRAFT_TOOL,
-  UPDATE_WORKFLOW_TOOL,
-  UPDATE_WORK_ITEM_TOOL,
-  WRITE_CLAUDE_MD_TOOL,
-  createToolContext,
-  handleAgentRunTool,
-  handleAgentTool,
-  handleProjectConfigTool,
-  handleWorkItemTool,
-  handleWorkflowTool,
-} from './tools/index.ts';
+// Import from the barrel-free subpath: the registry is pure data, so this keeps
+// `@pc/domain`'s `yaml` dep (and the rest of the barrel) out of the esbuild
+// bundle — a barrel import breaks the dist/server.mjs boot (yaml uses a dynamic
+// CJS require esbuild's ESM output can't satisfy).
+import { PC_RIG_TOOL_REGISTRY } from '@pc/domain/tool-registry';
+import { createToolContext } from './tools/index.ts';
+import { PC_RIG_HANDLERS, dispatchPcRigTool } from './tools/handlers.ts';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 // packages/mcp/src/server.ts → trunk root is three levels up. Used as the
@@ -77,62 +37,26 @@ const AGENT_SESSION_ID = process.env.PC_AGENT_SESSION_ID ?? '';
 const PROJECT_DATA = PROJECT_ID ? resolve(DATA, 'projects', PROJECT_ID) : DATA;
 const STATUS = resolve(PROJECT_DATA, 'mcp-status.json');
 
-/** Section 36 — derived export consumed by apps/server's
- *  `pod-tool-catalog.ts` for `mcp__pc-rig__*` wildcard expansion. Replaces
- *  the hand-maintained flat array that previously had to be kept in sync
- *  with TOOLS (the catalog-drift trap). `TOOLS` below is the sole source. */
-export const TOOLS = [
-  CREATE_WORK_ITEM_TOOL,
-  CREATE_AGENT_WORK_ITEM_TOOL,
-  APPROVE_WORK_ITEM_TOOL,
-  REJECT_WORK_ITEM_TOOL,
-  LOG_BUG_TOOL,
-  MOVE_WORK_ITEM_TOOL,
-  UPDATE_WORK_ITEM_TOOL,
-  // Workflow definitions and handlers live in tools/workflows.ts; keep these
-  // constants in-place so ListTools preserves the pre-split ordering.
-  ...AGENT_MANAGEMENT_TOOLS,
-  GET_WORK_ITEM_TOOL,
-  LIST_WORK_ITEMS_TOOL,
-  LIST_AREAS_TOOL,
-  SAVE_WORKFLOW_DRAFT_TOOL,
-  READ_WORKFLOW_DRAFT_TOOL,
-  GET_STAGES_TOOL,
-  PUBLISH_WORKFLOW_TOOL,
-  WRITE_CLAUDE_MD_TOOL,
-  LIST_STAGES_TOOL,
-  LIST_AGENTS_TOOL,
-  LIST_WORKFLOWS_TOOL,
-  FIRE_WORKFLOW_TOOL,
-  COMPLETE_NODE_TOOL,
-  NODE_FAILED_TOOL,
-  LIST_FIELD_SCHEMAS_TOOL,
-  CREATE_WORKFLOW_TOOL,
-  UPDATE_WORKFLOW_TOOL,
-  DELETE_WORKFLOW_TOOL,
-  GET_WORKFLOW_TOOL,
-  REPLACE_STAGES_TOOL,
-  REPLACE_FIELD_SCHEMAS_TOOL,
-  ATTACH_TO_WORK_ITEM_TOOL,
-  INVOKE_AGENT_TOOL,
-  CONTINUE_AGENT_TOOL,
-  LIST_MY_RUNS_TOOL,
-  INSPECT_AGENT_RUN_TOOL,
-  KILL_AGENT_RUN_TOOL,
-  ASK_ORCHESTRATOR_TOOL,
-  ASK_USER_TOOL,
-  REQUEST_APPROVAL_TOOL,
-  ANSWER_PENDING_TOOL,
-] as const;
+/** Slice 016 — the MCP server tool objects, ZIPPED from the canonical
+ *  `PC_RIG_TOOL_REGISTRY` (@pc/domain: name + agent description + inputSchema)
+ *  IN REGISTRY ORDER. The registry is now the SOLE ordered source of truth;
+ *  ListTools ordering is GUARANTEED by it instead of a hand-curated array.
+ *  Execution lives in the `PC_RIG_HANDLERS` map (zipped with this list by name
+ *  at CallTool time); the slice-016 parity test asserts the two are a bijection
+ *  in registry order, so a half-added tool fails the build. */
+export const TOOLS = PC_RIG_TOOL_REGISTRY.map((def) => ({
+  name: def.name,
+  description: def.description,
+  inputSchema: def.inputSchema,
+}));
 
 /** Section 36 — fully-qualified slugs consumed by apps/server's
- *  `mcp__pc-rig__*` wildcard expansion. Derived from TOOLS so the two can
- *  never drift; the previous hand-maintained flat array (and its drift test)
- *  are deleted. The `mcp__pc-rig__` prefix is the MCP server name Caisson scaffolds
- *  into every project's .mcp.json — keep it in sync if the server gets
- *  renamed. */
-export const PC_RIG_TOOL_NAMES: readonly string[] = TOOLS.map(
-  (t) => `mcp__pc-rig__${t.name}` as const,
+ *  `mcp__pc-rig__*` wildcard expansion. Derived from the registry order so the
+ *  views can never drift. The `mcp__pc-rig__` prefix is the MCP server name
+ *  Caisson scaffolds into every project's .mcp.json — keep it in sync if the
+ *  server gets renamed. */
+export const PC_RIG_TOOL_NAMES: readonly string[] = PC_RIG_TOOL_REGISTRY.map(
+  (d) => `mcp__pc-rig__${d.name}` as const,
 );
 
 const toolContext = createToolContext({
@@ -236,18 +160,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const args = (req.params.arguments ?? {}) as Record<string, unknown>;
-  const workItemResult = await handleWorkItemTool(req.params.name, args, toolContext);
-  if (workItemResult) return workItemResult;
-  const agentResult = await handleAgentTool(req.params.name, args, toolContext);
-  if (agentResult) return agentResult;
-  const workflowResult = await handleWorkflowTool(req.params.name, args, toolContext);
-  if (workflowResult) return workflowResult;
-  const projectConfigResult = await handleProjectConfigTool(req.params.name, args, toolContext);
-  if (projectConfigResult) return projectConfigResult;
-  const agentRunResult = await handleAgentRunTool(req.params.name, args, toolContext);
-  if (agentRunResult) return agentRunResult;
-
-  throw new Error(`unknown tool: ${req.params.name}`);
+  // Slice 016 — dispatch through the name-keyed handler map. Each entry wraps
+  // the existing ordered handler chain (handlers.ts), so behavior is
+  // byte-identical to the pre-slice chain; an unknown name throws the same
+  // error string.
+  const handler = PC_RIG_HANDLERS[req.params.name];
+  if (handler) return handler(args, toolContext);
+  return dispatchPcRigTool(req.params.name, args, toolContext);
 });
 
 // Section 36 — guard the stdio-attach + heartbeat behind an "am I the entry

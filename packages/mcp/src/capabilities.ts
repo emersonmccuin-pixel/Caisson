@@ -6,7 +6,9 @@
 // registry record, so the family map can no longer drift from the tool list.
 // The slice-016 parity test asserts capabilities keys === registry names.
 
-import { PC_RIG_TOOL_REGISTRY, type CapabilityFamily } from '@pc/domain';
+// Barrel-free subpath — see server.ts: a `@pc/domain` barrel import bundles
+// `yaml` and breaks the esbuild dist boot.
+import { PC_RIG_TOOL_REGISTRY, type CapabilityFamily } from '@pc/domain/tool-registry';
 
 export type { CapabilityFamily };
 
