@@ -16,7 +16,8 @@
 import { app, BrowserWindow, Menu, shell, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import type { ChildProcess } from 'node:child_process';
-import { join } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   packagedAgentHostLockFilePath,
@@ -227,6 +228,63 @@ async function stopPackagedAgentHost(): Promise<void> {
   await waitForChildExit(child, 2_000);
 }
 
+// ── Renderer diagnostics ───────────────────────────────────────────────────
+// Mirror the renderer's console + crash/freeze signals to a file so they can be
+// read outside DevTools (e.g. to debug a UI freeze where the page stops
+// responding to clicks). Best-effort; never throws into the boot path.
+//   DEV      → <workspace-root>/data/diagnostics/renderer-console.log
+//   PACKAGED → <PC_DATA_DIR>/diagnostics/… (falls back to Electron's logs dir)
+// Fresh per window launch (truncated on createWindow).
+
+function resolveDiagnosticsDir(): string {
+  const envDir = process.env.PC_DATA_DIR;
+  if (envDir && envDir !== 'undefined') return join(envDir, 'diagnostics');
+  let dir = __dirname;
+  for (let i = 0; i < 8; i += 1) {
+    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) return join(dir, 'data', 'diagnostics');
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return app.getPath('logs');
+}
+
+function setupRendererDiagnostics(win: BrowserWindow): void {
+  let logPath: string;
+  try {
+    const dir = resolveDiagnosticsDir();
+    mkdirSync(dir, { recursive: true });
+    logPath = join(dir, 'renderer-console.log');
+    writeFileSync(logPath, `# renderer console — ${APP_NAME} — session ${new Date().toISOString()}\n`);
+    // eslint-disable-next-line no-console
+    console.log(`[diagnostics] renderer console → ${logPath}`);
+  } catch {
+    return; // diagnostics are best-effort; a write failure must not break boot
+  }
+  const write = (entry: Record<string, unknown>): void => {
+    try {
+      appendFileSync(logPath, `${JSON.stringify({ t: new Date().toISOString(), ...entry })}\n`);
+    } catch {
+      /* ignore */
+    }
+  };
+  win.webContents.on('console-message', (details) => {
+    write({
+      kind: 'console',
+      level: details.level,
+      message: details.message,
+      source: `${details.sourceId}:${details.lineNumber}`,
+    });
+  });
+  // The freeze signal: Electron fires 'unresponsive' when the renderer stops
+  // pumping its event loop (the exact "clicks do nothing" symptom).
+  win.on('unresponsive', () => write({ kind: 'unresponsive', message: 'renderer stopped responding' }));
+  win.on('responsive', () => write({ kind: 'responsive', message: 'renderer recovered' }));
+  win.webContents.on('render-process-gone', (_event, gone) => {
+    write({ kind: 'render-process-gone', reason: gone.reason, exitCode: gone.exitCode });
+  });
+}
+
 async function createWindow(): Promise<void> {
   const url = DEV ? DEV_URL : `http://127.0.0.1:${PORT}`;
   const windowIcon = join(__dirname, '..', 'build', DEV ? 'icon-dev.png' : 'icon.png');
@@ -263,9 +321,15 @@ async function createWindow(): Promise<void> {
   // default Ctrl+R / F5 accelerators, leaving no way to refresh the renderer.
   // Add them back via raw key input plus a right-click context menu.
   const { webContents } = mainWindow;
+  setupRendererDiagnostics(mainWindow);
   webContents.on('before-input-event', (_event, input) => {
     if (input.type !== 'keyDown') return;
     const key = input.key.toLowerCase();
+    // DevTools: F12 or Ctrl/Cmd+Shift+I (the menu is nulled, so bind raw input).
+    if (key === 'f12' || ((input.control || input.meta) && input.shift && key === 'i')) {
+      webContents.toggleDevTools();
+      return;
+    }
     const isReload = key === 'f5' || (input.control && key === 'r');
     if (!isReload) return;
     if (input.shift) webContents.reloadIgnoringCache();
@@ -275,6 +339,8 @@ async function createWindow(): Promise<void> {
     Menu.buildFromTemplate([
       { label: 'Reload', click: () => webContents.reload() },
       { label: 'Force Reload', click: () => webContents.reloadIgnoringCache() },
+      { type: 'separator' },
+      { label: 'Toggle DevTools', click: () => webContents.toggleDevTools() },
     ]).popup({ window: mainWindow ?? undefined });
   });
 
