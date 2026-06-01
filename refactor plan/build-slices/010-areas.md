@@ -1,6 +1,6 @@
 # Slice 010 — Areas (focus buckets for work items)
 
-> Status: planned
+> Status: built 2026-05-31 (commit 3753c876) — gates green, awaiting human browser-review. Live "Update with agent" summary button deferred (optional fast-follow per Key Decisions). Web area filter is client-side (backend `?areaId=` exists, unused). Delete-area emits only `area.changed (deleted)` (no per-item facts) → UI refetches the work-item list on that reason.
 
 ## Roadmap Alignment
 - New feature slice (not in the original 001–011 roadmap). Inserted as 010; the prior 010 (MCP typed client) shifts to 011 and cleanup to 012.
