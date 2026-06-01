@@ -9,7 +9,7 @@
 //    + position, horizontal scroll affordance (fade + chevrons on overflow).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { isAreaChangedLiveEventFrame, isWorkItemChangedLiveEventFrame } from '@pc/contracts';
+import { isAreaChangedLiveEventFrame } from '@pc/contracts';
 import {
   DndContext,
   DragOverlay,
@@ -46,6 +46,7 @@ import { applyFilters } from './work-items/filter-sort';
 import { WorkItemsToolbar } from './work-items/WorkItemsToolbar';
 import { useWorkItemsView } from '@/store/work-items-view';
 import { useProjectAreas } from '@/hooks/use-project-areas';
+import { useLiveWorkItems } from '@/store/live-store';
 
 interface KanbanBoardProps {
   project: Project;
@@ -141,59 +142,32 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
     refetch();
   }, [refetch]);
 
-  // UI Spine step 3 — version-aware patch-in-place for work-item-changed
-  // envelopes. Patches the known items map without a whole-list refetch;
-  // only triggers refetch for new (unknown-id) or deleted items.
-  const kanbanLastIdx = useRef(0);
-  const kanbanItemsRef = useRef<WorkItem[]>([]);
-  // Keep ref in sync with state so the effect below can read current ids.
-  kanbanItemsRef.current = items;
+  // Slice 018 spike — live updates now come from the single identity-keyed
+  // live store (useLiveWorkItems), NOT from a positional scan over the shared
+  // chat-timeline `events` array. The store is keyed by (entity, id) + version,
+  // so it survives chat-timeline rebuilds (session-replay/snapshot) that made
+  // the old index-cursor scan silently skip frames during active sessions.
+  // Merge idempotently by id + version each time the store changes.
+  const liveWorkItems = useLiveWorkItems(project.id);
   useEffect(() => {
-    if (events.length < kanbanLastIdx.current) kanbanLastIdx.current = 0;
-    const start = kanbanLastIdx.current;
-    kanbanLastIdx.current = events.length;
-    if (start >= events.length) return;
-
-    const patches: WorkItem[] = [];
-    const removes: string[] = [];
-
-    for (let i = start; i < events.length; i++) {
-      const env = events[i];
-      // Slice 015b — consume the canonical relay `work-item.changed` frame.
-      if (!isWorkItemChangedLiveEventFrame(env)) continue;
-      if (env.event.projectId !== project.id) continue;
-      const snapshot = env.event.payload.workItem;
-      if (!snapshot || snapshot.projectId !== project.id) continue;
-      const wi = snapshot as unknown as WorkItem;
-      if (wi.deletedAt != null) removes.push(wi.id);
-      else patches.push(wi);
-    }
-
-    if (patches.length === 0 && removes.length === 0) return;
-
-    // Check for new ids before batching — use the ref so we read current state.
-    const knownIds = new Set(kanbanItemsRef.current.map((i) => i.id));
-    const hasNew = patches.some((wi) => !knownIds.has(wi.id));
-
+    if (liveWorkItems.length === 0) return;
     setItems((prev) => {
       let next = prev;
-      for (const wi of patches) {
+      for (const wi of liveWorkItems) {
         const idx = next.findIndex((i) => i.id === wi.id);
+        if (wi.deletedAt != null) {
+          if (idx !== -1) next = next.filter((i) => i.id !== wi.id);
+          continue;
+        }
         if (idx === -1) {
           next = [...next, wi];
         } else if (wi.version > (next[idx]?.version ?? 0)) {
           next = [...next.slice(0, idx), wi, ...next.slice(idx + 1)];
         }
       }
-      for (const id of removes) {
-        next = next.filter((i) => i.id !== id);
-      }
       return next;
     });
-
-    if (hasNew || removes.length > 0) refetch();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events, project.id]);
+  }, [liveWorkItems]);
 
   // Slice 010 carry-forward — deleting an Area reassigns its items to
   // Uncaptured WITHOUT per-item work-item.changed facts. Refetch the work-item

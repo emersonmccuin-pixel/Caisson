@@ -41,6 +41,7 @@ import {
   replayEventsFromItems,
 } from '@/hooks/chat-session-reducer';
 import { useWsEpoch } from '@/store/ws-epoch';
+import { useLiveStore } from '@/store/live-store';
 import {
   advanceLiveCursor,
   clearLiveCursor,
@@ -257,6 +258,9 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
           if (typeof cursor === 'string') {
             advanceLiveCursor(liveCursorScopeForProject(project.id), cursor);
           }
+          // Slice 018 spike — feed the single identity-keyed live store directly
+          // from the socket, independent of the chat-timeline reducer below.
+          useLiveStore.getState().applyEnvelope(env);
         }
         // Slice 015a — gap signal: our cursor predated the pruned outbox floor,
         // so a complete replay was impossible. Drop the cursor and force a full
