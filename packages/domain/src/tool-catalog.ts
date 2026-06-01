@@ -1,5 +1,5 @@
-// Shared tool catalog — single source of truth for friendly labels +
-// descriptions of every tool an agent can be granted in its allowlist.
+// Shared tool catalog — friendly labels + descriptions of every tool an agent
+// can be granted in its allowlist.
 //
 // Two consumers:
 //   1. Web UI (17d-v2 multi-select) — renders friendly label + dim slug +
@@ -10,6 +10,13 @@
 // Entries are grouped by `source`. CC built-ins + the pc-rig server are
 // always-on. Per-pod MCP servers added by the user fall through with a
 // graceful `<slug>` rendering (no friendly name) until they're cataloged.
+//
+// Slice 016 — the `pc-rig` partition now DERIVES from PC_RIG_TOOL_REGISTRY
+// (@pc/domain tool-registry.ts): the single ordered source of every pc-rig tool.
+// Its `label` + `catalogDescription` feed each derived entry. The `cc-builtin`
+// + `mcp-server` partitions and REQUIRED_AGENT_TOOLS stay hand-authored.
+
+import { PC_RIG_TOOL_REGISTRY } from './tool-registry.ts';
 
 export type ToolCatalogSource = 'cc-builtin' | 'pc-rig' | 'mcp-server';
 
@@ -26,8 +33,9 @@ export interface ToolCatalogEntry {
   serverName?: string;
 }
 
-export const TOOL_CATALOG: ToolCatalogEntry[] = [
-  // --- CC built-ins -------------------------------------------------------
+/** Hand-authored CC built-in entries. Always-on; not part of the pc-rig
+ *  registry. `AskUserQuestion` is granted to the workflow-builder pod. */
+const CC_BUILTIN_ENTRIES: ToolCatalogEntry[] = [
   {
     slug: 'Read',
     label: 'Read files',
@@ -82,338 +90,27 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     description: 'Run a web search query.',
     source: 'cc-builtin',
   },
-
-  // --- pc-rig (PC's own MCP server) ---------------------------------------
-  {
-    slug: 'mcp__pc-rig__pc_create_work_item',
-    label: 'Create work item',
-    description: "Make a new card in one of the project's stages.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_create_agent_work_item',
-    label: 'Create agent work item',
-    description:
-      'Dispatch contract for an agent — title + task + pod + expected output shape; AC is derived.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_log_bug',
-    label: 'Log a bug',
-    description: "File a bug to the user's PC dogfood tracker.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_approve_work_item',
-    label: 'Approve agent work item',
-    description:
-      'Approve a tier-2/3 agent contract sitting in awaiting-verification — flips to complete.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_reject_work_item',
-    label: 'Reject agent work item',
-    description:
-      'Reject a tier-2/3 agent contract with feedback — wakes the agent via continuation to retry.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_move_work_item',
-    label: 'Move work item to a stage',
-    description: 'Advance / move a card to a different stage.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_update_work_item',
-    label: 'Update work item',
-    description: "Edit a card's title, body, fields, or status.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_get_work_item',
-    label: 'Read a work item',
-    description: "Fetch a card's full content + fields.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_list_work_items',
-    label: 'List work items',
-    description: "Find cards in this project by stage / parent / archive-state.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_attach_to_work_item',
-    label: 'Attach run to work item',
-    description: 'Bind the current dispatch to a specific card.',
-    source: 'pc-rig',
-  },
-  // Batch-A tool-audit remediation — pc_node_failed re-registered (was
-  // removed in 19.17 but the spawner + prompts still depended on it) + 8
-  // live tools that were never added to this catalog + AskUserQuestion (CC
-  // built-in granted to workflow-builder).
-  {
-    slug: 'mcp__pc-rig__pc_node_failed',
-    label: 'Signal node failure',
-    description: 'Signal a hard failure from a workflow agent node so the spawner closes it as agent-self-failed.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_fire_workflow',
-    label: 'Fire a workflow',
-    description: 'Trigger a workflow by slug or ULID; returns the new runId + root work item id.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_complete_node',
-    label: 'Complete review node (orchestrator)',
-    description: 'Submit an approve or reject decision for a workflow run paused at an orchestrator-review node.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_create_workflow',
-    label: 'Create a workflow',
-    description: 'Create a new v2 workflow definition (YAML or graph object) in the project.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_update_workflow',
-    label: 'Update a workflow',
-    description: 'Replace or patch an existing workflow definition by DB ULID.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_delete_workflow',
-    label: 'Delete a workflow',
-    description: 'Soft-delete a workflow by DB ULID; cancels in-flight runs when forced.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_get_workflow',
-    label: 'Read a workflow',
-    description: 'Fetch a single workflow row by DB ULID or slug.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_replace_stages',
-    label: 'Replace project stages',
-    description: "Replace the project's stage definitions in bulk (destructive — use with caution).",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_replace_field_schemas',
-    label: 'Replace field schemas',
-    description: "Replace the project's custom work-item field schemas in bulk.",
-    source: 'pc-rig',
-  },
   {
     slug: 'AskUserQuestion',
     label: 'Ask the user a question (CC built-in)',
     description: 'CC built-in: pause and surface a question to the user during a workflow-builder session.',
     source: 'cc-builtin',
   },
-  // 19.23 — v2 workflow-builder catalog additions. These four are the
-  // live MCP tools the workflow-builder pod actually uses (19.9 + 19.17).
-  {
-    slug: 'mcp__pc-rig__pc_save_workflow_draft',
-    label: 'Save workflow draft',
-    description: 'Push the in-progress draft so the visualizer renders the workflow forming.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_read_workflow_draft',
-    label: 'Read workflow draft',
-    description: 'Read the current draft back (the user can drag nodes between your turns).',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_get_stages',
-    label: 'Get project stages (v2)',
-    description: "List the project's stages for stage-on-entry triggers.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_publish_workflow',
-    label: 'Publish workflow',
-    description: 'Commit the v2 workflow to the project DB (overwrite by slug).',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_list_stages',
-    label: 'List project stages',
-    description: "List the project's stages by id + label.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_list_agents',
-    label: 'List available agents',
-    description: 'List every pod the project can dispatch.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_list_workflows',
-    label: 'List workflows',
-    description: "List the project's workflows.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_list_field_schemas',
-    label: 'List field schemas',
-    description: "List the project's per-stage card field schemas.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_list_areas',
-    label: 'List areas',
-    description: "List the project's Areas (focus buckets) + their work-item counts.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_write_claude_md',
-    label: "Write project's CLAUDE.md",
-    description: "Author or replace the project's CLAUDE.md.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_invoke_agent',
-    label: 'Dispatch another agent',
-    description: 'Spawn another pod by name with an input prompt.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_ask_orchestrator',
-    label: 'Ask the orchestrator',
-    description: 'Pause and ask the project orchestrator a question.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_ask_user',
-    label: 'Ask the user',
-    description: 'Pause and ask the human user a question (via orchestrator).',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_request_approval',
-    label: 'Request approval',
-    description: 'Pause and request explicit approval before proceeding.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_answer_pending',
-    label: 'Answer a pending ask',
-    description: 'Reply to an earlier ask-orchestrator / ask-user / approval.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_continue_agent',
-    label: 'Continue an agent run',
-    description: 'Resume a terminal AgentRun with a follow-up input.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_list_my_runs',
-    label: 'List my agent runs',
-    description: "List recent agent runs YOU dispatched (scoped to caller's session).",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_inspect_agent_run',
-    label: 'Inspect an agent run',
-    description: 'Peek a run: status, pid liveness, idle age, last action.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_kill_agent_run',
-    label: 'Kill an agent run',
-    description: 'Force-end a run — kills the OS process + finalizes the row (works on phantoms).',
-    source: 'pc-rig',
-  },
+];
 
-  // --- pc-rig: pod CRUD (17b) ---------------------------------------------
-  {
-    slug: 'mcp__pc-rig__pc_create_agent',
-    label: 'Create an agent pod',
-    description: 'Author a new agent pod row (use for fresh-design flows).',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_get_agent',
-    label: "Read an agent's config",
-    description: 'Fetch a pod bundle: prompt + knowledge + secrets + MCP.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_update_agent_prompt',
-    label: "Update an agent's prompt",
-    description: "Replace a pod's system prompt body.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_update_agent_settings',
-    label: "Update an agent's settings",
-    description: 'Change model / tools / effort / output destination etc.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_delete_agent',
-    label: 'Delete an agent pod',
-    description: 'Soft-delete a non-stock pod.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_create_knowledge',
-    label: 'Add a knowledge doc',
-    description: 'Attach a reference document to an agent.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_update_knowledge',
-    label: 'Update a knowledge doc',
-    description: "Replace a knowledge doc's content.",
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_delete_knowledge',
-    label: 'Delete a knowledge doc',
-    description: 'Remove a knowledge doc from an agent.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_knowledge_read',
-    label: 'Read a knowledge doc',
-    description: 'Runtime: pull a knowledge doc by id (worker agents).',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_create_agent_secret',
-    label: 'Add an agent secret',
-    description: 'Attach an env-var secret to an agent (plaintext v1).',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_delete_agent_secret',
-    label: 'Remove an agent secret',
-    description: 'Detach a secret env var from an agent.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_add_agent_mcp_server',
-    label: "Configure an agent's MCP server",
-    description: 'Attach a per-pod MCP server config (gmail, jira, etc.).',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_delete_agent_mcp_server',
-    label: "Remove an agent's MCP server",
-    description: 'Detach a per-pod MCP server config.',
-    source: 'pc-rig',
-  },
-  {
-    slug: 'mcp__pc-rig__pc_list_agent_audit',
-    label: "Read an agent's change history",
-    description: "Inspect a pod's audit log (who changed what, when).",
-    source: 'pc-rig',
-  },
+/** Slice 016 — the pc-rig partition DERIVED from the canonical registry, in
+ *  registry (= ListTools) order. label + catalogDescription come straight from
+ *  the registry record; the slug is the `mcp__pc-rig__` prefix + bare name. */
+const PC_RIG_ENTRIES: ToolCatalogEntry[] = PC_RIG_TOOL_REGISTRY.map((d) => ({
+  slug: `mcp__pc-rig__${d.name}`,
+  label: d.label,
+  description: d.catalogDescription,
+  source: 'pc-rig',
+}));
 
+export const TOOL_CATALOG: ToolCatalogEntry[] = [
+  ...CC_BUILTIN_ENTRIES,
+  ...PC_RIG_ENTRIES,
 ];
 
 const BY_SLUG = new Map(TOOL_CATALOG.map((e) => [e.slug, e]));
