@@ -69,7 +69,36 @@ export {
   updateWorkItemStatus,
   WorkItemVersionConflictError,
 } from './repos/work-items.ts';
-export type { CreateWorkItemInput, PatchWorkItemInput } from './repos/work-items.ts';
+export type {
+  CreateWorkItemInput,
+  PatchWorkItemInput,
+  ListWorkItemsOptions,
+  WorkItemAreaFilter,
+} from './repos/work-items.ts';
+
+// Slice 010 — Areas repo (persistence-only; app-services announces).
+export {
+  createArea,
+  createAreaInDb,
+  getArea,
+  getAreaInDb,
+  listAreas,
+  listAreasInDb,
+  patchArea,
+  patchAreaInDb,
+  reorderAreas,
+  reorderAreasInDb,
+  setWorkItemArea,
+  setWorkItemAreaInDb,
+  softDeleteArea,
+  softDeleteAreaInDb,
+} from './repos/areas.ts';
+export type {
+  AreaRow,
+  CreateAreaInput,
+  ListAreasOptions,
+  PatchAreaInput,
+} from './repos/areas.ts';
 
 export {
   createAttachment,

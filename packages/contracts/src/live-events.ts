@@ -15,7 +15,8 @@ export type LiveEventEntity =
   | 'mailbox-message'
   | 'pending-interaction'
   | 'session-title'
-  | 'pod';
+  | 'pod'
+  | 'area';
 
 /** Canonical live-event type names. Replay accepts these for `type=` filtering. */
 export type LiveEventTypeName =
@@ -33,7 +34,8 @@ export type LiveEventTypeName =
   | 'mailbox.delivery.changed'
   | 'pending-interaction.changed'
   | 'session.title.changed'
-  | 'pod.changed';
+  | 'pod.changed'
+  | 'area.changed';
 
 const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'project.changed',
@@ -51,6 +53,7 @@ const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'pending-interaction.changed',
   'session.title.changed',
   'pod.changed',
+  'area.changed',
 ];
 
 export function isLiveEventTypeName(value: unknown): value is LiveEventTypeName {
@@ -240,7 +243,8 @@ function isLiveEventEntity(value: unknown): value is LiveEventEntity {
     value === 'mailbox-message' ||
     value === 'pending-interaction' ||
     value === 'session-title' ||
-    value === 'pod'
+    value === 'pod' ||
+    value === 'area'
   );
 }
 

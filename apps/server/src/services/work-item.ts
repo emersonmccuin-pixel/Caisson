@@ -104,6 +104,8 @@ export interface CreateWorkItemServiceInput {
   verificationNotes?: string | null;
   assignedAgentRunId?: ULID | null;
   worktreePath?: string | null;
+  /** Slice 010 — Area bucket FK at create time. */
+  areaId?: ULID | null;
 }
 
 export interface PatchWorkItemServiceInput {
@@ -115,6 +117,8 @@ export interface PatchWorkItemServiceInput {
   position?: number;
   type?: WorkItemType;
   fields?: Record<string, unknown>;
+  /** Slice 010 — set/clear the Area bucket FK (null = Uncaptured). */
+  areaId?: ULID | null;
 }
 
 export interface MoveWorkItemServiceInput {
@@ -293,6 +297,7 @@ export class WorkItemService {
         ? { assignedAgentRunId: input.assignedAgentRunId }
         : {}),
       ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
+      ...(input.areaId !== undefined ? { areaId: input.areaId } : {}),
     });
     announceWorkItemRow(workItem, this.opts.projectId, 'created');
     return workItem;
@@ -325,6 +330,7 @@ export class WorkItemService {
       ...(input.position !== undefined ? { position: input.position } : {}),
       ...(input.type !== undefined ? { type: input.type } : {}),
       ...(fields !== undefined ? { fields } : {}),
+      ...(input.areaId !== undefined ? { areaId: input.areaId } : {}),
     });
     if (!patched) throw new Error(`unknown work item: ${id}`);
     announceWorkItemRow(patched, this.opts.projectId, 'patched');

@@ -73,6 +73,7 @@ import { registerRuntimeHostRoutes } from './features/runtime-host/routes.ts';
 import { registerRuntimeHostWebSocketServer } from './features/runtime-host/websocket-server.ts';
 import { registerTransientSessionRoutes } from './features/transient-sessions/routes.ts';
 import { registerWorkItemRoutes } from './features/work-items/routes.ts';
+import { registerAreaRoutes } from './features/areas/routes.ts';
 import { registerAgentRunRoutes } from './features/agent-runs/routes.ts';
 import { registerWorktreeRoutes } from './features/project-worktrees/routes.ts';
 import { registerStatuslineRoutes } from './features/statusline/routes.ts';
@@ -968,6 +969,8 @@ registerWorkItemRoutes(app, {
   channelServer,
   hostClient: agentHostClientForDispatch,
 });
+
+registerAreaRoutes(app, { resolveProject });
 
 registerWorkflowCompatRoutes(app, { resolveProject, broadcastTo });
 

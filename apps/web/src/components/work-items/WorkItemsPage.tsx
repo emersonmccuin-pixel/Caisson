@@ -15,7 +15,7 @@ import type { WorkItem } from '@/features/work-items/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useWorkItemsView, type WorkItemsSubTab } from '@/store/work-items-view';
 import { KanbanBoard } from '../KanbanBoard';
-import { DashboardPlaceholder } from './DashboardPlaceholder';
+import { FocusTab } from './FocusTab';
 import { InitiativeInspector } from './InitiativeInspector';
 import { WorkItemsSubTabs } from './WorkItemsSubTabs';
 import { WorkItemsTable } from './WorkItemsTable';
@@ -28,13 +28,17 @@ interface WorkItemsPageProps {
 export function WorkItemsPage({ project, events }: WorkItemsPageProps) {
   const tab = useWorkItemsView((s) => s.activeSubTab);
   const setTab = useWorkItemsView((s) => s.setActiveSubTab);
+  const setAreaFilter = useWorkItemsView((s) => s.setAreaFilter);
   const [inspectedItem, setInspectedItem] = useState<WorkItem | null>(null);
   const [returnTab, setReturnTab] = useState<WorkItemsSubTab>('table');
 
-  // Drop the inspector when the active project switches.
+  // Drop the inspector + reset the (persisted, project-agnostic) Area filter
+  // when the active project switches — an area id from another project would
+  // otherwise hide everything.
   useEffect(() => {
     setInspectedItem(null);
-  }, [project.id]);
+    setAreaFilter(null);
+  }, [project.id, setAreaFilter]);
 
   const openInspector = useCallback((item: WorkItem, from: WorkItemsSubTab) => {
     setReturnTab(from);
@@ -75,7 +79,7 @@ export function WorkItemsPage({ project, events }: WorkItemsPageProps) {
             onOpenInspector={(item) => openInspector(item, 'table')}
           />
         ) : (
-          <DashboardPlaceholder />
+          <FocusTab project={project} events={events} />
         )}
       </div>
     </div>
@@ -85,7 +89,7 @@ export function WorkItemsPage({ project, events }: WorkItemsPageProps) {
 function labelForSubTab(t: WorkItemsSubTab): string {
   switch (t) {
     case 'dashboard':
-      return 'Dashboard';
+      return 'Focus';
     case 'kanban':
       return 'Kanban';
     case 'table':

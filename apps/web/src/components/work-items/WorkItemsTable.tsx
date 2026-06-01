@@ -6,7 +6,9 @@
 // `is_pinned` column from 37.2 (high-collision; parked); Assignee + Tags
 // have no backing data yet.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+import { isAreaChangedLiveEventFrame } from '@pc/contracts';
 
 import type { Project } from '@/features/projects/client';
 import { type WorkItem, type WorkItemType } from '@/features/work-items/client';
@@ -14,9 +16,11 @@ import { WORK_ITEM_STATUS_DOT_CLASS, WORK_ITEM_STATUS_LABEL } from '@/features/w
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useWorkItemsView } from '@/store/work-items-view';
 import { useProjectWorkItems } from '@/hooks/use-project-work-items';
+import { useProjectAreas } from '@/hooks/use-project-areas';
 import { WorkItemDetailModal } from './WorkItemDetailModal';
 import { WorkItemsToolbar } from './WorkItemsToolbar';
-import { applyFiltersAndSort } from './filter-sort';
+import { AreaFilterRail } from './AreaFilterRail';
+import { applyFilters, applySort } from './filter-sort';
 
 interface Props {
   project: Project;
@@ -59,7 +63,8 @@ const COLUMNS: { key: string; label: string; sortBy?: SortBy; widthClass: string
 ];
 
 export function WorkItemsTable({ project, events, onOpenInspector }: Props) {
-  const { workItems: items } = useProjectWorkItems(project, events);
+  const { workItems: items, refetch } = useProjectWorkItems(project, events);
+  const { areas } = useProjectAreas(project, events);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const showAgentContracts = useWorkItemsView((s) => s.showAgentContracts);
@@ -67,18 +72,56 @@ export function WorkItemsTable({ project, events, onOpenInspector }: Props) {
   const filters = useWorkItemsView((s) => s.filters);
   const sort = useWorkItemsView((s) => s.sort);
   const setSort = useWorkItemsView((s) => s.setSort);
+  const areaFilter = useWorkItemsView((s) => s.areaFilter);
 
   const hiddenAgentCount = useMemo(
     () => items.filter((i) => i.isAgentTask).length,
     [items],
   );
 
+  // Slice 010 carry-forward — refetch on a `deleted` area frame so items that
+  // fell back to Uncaptured reconcile (no per-item work-item.changed fact).
+  const areaDeleteLastIdx = useRef(0);
+  useEffect(() => {
+    if (events.length < areaDeleteLastIdx.current) areaDeleteLastIdx.current = 0;
+    const start = areaDeleteLastIdx.current;
+    areaDeleteLastIdx.current = events.length;
+    if (start >= events.length) return;
+    for (let i = start; i < events.length; i++) {
+      const env = events[i];
+      if (
+        isAreaChangedLiveEventFrame(env) &&
+        env.event.projectId === project.id &&
+        env.event.payload.reason === 'deleted'
+      ) {
+        refetch();
+        break;
+      }
+    }
+  }, [events, project.id, refetch]);
+
   // Section 38 — "Parent items only" toggle hides child items (parentId != null).
-  const visibleItems = useMemo(() => {
+  // Slice 010 — rail counts use the visibility-filtered (but not area-filtered)
+  // list; the table applies the area filter on top.
+  const railItems = useMemo(() => {
     let base = showAgentContracts ? items : items.filter((i) => !i.isAgentTask);
     if (showTopLevelOnly) base = base.filter((i) => i.parentId == null);
-    return applyFiltersAndSort(base, filters, sort);
-  }, [items, showAgentContracts, showTopLevelOnly, filters, sort]);
+    return applyFilters(base, filters);
+  }, [items, showAgentContracts, showTopLevelOnly, filters]);
+
+  const visibleItems = useMemo(
+    () =>
+      applySort(
+        applyFilters(
+          railItems,
+          { search: '', types: [], statuses: [], updatedWithin: 'all' },
+          undefined,
+          areaFilter,
+        ),
+        sort,
+      ),
+    [railItems, areaFilter, sort],
+  );
 
   const parentById = useMemo(() => {
     const m = new Map<string, WorkItem>();
@@ -100,7 +143,9 @@ export function WorkItemsTable({ project, events, onOpenInspector }: Props) {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full">
+      <AreaFilterRail areas={areas} items={railItems} />
+      <div className="flex min-w-0 flex-1 flex-col">
       <WorkItemsToolbar hiddenAgentCount={hiddenAgentCount} />
 
       <div className="min-h-0 flex-1 overflow-auto">
@@ -223,6 +268,7 @@ export function WorkItemsTable({ project, events, onOpenInspector }: Props) {
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 }

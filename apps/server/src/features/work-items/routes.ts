@@ -78,6 +78,18 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     const runtime = deps.resolveProject(id);
     if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
     const q = c.req.query();
+    // Slice 010 — `?areaId=` filters by Area. `uncaptured` (or empty) → items
+    // with no Area; a ULID → that Area's items. Runs at the repo layer.
+    if (q.areaId !== undefined) {
+      const areaFilter = q.areaId === '' || q.areaId === 'uncaptured' ? 'uncaptured' : (q.areaId as ULID);
+      let items = dbListWorkItems(runtime.project.id, { areaId: areaFilter });
+      if (q.stage !== undefined) items = items.filter((wi) => wi.stageId === q.stage);
+      if (q.parentId !== undefined) {
+        const wanted = q.parentId === '' ? null : (q.parentId as ULID);
+        items = items.filter((wi) => (wi.parentId ?? null) === wanted);
+      }
+      return c.json({ workItems: items });
+    }
     const hasFilters =
       q.stage !== undefined ||
       q.parentId !== undefined ||
@@ -168,17 +180,22 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       fields?: Record<string, unknown>;
       body?: string;
       title?: string;
+      areaId?: string | null;
     }>();
     const wiId = typeof body.id === 'string' ? body.id.trim() : '';
     const fields = body.fields && typeof body.fields === 'object' ? body.fields : null;
     const bodyText = typeof body.body === 'string' ? body.body : undefined;
     const titleText = typeof body.title === 'string' ? body.title : undefined;
+    // Slice 010 — `areaId: null` is a meaningful value (move to Uncaptured), so
+    // discriminate "present" via hasOwnProperty rather than a truthiness check.
+    const areaIdProvided = Object.prototype.hasOwnProperty.call(body, 'areaId');
+    const areaId = areaIdProvided ? (body.areaId === null ? null : (body.areaId as ULID)) : undefined;
     if (!wiId) return c.json({ ok: false, error: 'id required' }, 400);
-    if (!fields && bodyText === undefined && titleText === undefined) {
-      return c.json({ ok: false, error: 'at least one of fields, body, or title required' }, 400);
+    if (!fields && bodyText === undefined && titleText === undefined && !areaIdProvided) {
+      return c.json({ ok: false, error: 'at least one of fields, body, title, or areaId required' }, 400);
     }
     try {
-      if (bodyText !== undefined || titleText !== undefined) {
+      if (bodyText !== undefined || titleText !== undefined || areaIdProvided) {
         const current = runtime.workItemService().get(wiId as ULID);
         if (!current) return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
         const patchInput: Parameters<ReturnType<typeof runtime.workItemService>['patch']>[1] = {
@@ -187,6 +204,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
         if (titleText !== undefined) patchInput.title = titleText;
         if (bodyText !== undefined) patchInput.body = bodyText;
         if (fields) patchInput.fields = fields;
+        if (areaId !== undefined) patchInput.areaId = areaId;
         // patch() announces internally — no separate broadcastTo call.
         const workItem = runtime.workItemService().patch(wiId as ULID, patchInput);
         return c.json({ ok: true, workItem });
@@ -213,6 +231,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       parentId?: string | null;
       type?: string;
       fields?: Record<string, unknown>;
+      areaId?: string | null;
     }>();
     const title = typeof body.title === 'string' ? body.title.trim() : '';
     const stageId = typeof body.stageId === 'string' ? body.stageId.trim() : '';
@@ -232,6 +251,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
         ...(body.parentId !== undefined ? { parentId: body.parentId as ULID | null } : {}),
         ...(typeOpt !== undefined ? { type: typeOpt } : {}),
         ...(body.fields !== undefined ? { fields: body.fields } : {}),
+        ...(body.areaId !== undefined ? { areaId: body.areaId === null ? null : (body.areaId as ULID) } : {}),
       });
       return c.json({ ok: true, workItem });
     } catch (err) {
@@ -433,6 +453,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       position?: number;
       type?: string;
       fields?: Record<string, unknown>;
+      areaId?: string | null;
     }>();
     if (typeof body.version !== 'number') {
       return c.json({ ok: false, error: 'version required' }, 400);
@@ -451,6 +472,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       if (body.position !== undefined) input.position = body.position;
       if (body.type !== undefined) input.type = body.type as WorkItemType;
       if (body.fields !== undefined) input.fields = body.fields;
+      if (body.areaId !== undefined) input.areaId = body.areaId === null ? null : (body.areaId as ULID);
       const workItem = runtime.workItemService().patch(wiId, input);
       return c.json({ ok: true, workItem });
     } catch (err) {

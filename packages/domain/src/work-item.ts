@@ -85,6 +85,8 @@ export interface WorkItem {
    *  design — they don't burn user-visible numbers. Write-once: stable
    *  across re-parenting. */
   callsign: string | null;
+  /** Slice 010 — Area bucket FK, or null for Uncaptured. */
+  areaId: ULID | null;
 }
 
 /** Append-only event log written by mutation paths in the repo + by the

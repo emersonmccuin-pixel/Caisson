@@ -20,7 +20,8 @@ export type LiveOutboxEntity =
   | 'mailbox-message'
   | 'pending-interaction'
   | 'session-title'
-  | 'pod';
+  | 'pod'
+  | 'area';
 
 export interface InsertLiveEventDraft<TPayload = unknown> {
   id?: ULID;

@@ -13,7 +13,13 @@ import { persist } from 'zustand/middleware';
 
 import type { WorkItemStatus, WorkItemType } from '@/features/work-items/client';
 
+// Slice 010 — the first sub-tab is labelled "Focus" in the UI (Area cards);
+// the internal key stays 'dashboard' so persisted view state migrates cleanly.
 export type WorkItemsSubTab = 'dashboard' | 'kanban' | 'table';
+
+// Slice 010 — left-rail Area filter applied to Kanban + Table. `null` = All
+// (no filter), 'uncaptured' = items with areaId == null, otherwise an Area id.
+export type AreaFilter = string | null | 'uncaptured';
 
 export type UpdatedWindow = 'all' | 'today' | 'week' | 'month';
 export type SortBy = 'activity' | 'created' | 'alpha';
@@ -49,6 +55,9 @@ interface WorkItemsViewState {
   setShowTopLevelOnly: (value: boolean) => void;
   activeSubTab: WorkItemsSubTab;
   setActiveSubTab: (tab: WorkItemsSubTab) => void;
+  /** Slice 010 — single-select left-rail Area filter for Kanban + Table. */
+  areaFilter: AreaFilter;
+  setAreaFilter: (filter: AreaFilter) => void;
   filters: WorkItemsFilters;
   setFilters: (patch: Partial<WorkItemsFilters>) => void;
   clearFilters: () => void;
@@ -65,6 +74,8 @@ export const useWorkItemsView = create<WorkItemsViewState>()(
       setShowTopLevelOnly: (showTopLevelOnly) => set({ showTopLevelOnly }),
       activeSubTab: 'dashboard',
       setActiveSubTab: (activeSubTab) => set({ activeSubTab }),
+      areaFilter: null,
+      setAreaFilter: (areaFilter) => set({ areaFilter }),
       filters: DEFAULT_FILTERS,
       setFilters: (patch) => set({ filters: { ...get().filters, ...patch } }),
       clearFilters: () => set({ filters: DEFAULT_FILTERS }),

@@ -59,6 +59,7 @@ export function toWorkItemDto(wi: WorkItem): WorkItemDto {
     verificationNotes: wi.verificationNotes,
     assignedAgentRunId: wi.assignedAgentRunId,
     worktreePath: wi.worktreePath,
+    areaId: wi.areaId ?? null,
   };
 }
 

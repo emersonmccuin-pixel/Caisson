@@ -5,6 +5,7 @@
 
 import type { WorkItem } from '@/features/work-items/client';
 import type {
+  AreaFilter,
   SortBy,
   SortDir,
   UpdatedWindow,
@@ -34,6 +35,7 @@ export function applyFilters(
   items: WorkItem[],
   filters: WorkItemsFilters,
   now: number = Date.now(),
+  areaFilter: AreaFilter = null,
 ): WorkItem[] {
   const search = filters.search.trim().toLowerCase();
   const since = windowStartMs(filters.updatedWithin, now);
@@ -45,8 +47,17 @@ export function applyFilters(
     if (filters.types.length > 0 && !filters.types.includes(wi.type)) return false;
     if (filters.statuses.length > 0 && !filters.statuses.includes(wi.status)) return false;
     if (since !== null && wi.updatedAt < since) return false;
+    if (!matchesAreaFilter(wi, areaFilter)) return false;
     return true;
   });
+}
+
+/** Slice 010 — left-rail Area filter. `null` = All (pass), 'uncaptured' =
+ *  areaId == null, otherwise an Area id that must match `wi.areaId`. */
+export function matchesAreaFilter(wi: WorkItem, areaFilter: AreaFilter): boolean {
+  if (areaFilter == null) return true;
+  if (areaFilter === 'uncaptured') return wi.areaId == null;
+  return wi.areaId === areaFilter;
 }
 
 export function applySort(items: WorkItem[], sort: WorkItemsSort): WorkItem[] {
@@ -72,6 +83,7 @@ export function applyFiltersAndSort(
   filters: WorkItemsFilters,
   sort: WorkItemsSort,
   now: number = Date.now(),
+  areaFilter: AreaFilter = null,
 ): WorkItem[] {
-  return applySort(applyFilters(items, filters, now), sort);
+  return applySort(applyFilters(items, filters, now, areaFilter), sort);
 }

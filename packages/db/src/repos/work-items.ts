@@ -53,6 +53,7 @@ interface WorkItemRow {
   assignedAgentRunId: ULID | null;
   worktreePath: string | null;
   callsign: string | null;
+  areaId: ULID | null;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
@@ -87,6 +88,7 @@ function toDomain(row: WorkItemRow): WorkItem {
     assignedAgentRunId: row.assignedAgentRunId,
     worktreePath: row.worktreePath,
     callsign: row.callsign,
+    areaId: row.areaId ?? null,
   };
 }
 
@@ -113,13 +115,33 @@ export interface CreateWorkItemInput {
   verificationNotes?: string | null;
   assignedAgentRunId?: ULID | null;
   worktreePath?: string | null;
+  /** Slice 010 — Area bucket FK, or null for Uncaptured. */
+  areaId?: ULID | null;
 }
 
-export function listWorkItems(projectId: ULID): WorkItem[] {
+/** Slice 010 — area filter for the work-item list. `'uncaptured'` or `null`
+ *  filters `area_id IS NULL`; a ULID filters `area_id = ?`; omit for no
+ *  area filtering. */
+export type WorkItemAreaFilter = ULID | null | 'uncaptured';
+
+export interface ListWorkItemsOptions {
+  /** Slice 010 — narrow to one Area, or to Uncaptured. */
+  areaId?: WorkItemAreaFilter;
+}
+
+export function listWorkItems(projectId: ULID, opts: ListWorkItemsOptions = {}): WorkItem[] {
+  const conditions = [eq(workItems.projectId, projectId), isNull(workItems.deletedAt)];
+  if (opts.areaId !== undefined) {
+    conditions.push(
+      opts.areaId === null || opts.areaId === 'uncaptured'
+        ? isNull(workItems.areaId)
+        : eq(workItems.areaId, opts.areaId),
+    );
+  }
   const rows = getDb()
     .select()
     .from(workItems)
-    .where(and(eq(workItems.projectId, projectId), isNull(workItems.deletedAt)))
+    .where(and(...conditions))
     .orderBy(asc(workItems.position), asc(workItems.createdAt))
     .all() as WorkItemRow[];
   return rows.map(toDomain);
@@ -252,6 +274,7 @@ export function createWorkItem(input: CreateWorkItemInput): WorkItem {
       assignedAgentRunId: input.assignedAgentRunId ?? null,
       worktreePath: input.worktreePath ?? null,
       callsign,
+      areaId: input.areaId ?? null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -400,6 +423,9 @@ export interface PatchWorkItemInput {
   /** Replaces the fields map wholesale. Callers wanting merge semantics
    *  should read first + spread. (validateFields is run at the service layer.) */
   fields?: Record<string, unknown>;
+  /** Slice 010 — set/clear the Area bucket FK. Omit to leave unchanged;
+   *  pass null to move the item to Uncaptured. */
+  areaId?: ULID | null;
 }
 
 /** Version-checked patch. Used by the WorkItemService for non-workflow mutations
@@ -421,6 +447,7 @@ export function patchWorkItem(id: ULID, input: PatchWorkItemInput): WorkItem | n
     position: input.position ?? row.position,
     type: input.type ?? row.type,
     fields: input.fields ?? row.fields,
+    areaId: input.areaId === undefined ? row.areaId : input.areaId,
     version: row.version + 1,
     updatedAt: Date.now(),
   };

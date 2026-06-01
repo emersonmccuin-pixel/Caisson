@@ -17,6 +17,10 @@ export const CREATE_WORK_ITEM_TOOL = {
         type: 'string',
         description: 'optional project id (ULID) to write the work item into a different project. When absent the work item lands in the current project (PC_PROJECT_ID). Single-user app — no ownership gate; a future multi-user pass should revisit.',
       },
+      area_id: {
+        type: 'string',
+        description: 'optional Area id (ULID) to file the work item under. Omit (or pass null) for Uncaptured. See pc_list_areas.',
+      },
     },
     required: ['title'],
   },
@@ -179,9 +183,20 @@ export const UPDATE_WORK_ITEM_TOOL = {
         description: 'fields to merge into workItem.fields (shallow merge)',
         additionalProperties: true,
       },
+      area_id: {
+        type: 'string',
+        description: 'set the work item\'s Area (ULID). Pass null to move it to Uncaptured. See pc_list_areas.',
+      },
     },
     required: ['id'],
   },
+} as const;
+
+export const LIST_AREAS_TOOL = {
+  name: 'pc_list_areas',
+  description:
+    'List the project\'s Areas — first-class buckets a work item can belong to (or none, "Uncaptured"). Use this to discover Area ids before filing/assigning a work item to an Area. Returns { areas: [{ id, name, summary, sortOrder, ... }, ...] } ordered by sortOrder. No arguments; PC_PROJECT_ID env is the implicit scope.',
+  inputSchema: { type: 'object', properties: {} },
 } as const;
 
 export const GET_WORK_ITEM_TOOL = {
@@ -263,6 +278,7 @@ export const WORK_ITEM_TOOLS = [
   UPDATE_WORK_ITEM_TOOL,
   GET_WORK_ITEM_TOOL,
   LIST_WORK_ITEMS_TOOL,
+  LIST_AREAS_TOOL,
   ATTACH_TO_WORK_ITEM_TOOL,
 ] as const;
 
@@ -301,6 +317,8 @@ export async function handleWorkItemTool(
         : '';
       const payload: Record<string, unknown> = { title };
       if (stageId) payload.stageId = stageId;
+      if (typeof args.area_id === 'string' && args.area_id.trim()) payload.areaId = args.area_id.trim();
+      else if (args.area_id === null) payload.areaId = null;
       if (bodyText !== undefined) payload.body = (bodyText + originNote).trim();
       else if (originNote) payload.body = originNote.trim();
       try {
@@ -635,12 +653,13 @@ export async function handleWorkItemTool(
       const fields = args.fields && typeof args.fields === 'object' ? args.fields : null;
       const bodyText = typeof args.body === 'string' ? args.body : undefined;
       const titleText = typeof args.title === 'string' ? args.title : undefined;
+      const areaIdProvided = typeof args.area_id === 'string' || args.area_id === null;
       if (!ref) {
         return { content: [{ type: 'text', text: 'pc_update_work_item: id required' }], isError: true };
       }
-      if (!fields && bodyText === undefined && titleText === undefined) {
+      if (!fields && bodyText === undefined && titleText === undefined && !areaIdProvided) {
         return {
-          content: [{ type: 'text', text: 'pc_update_work_item: at least one of fields, body, or title required' }],
+          content: [{ type: 'text', text: 'pc_update_work_item: at least one of fields, body, title, or area_id required' }],
           isError: true,
         };
       }
@@ -656,6 +675,8 @@ export async function handleWorkItemTool(
         if (fields) payload.fields = fields;
         if (bodyText !== undefined) payload.body = bodyText;
         if (titleText !== undefined) payload.title = titleText;
+        if (typeof args.area_id === 'string' && args.area_id.trim()) payload.areaId = args.area_id.trim();
+        else if (args.area_id === null) payload.areaId = null;
         const res = await ctx.postServer(ctx.projectPath('work-items/update'), payload);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
@@ -718,6 +739,24 @@ export async function handleWorkItemTool(
       } catch (err) {
         return {
           content: [{ type: 'text', text: `pc_list_work_items failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
+    case 'pc_list_areas': {
+      try {
+        const res = await ctx.getServer(ctx.projectPath('areas'));
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `pc_list_areas failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_list_areas failed: ${(err as Error).message}` }],
           isError: true,
         };
       }

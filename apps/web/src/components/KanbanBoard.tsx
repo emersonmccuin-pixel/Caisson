@@ -9,7 +9,7 @@
 //    + position, horizontal scroll affordance (fade + chevrons on overflow).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
+import { isAreaChangedLiveEventFrame, isWorkItemChangedLiveEventFrame } from '@pc/contracts';
 import {
   DndContext,
   DragOverlay,
@@ -41,9 +41,11 @@ function resolveCancelledHidden(
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { CreateWorkItemModal } from './work-items/CreateWorkItemModal';
 import { WorkItemDetailModal } from './work-items/WorkItemDetailModal';
+import { AreaFilterRail } from './work-items/AreaFilterRail';
 import { applyFilters } from './work-items/filter-sort';
 import { WorkItemsToolbar } from './work-items/WorkItemsToolbar';
 import { useWorkItemsView } from '@/store/work-items-view';
+import { useProjectAreas } from '@/hooks/use-project-areas';
 
 interface KanbanBoardProps {
   project: Project;
@@ -92,6 +94,11 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
   const showAgentContracts = useWorkItemsView((s) => s.showAgentContracts);
   const showTopLevelOnly = useWorkItemsView((s) => s.showTopLevelOnly);
   const filters = useWorkItemsView((s) => s.filters);
+  const areaFilter = useWorkItemsView((s) => s.areaFilter);
+  // Slice 010 — Area list for the left rail. Refetch the work-item list on any
+  // area frame too, since a deleted Area reassigns its items to Uncaptured
+  // WITHOUT per-item work-item.changed facts (carry-forward).
+  const { areas } = useProjectAreas(project, events);
 
   // Section 26.7. Agent-contract work items render only when the toggle is on.
   // Hidden rows still flow through child-count + parent lookups so non-agent
@@ -109,11 +116,19 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
   // Kanban honors drag positions inside each column, so toolbar `sort` doesn't
   // apply here — only filters. Table view (37.7) is where sort is load-bearing.
   // Section 38 — "Parent items only" toggle hides child items (parentId != null).
-  const visibleItems = useMemo(() => {
+  // Visibility-filtered (agent / top-level / toolbar) but NOT area-filtered —
+  // this is the list the rail counts against so each bucket's count reflects
+  // the same population the board would show under "All".
+  const railItems = useMemo(() => {
     let base = showAgentContracts ? items : items.filter((i) => !i.isAgentTask);
     if (showTopLevelOnly) base = base.filter((i) => i.parentId == null);
     return applyFilters(base, filters);
   }, [items, showAgentContracts, showTopLevelOnly, filters]);
+
+  const visibleItems = useMemo(
+    () => applyFilters(railItems, { search: '', types: [], statuses: [], updatedWithin: 'all' }, undefined, areaFilter),
+    [railItems, areaFilter],
+  );
 
   const refetch = useCallback(() => {
     workItemsApi.workItems(project.id)
@@ -179,6 +194,28 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
     if (hasNew || removes.length > 0) refetch();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, project.id]);
+
+  // Slice 010 carry-forward — deleting an Area reassigns its items to
+  // Uncaptured WITHOUT per-item work-item.changed facts. Refetch the work-item
+  // list on a `deleted` area frame so areaId on the affected cards reconciles.
+  const areaDeleteLastIdx = useRef(0);
+  useEffect(() => {
+    if (events.length < areaDeleteLastIdx.current) areaDeleteLastIdx.current = 0;
+    const start = areaDeleteLastIdx.current;
+    areaDeleteLastIdx.current = events.length;
+    if (start >= events.length) return;
+    for (let i = start; i < events.length; i++) {
+      const env = events[i];
+      if (
+        isAreaChangedLiveEventFrame(env) &&
+        env.event.projectId === project.id &&
+        env.event.payload.reason === 'deleted'
+      ) {
+        refetch();
+        break;
+      }
+    }
+  }, [events, project.id, refetch]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -280,7 +317,9 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className="flex h-full flex-col">
+      <div className="flex h-full">
+        <AreaFilterRail areas={areas} items={railItems} />
+        <div className="flex min-w-0 flex-1 flex-col">
         <WorkItemsToolbar hiddenAgentCount={hiddenAgentCount} />
         <div className="min-h-0 flex-1">
           <KanbanScrollContainer>
@@ -295,6 +334,7 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
               />
             ))}
           </KanbanScrollContainer>
+        </div>
         </div>
       </div>
 

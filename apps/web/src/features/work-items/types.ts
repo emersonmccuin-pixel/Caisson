@@ -71,6 +71,7 @@ export interface WorkItem {
   projectId: ULID;
   parentId: ULID | null;
   initiativeId: ULID | null;
+  areaId: ULID | null;
   position: number;
   title: string;
   body: string;
@@ -133,6 +134,7 @@ export interface WorkItemPatch {
   stageId?: string;
   parentId?: ULID | null;
   initiativeId?: ULID | null;
+  areaId?: ULID | null;
   position?: number;
   type?: WorkItemType;
   fields?: Record<string, unknown>;

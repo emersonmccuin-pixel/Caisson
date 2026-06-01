@@ -100,6 +100,7 @@ export const liveOutbox = sqliteTable(
         | 'pending-interaction'
         | 'session-title'
         | 'pod'
+        | 'area'
       >(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),
@@ -183,6 +184,8 @@ export const workItems = sqliteTable(
     assignedAgentRunId: text('assigned_agent_run_id').$type<ULID>(),
     /** Worktree path for code-writer / file-producing agents. */
     worktreePath: text('worktree_path'),
+    /** Slice 010 — Area bucket FK (no DB FK; app-enforced), null = Uncaptured. */
+    areaId: text('area_id').$type<ULID | null>(),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     deletedAt: integer('deleted_at'),
@@ -192,7 +195,34 @@ export const workItems = sqliteTable(
     index('work_items_stage_idx').on(t.projectId, t.stageId),
     /** Section 26 — fast filter for the "agent contracts" surface. */
     index('work_items_agent_task_idx').on(t.projectId, t.isAgentTask),
+    /** Slice 010 — fast filter for the Area / Uncaptured rail. */
+    index('work_items_area_idx').on(t.projectId, t.areaId),
   ],
+);
+
+/**
+ * Slice 010 — Areas. First-class, project-scoped buckets. A work item belongs
+ * to exactly one Area (`work_items.area_id`) or to none ("Uncaptured"). Manual
+ * `sort_order`, plain editable `summary`. Delete → member items fall back to
+ * Uncaptured (FK set null); the area row soft-deletes.
+ */
+export const areas = sqliteTable(
+  'areas',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    projectId: text('project_id')
+      .notNull()
+      .$type<ULID>()
+      .references(() => projects.id),
+    name: text('name').notNull(),
+    summary: text('summary').notNull().default(''),
+    sortOrder: integer('sort_order').notNull().default(0),
+    version: integer('version').notNull().default(1),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    deletedAt: integer('deleted_at'),
+  },
+  (t) => [index('areas_project_idx').on(t.projectId, t.sortOrder)],
 );
 
 /**

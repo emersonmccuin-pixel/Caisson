@@ -14,8 +14,10 @@ import remarkGfm from 'remark-gfm';
 import { isLiveEventFrame, isWorkItemChangedLiveEventFrame } from '@pc/contracts';
 
 import type { Project } from '@/features/projects/client';
+import type { Area } from '@/features/areas/client';
 import { WORK_ITEM_TYPES, WorkItemConflictError, WorkItemFieldValidationError, workItemsApi, type Attachment, type FieldSchema, type WorkItem, type WorkItemPatch, type WorkItemType } from '@/features/work-items/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
+import { useProjectAreas } from '@/hooks/use-project-areas';
 import { TypedFieldEditor } from './TypedFieldEditor';
 
 type TabId = 'overview' | 'children' | 'attachments' | 'activity';
@@ -45,6 +47,7 @@ interface Draft {
   body: string;
   stageId: string;
   type: WorkItemType;
+  areaId: string | null;
   fields: Record<string, unknown>;
 }
 
@@ -54,6 +57,7 @@ function draftFromItem(wi: WorkItem): Draft {
     body: wi.body,
     stageId: wi.stageId,
     type: wi.type ?? 'task',
+    areaId: wi.areaId ?? null,
     fields: { ...(wi.fields ?? {}) },
   };
 }
@@ -63,6 +67,7 @@ function isDirty(draft: Draft, baseline: WorkItem): boolean {
   if (draft.body !== baseline.body) return true;
   if (draft.stageId !== baseline.stageId) return true;
   if (draft.type !== (baseline.type ?? 'task')) return true;
+  if (draft.areaId !== (baseline.areaId ?? null)) return true;
   return !shallowEqualRecord(draft.fields, baseline.fields ?? {});
 }
 
@@ -114,6 +119,9 @@ export function WorkItemDetailModal({
   const [remoteChanged, setRemoteChanged] = useState<WorkItem | null>(null);
   const [fieldSchemas, setFieldSchemas] = useState<FieldSchema[]>([]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  // Slice 010 — Area dropdown options. useProjectAreas refetches on any area
+  // frame, so options stay live while the modal is open.
+  const { areas } = useProjectAreas(project, events);
 
   useEffect(() => {
     let cancelled = false;
@@ -209,6 +217,7 @@ export function WorkItemDetailModal({
       if (draft.body !== baseline.body) patch.body = draft.body;
       if (draft.stageId !== baseline.stageId) patch.stageId = draft.stageId;
       if (draft.type !== (baseline.type ?? 'task')) patch.type = draft.type;
+      if (draft.areaId !== (baseline.areaId ?? null)) patch.areaId = draft.areaId;
       if (!shallowEqualRecord(draft.fields, baseline.fields ?? {})) {
         patch.fields = draft.fields;
       }
@@ -368,6 +377,7 @@ export function WorkItemDetailModal({
               setDraft={setDraft}
               parent={parent}
               stages={stageOptions}
+              areas={areas}
               fieldSchemas={fieldSchemas}
               fieldErrors={fieldErrors}
               onSwitchToParent={() => parent && attemptSwitch(parent.id)}
@@ -521,6 +531,7 @@ function OverviewTab({
   setDraft,
   parent,
   stages,
+  areas,
   fieldSchemas,
   fieldErrors,
   onSwitchToParent,
@@ -530,10 +541,15 @@ function OverviewTab({
   setDraft: (next: Draft | ((p: Draft) => Draft)) => void;
   parent: WorkItem | null;
   stages: { id: string; name: string }[];
+  areas: Area[];
   fieldSchemas: FieldSchema[];
   fieldErrors: Record<string, string>;
   onSwitchToParent: () => void;
 }) {
+  const sortedAreas = useMemo(
+    () => [...areas].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
+    [areas],
+  );
   const orderedSchemas = useMemo(
     () => [...fieldSchemas].sort((a, b) => a.order - b.order || a.key.localeCompare(b.key)),
     [fieldSchemas],
@@ -585,6 +601,22 @@ function OverviewTab({
               — (top-level)
             </div>
           )}
+        </Field>
+        <Field label="Area">
+          <select
+            value={draft.areaId ?? ''}
+            onChange={(e) =>
+              setDraft((p) => ({ ...p, areaId: e.target.value === '' ? null : e.target.value }))
+            }
+            className="w-full border border-border bg-background px-2 py-1 text-sm"
+          >
+            <option value="">none (Uncaptured)</option>
+            {sortedAreas.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
         </Field>
       </div>
 

@@ -56,6 +56,8 @@ export interface WorkItemDto {
   verificationNotes: string | null;
   assignedAgentRunId: ULID | null;
   worktreePath: string | null;
+  /** Slice 010 — Area bucket FK, or null for Uncaptured. */
+  areaId: ULID | null;
 }
 
 /** Reasons a work item changed durably. `verified`/`approved`/`rejected`/
@@ -115,6 +117,8 @@ export interface CreateWorkItemRequest {
   position?: number;
   type?: WorkItemType;
   fields?: Record<string, unknown>;
+  /** Slice 010 — Area bucket FK, or null for Uncaptured. */
+  areaId?: ULID | null;
 }
 
 export interface PatchWorkItemRequest {
@@ -126,6 +130,8 @@ export interface PatchWorkItemRequest {
   position?: number;
   type?: WorkItemType;
   fields?: Record<string, unknown>;
+  /** Slice 010 — Area bucket FK, or null for Uncaptured. */
+  areaId?: ULID | null;
 }
 
 export interface MoveWorkItemRequest {
@@ -187,7 +193,8 @@ export function isWorkItemDto(value: unknown): value is WorkItemDto {
     typeof value.isWorkflowRoot === 'boolean' &&
     typeof value.ephemeral === 'boolean' &&
     (value.assignedAgentRunId === null || typeof value.assignedAgentRunId === 'string') &&
-    (value.worktreePath === null || typeof value.worktreePath === 'string')
+    (value.worktreePath === null || typeof value.worktreePath === 'string') &&
+    (value.areaId === null || typeof value.areaId === 'string')
   );
 }
 
@@ -201,6 +208,9 @@ export function parseCreateWorkItemRequest(input: unknown): ParseResult<CreateWo
   if (typeof input.body === 'string') request.body = input.body;
   if (input.parentId !== undefined) {
     request.parentId = input.parentId === null ? null : String(input.parentId);
+  }
+  if (input.areaId !== undefined) {
+    request.areaId = input.areaId === null ? null : String(input.areaId);
   }
   if (typeof input.position === 'number') request.position = input.position;
   if (input.type !== undefined) {
@@ -223,6 +233,9 @@ export function parsePatchWorkItemRequest(input: unknown): ParseResult<PatchWork
   if (typeof input.stageId === 'string') request.stageId = input.stageId;
   if (input.parentId !== undefined) {
     request.parentId = input.parentId === null ? null : String(input.parentId);
+  }
+  if (input.areaId !== undefined) {
+    request.areaId = input.areaId === null ? null : String(input.areaId);
   }
   if (typeof input.position === 'number') request.position = input.position;
   if (input.type !== undefined) {

@@ -15,6 +15,7 @@ import remarkGfm from 'remark-gfm';
 import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
 
 import type { Project, Stage } from '@/features/projects/client';
+import { useProjectAreas } from '@/hooks/use-project-areas';
 import { WorkItemConflictError, workItemsApi, type Attachment, type WorkItem, type WorkItemStatus, type WorkItemType } from '@/features/work-items/client';
 import {
   WORK_ITEM_STATUS_GLYPH,
@@ -63,6 +64,7 @@ export function InitiativeInspector({
   const phaseLabel = derivePhaseLabel(stage, workItem);
   const pushPrefill = useChatComposerPrefill((s) => s.push);
   const setCenterTab = useActiveCenterTab((s) => s.setTab);
+  const { areas } = useProjectAreas(project, events);
 
   const chatAboutThis = useCallback(() => {
     // Pre-fill format: `[About: <title>] ` — the bracketed prefix is a
@@ -108,6 +110,12 @@ export function InitiativeInspector({
         <span className="border border-border/40 px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-secondary">
           {phaseLabel}
         </span>
+        <AreaSelect
+          project={project}
+          workItem={workItem}
+          areas={areas}
+          onPatched={onWorkItemPatched}
+        />
         <div className="flex-1" />
         <div className="flex items-center gap-1.5">
           <HeaderButton title="Pin (coming in 37.15)" disabled>
@@ -172,6 +180,65 @@ export function InitiativeInspector({
         )}
       </div>
     </div>
+  );
+}
+
+/** Slice 010 — inline Area dropdown in the inspector header. PATCHes the work
+ *  item's areaId immediately on change (`''` clears to Uncaptured). */
+function AreaSelect({
+  project,
+  workItem,
+  areas,
+  onPatched,
+}: {
+  project: Project;
+  workItem: WorkItem;
+  areas: { id: string; name: string; sortOrder: number }[];
+  onPatched: (next: WorkItem) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const sorted = useMemo(
+    () => [...areas].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
+    [areas],
+  );
+
+  async function change(value: string) {
+    const areaId = value === '' ? null : value;
+    if (areaId === (workItem.areaId ?? null) || saving) return;
+    setSaving(true);
+    try {
+      const next = await workItemsApi.patchWorkItem(
+        project.id,
+        workItem.id,
+        workItem.version,
+        { areaId },
+      );
+      onPatched(next);
+    } catch (e) {
+      if (e instanceof WorkItemConflictError) onPatched(e.current);
+      // else: swallow — the select snaps back to workItem.areaId on re-render.
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.08em] text-[var(--fg-dim)]">
+      Area
+      <select
+        value={workItem.areaId ?? ''}
+        disabled={saving}
+        onChange={(e) => void change(e.target.value)}
+        className="border border-border/40 bg-background px-1.5 py-0.5 text-[11px] normal-case tracking-normal text-foreground disabled:opacity-50"
+      >
+        <option value="">none</option>
+        {sorted.map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.name}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

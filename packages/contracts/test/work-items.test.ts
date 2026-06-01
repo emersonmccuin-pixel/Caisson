@@ -54,6 +54,7 @@ const workItem: WorkItemDto = {
   verificationNotes: null,
   assignedAgentRunId: null,
   worktreePath: null,
+  areaId: null,
 };
 
 const attachment: AttachmentDto = {
