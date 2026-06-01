@@ -282,11 +282,12 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
           if (typeof cursor === 'string') {
             advanceLiveCursor(liveCursorScopeForProject(pid), cursor);
           }
-          // Slice 018 — feed the single identity-keyed live store directly from
-          // the socket, independent of the chat-timeline reducer below. Every
-          // resource view reads the store; the chat-timeline retention of these
-          // frames is the reconcile-first fallback, removed once verified.
+          // Slice 018 / T3.3 — feed the single identity-keyed live store from the
+          // socket, then STOP. The store is the SOLE live path for relay frames;
+          // they never reach the chat-timeline reducer. Every resource view reads
+          // the store (T3.1/T3.2/T3.2b/T3.2c migrated all consumers).
           useLiveStore.getState().applyEnvelope(env);
+          return;
         }
         // Slice 015a — gap signal: our cursor predated the pruned outbox floor,
         // so a complete replay was impossible. Drop the cursor and force a full

@@ -1,5 +1,3 @@
-import { isLiveEventFrame } from '@pc/contracts';
-
 import type { SessionReplayItem, SessionTransitionResponse } from '@/features/runtime/client';
 import {
   isProjectChangedLiveEventFrame,
@@ -195,13 +193,11 @@ function applyEnvelope(
     state.projectId &&
     env.projectId !== state.projectId &&
     !isProjectChangedRefetchEnvelope(env) &&
-    !isProjectChangedLiveEventFrame(env) &&
-    // Slice 015b — relay-delivered `live-event` frames carry their scope in
-    // `event.projectId` (no top-level `projectId`). Keep any frame for this
-    // project (or a global-scope frame) in the timeline so the resource-list
-    // hooks can consume it; reject another project's rows.
-    !(isLiveEventFrame(env) &&
-      (env.event.projectId === null || env.event.projectId === state.projectId))
+    !isProjectChangedLiveEventFrame(env)
+    // T3.3 — generic relay `live-event` frames are early-returned in the WS
+    // handler and never reach the reducer; the store is their sole path. A
+    // frame that somehow leaks here is now correctly REJECTED (not timelined).
+    // The project.changed refetch forms above are a separate (non-store) signal.
   ) {
     return state;
   }
@@ -534,20 +530,11 @@ function shouldPreserveUnsequencedAcrossSnapshot(
 }
 
 function shouldPreserveProjectEventAcrossSessionReset(env: WsEnvelope): boolean {
-  if (
-    env.type === 'event' ||
-    env.type === 'jsonl' ||
-    env.type === 'raw' ||
-    env.type === 'state' ||
-    env.type === 'turn-end' ||
-    env.type === 'exit' ||
-    env.type === 'send-ack' ||
-    env.type === 'send-queue-snapshot' ||
-    env.type === 'runtime-state'
-  ) {
-    return false;
-  }
-  return true;
+  // T3.3 — explicit allow-set (was a deny-list that retained "everything else").
+  // Only the project.changed refetch signal must survive a session reset; generic
+  // relay `live-event` frames no longer reach the reducer (early-returned to the
+  // store), and every chat/runtime envelope is session-scoped (dropped on reset).
+  return env.type === 'project.changed' || isProjectChangedLiveEventFrame(env);
 }
 
 function insertSequencedTimelineEntry(
