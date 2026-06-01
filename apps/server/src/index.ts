@@ -100,7 +100,6 @@ import { resetStockPodToDefault } from './services/stock-pod-reset.ts';
 import { detectStockPodDrift, listCanonicalStockPodNames } from './services/pod-drift.ts';
 import { seedStockPods } from './services/stock-pod-seed.ts';
 import { reattachAgentRunsDuringServerBoot } from './services/agent-run-server-boot.ts';
-import type { AgentHostReattachClient } from './services/agent-host-reattach.ts';
 import { reconcileAgentRunsAgainstHost } from './services/agent-host-reattach.ts';
 import { sweepAgentRunLiveness } from './services/agent-run-liveness-sweep.ts';
 import { getActiveRunRegistry } from './services/agent-active-runs.ts';
@@ -254,13 +253,19 @@ const projectScaffold = new ProjectScaffold({
   channelPort: CHANNEL_PORT,
 });
 
-let agentHostClientForDispatch: AgentHostReattachClient | null = null;
+// T1.2 — host-mode discriminator. After D1, boot reattach runs on `hostConnection`
+// and `result.mode === 'host'` is the authoritative host-mode signal that gates
+// the reconcile + liveness sweeps (one reconciler owns non-terminal rows). NOT
+// `hostConnection.isConnected()` — the always-on host may be mid-respawn
+// (disconnected) while still in host-mode.
+let hostMode = false;
 
 // T1.1 — the one long-lived HostConnection for the DISPATCH path. Lock-file is
 // the sole source of host identity; `sendCommand` re-discovers + reconnects on a
 // dead baseUrl, so a host respawn on a new port is picked up with NO API restart
-// (kills T1-A). Built BESIDE the boot-reattach/sweep `agentHostClientForDispatch`
-// (reconcile-first; those migrate in T1.2/T2.3). Health transitions write the
+// (kills T1-A). T1.2 — ALL live host consumers (sweep, mcp-bridge, ProjectRegistry
+// → factory/spawner, boot reattach) now ride this ONE conduit + its multiplexed
+// event stream; the frozen per-boot client is gone. Health transitions write the
 // durable global `host-health` live-event consumed by the UI pill.
 const hostConnection = createHostConnection({ dataDir: DATA });
 hostConnection.onHealthChange((h) => announceHostHealth(toHostHealthSnapshot(h)));
@@ -287,7 +292,7 @@ const projectRegistry = new ProjectRegistry({
   trunkPath: ROOT,
   serverPort: PORT,
   channelPort: CHANNEL_PORT,
-  getHostClient: () => agentHostClientForDispatch,
+  getHostClient: () => hostConnection,
   broadcastFor: (projectId) => (event) => broadcastTo(projectId, event),
   // Slice 008 — workflow-review cutover seam (friction #1). The closure runs at
   // workflow-fire time (post-boot), so it safely references the mailbox bindings
@@ -441,19 +446,23 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
   return mailboxService.enqueue(input);
 }
 
-// Boot-time agent-run reconciliation. Phase C can reattach through an
-// already-connected host client; until Phase D supplies that client, this
-// preserves the legacy idempotent orphan sweep.
+// Boot-time agent-run reconciliation. T1.2 (D1) — boot reattach now consumes the
+// ONE `hostConnection`: refresh its run cache FIRST (it connects lazily + the
+// sync reattach enumeration reads `listRuns()`), then pass `getHostClient: () =>
+// hostConnection` so reattach's persistent `onEvent` rides the shared multiplexed
+// emitter (truly one stream). `mode === 'host'` is the host-mode discriminator.
 {
   try {
+    await hostConnection.refreshRuns().catch(() => {});
     const result = await reattachAgentRunsDuringServerBoot({
+      getHostClient: () => hostConnection,
       broadcast: broadcastTo,
       channelServer,
       deliveryRouter,
       mailboxEnqueue: enqueueMailboxAndFanout,
     });
     if (result.mode === 'host') {
-      agentHostClientForDispatch = result.hostClient;
+      hostMode = true;
       const reattach = result.reattach;
       const changed =
         reattach.reconcile.reconciled +
@@ -513,15 +522,15 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
 // no-ops when there's no out-of-process host.
 const AGENT_RUN_RECONCILE_SWEEP_MS = 15_000;
 const agentRunReconcileSweep = setInterval(() => {
-  const client = agentHostClientForDispatch;
-  if (!client) return;
+  if (!hostMode) return;
   void (async () => {
     try {
-      // Pull fresh host snapshots (updates the client's run cache), then
-      // reconcile non-terminal DB rows against them.
-      await client.sendCommand({ type: 'list-runs' });
+      // T1.2 — pull fresh host snapshots through the ONE self-healing
+      // `hostConnection` (re-discovers a respawned host on a new port; no API
+      // restart), then reconcile non-terminal DB rows against them.
+      await hostConnection.refreshRuns();
       const res = reconcileAgentRunsAgainstHost({
-        hostClient: client,
+        hostClient: hostConnection,
         activeRunRegistry: getActiveRunRegistry(),
         broadcast: broadcastTo,
         channelServer,
@@ -550,7 +559,7 @@ if (typeof agentRunReconcileSweep.unref === 'function') agentRunReconcileSweep.u
 // a phantom "running" row self-clears within a tick instead of at next restart.
 const AGENT_RUN_LIVENESS_SWEEP_MS = 30_000;
 const agentRunLivenessSweep = setInterval(() => {
-  if (agentHostClientForDispatch) return; // host-mode owns reconciliation
+  if (hostMode) return; // host-mode owns reconciliation (reconcile sweep)
   try {
     const res = sweepAgentRunLiveness({
       activeRunRegistry: getActiveRunRegistry(),
@@ -585,7 +594,7 @@ function resolveProject(projectId: string): ProjectRuntime | null {
 registerMcpBridgeRoutes(app, {
   dataDir: DATA,
   resolveProject,
-  getHostClient: () => agentHostClientForDispatch,
+  getHostClient: () => hostConnection,
 });
 
 // ── Slice 007 — mailbox platform (additive; alongside Channel, no cutover) ──
