@@ -73,8 +73,9 @@ export function SessionsRail({
     };
   }, [project?.id]);
 
-  // Refetch when the chat fires a session-changed (new / resume) or
-  // session-title-updated envelope so the row's title + ordering stay live.
+  // Refetch when the chat fires a session-changed (new / resume) or the
+  // canonical session.title.changed relay frame so the row's title + ordering
+  // stay live.
   useEffect(() => {
     if (!project) return;
     const last = [...events].reverse().find(

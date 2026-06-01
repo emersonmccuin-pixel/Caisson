@@ -40,17 +40,6 @@ export interface WorkflowDefinitionChangedLivePayload {
   workflowId?: string;
 }
 
-/** Legacy compatibility projection broadcast under the websocket name
- *  `workflow-changed`. The server already emits this shape; canonical events
- *  are additive. */
-export interface WorkflowChangedRefetchEnvelope {
-  type: 'workflow-changed';
-  scope: WorkflowScope;
-  projectId: ULID | null;
-  change: WorkflowDefinitionChange;
-  definition?: WorkflowDefinitionDto;
-  workflowId?: string;
-}
 
 export type WorkflowDefinitionChangedLiveEvent = LiveEvent<WorkflowDefinitionChangedLivePayload> & {
   type: 'workflow.definition.changed';
@@ -115,37 +104,6 @@ export function isWorkflowDefinitionChangedLiveEventFrame(
   value: unknown,
 ): value is WorkflowDefinitionChangedLiveEventFrame {
   return isLiveEventFrame(value) && isWorkflowDefinitionChangedLiveEvent(value.event);
-}
-
-export function buildWorkflowChangedRefetchEnvelope(input: {
-  scope: WorkflowScope;
-  projectId: ULID | null;
-  change: WorkflowDefinitionChange;
-  definition?: WorkflowDefinitionDto;
-  workflowId?: string;
-}): WorkflowChangedRefetchEnvelope {
-  const out: WorkflowChangedRefetchEnvelope = {
-    type: 'workflow-changed',
-    scope: input.scope,
-    projectId: input.projectId,
-    change: input.change,
-  };
-  if (input.definition !== undefined) out.definition = input.definition;
-  if (input.workflowId !== undefined) out.workflowId = input.workflowId;
-  return out;
-}
-
-/** Build the legacy `workflow-changed` envelope from a canonical event. */
-export function toWorkflowChangedRefetchEnvelope(
-  event: WorkflowDefinitionChangedLiveEvent,
-): WorkflowChangedRefetchEnvelope {
-  return buildWorkflowChangedRefetchEnvelope({
-    scope: event.scope as WorkflowScope,
-    projectId: event.projectId,
-    change: event.payload.change,
-    ...(event.payload.definition !== undefined ? { definition: event.payload.definition } : {}),
-    ...(event.payload.workflowId !== undefined ? { workflowId: event.payload.workflowId } : {}),
-  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

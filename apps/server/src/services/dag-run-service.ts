@@ -717,14 +717,12 @@ export function makeExecutorDeps(
       });
     },
     isCancelled: () => workflowRunsV2Repo.getRun(run.id)?.status === 'cancelled',
-    holdForHuman: (nodeId, reason) => {
-      opts.broadcast({
-        type: 'workflow-v2-human-hold',
-        projectId: opts.projectId,
-        runId: run.id,
-        nodeId,
-        reason,
-      });
+    holdForHuman: (_nodeId, _reason) => {
+      // Slice 015c — the legacy `workflow-v2-human-hold` envelope is deleted: it
+      // had no web consumer, and the durable fact (the run advancing to `failed`
+      // on the iteration-ceiling path) already rides the relay's
+      // `workflow.run.changed` frame, with the `iteration_ceiling_hit` event
+      // appended to the run log for audit. Nothing else to deliver.
     },
   };
 }

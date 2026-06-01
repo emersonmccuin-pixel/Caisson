@@ -861,13 +861,13 @@ registerProjectRoutes(app, {
   refreshProject: (project) => projectRegistry.refresh(project as unknown as Project),
   removeProject: (projectId) => projectRegistry.remove(projectId),
   resolveProject,
-  publishProjectChanged: (legacyEvent, _liveEvent) => {
-    // Slice 015b — the relay delivers the canonical `project.changed` frame.
-    // The mutation gateways write the global-scope outbox row in-txn
-    // (`projects.ts` `projectChanged(...)`); the relay's global `broadcastAll`
-    // fans the identical frame to every socket on its drain tick. No hand
-    // frame-fanout here. The legacy refetch envelope stays until 015c.
-    broadcastAll(legacyEvent);
+  publishProjectChanged: (_legacyEvent, _liveEvent) => {
+    // Slice 015c — fully relay-delivered. The mutation gateways write the
+    // global-scope `project.changed` outbox row in-txn (`projects.ts`
+    // `projectChanged(...)`); the relay's global `broadcastAll` fans the
+    // canonical frame to every socket on its drain tick, which the web's
+    // project-changed scanner already treats as a refetch trigger. Both the
+    // hand frame-fanout (015b) AND the legacy refetch envelope (here) are gone.
   },
 });
 

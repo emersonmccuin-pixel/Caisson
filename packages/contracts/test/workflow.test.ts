@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 
 import {
   buildLiveEventFrame,
-  buildWorkflowChangedRefetchEnvelope,
   buildWorkflowRunChangedRefetchEnvelope,
   isWorkflowDefinitionChangedLiveEvent,
   isWorkflowDefinitionChangedLiveEventFrame,
@@ -14,8 +13,6 @@ import {
   isWorkflowRunDto,
   parseFireWorkflowRequest,
   parseWorkflowReviewRequest,
-  toWorkflowChangedRefetchEnvelope,
-  toWorkflowReviewPendingRefetchEnvelope,
   toWorkflowRunChangedRefetchEnvelope,
   type WorkflowDefinitionChangedLiveEvent,
   type WorkflowDefinitionDto,
@@ -153,41 +150,6 @@ test('run event adapts to legacy workflow-v2-run-changed (null without snapshot)
     null,
   );
   assert.deepEqual(buildWorkflowRunChangedRefetchEnvelope({ projectId: 'p1', run }).type, 'workflow-v2-run-changed');
-});
-
-test('review event adapts to legacy workflow-v2-review-pending only when pending', () => {
-  assert.deepEqual(toWorkflowReviewPendingRefetchEnvelope(reviewChangedEvent()), {
-    type: 'workflow-v2-review-pending',
-    projectId: 'p1',
-    runId: 'r1',
-    nodeId: 'n1',
-    flavor: 'human',
-    prompt: 'check',
-  });
-  assert.equal(
-    toWorkflowReviewPendingRefetchEnvelope(
-      reviewChangedEvent({ payload: { runId: 'r1', nodeId: 'n1', flavor: 'human', state: 'approved' } }),
-    ),
-    null,
-  );
-});
-
-test('definition event adapts to legacy workflow-changed', () => {
-  assert.deepEqual(toWorkflowChangedRefetchEnvelope(definitionChangedEvent()), {
-    type: 'workflow-changed',
-    scope: 'project',
-    projectId: 'p1',
-    change: 'updated',
-    definition,
-  });
-  const del = buildWorkflowChangedRefetchEnvelope({
-    scope: 'global',
-    projectId: null,
-    change: 'deleted',
-    workflowId: 'wf1',
-  });
-  assert.equal(del.type, 'workflow-changed');
-  assert.equal(del.workflowId, 'wf1');
 });
 
 test('fire + review request parsers validate input', () => {

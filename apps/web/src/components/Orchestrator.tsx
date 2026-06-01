@@ -270,7 +270,7 @@ export function Orchestrator({
   }, [viewingSessionId, project.id]);
 
   // Active session. Fetched once per project, then patched live from WS
-  // session-changed (new-session / resume) + session-title-updated.
+  // session-changed (new-session / resume) + session.title.changed relay frame.
   const [session, setSession] = useState<OrchestratorSession | null>(null);
   const [runtimeSnapshot, setRuntimeSnapshot] =
     useState<OrchestratorRuntimeSnapshot | null>(null);

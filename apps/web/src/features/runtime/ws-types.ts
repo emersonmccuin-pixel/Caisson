@@ -143,41 +143,6 @@ export interface ApprovalRequiredEvent extends ChatEventBase {
   on_reject_prompt?: string;
 }
 
-/** UI Spine step 3 — versioned full-snapshot delta for the project's stages set.
- *  Every stage in the array carries `rev` (stamped from the project's stagesRev
- *  counter). The frontend store-slice discards the batch if the incoming
- *  stage rev ≤ the stored rev for any stage in the map (all stages in a batch
- *  share the same rev, so one check suffices). */
-export interface StagesChangedEnvelope extends WsEnvelope {
-  type: 'stages-changed';
-  projectId: string;
-  stages: Array<{
-    id: string;
-    name: string;
-    order: number;
-    rev?: number;
-    [k: string]: unknown;
-  }>;
-}
-
-/** UI Spine step 3 — versioned full-snapshot delta for a single work item.
- *  Replaces the dumb `work-items-changed` list-refetch signal.
- *  The `workItem` object carries `version`; the frontend discards any incoming
- *  message where `workItem.version <= stored.version` to handle out-of-order
- *  or duplicate WS delivery. */
-export interface WorkItemChangedEnvelope extends WsEnvelope {
-  type: 'work-item-changed';
-  projectId: string;
-  workItem: {
-    id: string;
-    projectId: string;
-    stageId: string;
-    version: number;
-    deletedAt: number | null;
-    [k: string]: unknown;
-  };
-}
-
 /** Section 4e.3 - per-project envelope fired by `persistAndBroadcast` on
  *  every workflow_runs mutation. Carries the minimum shape needed to drive
  *  the WorkflowDrawer's live-tick without forcing a full refetch. The drawer

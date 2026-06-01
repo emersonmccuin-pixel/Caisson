@@ -3,13 +3,15 @@
 // EVERY mutation of a workflow_runs_v2 row MUST go through a function here.
 // Slice 004: each function now routes through the WorkflowRunMutationGateway,
 // which writes the repo change + a durable live_outbox row in ONE transaction.
-// After commit we fan out BOTH the canonical {type:'live-event'} frame (new
-// clients) and the legacy `workflow-v2-run-changed` envelope (compat) via the
-// supplied `broadcast`. "Forgetting to announce" stays structurally impossible.
+// Slice 015c: the live-relay drains that committed outbox row post-commit and
+// fans the canonical `live-event` frame to subscribers. Both the hand live-frame
+// fanout (removed in 015b) AND the legacy `workflow-v2-run-changed` envelope
+// (removed here — no live web consumer; the web reads the relay frame by
+// `event.entity`) are GONE. "Forgetting to announce" stays structurally
+// impossible (the outbox row is in the gateway txn).
 //
-// The `broadcast` callback is `(event: unknown) => void` scoped to a single
-// project — callers typically pass `opts.broadcast` from DagRunServiceOptions
-// or a `broadcastTo(projectId, ...)` lambda.
+// The `broadcast` callback is kept on the signatures for caller compatibility,
+// but is now unused for run changes (delivery is door-only).
 
 import type { ULID, WorkflowV2 } from '@pc/domain';
 import { workflowRunsV2Repo, type WorkflowRunV2Record } from '@pc/db';
@@ -18,7 +20,6 @@ import {
   type WorkflowRunChangedPublication,
 } from '@pc/app-services';
 import {
-  buildWorkflowRunChangedRefetchEnvelope,
   type WorkflowRunChangedReason,
 } from '@pc/contracts';
 
@@ -42,16 +43,12 @@ function reasonForStatus(status: WorkflowV2.WorkflowRunStatus): WorkflowRunChang
   }
 }
 
-/** Fan out a gateway publication. Slice 015b: the canonical `live-event` frame
- *  is now delivered by the live-relay draining the in-txn `live_outbox` row —
- *  the hand frame fanout is GONE (the web consumes the relay frame by
- *  `event.entity`). The legacy `workflow-v2-run-changed` envelope stays for the
- *  drawer / other consumers until slice 015c retires it. */
-function fanout(pub: WorkflowRunChangedPublication | null, broadcast: RunBroadcast): void {
-  if (!pub) return;
-  broadcast(
-    buildWorkflowRunChangedRefetchEnvelope({ projectId: pub.run.projectId, run: pub.run }),
-  );
+/** Slice 015c — no-op. The canonical `live-event` frame is delivered by the
+ *  live-relay draining the in-txn `live_outbox` row; the legacy
+ *  `workflow-v2-run-changed` envelope is retired (no live web consumer). Kept as
+ *  a seam so the announcing-write callers stay structurally identical. */
+function fanout(_pub: WorkflowRunChangedPublication | null, _broadcast: RunBroadcast): void {
+  /* relay-delivered; no hand fanout */
 }
 
 /** Read the full row and broadcast a versioned snapshot. No-ops if the row

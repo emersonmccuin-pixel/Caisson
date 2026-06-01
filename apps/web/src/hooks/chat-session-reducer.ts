@@ -162,8 +162,6 @@ function applyEnvelope(
       });
     case 'raw':
       return appendTerminalRaw(state, env);
-    case 'session-title-updated':
-      return applySessionMetadata(state, env);
     default:
       return applyDelta(state, env);
   }
@@ -349,28 +347,6 @@ function applySessionChanged(
     },
     env,
     (candidate) => candidate.type === 'session-changed',
-  );
-}
-
-function applySessionMetadata(
-  state: ChatSessionReducerState,
-  env: WsEnvelope,
-): ChatSessionReducerState {
-  const sessionId = sessionIdFromSessionEnvelope(env);
-  if (
-    state.activeSessionId &&
-    sessionId &&
-    sessionId !== state.activeSessionId
-  ) {
-    return state;
-  }
-  return appendUnsequenced(
-    {
-      ...state,
-      activeSessionId: state.activeSessionId ?? sessionId,
-    },
-    env,
-    (candidate) => candidate.type === env.type,
   );
 }
 

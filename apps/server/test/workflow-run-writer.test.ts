@@ -2,9 +2,9 @@
 //
 // `writeRunStatus` / `announceRun` write the durable `workflow.run.changed` fact
 // to the live outbox in-txn (the live-relay drains + delivers the canonical
-// frame). The hand `live-event` frame fanout is GONE; the legacy
-// `workflow-v2-run-changed` envelope STAYS (retired by 015c) for the drawer /
-// other consumers.
+// frame). Slice 015c: BOTH the hand `live-event` frame fanout AND the legacy
+// `workflow-v2-run-changed` envelope are GONE — delivery is door-only, so the
+// broadcast sink stays empty.
 
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -56,7 +56,7 @@ function seedRun(projectId: ULID) {
   });
 }
 
-test('writeRunStatus writes the outbox fact (full run snapshot) + legacy envelope, NO hand frame', () => {
+test('writeRunStatus writes the outbox fact (full run snapshot), NO hand broadcast', () => {
   const projectId = seedProject();
   const run = seedRun(projectId);
   const before = getLiveEventHighWater() ?? '0';
@@ -81,11 +81,9 @@ test('writeRunStatus writes the outbox fact (full run snapshot) + legacy envelop
     0,
     'hand live-event frame must be gone',
   );
-  // Legacy envelope still emitted (retired in 015c).
-  assert.ok(
-    broadcasts.some((b) => (b as { type?: string }).type === 'workflow-v2-run-changed'),
-    'legacy workflow-v2-run-changed envelope still emitted',
-  );
+  // Slice 015c — the legacy `workflow-v2-run-changed` envelope is retired; the
+  // broadcast sink stays empty (delivery is door-only).
+  assert.equal(broadcasts.length, 0, 'no hand broadcast — relay delivers from the outbox');
 });
 
 test('announceRun on a missing run emits nothing and writes no outbox row', () => {

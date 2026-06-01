@@ -193,16 +193,6 @@ export interface WorkflowRunChangedRefetchEnvelope {
   run: WorkflowRunDto;
 }
 
-/** Legacy `workflow-v2-review-pending` envelope. */
-export interface WorkflowReviewPendingRefetchEnvelope {
-  type: 'workflow-v2-review-pending';
-  projectId: ULID;
-  runId: string;
-  nodeId: string;
-  flavor: WorkflowReviewFlavor;
-  prompt: string | null;
-}
-
 // ── Guards ───────────────────────────────────────────────────────────────────
 
 export function isWorkflowRunStatus(value: unknown): value is WorkflowRunStatus {
@@ -313,23 +303,6 @@ export function buildWorkflowRunChangedRefetchEnvelope(input: {
   return { type: 'workflow-v2-run-changed', projectId: input.projectId, run: input.run };
 }
 
-export function buildWorkflowReviewPendingRefetchEnvelope(input: {
-  projectId: ULID;
-  runId: string;
-  nodeId: string;
-  flavor: WorkflowReviewFlavor;
-  prompt: string | null;
-}): WorkflowReviewPendingRefetchEnvelope {
-  return {
-    type: 'workflow-v2-review-pending',
-    projectId: input.projectId,
-    runId: input.runId,
-    nodeId: input.nodeId,
-    flavor: input.flavor,
-    prompt: input.prompt,
-  };
-}
-
 /** Legacy `workflow-v2-run-changed` from a canonical run event. Returns null
  *  when the payload carries no run snapshot. */
 export function toWorkflowRunChangedRefetchEnvelope(
@@ -339,22 +312,6 @@ export function toWorkflowRunChangedRefetchEnvelope(
   return buildWorkflowRunChangedRefetchEnvelope({
     projectId: event.projectId,
     run: event.payload.run,
-  });
-}
-
-/** Legacy `workflow-v2-review-pending` from a canonical review event. Returns
- *  null unless the review is in the `pending` state (the legacy channel only
- *  ever carried the pending signal). */
-export function toWorkflowReviewPendingRefetchEnvelope(
-  event: WorkflowReviewChangedLiveEvent,
-): WorkflowReviewPendingRefetchEnvelope | null {
-  if (event.payload.state !== 'pending') return null;
-  return buildWorkflowReviewPendingRefetchEnvelope({
-    projectId: event.projectId,
-    runId: event.payload.runId,
-    nodeId: event.payload.nodeId,
-    flavor: event.payload.flavor,
-    prompt: event.payload.prompt ?? null,
   });
 }
 
