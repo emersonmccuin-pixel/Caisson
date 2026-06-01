@@ -55,5 +55,8 @@ export function useMailboxInbox(
     if (scan.changed) refetch();
   }, [events, refetch]);
 
-  return { items, loading, refetch };
+  // Exclude dismissed rows client-side so they vanish immediately on dismiss
+  // and stay gone after the next refetch (the server returns them with a
+  // dismissedAt timestamp but no excludeDismissed query param exists yet).
+  return { items: items.filter((i) => i.recipient.dismissedAt === null), loading, refetch };
 }

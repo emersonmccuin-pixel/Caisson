@@ -341,15 +341,37 @@ function MailboxRegion({
   project: Project;
   events: WsEnvelope[];
 }) {
-  // Slice 007 — the project inbox surface. Lists recipients (unread/actioned),
-  // renders the answer/dismiss action form, and refetches live on the canonical
-  // mailbox.* / pending-interaction.changed frames (the hook owns the refetch).
+  const [expanded, setExpanded] = useState(true);
+  const [count, setCount] = useState(0);
+
   return (
-    <RegionShell title="Inbox">
-      <div className="px-3 pb-2 text-[12px] text-foreground [&_.mailbox-inbox]:space-y-1.5 [&_.mailbox-inbox__row]:rounded [&_.mailbox-inbox__row]:border [&_.mailbox-inbox__row]:border-border [&_.mailbox-inbox__row]:bg-card [&_.mailbox-inbox__row]:p-2 [&_.mailbox-inbox--empty]:py-1 [&_.mailbox-inbox--empty]:text-[11px] [&_.mailbox-inbox--empty]:italic [&_.mailbox-inbox--empty]:text-muted-foreground/70 [&_button]:mr-1 [&_button]:border [&_button]:border-border [&_button]:bg-card [&_button]:px-1.5 [&_button]:py-0.5 [&_button]:text-[10px] [&_button]:uppercase [&_button]:tracking-wider [&_button]:text-muted-foreground [&_input]:mr-1 [&_input]:border [&_input]:border-border [&_input]:bg-background [&_input]:px-1 [&_input]:py-0.5 [&_input]:text-[11px]">
-        <MailboxInbox scope={{ projectId: project.id }} events={events} />
+    <section className="border-b border-border">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between px-3 py-1.5 hover:bg-muted/40"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-mono text-muted-foreground">
+            {expanded ? '▾' : '▸'}
+          </span>
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Inbox
+          </span>
+        </div>
+        <div className="bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
+          {count}
+        </div>
+      </button>
+      {/* Keep mounted when collapsed so the count stays live. */}
+      <div className={expanded ? 'px-3 pb-2' : 'hidden'}>
+        <MailboxInbox
+          scope={{ projectId: project.id }}
+          events={events}
+          onVisibleCount={setCount}
+        />
       </div>
-    </RegionShell>
+    </section>
   );
 }
 
