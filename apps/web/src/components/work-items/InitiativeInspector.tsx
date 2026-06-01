@@ -15,7 +15,7 @@ import remarkGfm from 'remark-gfm';
 import type { Project, Stage } from '@/features/projects/client';
 import { useProjectAreas } from '@/hooks/use-project-areas';
 import { WorkItemConflictError, workItemsApi, type Attachment, type WorkItem, type WorkItemStatus, type WorkItemType } from '@/features/work-items/client';
-import { attachmentChangedFromLiveFrame } from '@/features/work-items/attachment-live-events';
+import { hasNewAttachmentFrameFor } from '@/features/work-items/attachment-live-events';
 import { workItemHistoryRows } from '@/features/work-items/work-item-live-events';
 import { useLiveEntitySignature, useLiveEvents } from '@/store/live-store';
 import {
@@ -690,6 +690,14 @@ function ActivityTab({
     };
   }, [project.id, workItem.id]);
 
+  const reloadAttachments = () => {
+    workItemsApi.listAttachments(project.id, workItem.id)
+      .then(setAttachments)
+      .catch(() => {
+        /* leave the existing list */
+      });
+  };
+  // Legacy bare `attachment-changed` envelope (survives the T3.3 cut).
   const attLastIdx = useRef(0);
   useEffect(() => {
     if (events.length < attLastIdx.current) attLastIdx.current = 0;
@@ -698,18 +706,23 @@ function ActivityTab({
     if (start >= events.length) return;
     for (let i = start; i < events.length; i++) {
       const env = events[i];
-      const live = attachmentChangedFromLiveFrame(env);
-      const legacyMatch = env?.type === 'attachment-changed' && env.workItemId === workItem.id;
-      if (legacyMatch || (live && live.workItemId === workItem.id)) {
-        workItemsApi.listAttachments(project.id, workItem.id)
-          .then(setAttachments)
-          .catch(() => {
-            /* leave the existing list */
-          });
+      if (env?.type === 'attachment-changed' && env.workItemId === workItem.id) {
+        reloadAttachments();
         break;
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, project.id, workItem.id]);
+
+  // T3.2c — canonical `attachment.changed` off the live store.
+  const attachmentEvents = useLiveEvents('attachment', project.id);
+  const attSeenRef = useRef<Map<string, number | string>>(new Map());
+  useEffect(() => {
+    if (hasNewAttachmentFrameFor(attachmentEvents, workItem.id, attSeenRef.current)) {
+      reloadAttachments();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachmentEvents, workItem.id]);
 
   const stageNameById = useMemo(() => {
     const m = new Map<string, string>();
@@ -961,6 +974,7 @@ function DocumentsTab({
     refetch();
   }, [refetch]);
 
+  // Legacy bare `attachment-changed` envelope (survives the T3.3 cut).
   const att2LastIdx = useRef(0);
   useEffect(() => {
     if (events.length < att2LastIdx.current) att2LastIdx.current = 0;
@@ -969,14 +983,19 @@ function DocumentsTab({
     if (start >= events.length) return;
     for (let i = start; i < events.length; i++) {
       const env = events[i];
-      const live = attachmentChangedFromLiveFrame(env);
-      const legacyMatch = env?.type === 'attachment-changed' && env.workItemId === workItem.id;
-      if (legacyMatch || (live && live.workItemId === workItem.id)) {
+      if (env?.type === 'attachment-changed' && env.workItemId === workItem.id) {
         refetch();
         break;
       }
     }
   }, [events, workItem.id, refetch]);
+
+  // T3.2c — canonical `attachment.changed` off the live store.
+  const attachment2Events = useLiveEvents('attachment', project.id);
+  const att2SeenRef = useRef<Map<string, number | string>>(new Map());
+  useEffect(() => {
+    if (hasNewAttachmentFrameFor(attachment2Events, workItem.id, att2SeenRef.current)) refetch();
+  }, [attachment2Events, workItem.id, refetch]);
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();

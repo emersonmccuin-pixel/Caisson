@@ -14,7 +14,7 @@ import remarkGfm from 'remark-gfm';
 import type { Project } from '@/features/projects/client';
 import type { Area } from '@/features/areas/client';
 import { WORK_ITEM_TYPES, WorkItemConflictError, WorkItemFieldValidationError, workItemsApi, type Attachment, type FieldSchema, type WorkItem, type WorkItemPatch, type WorkItemType } from '@/features/work-items/client';
-import { attachmentChangedFromLiveFrame } from '@/features/work-items/attachment-live-events';
+import { hasNewAttachmentFrameFor } from '@/features/work-items/attachment-live-events';
 import { latestFieldSchemas, workItemHistoryRows } from '@/features/work-items/work-item-live-events';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useProjectAreas } from '@/hooks/use-project-areas';
@@ -875,6 +875,8 @@ function AttachmentsTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, workItemId]);
 
+  // Legacy bare `attachment-changed` envelope (Phase-C-pending) still rides the
+  // chat timeline — it's not a live-event frame, so it survives the T3.3 cut.
   const attachLastIdx = useRef(0);
   useEffect(() => {
     if (events.length < attachLastIdx.current) attachLastIdx.current = 0;
@@ -887,15 +889,17 @@ function AttachmentsTab({
         refetch();
         break;
       }
-      // Slice 017 Fix 3 — also react to the canonical relay frame.
-      const live = attachmentChangedFromLiveFrame(env);
-      if (live && live.workItemId === workItemId) {
-        refetch();
-        break;
-      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, workItemId]);
+
+  // T3.2c — canonical `attachment.changed` off the live store (rebuild-proof).
+  const attachmentEvents = useLiveEvents('attachment', projectId);
+  const attachSeenRef = useRef<Map<string, number | string>>(new Map());
+  useEffect(() => {
+    if (hasNewAttachmentFrameFor(attachmentEvents, workItemId, attachSeenRef.current)) refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachmentEvents, workItemId]);
 
   async function del(aId: string) {
     if (!window.confirm('Delete this attachment? This cannot be undone.')) return;
@@ -1064,6 +1068,7 @@ function ActivityTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, workItem.id]);
 
+  // Legacy bare `attachment-changed` envelope (survives the T3.3 cut).
   const attach2LastIdx = useRef(0);
   useEffect(() => {
     if (events.length < attach2LastIdx.current) attach2LastIdx.current = 0;
@@ -1076,15 +1081,19 @@ function ActivityTab({
         refetchAttachments();
         break;
       }
-      // Slice 017 Fix 3 — also react to the canonical relay frame.
-      const live = attachmentChangedFromLiveFrame(env);
-      if (live && live.workItemId === workItem.id) {
-        refetchAttachments();
-        break;
-      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, workItem.id]);
+
+  // T3.2c — canonical `attachment.changed` off the live store.
+  const attachment2Events = useLiveEvents('attachment', projectId);
+  const attach2SeenRef = useRef<Map<string, number | string>>(new Map());
+  useEffect(() => {
+    if (hasNewAttachmentFrameFor(attachment2Events, workItem.id, attach2SeenRef.current)) {
+      refetchAttachments();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachment2Events, workItem.id]);
 
   const rows = useMemo<ActivityRow[]>(() => {
     const out: ActivityRow[] = [];
