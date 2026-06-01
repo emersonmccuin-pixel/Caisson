@@ -487,7 +487,8 @@ export async function handleWorkflowTool(
             ? args.trigger
             : { kind: 'manual' };
         const body: Record<string, unknown> = { trigger, projectId: ctx.projectId };
-        const res = await ctx.postServer(`/api/workflows/${encodeURIComponent(rowId)}/fire`, body);
+        // Slice 011 — typed client parses WorkflowRunDto; raw body emitted verbatim.
+        const res = await ctx.client.fireWorkflow(`/api/workflows/${encodeURIComponent(rowId)}/fire`, body);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }
@@ -657,7 +658,7 @@ export async function handleWorkflowTool(
         };
       }
       try {
-        const res = await ctx.getServer(`/api/workflows/${encodeURIComponent(workflowId)}`);
+        const res = await ctx.client.getWorkflow(`/api/workflows/${encodeURIComponent(workflowId)}`);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }
