@@ -165,7 +165,10 @@ html {
   color-scheme: dark;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-size: calc(16px * var(--font-scale, 1));
+  /* Baseline root font is 14.4px (= 16 × 0.9): what used to be the 90% font
+     scale is now the 100% default. The --font-scale slider multiplies on top,
+     so 100% (scale = 1) renders this baseline. */
+  font-size: calc(14.4px * var(--font-scale, 1));
 }
 
 body {
