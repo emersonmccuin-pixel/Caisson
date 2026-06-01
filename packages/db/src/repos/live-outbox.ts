@@ -8,6 +8,7 @@ import { liveOutbox } from '../schema.ts';
 export type LiveOutboxScope = 'global' | 'project';
 export type LiveOutboxEntity =
   | 'project'
+  | 'project-claude-md'
   | 'work-item'
   | 'stage'
   | 'field-schema'
@@ -17,7 +18,8 @@ export type LiveOutboxEntity =
   | 'workflow-review'
   | 'agent-run'
   | 'mailbox-message'
-  | 'pending-interaction';
+  | 'pending-interaction'
+  | 'session-title';
 
 export interface InsertLiveEventDraft<TPayload = unknown> {
   id?: ULID;

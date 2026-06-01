@@ -951,7 +951,6 @@ registerRuntimeHostRoutes(app, {
 
 registerProjectContextRoutes(app, {
   resolveProject,
-  broadcastTo,
   getProjectFolderPath: (projectId) => getProjectById(projectId)?.folderPath ?? null,
 });
 

@@ -6,6 +6,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { isLiveEventFrame } from '@pc/contracts';
+
 import { transientInputCapabilities } from '@/features/chat/runtimeState';
 import { transientSessionsApi } from '@/features/transient-sessions/client';
 import {
@@ -78,7 +80,12 @@ export function SetupWizardModal({ projectId, events, onClose }: SetupWizardModa
       } else if (env.type === 'setup-wizard-exit') {
         if (!belongsToTransientSession(env, sessionId)) continue;
         setState('exited');
-      } else if (env.type === 'project-claude-md-changed') {
+      } else if (
+        // Slice 015b — canonical relay project.claude-md.changed frame.
+        isLiveEventFrame(env) &&
+        env.event.entity === 'project-claude-md' &&
+        env.event.projectId === projectId
+      ) {
         closeRef.current();
       }
     }

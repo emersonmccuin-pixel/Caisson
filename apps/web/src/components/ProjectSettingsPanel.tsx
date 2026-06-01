@@ -11,6 +11,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+import { isLiveEventFrame } from '@pc/contracts';
+
 import { projectsApi, type Project } from '@/features/projects/client';
 import { projectContextApi } from '@/features/project-context/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
@@ -336,7 +338,12 @@ function SetupWizardNag({
     for (let i = start; i < end; i++) {
       const env = events[i];
       if (!env) continue;
-      if (env.type === 'project-claude-md-changed') {
+      // Slice 015b — canonical relay project.claude-md.changed frame.
+      if (
+        isLiveEventFrame(env) &&
+        env.event.entity === 'project-claude-md' &&
+        env.event.projectId === project.id
+      ) {
         projectContextApi.getClaudeMdStatus(project.id)
           .then((s) => setNeeds(!s.exists || s.empty))
           .catch(() => {

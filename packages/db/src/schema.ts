@@ -87,6 +87,7 @@ export const liveOutbox = sqliteTable(
       .notNull()
       .$type<
         | 'project'
+        | 'project-claude-md'
         | 'work-item'
         | 'stage'
         | 'field-schema'
@@ -97,6 +98,7 @@ export const liveOutbox = sqliteTable(
         | 'agent-run'
         | 'mailbox-message'
         | 'pending-interaction'
+        | 'session-title'
       >(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),

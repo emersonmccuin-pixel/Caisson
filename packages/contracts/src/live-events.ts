@@ -3,6 +3,7 @@ import { parseErr, parseOk, type ParseResult, type ULID } from './shared.ts';
 export type LiveEventScope = 'project' | 'global';
 export type LiveEventEntity =
   | 'project'
+  | 'project-claude-md'
   | 'work-item'
   | 'stage'
   | 'field-schema'
@@ -12,11 +13,13 @@ export type LiveEventEntity =
   | 'workflow-review'
   | 'agent-run'
   | 'mailbox-message'
-  | 'pending-interaction';
+  | 'pending-interaction'
+  | 'session-title';
 
 /** Canonical live-event type names. Replay accepts these for `type=` filtering. */
 export type LiveEventTypeName =
   | 'project.changed'
+  | 'project.claude-md.changed'
   | 'work-item.changed'
   | 'stage.list.changed'
   | 'field-schema.list.changed'
@@ -27,10 +30,12 @@ export type LiveEventTypeName =
   | 'agent.run.changed'
   | 'mailbox.message.changed'
   | 'mailbox.delivery.changed'
-  | 'pending-interaction.changed';
+  | 'pending-interaction.changed'
+  | 'session.title.changed';
 
 const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'project.changed',
+  'project.claude-md.changed',
   'work-item.changed',
   'stage.list.changed',
   'field-schema.list.changed',
@@ -42,6 +47,7 @@ const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'mailbox.message.changed',
   'mailbox.delivery.changed',
   'pending-interaction.changed',
+  'session.title.changed',
 ];
 
 export function isLiveEventTypeName(value: unknown): value is LiveEventTypeName {
@@ -219,6 +225,7 @@ function isLiveEventScope(value: unknown): value is LiveEventScope {
 function isLiveEventEntity(value: unknown): value is LiveEventEntity {
   return (
     value === 'project' ||
+    value === 'project-claude-md' ||
     value === 'work-item' ||
     value === 'stage' ||
     value === 'field-schema' ||
@@ -228,7 +235,8 @@ function isLiveEventEntity(value: unknown): value is LiveEventEntity {
     value === 'workflow-review' ||
     value === 'agent-run' ||
     value === 'mailbox-message' ||
-    value === 'pending-interaction'
+    value === 'pending-interaction' ||
+    value === 'session-title'
   );
 }
 

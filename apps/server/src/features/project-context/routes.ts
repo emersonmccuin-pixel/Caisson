@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 import type { Hono } from 'hono';
 import type { ULID } from '@pc/domain';
-import { getProjectById } from '@pc/db';
+import { getDb, getProjectById, insertLiveEvent } from '@pc/db';
 
 import { listCustomCommands as defaultListCustomCommands } from '../../services/custom-commands.ts';
 import {
@@ -18,7 +18,6 @@ export interface ProjectContextRuntime {
 
 export interface ProjectContextRouteDeps {
   resolveProject(projectId: string): ProjectContextRuntime | null;
-  broadcastTo(projectId: ULID, msg: unknown): void;
   getProjectFolderPath?: (projectId: ULID) => string | null;
   listCustomCommands?: typeof defaultListCustomCommands;
   readMemoryFile?: typeof defaultReadMemoryFile;
@@ -106,7 +105,20 @@ export function registerProjectContextRoutes(app: Hono, deps: ProjectContextRout
     } catch (err) {
       return c.json({ ok: false, error: `write failed: ${(err as Error).message}` }, 500);
     }
-    deps.broadcastTo(id, { type: 'project-claude-md-changed' });
+    // Slice 015b — announce through the durable door; the relay delivers the
+    // canonical project.claude-md.changed frame. No hand-fanout. The fact is a
+    // refetch signal (the file content lives on disk, re-probed via HTTP).
+    getDb().transaction((tx) => {
+      insertLiveEvent(tx, {
+        scope: 'project',
+        projectId: id,
+        type: 'project.claude-md.changed',
+        entity: 'project-claude-md',
+        entityId: id,
+        version: null,
+        payload: {},
+      });
+    });
     return c.json({ ok: true });
   });
 }
