@@ -10,12 +10,12 @@
 // Scope filter for the roster: only project-scope pods for THIS project + stock
 // globals. The list endpoint already applies that filter (listProjectVisibleAgents).
 
-import { useEffect, useRef, useMemo } from 'react';
-import { isPodChangedLiveEventFrame } from '@pc/contracts';
+import { useEffect, useMemo } from 'react';
 import type { Project, ULID } from '@/features/projects/client';
 import { agentsApi, type Pod } from '@/features/agents/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useResourceList } from '@/hooks/use-resource-list';
+import { useLiveEntitySignature } from '@/store/live-store';
 
 export function useProjectPods(
   project: Project | null,
@@ -32,24 +32,13 @@ export function useProjectPods(
     list: (projectId) => agentsApi.listPods(projectId as ULID),
   });
 
-  // Refetch on any pod.changed relay frame (created / updated / deleted). Scan
-  // every new envelope since the last processed index so a frame buried in a
-  // batched flush isn't missed (UI spine).
-  const scanIdx = useRef(0);
+  // Slice 018 — refetch the roster whenever the pod frame set changes in the
+  // identity-keyed live store (created / updated / deleted). Global pod frames
+  // carry projectId null and reach every project, which the signature includes.
+  const podSig = useLiveEntitySignature('pod', project?.id ?? null);
   useEffect(() => {
-    if (events.length < scanIdx.current) scanIdx.current = 0;
-    const start = scanIdx.current;
-    scanIdx.current = events.length;
-    if (start >= events.length) return;
-    for (let i = start; i < events.length; i++) {
-      const env = events[i];
-      if (env && isPodChangedLiveEventFrame(env)) {
-        refetch();
-        return;
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events]);
+    if (podSig) refetch();
+  }, [podSig, refetch]);
 
   // Sort alphabetically — mirrors the original hook.
   const pods = useMemo(

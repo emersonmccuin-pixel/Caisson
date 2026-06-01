@@ -8,17 +8,17 @@
 // without per-item `work-item.changed` facts). Callers that show member counts
 // must independently refetch their work-item list on the same frame.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-
-import { isAreaChangedLiveEventFrame } from '@pc/contracts';
+import { useCallback, useEffect, useState } from 'react';
 
 import { areasApi, type Area } from '@/features/areas/client';
 import type { Project } from '@/features/projects/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
+import { useLiveEntitySignature } from '@/store/live-store';
 
 export function useProjectAreas(
   project: Project | null,
-  events: WsEnvelope[],
+  // Retained for signature stability; area changes now come from the live store.
+  _events: WsEnvelope[],
 ): { areas: Area[]; refetch: () => void } {
   const [areas, setAreas] = useState<Area[]>([]);
 
@@ -41,26 +41,13 @@ export function useProjectAreas(
     refetch();
   }, [refetch]);
 
-  // Scan every new envelope since the last processed index — refetch on any
-  // area.changed frame for this project.
-  const lastIdx = useRef(0);
+  // Slice 018 — refetch the full list whenever the area frame set changes in the
+  // identity-keyed live store. The signature flips only on a genuine area change
+  // (rebuild-proof; no positional cursor over the chat timeline).
+  const areaSig = useLiveEntitySignature('area', project?.id ?? null);
   useEffect(() => {
-    if (!project) {
-      lastIdx.current = events.length;
-      return;
-    }
-    if (events.length < lastIdx.current) lastIdx.current = 0;
-    const start = lastIdx.current;
-    lastIdx.current = events.length;
-    if (start >= events.length) return;
-    for (let i = start; i < events.length; i++) {
-      const env = events[i];
-      if (isAreaChangedLiveEventFrame(env) && env.event.projectId === project.id) {
-        refetch();
-        break;
-      }
-    }
-  }, [events, project?.id, refetch]);
+    if (project && areaSig) refetch();
+  }, [areaSig, project, refetch]);
 
   return { areas, refetch };
 }

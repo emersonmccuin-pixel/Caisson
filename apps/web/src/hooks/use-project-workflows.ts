@@ -13,25 +13,23 @@
 // honored by which sockets receive it; a global def frame carries projectId
 // null and reaches every project, which is exactly the refetch trigger we want.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-
-import { isWorkflowDefinitionChangedLiveEventFrame } from '@pc/contracts';
+import { useEffect, useMemo, useState } from 'react';
 
 import type { Project, ULID } from '@/features/projects/client';
 import { workflowsApi, type WorkflowRow } from '@/features/workflows/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
+import { useLiveEntitySignature } from '@/store/live-store';
 
 export function useProjectWorkflows(
   project: Project | null,
-  events: WsEnvelope[],
+  // Retained for signature stability; definition changes now come from the store.
+  _events: WsEnvelope[],
 ): { workflows: WorkflowRow[]; refetch: () => void } {
   const [map, setMap] = useState<Map<ULID, WorkflowRow>>(() => new Map());
-  const lastProcessedIdx = useRef(0);
 
   useEffect(() => {
     if (!project) {
       setMap(new Map());
-      lastProcessedIdx.current = 0;
       return;
     }
     let cancelled = false;
@@ -39,36 +37,24 @@ export function useProjectWorkflows(
       if (cancelled) return;
       setMap(new Map(list.map((w) => [w.id, w])));
     });
-    lastProcessedIdx.current = events.length;
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
 
+  // Slice 018 — refetch HTTP truth whenever the workflow-definition frame set
+  // changes in the identity-keyed live store. Global defs carry projectId null
+  // and reach every project (the signature includes them); the list endpoint
+  // already applies the globals ∪ this-project visibility filter.
+  const defSig = useLiveEntitySignature('workflow-definition', project?.id ?? null);
   useEffect(() => {
-    if (!project || events.length === 0) {
-      lastProcessedIdx.current = events.length;
-      return;
-    }
-    if (events.length < lastProcessedIdx.current) lastProcessedIdx.current = 0;
-    const start = lastProcessedIdx.current;
-    if (start >= events.length) return;
-
-    let sawDefinitionChange = false;
-    for (let i = start; i < events.length; i++) {
-      const env = events[i];
-      if (isWorkflowDefinitionChangedLiveEventFrame(env)) sawDefinitionChange = true;
-    }
-    lastProcessedIdx.current = events.length;
-
-    if (sawDefinitionChange) {
-      void workflowsApi.listWorkflowRows(project.id).then((list) => {
-        setMap(new Map(list.map((w) => [w.id, w])));
-      });
-    }
+    if (!project || !defSig) return;
+    void workflowsApi.listWorkflowRows(project.id).then((list) => {
+      setMap(new Map(list.map((w) => [w.id, w])));
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events, project?.id]);
+  }, [defSig, project?.id]);
 
   const workflows = useMemo(
     () =>

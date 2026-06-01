@@ -8,28 +8,29 @@
 // List fn: fetches from GET /api/projects/:id (returns project including
 // stages, each pre-stamped with rev by updateProjectStages on the server).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-
-import { isLiveEventFrame } from '@pc/contracts';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { Project, Stage, ULID } from '@/features/projects/client';
 import { projectsApi } from '@/features/projects/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
+import { useLiveEvents } from '@/store/live-store';
+
+function stagesRevOf(stages: Stage[]): number {
+  return stages[0]?.rev ?? 0;
+}
 
 export function useProjectStages(
   project: Project | null,
-  events: WsEnvelope[],
+  // Retained for signature stability; stage changes now come from the store.
+  _events: WsEnvelope[],
 ): { stages: Stage[]; refetch: () => void } {
-  const [map, setMap] = useState<Map<string, Stage>>(() => new Map());
-  const lastIdx = useRef(0);
+  // Seed = HTTP truth (project prop first for an instant paint, then the fetch).
+  const [seed, setSeed] = useState<Stage[]>(() => project?.stages ?? []);
 
   const fetchAndSet = useCallback(
     (projectId: string) => {
       void (projectsApi.project(projectId as ULID) as unknown as Promise<Project>)
-        .then((p) => {
-          const list: Stage[] = p.stages ?? [];
-          setMap(new Map(list.map((s) => [s.id, s])));
-        })
+        .then((p) => setSeed(p.stages ?? []))
         .catch(() => {/* ignore */});
     },
     [],
@@ -38,65 +39,39 @@ export function useProjectStages(
   // Initial fetch + project switch.
   useEffect(() => {
     if (!project) {
-      setMap(new Map());
-      lastIdx.current = 0;
+      setSeed([]);
       return;
     }
-    // Seed from project prop first (instant — no network round-trip).
-    setMap(new Map((project.stages ?? []).map((s) => [s.id, s])));
-    lastIdx.current = events.length;
+    setSeed(project.stages ?? []);
     fetchAndSet(project.id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
 
-  // Slice 015b — scan new canonical `stage.list.changed` relay frames; apply
-  // version-aware batch replacement. Stages are always replaced atomically, so
-  // every stage in a batch shares the same `rev`.
-  useEffect(() => {
-    if (!project || events.length === 0) {
-      lastIdx.current = events.length;
-      return;
+  // Slice 018 — overlay the latest `stage.list.changed` batch from the
+  // identity-keyed live store. Stages are replaced atomically (every stage in a
+  // batch shares one `rev`), so we pick the highest-rev batch across the seed
+  // and any store frames. Rebuild-proof: no positional cursor over the timeline.
+  const stageFrames = useLiveEvents('stage', project?.id ?? null);
+  const stages = useMemo(() => {
+    let chosen = seed;
+    let chosenRev = stagesRevOf(seed);
+    for (const ev of stageFrames) {
+      const payload = ev.payload as { stagesRev?: number; stages?: Stage[] };
+      const batch = payload.stages;
+      if (!Array.isArray(batch) || batch.length === 0) continue;
+      const rev = payload.stagesRev ?? stagesRevOf(batch);
+      if (rev > chosenRev) {
+        chosen = batch;
+        chosenRev = rev;
+      }
     }
-    if (events.length < lastIdx.current) lastIdx.current = 0;
-    const start = lastIdx.current;
-    lastIdx.current = events.length;
-    if (start >= events.length) return;
-
-    for (let i = start; i < events.length; i++) {
-      const env = events[i];
-      // Slice 015b — match the canonical relay frame by entity. The server emits
-      // domain stages (carry `order` + `rev`); the contract StageDto guard uses
-      // `position`, so gate by entity/scope rather than the strict payload guard.
-      if (!isLiveEventFrame(env) || env.event.entity !== 'stage') continue;
-      if (env.event.projectId !== project.id) continue;
-      const payload = env.event.payload as { stagesRev?: number; stages?: Stage[] };
-      const stages = payload.stages;
-      if (!Array.isArray(stages) || stages.length === 0) continue;
-      const incomingRev = payload.stagesRev ?? (stages[0] as Stage).rev ?? 0;
-
-      setMap((prev) => {
-        // If any stored stage has a higher-or-equal rev, the batch is stale.
-        if (incomingRev > 0) {
-          for (const s of prev.values()) {
-            if ((s.rev ?? 0) >= incomingRev) return prev; // stale — discard
-          }
-        }
-        return new Map(stages.map((s) => [s.id, s]));
-      });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events, project?.id]);
+    return [...chosen].sort((a, b) => a.order - b.order);
+  }, [seed, stageFrames]);
 
   const refetch = useCallback(() => {
     if (!project) return;
     fetchAndSet(project.id);
   }, [project, fetchAndSet]);
-
-  // Sort by order (preserves user-defined column sequence).
-  const stages = useMemo(
-    () => [...map.values()].sort((a, b) => a.order - b.order),
-    [map],
-  );
 
   return { stages, refetch };
 }

@@ -77,6 +77,30 @@ export function useLiveEvents(
   }, [byKey, entity, projectId]);
 }
 
+/** A stable signature of the frame set the store holds for `entity` in
+ *  `projectId` scope (project + global). The string changes ONLY when that
+ *  entity's frames change (a new id, or a newer version/cursor for an existing
+ *  id) — so a refetch-only consumer can key an effect off it and refetch
+ *  exactly once per genuine change, never on an unrelated entity's frame.
+ *  Selected via zustand so the component re-renders only when the value flips. */
+export function useLiveEntitySignature(
+  entity: LiveEventEntity | null,
+  projectId: string | null,
+): string {
+  return useLiveStore((s) => {
+    if (!entity || !projectId) return '';
+    let sig = '';
+    for (const ev of s.byKey.values()) {
+      if (ev.entity !== entity) continue;
+      if (ev.projectId !== null && ev.projectId !== projectId) continue;
+      // version when present (versioned entities), else the monotonic global
+      // cursor (last-write-wins entities) — both advance on a newer frame.
+      sig += `${ev.entityId}:${ev.version ?? ev.cursor};`;
+    }
+    return sig;
+  });
+}
+
 /** Latest live snapshot of every work item the store has seen for this project,
  *  including soft-deleted ones (carry `deletedAt` so the view can drop them). */
 export function useLiveWorkItems(projectId: string): WorkItem[] {
