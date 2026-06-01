@@ -52,12 +52,46 @@ test('project websocket filter accepts only matching project events or project.c
     }, 'p1'),
     true,
   );
+  // Slice 015a — the relay delivers ALL entity families as `live-event` frames
+  // (not only project.changed). A global frame (event.projectId === null) is
+  // accepted regardless of entity so the WS cursor advances.
   assert.equal(
     shouldAcceptProjectWsEnvelope({
       type: 'live-event',
       event: { ...projectChangedLiveEvent('evt2', '5'), type: 'work-item.changed' },
     }, 'p1'),
+    true,
+  );
+  // A project-scoped relay frame for a DIFFERENT project is still rejected.
+  assert.equal(
+    shouldAcceptProjectWsEnvelope({
+      type: 'live-event',
+      event: {
+        ...projectChangedLiveEvent('evt3', '6'),
+        scope: 'project',
+        projectId: 'p2',
+        type: 'work-item.changed',
+      },
+    }, 'p1'),
     false,
+  );
+  // A project-scoped relay frame for THIS project is accepted.
+  assert.equal(
+    shouldAcceptProjectWsEnvelope({
+      type: 'live-event',
+      event: {
+        ...projectChangedLiveEvent('evt4', '7'),
+        scope: 'project',
+        projectId: 'p1',
+        type: 'work-item.changed',
+      },
+    }, 'p1'),
+    true,
+  );
+  // The server gap signal is always accepted so the client can self-heal.
+  assert.equal(
+    shouldAcceptProjectWsEnvelope({ type: 'live-reset', projectId: null, cursor: '9' }, 'p1'),
+    true,
   );
 });
 

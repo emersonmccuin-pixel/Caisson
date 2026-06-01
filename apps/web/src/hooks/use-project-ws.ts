@@ -41,6 +41,12 @@ import {
   replayEventsFromItems,
 } from '@/hooks/chat-session-reducer';
 import { useWsEpoch } from '@/store/ws-epoch';
+import {
+  advanceLiveCursor,
+  clearLiveCursor,
+  liveCursorScopeForProject,
+  readLiveCursor,
+} from '@/features/live/hooks';
 
 interface UseProjectWsResult {
   events: WsEnvelope[];
@@ -201,6 +207,20 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
         // delivered. Bump the epoch so resource-list hooks refetch the truth —
         // this is what removes the "manual refresh to see new agents/workflows".
         if (project) useWsEpoch.getState().bump(project.id);
+        // Slice 015a — WS subscribe handshake. Send our stored `lastVersion`
+        // (the global `seq` cursor) so the relay replays `(lastVersion,
+        // snapshot]` for this project; live rows then arrive via the same
+        // socket. The epoch bump above is the belt-and-suspenders full reload;
+        // the cursor catch-up is the precise replay on top. A below-floor
+        // cursor comes back as a `live-reset` frame (handled below).
+        if (project) {
+          const lastVersion = readLiveCursor(liveCursorScopeForProject(project.id));
+          try {
+            ws.send(JSON.stringify({ type: 'subscribe', lastVersion, projectId: project.id }));
+          } catch {
+            /* best-effort; the epoch bump already triggered a full reload */
+          }
+        }
       });
 
       ws.addEventListener('close', () => {
@@ -228,6 +248,24 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
           lastPongAt: env.type === 'server-pong' ? lastInboundAt : prev.lastPongAt,
         }));
         if (env.type === 'server-pong') return;
+        // Slice 015a — advance the global `seq` cursor on every live-event frame
+        // so the next (re)connect handshake replays only what we haven't seen.
+        // Resource-list stores already dedupe by per-entity `version`, so we do
+        // not re-route the frame here — we only persist the cursor.
+        if (env.type === 'live-event' && project) {
+          const cursor = (env as { event?: { cursor?: unknown } }).event?.cursor;
+          if (typeof cursor === 'string') {
+            advanceLiveCursor(liveCursorScopeForProject(project.id), cursor);
+          }
+        }
+        // Slice 015a — gap signal: our cursor predated the pruned outbox floor,
+        // so a complete replay was impossible. Drop the cursor and force a full
+        // reload (epoch bump) so resource lists refetch HTTP truth.
+        if (env.type === 'live-reset' && project) {
+          clearLiveCursor(liveCursorScopeForProject(project.id));
+          useWsEpoch.getState().bump(project.id);
+          return;
+        }
         if (env.type === 'event') {
           const ts = eventTimestamp(env);
           if (ts) {

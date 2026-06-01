@@ -27,10 +27,13 @@ export type {
 } from './repos/projects.ts';
 
 export {
+  getLiveEventFloor,
   getLiveEventHighWater,
   insertLiveEvent,
   listLiveEventsAfter,
+  listLiveOutboxRowsAfter,
   markLiveEventsPublished,
+  pruneLiveOutbox,
   LiveEventCursorError,
 } from './repos/live-outbox.ts';
 export type {
@@ -39,6 +42,8 @@ export type {
   ListLiveEventsAfterResult,
   LiveOutboxEvent,
   LiveOutboxScope,
+  PruneLiveOutboxInput,
+  PruneLiveOutboxResult,
 } from './repos/live-outbox.ts';
 
 export {

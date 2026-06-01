@@ -28,6 +28,7 @@ export function registerLiveEventRoutes(app: Hono): void {
         ok: true,
         events: replay.events,
         nextCursor: replay.nextCursor,
+        ...(replay.resetRequired ? { resetRequired: true } : {}),
       };
       return c.json(response);
     } catch (err) {

@@ -1,6 +1,10 @@
 # Slice 015 — State Propagation Spine (relay + WS cursor cut-over + no-bypass gate)
 
-> Status: planned
+> Status: 015a built (2026-05-31, unit-proven, not yet live-verified — row 51); 015b/015c planned
+
+## Build log
+
+- **015a built 2026-05-31.** Relay + WS `lastVersion` subscribe handshake + outbox prune (size 10k / age 1h) shipped BESIDE the existing hand-fanout (dual delivery; zero behavior regression). Files: `apps/server/src/services/live-relay.ts` (new), `apps/server/src/index.ts` (relay wire + 250ms drain timer + 5m prune timer + boot prime-to-head + `catchUp` dep), `apps/server/src/features/runtime-host/{websocket-server,websocket-message}.ts` (`subscribe` handshake → per-socket `catchUp`), `apps/server/src/features/live-events/routes.ts` (`resetRequired`), `packages/db/src/repos/live-outbox.ts` (`pruneLiveOutbox`/`getLiveEventFloor`/`listLiveOutboxRowsAfter` + `resetRequired` in `listLiveEventsAfter`), `packages/contracts/src/live-events.ts` (`LiveEventSubscribe`/`LiveEventResetFrame` + guards), web `apps/web/src/features/live/hooks.ts` (generic per-scope cursor store), `apps/web/src/hooks/use-project-ws.ts` (send `subscribe`, advance cursor, handle `live-reset`), `apps/web/src/features/projects/live-events.ts` (accept relay frames + `live-reset`). Typecheck exit 0. Tests: db 26/26, server 88/88, contracts 62/62, web 19/19 (all suites green; +12 new 015a tests). Live two-client verification deferred to row 51 (human). 015b (migrate bypassers) and 015c (no-bypass gate) NOT started — the old hand-fanout is intact.
 
 ## 1. Baseline and Decision
 

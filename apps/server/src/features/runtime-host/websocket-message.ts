@@ -41,6 +41,12 @@ export interface RuntimeHostWsMessageInput<
   broadcastSendQueueSnapshot(projectId: ULID, sessionId: ULID): void;
   ensureOrchestratorPty(projectId: ULID, runtime: TRuntime): TPty;
   resolvePendingAsk(toolUseId: string, answer: string): void;
+  /** Slice 015a — WS subscribe handshake. The client sends its stored
+   *  `lastVersion` (the global `seq` cursor) on (re)connect; the relay replays
+   *  `(lastVersion, snapshot]` to THIS socket then live rows flow from the
+   *  already-attached hub subscription. Optional so existing tests/callers that
+   *  don't wire it stay valid. */
+  onSubscribe?(lastVersion: string | undefined): void;
 }
 
 interface RuntimeHostWireMessage {
@@ -54,6 +60,7 @@ interface RuntimeHostWireMessage {
   sentAt?: unknown;
   toolUseId?: string;
   answer?: string;
+  lastVersion?: unknown;
 }
 
 export async function handleRuntimeHostWsMessage<
@@ -64,6 +71,7 @@ export async function handleRuntimeHostWsMessage<
     broadcastSendQueueSnapshot,
     broadcastTo,
     ensureOrchestratorPty,
+    onSubscribe,
     projectId,
     raw,
     resolvePendingAsk,
@@ -145,6 +153,17 @@ export async function handleRuntimeHostWsMessage<
       const id = msg.toolUseId;
       const answer = msg.answer ?? '';
       if (id) resolvePendingAsk(id, answer);
+      break;
+    }
+    case 'subscribe': {
+      // Slice 015a — cursor catch-up handshake. `lastVersion` is the global
+      // `seq` cursor; a valid non-negative integer string or omitted (cold
+      // load → no replay). The relay validates/clamps; we only pass it through.
+      const lastVersion =
+        typeof msg.lastVersion === 'string' && /^(0|[1-9]\d*)$/.test(msg.lastVersion)
+          ? msg.lastVersion
+          : undefined;
+      onSubscribe?.(lastVersion);
       break;
     }
   }

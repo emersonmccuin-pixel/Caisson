@@ -49,6 +49,10 @@ export interface RuntimeHostWebSocketConnectionDeps<
   broadcastSendQueueSnapshot(projectId: ULID, sessionId: ULID): void;
   ensureOrchestratorPty(projectId: ULID, runtime: TRuntime): TPty;
   resolvePendingAsk(toolUseId: string, answer: string): void;
+  /** Slice 015a — per-socket subscribe-handshake catch-up. Replays the live
+   *  outbox window `(lastVersion, snapshot]` to THIS socket. Optional so
+   *  callers/tests that don't wire the relay stay valid. */
+  catchUp?(socket: TSocket, lastVersion: string | undefined, projectId: ULID): void;
   sendConnectSnapshot?(input: RuntimeHostConnectInput<TPty, TRuntime>): OrchestratorSession;
   handleWsMessage?(input: RuntimeHostWsMessageInput<TPty, TRuntime>): Promise<void> | void;
 }
@@ -84,6 +88,7 @@ export function handleRuntimeHostWsConnection<
     attachPtyHandlers,
     broadcastSendQueueSnapshot,
     broadcastTo,
+    catchUp,
     ensureOrchestratorPty,
     request,
     resolvePendingAsk,
@@ -131,6 +136,9 @@ export function handleRuntimeHostWsConnection<
       broadcastSendQueueSnapshot,
       ensureOrchestratorPty,
       resolvePendingAsk,
+      onSubscribe: catchUp
+        ? (lastVersion) => catchUp(ws, lastVersion, projectId)
+        : undefined,
     });
   });
 

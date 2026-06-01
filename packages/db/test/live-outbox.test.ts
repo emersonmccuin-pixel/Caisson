@@ -11,13 +11,29 @@ const {
   closeDb,
   createProject,
   getDb,
+  getLiveEventFloor,
   getProjectById,
   insertLiveEvent,
   listLiveEventsAfter,
+  listLiveOutboxRowsAfter,
+  pruneLiveOutbox,
   runMigrations,
   updateProjectMetaInDb,
   LiveEventCursorError,
 } = await import('../src/index.ts');
+
+function insertGlobal(entityId: string, createdAt?: number) {
+  return insertLiveEvent(getDb(), {
+    scope: 'global',
+    projectId: null,
+    type: 'project.changed',
+    entity: 'project',
+    entityId,
+    version: null,
+    payload: { reason: 'created', projectIdChanged: entityId },
+    ...(createdAt !== undefined ? { createdAt } : {}),
+  });
+}
 
 before(() => runMigrations());
 after(() => {
@@ -172,4 +188,93 @@ test('project mutation and outbox insert roll back together in one transaction',
 
   assert.equal(getProjectById(project.id)?.name, 'Rollback Original');
   assert.deepEqual(listLiveEventsAfter({ after }).events, []);
+});
+
+// ── Slice 015a — prune + floor + resetRequired ─────────────────────────────
+
+test('prune by size keeps the newest maxRows and raises the floor', () => {
+  // Fresh isolated DB so seq counting is deterministic for this assertion.
+  closeDb();
+  const dir = mkdtempSync(join(tmpdir(), 'pc-prune-size-'));
+  process.env.PC_DATA_DIR = dir;
+  runMigrations();
+
+  const inserted = [];
+  for (let i = 0; i < 8; i++) inserted.push(insertGlobal(`e${i}`));
+  const head = inserted[inserted.length - 1].cursor;
+
+  const result = pruneLiveOutbox({ maxRows: 3 });
+  assert.equal(result.deleted, 5);
+  // Floor is the lowest surviving seq = head - 2 (3 newest rows survive).
+  assert.equal(result.floor, Number(head) - 2);
+  assert.equal(getLiveEventFloor(), String(Number(head) - 2));
+
+  // The surviving window is exactly the newest 3 rows.
+  const survivors = listLiveOutboxRowsAfter('0', 100);
+  assert.equal(survivors.length, 3);
+  assert.deepEqual(
+    survivors.map((r) => r.entityId),
+    ['e5', 'e6', 'e7'],
+  );
+
+  closeDb();
+  rmSync(dir, { recursive: true, force: true });
+  process.env.PC_DATA_DIR = tmpDir;
+  runMigrations();
+});
+
+test('prune by age drops rows older than maxAgeMs', () => {
+  closeDb();
+  const dir = mkdtempSync(join(tmpdir(), 'pc-prune-age-'));
+  process.env.PC_DATA_DIR = dir;
+  runMigrations();
+
+  const now = 1_000_000;
+  insertGlobal('old1', now - 10_000);
+  insertGlobal('old2', now - 5_000);
+  const fresh = insertGlobal('fresh', now - 1_000);
+
+  const result = pruneLiveOutbox({ maxAgeMs: 2_000, now });
+  assert.equal(result.deleted, 2);
+  const survivors = listLiveOutboxRowsAfter('0', 100);
+  assert.deepEqual(
+    survivors.map((r) => r.id),
+    [fresh.id],
+  );
+
+  closeDb();
+  rmSync(dir, { recursive: true, force: true });
+  process.env.PC_DATA_DIR = tmpDir;
+  runMigrations();
+});
+
+test('cursor below the pruned floor → resetRequired; cursor at/after floor replays', () => {
+  closeDb();
+  const dir = mkdtempSync(join(tmpdir(), 'pc-prune-reset-'));
+  process.env.PC_DATA_DIR = dir;
+  runMigrations();
+
+  const rows = [];
+  for (let i = 0; i < 6; i++) rows.push(insertGlobal(`r${i}`));
+
+  // Keep only the newest 2 → floor jumps to (head - 1).
+  pruneLiveOutbox({ maxRows: 2 });
+  const floor = Number(getLiveEventFloor());
+
+  // A cursor well below the floor cannot be fully replayed → resetRequired,
+  // and the events array is empty (no partial replay).
+  const stale = listLiveEventsAfter({ after: '1' });
+  assert.equal(stale.resetRequired, true);
+  assert.deepEqual(stale.events, []);
+
+  // A cursor at exactly (floor - 1) is fine: the first row we'd replay is
+  // `floor`, which still exists → no reset.
+  const ok = listLiveEventsAfter({ after: String(floor - 1) });
+  assert.notEqual(ok.resetRequired, true);
+  assert.equal(ok.events.length, 2);
+
+  closeDb();
+  rmSync(dir, { recursive: true, force: true });
+  process.env.PC_DATA_DIR = tmpDir;
+  runMigrations();
 });

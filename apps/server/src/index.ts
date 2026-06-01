@@ -20,6 +20,7 @@ import {
   getProjectById,
   listProjects,
   newId,
+  pruneLiveOutbox,
   runMigrations,
   setOrchestratorSessionJsonlCursor,
   setOrchestratorSessionJsonlPath,
@@ -45,6 +46,7 @@ import {
 } from './services/orchestrator-send-queue-delivery.ts';
 import { OrchestratorRuntimeSnapshots } from './services/orchestrator-runtime-snapshot.ts';
 import { ProjectWebSocketHub } from './services/websocket-hub.ts';
+import { LiveRelay } from './services/live-relay.ts';
 import { drainPendingForSession } from './services/agent-delivery.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
 import { sweepEphemeralWorkItems } from './services/ephemeral-work-item-sweep.ts';
@@ -207,6 +209,16 @@ function broadcastTo(projectId: ULID, msg: unknown): void {
 function broadcastAll(msg: unknown): void {
   wsHub.broadcastAll(msg);
 }
+
+// Slice 015a — the single live-event relay. Drains committed `live_outbox` rows
+// to the hub's subscribers per scope/project, and serves the per-socket
+// subscribe handshake (cursor catch-up). It ships BESIDE the existing
+// hand-written `broadcast*` fanout (dual delivery); the client dedupes by event
+// `id` + per-entity `version`, so a row delivered by both paths is harmless.
+// 015b deletes the legacy fanout subsystem-by-subsystem as the relay proves it.
+// NEVER call relay.drain() inside a db.transaction(...) closure (ADR Non-goal).
+const liveRelay = new LiveRelay({ hub: wsHub });
+liveRelay.primeToHead();
 
 const runtimeSnapshots = new OrchestratorRuntimeSnapshots();
 
@@ -657,6 +669,47 @@ const mailboxWorkerSweep = setInterval(() => {
 }, MAILBOX_WORKER_SWEEP_MS);
 if (typeof mailboxWorkerSweep.unref === 'function') mailboxWorkerSweep.unref();
 
+// Slice 015a — universal post-commit relay drain. Gateways write the outbox row
+// in-txn; this short-interval drain fans the committed rows to subscribers
+// regardless of which subsystem wrote them, so 015a delivers via the relay for
+// EVERY domain without yet touching any call site (dual delivery beside the
+// existing fanout). 015b replaces this blanket timer with explicit post-commit
+// drains as each subsystem's hand-fanout is deleted. Unref'd; never blocks
+// shutdown. Drain is re-entrant-safe and a no-op when there's nothing new.
+const LIVE_RELAY_DRAIN_MS = 250;
+const liveRelayDrainSweep = setInterval(() => {
+  try {
+    liveRelay.drain();
+  } catch (err) {
+    console.warn('[live-relay] drain pass failed:', (err as Error).message);
+  }
+}, LIVE_RELAY_DRAIN_MS);
+if (typeof liveRelayDrainSweep.unref === 'function') liveRelayDrainSweep.unref();
+
+// Slice 015a — outbox prune by size AND age (whichever hits first). The outbox
+// is a transient delivery buffer, not an event store; prune by fixed size/age,
+// never by a live-cursor watermark. A reconnecting client whose cursor predates
+// the new floor self-heals via the `resetRequired` → full-domain-reload path.
+const LIVE_OUTBOX_MAX_ROWS = 10_000;
+const LIVE_OUTBOX_MAX_AGE_MS = 60 * 60 * 1000; // 1h
+const LIVE_OUTBOX_PRUNE_MS = 5 * 60 * 1000; // every 5m
+function pruneLiveOutboxSafe(): void {
+  try {
+    const result = pruneLiveOutbox({
+      maxRows: LIVE_OUTBOX_MAX_ROWS,
+      maxAgeMs: LIVE_OUTBOX_MAX_AGE_MS,
+    });
+    if (result.deleted > 0) {
+      console.log(`[live-relay] pruned ${result.deleted} outbox row(s); floor=${result.floor}`);
+    }
+  } catch (err) {
+    console.warn('[live-relay] outbox prune failed:', (err as Error).message);
+  }
+}
+pruneLiveOutboxSafe();
+const liveOutboxPruneSweep = setInterval(pruneLiveOutboxSafe, LIVE_OUTBOX_PRUNE_MS);
+if (typeof liveOutboxPruneSweep.unref === 'function') liveOutboxPruneSweep.unref();
+
 // Boot-sweep orphaned `open` ask-shadow rows to `expired` (a lost /api/ask
 // connection cannot be unblocked). Inspectable, not a resume.
 {
@@ -1025,6 +1078,11 @@ registerRuntimeHostWebSocketServer<ReturnType<ProjectRuntime['ensurePty']>, Proj
   startOrchestratorPtyInBackground,
   broadcastTo,
   broadcastSendQueueSnapshot,
+  // Slice 015a — per-socket cursor catch-up. The relay replays the outbox window
+  // `(lastVersion, snapshot]` to this socket on its `subscribe` handshake; live
+  // rows then arrive via the hub subscription attached on connect.
+  catchUp: (socket, lastVersion, projectId) =>
+    liveRelay.catchUp(socket, lastVersion, projectId),
   ensureOrchestratorPty,
   resolvePendingAsk: (id, answer) => {
     const resolved = pendingAsks.resolve(id, answer);
@@ -1036,6 +1094,8 @@ registerRuntimeHostWebSocketServer<ReturnType<ProjectRuntime['ensurePty']>, Proj
 function gracefulShutdown(): void {
   clearInterval(agentRunReconcileSweep);
   clearInterval(mailboxWorkerSweep);
+  clearInterval(liveRelayDrainSweep);
+  clearInterval(liveOutboxPruneSweep);
   projectRegistry.shutdownAll();
   channelServer.shutdown();
 }

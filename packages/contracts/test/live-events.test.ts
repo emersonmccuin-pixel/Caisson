@@ -5,12 +5,36 @@ import {
   buildLiveEventFrame,
   isLiveEvent,
   isLiveEventFrame,
+  isLiveEventResetFrame,
+  isLiveEventSubscribe,
   isProjectChangedLiveEvent,
   isProjectChangedLiveEventFrame,
   parseListLiveEventsQuery,
   toProjectChangedRefetchEnvelope,
   type ProjectChangedLiveEvent,
 } from '../src/index.ts';
+
+// ── Slice 015a — subscribe handshake + reset guards ────────────────────────
+
+test('isLiveEventSubscribe accepts valid handshakes and rejects bad cursors', () => {
+  assert.equal(isLiveEventSubscribe({ type: 'subscribe' }), true);
+  assert.equal(isLiveEventSubscribe({ type: 'subscribe', lastVersion: '42' }), true);
+  assert.equal(
+    isLiveEventSubscribe({ type: 'subscribe', lastVersion: '7', projectId: 'p1' }),
+    true,
+  );
+  assert.equal(isLiveEventSubscribe({ type: 'subscribe', lastVersion: 'abc' }), false);
+  assert.equal(isLiveEventSubscribe({ type: 'subscribe', lastVersion: '-1' }), false);
+  assert.equal(isLiveEventSubscribe({ type: 'subscribe', projectId: '' }), false);
+  assert.equal(isLiveEventSubscribe({ type: 'other' }), false);
+});
+
+test('isLiveEventResetFrame accepts global and project reset frames', () => {
+  assert.equal(isLiveEventResetFrame({ type: 'live-reset', projectId: null, cursor: '9' }), true);
+  assert.equal(isLiveEventResetFrame({ type: 'live-reset', projectId: 'p1', cursor: null }), true);
+  assert.equal(isLiveEventResetFrame({ type: 'live-reset', projectId: null, cursor: 'x' }), false);
+  assert.equal(isLiveEventResetFrame({ type: 'live-event' }), false);
+});
 
 const projectDto = {
   id: 'p1',
