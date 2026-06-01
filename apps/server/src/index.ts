@@ -464,6 +464,36 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
   }
 }
 
+// Slice 017 Fix 4 — workflow-run boot reconciliation (slice 004 was imported
+// but never invoked). Mirrors the agent-run boot reconcile above: interrupted
+// `running`/`pending` runs fail-closed with `interrupted-on-boot` + a durable
+// `workflow.run.changed` (reason:'reconciled') fact; `paused` runs are skipped.
+{
+  try {
+    const workflowRunGateway = new WorkflowRunMutationGateway();
+    const wfResult = reconcileWorkflowRunsOnBoot({
+      listRuns: () => workflowRunsV2Repo.listRunsByStatus(RECONCILE_SCAN_STATUSES),
+      failClosed: (run, reason) => {
+        workflowRunGateway.commitRunChange({
+          projectId: run.projectId,
+          reason: 'reconciled',
+          mutate: () => {
+            workflowRunsV2Repo.setStatus(run.id, 'failed', { lastReason: reason });
+            return workflowRunsV2Repo.getRun(run.id);
+          },
+        });
+      },
+    });
+    if (wfResult.failed > 0) {
+      console.log(
+        `[workflow-runs] boot reconcile: failed-closed=${wfResult.failed}, skippedPaused=${wfResult.skippedPaused}, scanned=${wfResult.scanned}`,
+      );
+    }
+  } catch (err) {
+    console.error('[workflow-runs] boot reconcile failed:', (err as Error).message);
+  }
+}
+
 // State-propagation overhaul Step 1 (docs/state-propagation-decision.md):
 // continuous reconcile sweep. Events = latency, reconcile = correctness — a
 // terminal transition the live host event stream dropped still converges here
