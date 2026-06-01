@@ -101,6 +101,39 @@ export function useLiveEntitySignature(
   });
 }
 
+/** T1.1 — every global-scope live event the store holds for `entity`
+ *  (`scope === 'global'`, i.e. `projectId === null`). Distinct from
+ *  `useLiveEvents`, whose null-projectId early-return is load-bearing for the
+ *  project views. This is the project-less selector T3.1 will also reuse. */
+export function useLiveGlobalEvents(entity: LiveEventEntity | null): LiveEvent[] {
+  const byKey = useLiveStore((s) => s.byKey);
+  return useMemo(() => {
+    if (!entity) return [];
+    const out: LiveEvent[] = [];
+    for (const ev of byKey.values()) {
+      if (ev.entity !== entity) continue;
+      if (ev.projectId !== null) continue;
+      out.push(ev);
+    }
+    return out;
+  }, [byKey, entity]);
+}
+
+/** Stable signature of the global-scope frame set for `entity`; flips only when
+ *  a global frame for that entity lands (new id, or newer version/cursor). */
+export function useLiveGlobalSignature(entity: LiveEventEntity | null): string {
+  return useLiveStore((s) => {
+    if (!entity) return '';
+    let sig = '';
+    for (const ev of s.byKey.values()) {
+      if (ev.entity !== entity) continue;
+      if (ev.projectId !== null) continue;
+      sig += `${ev.entityId}:${ev.version ?? ev.cursor};`;
+    }
+    return sig;
+  });
+}
+
 /** Latest live snapshot of every work item the store has seen for this project,
  *  including soft-deleted ones (carry `deletedAt` so the view can drop them). */
 export function useLiveWorkItems(projectId: string): WorkItem[] {

@@ -21,7 +21,8 @@ export type LiveOutboxEntity =
   | 'pending-interaction'
   | 'session-title'
   | 'pod'
-  | 'area';
+  | 'area'
+  | 'host-health';
 
 export interface InsertLiveEventDraft<TPayload = unknown> {
   id?: ULID;

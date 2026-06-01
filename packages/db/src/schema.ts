@@ -101,6 +101,7 @@ export const liveOutbox = sqliteTable(
         | 'session-title'
         | 'pod'
         | 'area'
+        | 'host-health'
       >(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),

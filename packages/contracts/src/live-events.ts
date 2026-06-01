@@ -16,7 +16,8 @@ export type LiveEventEntity =
   | 'pending-interaction'
   | 'session-title'
   | 'pod'
-  | 'area';
+  | 'area'
+  | 'host-health';
 
 /** Canonical live-event type names. Replay accepts these for `type=` filtering. */
 export type LiveEventTypeName =
@@ -35,7 +36,8 @@ export type LiveEventTypeName =
   | 'pending-interaction.changed'
   | 'session.title.changed'
   | 'pod.changed'
-  | 'area.changed';
+  | 'area.changed'
+  | 'host-health.changed';
 
 const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'project.changed',
@@ -54,6 +56,7 @@ const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'session.title.changed',
   'pod.changed',
   'area.changed',
+  'host-health.changed',
 ];
 
 export function isLiveEventTypeName(value: unknown): value is LiveEventTypeName {
@@ -244,8 +247,42 @@ function isLiveEventEntity(value: unknown): value is LiveEventEntity {
     value === 'pending-interaction' ||
     value === 'session-title' ||
     value === 'pod' ||
-    value === 'area'
+    value === 'area' ||
+    value === 'host-health'
   );
+}
+
+/** T1.1 — wire payload for the global `host-health.changed` live event. One
+ *  source of truth for the host-connection liveness shape; `HostConnection`
+ *  (server) emits this, `HostHealthPill` (web) renders it. */
+export interface HostHealthSnapshot {
+  state: 'connected' | 'reconnecting' | 'down';
+  hostId: string | null;
+  pid: number | null;
+  lastError?: string;
+  /** ms epoch the current state began. */
+  since: number;
+}
+
+export interface HostHealthChangedLivePayload {
+  health: HostHealthSnapshot;
+}
+
+export function isHostHealthSnapshot(value: unknown): value is HostHealthSnapshot {
+  return (
+    isRecord(value) &&
+    (value.state === 'connected' || value.state === 'reconnecting' || value.state === 'down') &&
+    (value.hostId === null || typeof value.hostId === 'string') &&
+    (value.pid === null || typeof value.pid === 'number') &&
+    (value.lastError === undefined || typeof value.lastError === 'string') &&
+    typeof value.since === 'number'
+  );
+}
+
+export function isHostHealthChangedLivePayload(
+  value: unknown,
+): value is HostHealthChangedLivePayload {
+  return isRecord(value) && isHostHealthSnapshot(value.health);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

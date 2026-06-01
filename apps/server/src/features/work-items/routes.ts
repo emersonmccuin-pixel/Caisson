@@ -58,7 +58,9 @@ export interface WorkItemRoutesDeps {
   broadcastTo(projectId: ULID, msg: unknown): void;
   refreshProject(project: Project): void;
   channelServer: ChannelServer;
-  hostClient?: AgentHostReattachClient | null;
+  /** T1.1 — resolve the live HostConnection PER REQUEST (not by-value at
+   *  register time) so a host respawn on a new port is picked up with no API restart. */
+  getHostConnection?: () => AgentHostReattachClient | null;
 }
 
 function verificationReviewStatus(err: VerificationReviewError): 400 | 404 | 409 {
@@ -384,6 +386,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
         400,
       );
     }
+    const host = deps.getHostConnection?.() ?? null;
     try {
       const result = await rejectAgentWorkItem(
         {
@@ -396,7 +399,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
         {
           channelServer: deps.channelServer,
           broadcast: (env) => deps.broadcastTo(projectId, env),
-          ...(deps.hostClient ? { hostClient: deps.hostClient } : {}),
+          ...(host ? { hostClient: host } : {}),
         },
       );
       if (result.workItem.projectId !== projectId) {

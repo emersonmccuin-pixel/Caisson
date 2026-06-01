@@ -48,6 +48,8 @@ import { OrchestratorRuntimeSnapshots } from './services/orchestrator-runtime-sn
 import { ProjectWebSocketHub } from './services/websocket-hub.ts';
 import { LiveRelay } from './services/live-relay.ts';
 import { announceSessionTitle } from './services/session-title-writer.ts';
+import { createHostConnection, toHostHealthSnapshot } from './services/host-connection.ts';
+import { announceHostHealth } from './services/host-health-writer.ts';
 import { drainPendingForSession } from './services/agent-delivery.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
 import { sweepEphemeralWorkItems } from './services/ephemeral-work-item-sweep.ts';
@@ -253,6 +255,15 @@ const projectScaffold = new ProjectScaffold({
 });
 
 let agentHostClientForDispatch: AgentHostReattachClient | null = null;
+
+// T1.1 — the one long-lived HostConnection for the DISPATCH path. Lock-file is
+// the sole source of host identity; `sendCommand` re-discovers + reconnects on a
+// dead baseUrl, so a host respawn on a new port is picked up with NO API restart
+// (kills T1-A). Built BESIDE the boot-reattach/sweep `agentHostClientForDispatch`
+// (reconcile-first; those migrate in T1.2/T2.3). Health transitions write the
+// durable global `host-health` live-event consumed by the UI pill.
+const hostConnection = createHostConnection({ dataDir: DATA });
+hostConnection.onHealthChange((h) => announceHostHealth(toHostHealthSnapshot(h)));
 
 // Remove/quarantine legacy PC Claude runtime files from project roots before
 // any Claude process starts. PC now passes session-local `--settings`,
@@ -997,7 +1008,7 @@ registerWorkItemRoutes(app, {
   broadcastTo,
   refreshProject: (project) => projectRegistry.refresh(project),
   channelServer,
-  hostClient: agentHostClientForDispatch,
+  getHostConnection: () => hostConnection,
 });
 
 registerAreaRoutes(app, { resolveProject });
@@ -1013,7 +1024,7 @@ registerWorktreeRoutes(app, { resolveProject });
 registerAgentRunRoutes(app, {
   channelServer,
   broadcastTo,
-  hostClient: agentHostClientForDispatch,
+  getHostConnection: () => hostConnection,
   // Slice 008 — gated agent delivery. Default env router resolves to `channel`
   // unless PC_DELIVERY_AGENT=mailbox is set; the port enqueues + fans out the
   // mailbox message frame (the worker then drains delivery + fans delivery frames).
@@ -1121,6 +1132,7 @@ function gracefulShutdown(): void {
   clearInterval(mailboxWorkerSweep);
   clearInterval(liveRelayDrainSweep);
   clearInterval(liveOutboxPruneSweep);
+  hostConnection.close();
   projectRegistry.shutdownAll();
   channelServer.shutdown();
 }

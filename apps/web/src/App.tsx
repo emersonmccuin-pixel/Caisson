@@ -6,6 +6,7 @@ import { AppSettingsModal } from '@/components/AppSettingsModal';
 import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { SessionSwitcher } from '@/components/SessionSwitcher';
+import { HostHealthPill } from '@/features/system/HostHealthPill';
 import { Shell } from '@/components/Shell';
 import { tabLabel } from '@/components/Tabs';
 import { liveEventsApi } from '@/features/live/client';
@@ -395,6 +396,7 @@ export default function App() {
           </div>
         )}
         <div className="ml-auto flex items-center gap-3 text-[10px] uppercase tracking-[0.04em]">
+          <HostHealthPill />
           {telemetryModel && (
             <span className="flex items-center gap-1.5" title="Active orchestrator model">
               <span className="text-[var(--fg-dim)]">model</span>

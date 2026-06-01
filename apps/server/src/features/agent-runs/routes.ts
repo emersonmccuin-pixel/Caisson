@@ -51,7 +51,10 @@ export interface AgentRunActiveRegistry {
 export interface AgentRunRouteDeps {
   channelServer: ChannelServer;
   broadcastTo(projectId: ULID, msg: unknown): void;
-  hostClient?: AgentHostReattachClient | null;
+  /** T1.1 — resolve the live HostConnection PER REQUEST (not captured by-value
+   *  at register time) so a host respawn on a new port is picked up without an
+   *  API restart. */
+  getHostConnection?: () => AgentHostReattachClient | null;
   /** Slice 008 — per-flow delivery gate (default channel). */
   deliveryRouter?: DeliveryRouter;
   /** Slice 008 — mailbox enqueue port; threaded into the factory/terminal/
@@ -126,13 +129,18 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
   const deliveryRouter = deps.deliveryRouter ?? envDeliveryRouter();
   const mailboxEnqueue = deps.mailboxEnqueue ?? null;
 
+  // T1.1 — resolve the live host connection PER CALL (the route no longer
+  // captures it by-value at register time, which is what kept dispatch broken
+  // after a host respawn until the API restarted).
+  const resolveHost = (): AgentHostReattachClient | null => deps.getHostConnection?.() ?? null;
+
   // OBJ-2A — on-demand host level-read for the pause gate. Refreshes the host's
   // run cache (the same `list-runs` primitive the reconcile sweep uses) then
   // re-reads THIS run, so an immediate `pc_ask_user` decides from authority
   // instead of waiting up to 15s for the next sweep tick. Only meaningful when
   // a host client exists; the pause call wires it conditionally.
-  const hostClient = deps.hostClient ?? null;
   const hostRunStateReader = async (id: ULID): Promise<AgentRunState | null> => {
+    const hostClient = resolveHost();
     if (!hostClient) return null;
     // `list-runs` refresh + find-by-runId — the SAME primitive the reconcile
     // sweep uses (index.ts), staying on the AgentHostReattachClient interface.
@@ -312,6 +320,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       return c.json({ ok: false, error: depthCheck.error, cause: depthCheck.cause }, 400);
     }
 
+    const host = resolveHost();
     const result = await services.dispatchFreshAgent(
       {
         projectId,
@@ -329,7 +338,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         deliveryRouter,
         mailboxEnqueue,
         broadcast: (env) => deps.broadcastTo(projectId, env),
-        ...(deps.hostClient ? { hostClient: deps.hostClient } : {}),
+        ...(host ? { hostClient: host } : {}),
       },
     );
 
@@ -416,6 +425,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       );
     }
 
+    const host = resolveHost();
     const result = await services.dispatchContinueAgent(
       {
         projectId,
@@ -431,7 +441,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         deliveryRouter,
         mailboxEnqueue,
         broadcast: (env) => deps.broadcastTo(projectId, env),
-        ...(deps.hostClient ? { hostClient: deps.hostClient } : {}),
+        ...(host ? { hostClient: host } : {}),
       },
     );
 
@@ -560,7 +570,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         // OBJ-2A — on-demand host level-read closes the early-ask race: a fresh
         // host round-trip when the DB row is still queued/spawning. Only wired
         // when an out-of-process host client is present; in-process omits it.
-        ...(deps.hostClient ? { hostRunState: hostRunStateReader } : {}),
+        ...(resolveHost() ? { hostRunState: hostRunStateReader } : {}),
       },
     );
 
