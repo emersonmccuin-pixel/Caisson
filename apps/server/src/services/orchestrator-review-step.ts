@@ -6,6 +6,13 @@
 //
 // Pure async function with all dependencies injected so it's unit-testable
 // without standing up a real channel server. Matches the 4a.5 pattern.
+//
+// Slice 015b — the transient `review-pending` hand-broadcast is removed. The
+// durable workflow.review.changed fact is written + delivered by the live DAG
+// run path (dag-run-service `commitReviewChange` → in-txn live_outbox row → the
+// 015a relay). This legacy step's broadcast had no durable row and no UI
+// consumer, so it was a pure no-bypass-gate violation; deleting it is the
+// migration.
 
 import type {
   NodeOutput,
@@ -18,7 +25,6 @@ import { buildWorkflowEventHeader } from './workflow-event-header.ts';
 import type { SubstituteTemplate } from './typed-substitution.ts';
 
 export type PostChannel = (body: string) => Promise<void>;
-export type BroadcastFn = (event: unknown) => void;
 
 /** Slice 008 — gated mailbox review delivery for the legacy step dispatcher.
  *  When present and it returns true, the review prompt was enqueued as a
@@ -38,7 +44,6 @@ export interface OrchestratorReviewStepDeps {
   workflow: Workflow;
   substituteTemplate: SubstituteTemplate;
   postChannel: PostChannel;
-  broadcast: BroadcastFn;
   /** Slice 008 — optional gated mailbox delivery (default: Channel via postChannel). */
   deliverReview?: DeliverReview;
 }
@@ -76,19 +81,6 @@ export async function runOrchestratorReviewStep(
       };
     }
   }
-  deps.broadcast({
-    type: 'event',
-    event: {
-      kind: 'review-pending',
-      flavor: 'orchestrator',
-      ts: new Date().toISOString(),
-      workflowRunId: run.id,
-      nodeId: node.id,
-      prompt,
-      artifact,
-      on_revise_prompt: onRevisePrompt,
-    },
-  });
   return { kind: 'async' };
 }
 

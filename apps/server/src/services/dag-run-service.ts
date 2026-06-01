@@ -38,8 +38,6 @@ import { announceRunCreated, writeDagAndStatus } from './workflow-run-writer.ts'
 import { announceAgentRunChange } from './agent-run-writer.ts';
 import { WorkflowRunMutationGateway } from '@pc/app-services';
 import {
-  buildLiveEventFrame,
-  buildWorkflowReviewPendingRefetchEnvelope,
   type WorkflowReviewFlavor,
   type WorkflowReviewState,
 } from '@pc/contracts';
@@ -90,13 +88,15 @@ export type WorkflowReviewDelivery = (input: {
   body: string;
 }) => boolean;
 
-// Slice 004 — durable workflow.review.changed facts via the run gateway. The
-// run-row state still flows through workflow-run-writer; this is the review
-// audit/action surface that mirrors the transient workflow-v2-review-pending.
+// Slice 015b — durable workflow.review.changed facts via the run gateway. The
+// gateway writes the in-txn `live_outbox` row; the 015a relay drains + delivers
+// it. The run-row state still flows through workflow-run-writer; this is the
+// review audit/action surface. The old hand-fanned canonical frame + legacy
+// `workflow-v2-review-pending` envelope are deleted — delivery is door-only.
 const reviewGateway = new WorkflowRunMutationGateway();
 
 function emitReviewFact(
-  opts: { projectId: ULID; broadcast: (event: unknown) => void },
+  opts: { projectId: ULID },
   input: {
     runId: ULID;
     nodeId: string;
@@ -106,7 +106,7 @@ function emitReviewFact(
     notes?: string;
   },
 ): void {
-  const pub = reviewGateway.commitReviewChange({
+  reviewGateway.commitReviewChange({
     projectId: opts.projectId,
     runId: input.runId,
     nodeId: input.nodeId,
@@ -115,19 +115,6 @@ function emitReviewFact(
     ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
     ...(input.notes !== undefined ? { notes: input.notes } : {}),
   });
-  opts.broadcast(buildLiveEventFrame(pub.liveEvent));
-  // Legacy compat: only the pending state had a transient broadcast name.
-  if (input.state === 'pending') {
-    opts.broadcast(
-      buildWorkflowReviewPendingRefetchEnvelope({
-        projectId: opts.projectId,
-        runId: input.runId,
-        nodeId: input.nodeId,
-        flavor: input.flavor,
-        prompt: input.prompt ?? null,
-      }),
-    );
-  }
 }
 
 export interface DagRunServiceOptions {
@@ -682,26 +669,18 @@ export function makeExecutorDeps(
         await postChannel(body, 'workflow');
       }
     }
-    // Slice 004 — durable workflow.review.changed (pending) fact + canonical
-    // frame via the gateway. Then the legacy transient broadcast (unchanged
-    // wire shape incl. `bundle`) for existing clients.
-    const reviewPub = reviewGateway.commitReviewChange({
+    // Slice 015b — durable workflow.review.changed (pending) fact via the
+    // gateway's in-txn live_outbox row. The 015a relay drains + delivers it;
+    // the web `scanWorkflowLiveEvents` consumer reads the canonical frame. The
+    // old hand-fanned frame + legacy `workflow-v2-review-pending` envelope are
+    // deleted — delivery flows through the door only.
+    reviewGateway.commitReviewChange({
       projectId: opts.projectId,
       runId: run.id,
       nodeId: node.id,
       flavor,
       state: 'pending',
       prompt: node.prompt ?? null,
-    });
-    opts.broadcast(buildLiveEventFrame(reviewPub.liveEvent));
-    opts.broadcast({
-      type: 'workflow-v2-review-pending',
-      projectId: opts.projectId,
-      runId: run.id,
-      nodeId: node.id,
-      flavor,
-      prompt: node.prompt ?? null,
-      bundle,
     });
   };
 
