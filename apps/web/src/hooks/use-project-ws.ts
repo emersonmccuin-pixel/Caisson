@@ -36,9 +36,11 @@ import {
 import {
   chatSessionReducer,
   createChatSessionState,
+  EMPTY_AGGREGATES,
   materializeChatSessionEvents,
   replayEventsFromEnvelope,
   replayEventsFromItems,
+  type ChatSessionAggregates,
 } from '@/hooks/chat-session-reducer';
 import { useWsEpoch } from '@/store/ws-epoch';
 import { useLiveStore } from '@/store/live-store';
@@ -51,6 +53,7 @@ import {
 
 interface UseProjectWsResult {
   events: WsEnvelope[];
+  aggregates: ChatSessionAggregates;
   status: WsStatus;
   diagnostics: WsDiagnostics;
   clear: () => void;
@@ -96,6 +99,13 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
       project && sessionState.projectId === project.id
         ? materializeChatSessionEvents(sessionState)
         : [],
+    [project, sessionState],
+  );
+  const aggregates = useMemo(
+    () =>
+      project && sessionState.projectId === project.id
+        ? sessionState.aggregates
+        : EMPTY_AGGREGATES,
     [project, sessionState],
   );
   const [status, setStatus] = useState<WsStatus>('idle');
@@ -405,6 +415,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
 
   return {
     events,
+    aggregates,
     status,
     diagnostics,
     clear: () => {

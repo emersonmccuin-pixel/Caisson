@@ -457,6 +457,7 @@ export default function App() {
           onProjectReorder={handleProjectReorder}
           unreadProjectIds={unreadProjectIds}
           wsEvents={ws.events}
+          wsAggregates={ws.aggregates}
           wsSend={ws.send}
           wsStatus={ws.status}
           wsDiagnostics={ws.diagnostics}

@@ -6,6 +6,7 @@ import {
   isProjectChangedRefetchEnvelope,
 } from '@/features/projects/live-events';
 import type {
+  JsonlEvent,
   RuntimeStateEnvelope,
   SendAckEnvelope,
   SendQueueSnapshotEnvelope,
@@ -35,6 +36,24 @@ interface EnvEntry {
   env: WsEnvelope;
 }
 
+// Incrementally-maintained stream projection. A pure derivation of the same
+// event stream the reducer owns — running token totals + latest model /
+// session-state / turn-duration. Maintained O(1)-amortized at the single
+// append site so consumers never re-fold the whole timeline per frame.
+export interface ChatSessionAggregates {
+  usage: { inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number };
+  latestModel: string | null;          // most-recent jsonl-usage.model (non-null)
+  latestSessionState: string | null;   // most-recent jsonl-session-state.state
+  lastTurnDurationMs: number | null;    // most-recent jsonl-turn-duration.durationMs (non-null)
+}
+
+export const EMPTY_AGGREGATES: ChatSessionAggregates = {
+  usage: { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 },
+  latestModel: null,
+  latestSessionState: null,
+  lastTurnDurationMs: null,
+};
+
 export interface ChatSessionReducerState {
   projectId: string | null;
   activeSessionId: string | null;
@@ -44,6 +63,7 @@ export interface ChatSessionReducerState {
   sequenced: SequencedEntry[];
   unsequenced: EnvEntry[];
   terminalRaw: EnvEntry[];
+  aggregates: ChatSessionAggregates;
 }
 
 export type ChatSessionReducerAction =
@@ -61,7 +81,43 @@ export function createChatSessionState(projectId: string | null): ChatSessionRed
     sequenced: [],
     unsequenced: [],
     terminalRaw: [],
+    aggregates: EMPTY_AGGREGATES,
   };
+}
+
+// Pure: derive next aggregates from prev + one envelope. Returns prev (same
+// reference) when the envelope contributes nothing → referential stability.
+function foldAggregate(prev: ChatSessionAggregates, env: WsEnvelope): ChatSessionAggregates {
+  if (env.type !== 'jsonl') return prev;
+  const ev = (env as WsEnvelope & { event?: JsonlEvent }).event;
+  if (!ev) return prev;
+  switch (ev.kind) {
+    case 'jsonl-usage':
+      return {
+        ...prev,
+        usage: {
+          inputTokens: prev.usage.inputTokens + ev.inputTokens,
+          outputTokens: prev.usage.outputTokens + ev.outputTokens,
+          cacheCreationTokens: prev.usage.cacheCreationTokens + ev.cacheCreationTokens,
+          cacheReadTokens: prev.usage.cacheReadTokens + ev.cacheReadTokens,
+        },
+        latestModel: ev.model ?? prev.latestModel,
+      };
+    case 'jsonl-session-state':
+      return prev.latestSessionState === ev.state ? prev : { ...prev, latestSessionState: ev.state };
+    case 'jsonl-turn-duration':
+      return ev.durationMs == null ? prev : { ...prev, lastTurnDurationMs: ev.durationMs };
+    default:
+      return prev;
+  }
+}
+
+// Pure: full recompute from a materialized event list (used by snapshot/replay
+// paths, where we rebuild `sequenced`/`timeline` wholesale). Deterministic.
+export function aggregatesFromEvents(events: WsEnvelope[]): ChatSessionAggregates {
+  let agg = EMPTY_AGGREGATES;
+  for (const env of events) agg = foldAggregate(agg, env);
+  return agg;
 }
 
 export function chatSessionReducer(
@@ -195,6 +251,10 @@ export function applySnapshot(
     timeline: preserved.timeline,
     unsequenced: preserved.unsequenced,
     terminalRaw: preserveTerminalRaw(state, sessionId),
+    // Re-seed wholesale from the replay set (NOT carry-forward) — a snapshot is
+    // a full re-seed of the live timeline; carrying prior aggregates would
+    // double-count a live jsonl-usage the snapshot also contains.
+    aggregates: aggregatesFromEvents(replayEvents),
   };
 
   for (const entry of sequenced) {
@@ -229,6 +289,8 @@ export function applyDelta(
   const activeSessionId = state.activeSessionId ?? entry.sessionId;
   const existing = state.sequenced.find((candidate) => candidate.key === entry.key);
   if (existing) {
+    // Dedupe/replace branch — the envelope was already folded on first arrival.
+    // Do NOT fold again or a re-delivered jsonl-usage would double-count.
     return {
       ...state,
       activeSessionId,
@@ -247,6 +309,9 @@ export function applyDelta(
     highWaterSeq: Math.max(state.highWaterSeq, entry.seq),
     timeline,
     sequenced,
+    // Fold ONLY on the genuinely-new entry. foldAggregate returns the same
+    // reference when the envelope contributes nothing → referential stability.
+    aggregates: foldAggregate(state.aggregates, entry.env),
   });
 }
 
@@ -335,6 +400,7 @@ function applySessionChanged(
         timeline: preserved.timeline,
         unsequenced: preserved.unsequenced,
         terminalRaw: [],
+        aggregates: EMPTY_AGGREGATES,
       },
       env,
       (candidate) => candidate.type === 'session-changed',
@@ -558,6 +624,9 @@ function trimTimeline(state: ChatSessionReducerState): ChatSessionReducerState {
   const droppedEnvKeys = new Set(
     dropped.filter((entry) => entry.kind === 'env').map((entry) => entry.key),
   );
+  // `aggregates` is carried forward UNTOUCHED (via ...state). Totals are
+  // session-cumulative and decoupled from timeline retention; recomputing from
+  // the trimmed (windowed) set would corrupt them.
   return {
     ...state,
     timeline: state.timeline.slice(dropCount),

@@ -17,13 +17,13 @@ import {
   orchestratorInputCapabilities,
 } from '@/features/chat/runtimeState';
 import type {
-  JsonlEvent,
   WsDiagnostics,
   WsEnvelope,
   WsOutbound,
   WsStatus,
 } from '@/features/runtime/ws-types';
-import { useOrchestratorTelemetry, type UsageTotals } from '@/store/orchestrator-telemetry';
+import type { ChatSessionAggregates } from '@/hooks/chat-session-reducer';
+import { useOrchestratorTelemetry } from '@/store/orchestrator-telemetry';
 import { useViewingSession } from '@/store/viewing-session';
 import { useChatOpen } from '@/store/chat-open';
 import { ChatSurface } from '@/features/chat/ChatSurface';
@@ -38,6 +38,7 @@ import type { ULID } from '@/features/projects/types';
 interface OrchestratorProps {
   project: Project;
   events: WsEnvelope[];
+  aggregates: ChatSessionAggregates;
   send: (msg: WsOutbound) => boolean;
   wsStatus: WsStatus;
   wsDiagnostics: WsDiagnostics;
@@ -213,6 +214,7 @@ function composerStatusMessageFor(
 export function Orchestrator({
   project,
   events,
+  aggregates,
   send,
   wsStatus,
   wsDiagnostics,
@@ -327,38 +329,10 @@ export function Orchestrator({
   const sourceEvents = viewingSessionId ? pastEvents : events;
   const isViewingPast = viewingSessionId !== null;
 
-  // Session token usage — sum jsonl-usage envelopes across the current stream.
-  // Sidechain entries short-circuit at the tailer, so subagent tokens aren't
-  // included here. Past-session view: jsonl-usage envelopes survive in
-  // events.jsonl since 0e, so the bar still shows useful numbers.
-  const sessionUsage = useMemo<UsageTotals>(() => {
-    const totals: UsageTotals = {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheCreationTokens: 0,
-      cacheReadTokens: 0,
-    };
-    for (const env of events) {
-      if (env.type !== 'jsonl') continue;
-      const ev = (env as WsEnvelope & { event: JsonlEvent }).event;
-      if (!ev || ev.kind !== 'jsonl-usage') continue;
-      totals.inputTokens += ev.inputTokens;
-      totals.outputTokens += ev.outputTokens;
-      totals.cacheCreationTokens += ev.cacheCreationTokens;
-      totals.cacheReadTokens += ev.cacheReadTokens;
-    }
-    return totals;
-  }, [events]);
-
-  const liveModel = useMemo<string | null>(() => {
-    for (let i = events.length - 1; i >= 0; i--) {
-      const env = events[i]!;
-      if (env.type !== 'jsonl') continue;
-      const ev = (env as WsEnvelope & { event: JsonlEvent }).event;
-      if (ev?.kind === 'jsonl-usage' && ev.model) return ev.model;
-    }
-    return session?.model ?? null;
-  }, [events, session?.model]);
+  // Session token usage + live model — maintained incrementally in the reducer
+  // (O(1) per appended event), handed in as referentially-stable `aggregates`.
+  // Preserve the `session?.model` fallback the old liveModel memo had.
+  const liveModel = aggregates.latestModel ?? session?.model ?? null;
 
   // Section 32.4 — publish telemetry into a shared store so App.tsx's
   // slim header can render the same model + token roll-up the StatusBar
@@ -371,8 +345,8 @@ export function Orchestrator({
   const setRuntime = useOrchestratorTelemetry((s) => s.setRuntime);
   const clearTelemetry = useOrchestratorTelemetry((s) => s.clear);
   useEffect(() => {
-    setTelemetry({ model: liveModel, usage: sessionUsage });
-  }, [liveModel, sessionUsage, setTelemetry]);
+    setTelemetry({ model: liveModel, usage: aggregates.usage });
+  }, [liveModel, aggregates.usage, setTelemetry]);
   useEffect(() => {
     setSessionMeta({
       sessionId: session?.id ?? null,
@@ -382,23 +356,10 @@ export function Orchestrator({
   useEffect(() => () => clearTelemetry(), [clearTelemetry]);
 
   // Section 31.3 — most-recent CC `session_state_changed` value seen in
-  // JSONL. States: `idle` / `running` / `requires_action`. Drives the
-  // composer placeholder hint when the user needs to act. Stays null if the
-  // signal hasn't fired yet — Section 31's firing matrix shows it didn't
-  // fire in 22k rows of 2026-05-25 captures, so we use it ADDITIVELY for
-  // now and keep the legacy hook-based `sessionEnded` scan below as the
-  // disable fallback until we verify the new signal fires reliably in PTY
-  // mode. The buildout's "drop the hook-event scan" step is gated on that
-  // empirical confirmation.
-  const latestSessionState = useMemo<string | null>(() => {
-    for (let i = events.length - 1; i >= 0; i--) {
-      const env = events[i]!;
-      if (env.type !== 'jsonl') continue;
-      const ev = (env as WsEnvelope & { event: JsonlEvent }).event;
-      if (ev?.kind === 'jsonl-session-state') return ev.state;
-    }
-    return null;
-  }, [events]);
+  // JSONL. States: `idle` / `running` / `requires_action`. Drives the composer
+  // placeholder hint when the user needs to act. Maintained incrementally in
+  // the reducer; null until the first session-state envelope lands.
+  const latestSessionState = aggregates.latestSessionState;
 
   const latestRuntimeState = useMemo<string | null>(() => {
     for (let i = events.length - 1; i >= 0; i--) {
@@ -411,24 +372,13 @@ export function Orchestrator({
     return null;
   }, [events]);
 
-  // Section 31.8 — latest `jsonl-turn-duration` durationMs. Fires AFTER
-  // `jsonl-turn-end`; composer status line shows the most-recent value as
-  // a "Ns" tail. Walk newest-first; null until the first turn lands.
-  const lastTurnDurationMs = useMemo<number | null>(() => {
-    for (let i = events.length - 1; i >= 0; i--) {
-      const env = events[i]!;
-      if (env.type !== 'jsonl') continue;
-      const ev = (env as WsEnvelope & { event: JsonlEvent }).event;
-      if (ev?.kind === 'jsonl-turn-duration' && ev.durationMs != null) {
-        return ev.durationMs;
-      }
-    }
-    return null;
-  }, [events]);
+  // Section 31.8 — latest `jsonl-turn-duration` durationMs. Maintained
+  // incrementally in the reducer; null until the first turn lands.
+  const lastTurnDurationMs = aggregates.lastTurnDurationMs;
 
   useEffect(() => {
-    setRuntime({ sessionState: latestSessionState, lastTurnDurationMs });
-  }, [latestSessionState, lastTurnDurationMs, setRuntime]);
+    setRuntime({ sessionState: aggregates.latestSessionState, lastTurnDurationMs });
+  }, [aggregates.latestSessionState, aggregates.lastTurnDurationMs, setRuntime]);
 
   // Process lifecycle is not chat lifecycle. Hook-level session-end events can
   // be replayed from old claude.exe exits; they should not close an active PC

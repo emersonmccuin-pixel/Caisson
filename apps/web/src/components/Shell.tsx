@@ -21,6 +21,7 @@ import type {
   WsOutbound,
   WsStatus,
 } from '@/features/runtime/ws-types';
+import type { ChatSessionAggregates } from '@/hooks/chat-session-reducer';
 import { useProjectAgentRuns } from '@/hooks/use-project-agent-runs';
 import { useActiveCenterTab } from '@/store/active-center-tab';
 import { useActiveProject } from '@/store/active-project';
@@ -54,6 +55,7 @@ interface ShellProps {
   onProjectReorder: (orderedIds: string[]) => void;
   unreadProjectIds: ReadonlySet<string>;
   wsEvents: WsEnvelope[];
+  wsAggregates: ChatSessionAggregates;
   wsSend: (msg: WsOutbound) => boolean;
   wsStatus: WsStatus;
   wsDiagnostics: WsDiagnostics;
@@ -71,6 +73,7 @@ export function Shell({
   onProjectReorder,
   unreadProjectIds,
   wsEvents,
+  wsAggregates,
   wsSend,
   wsStatus,
   wsDiagnostics,
@@ -122,6 +125,7 @@ export function Shell({
             activeProject={activeProject}
             projectCount={projects.length}
             wsEvents={wsEvents}
+            wsAggregates={wsAggregates}
             wsSend={wsSend}
             wsStatus={wsStatus}
             wsDiagnostics={wsDiagnostics}
@@ -205,6 +209,7 @@ function Center({
   activeProject,
   projectCount,
   wsEvents,
+  wsAggregates,
   wsSend,
   wsStatus,
   wsDiagnostics,
@@ -217,6 +222,7 @@ function Center({
   activeProject: Project | null;
   projectCount: number;
   wsEvents: WsEnvelope[];
+  wsAggregates: ChatSessionAggregates;
   wsSend: (msg: WsOutbound) => boolean;
   wsStatus: WsStatus;
   wsDiagnostics: WsDiagnostics;
@@ -243,6 +249,7 @@ function Center({
           <Orchestrator
             project={activeProject}
             events={wsEvents}
+            aggregates={wsAggregates}
             send={wsSend}
             wsStatus={wsStatus}
             wsDiagnostics={wsDiagnostics}
