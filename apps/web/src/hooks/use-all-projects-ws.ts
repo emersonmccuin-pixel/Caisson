@@ -24,6 +24,12 @@ import {
   shouldAcceptProjectWsEnvelope,
 } from '@/features/projects/live-events';
 import {
+  advanceLiveCursor,
+  clearLiveCursor,
+  liveCursorScopeForProject,
+} from '@/features/live/hooks';
+import { useLiveStore } from '@/store/live-store';
+import {
   createHeartbeatPing,
   heartbeatTimedOut,
   nextBackoffMs,
@@ -195,6 +201,25 @@ function openWithBackoff(
       }
       if (!shouldAcceptProjectWsEnvelope(env, projectId)) return;
       if (env.type === 'server-pong') return;
+      // T3.2 — feed the single identity-keyed live store from the BACKGROUND
+      // fleet too (use-project-ws does this for the active socket). Global
+      // `project.changed` frames from a non-active project now reach the store,
+      // so the App's signature-driven refetch sees them.
+      if (env.type === 'live-event') {
+        const cursor = (env as { event?: { cursor?: unknown } }).event?.cursor;
+        if (typeof cursor === 'string') {
+          advanceLiveCursor(liveCursorScopeForProject(projectId), cursor);
+        }
+        useLiveStore.getState().applyEnvelope(env);
+      }
+      if (env.type === 'live-reset') {
+        // Open Q1 — the fleet has no epoch wiring; lowest-risk reset is to clear
+        // the store + this socket's cursor and let the App's HTTP catch-up effect
+        // reconcile against fresh truth (no useWsEpoch on the background fleet).
+        clearLiveCursor(liveCursorScopeForProject(projectId));
+        useLiveStore.getState().clearAll();
+        return;
+      }
       if (env.type === 'event') {
         const inner = (env.event as { ts?: unknown } | undefined) ?? {};
         if (typeof inner.ts === 'string') {

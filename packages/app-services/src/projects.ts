@@ -275,7 +275,10 @@ export function buildProjectChangedLiveEventDraft(
     projectId: null,
     type: 'project.changed',
     entity: 'project',
-    entityId: (payload.projectIdChanged as DomainULID | undefined) ?? null,
+    // Reorder frames carry no projectIdChanged → give them a stable synthetic id
+    // so the store (which drops null-entityId frames) keeps them and the global
+    // `project` signature advances on a reorder. ULIDs are never literal 'reorder'.
+    entityId: (payload.projectIdChanged as DomainULID | undefined) ?? ('reorder' as DomainULID),
     version: null,
     payload,
   };
@@ -308,7 +311,9 @@ function buildEphemeralProjectChangedLiveEvent(
     projectId: null,
     type: 'project.changed',
     entity: 'project',
-    entityId: payload.projectIdChanged ?? null,
+    // Match buildProjectChangedLiveEventDraft: reorder frames get the synthetic
+    // id so ephemeral (no-tx) and relayed (DB round-trip) frames agree.
+    entityId: payload.projectIdChanged ?? ('reorder' as ContractULID),
     version: null,
     createdAt: Date.now(),
     payload,

@@ -14,15 +14,13 @@ import {
   readStoredProjectChangedCursor,
   writeStoredProjectChangedCursor,
 } from '@/features/live/hooks';
-import {
-  projectChangedLiveEventFromUnknown,
-  scanProjectChangedEvents,
-} from '@/features/projects/live-events';
+import { projectChangedLiveEventFromUnknown } from '@/features/projects/live-events';
 import { useAllProjectsWs } from '@/hooks/use-all-projects-ws';
 import { useProjectUnread } from '@/hooks/use-project-unread';
 import { useProjectWs } from '@/hooks/use-project-ws';
 import { useRichLinkInvalidator } from '@/hooks/use-rich-link-invalidator';
 import { useStatuslineSync } from '@/hooks/use-statusline-sync';
+import { useLiveGlobalSignature } from '@/store/live-store';
 import { useActiveCenterTab } from '@/store/active-center-tab';
 import { useActiveProject } from '@/store/active-project';
 import { useAppSettingsModal } from '@/store/app-settings-modal';
@@ -46,10 +44,13 @@ export default function App() {
   const [brandMenuOpen, setBrandMenuOpen] = useState(false);
   const brandMenuRef = useRef<HTMLDivElement | null>(null);
   const brandButtonRef = useRef<HTMLButtonElement | null>(null);
-  const projectChangedScanRef = useRef({ active: 0, background: 0 });
   const projectChangedCursorRef = useRef<string | null>(readStoredProjectChangedCursor());
   const seenProjectChangedLiveIdsRef = useRef<Set<string>>(new Set());
   const replayInFlightRef = useRef(false);
+  // Tracks whether the cold load has completed, read by the signature-driven
+  // refetch effect WITHOUT depping `projects` (depping it would reintroduce the
+  // c6288afd object-churn loop).
+  const projectsLoadedRef = useRef(false);
 
   // Section 10 Phase 2 — first-run onboarding gate. `?onboarding=force` opens
   // it with real preflight; `?onboarding=sim` opens it on a faked blank machine
@@ -90,7 +91,16 @@ export default function App() {
   const activityPanelOpen = settings?.activityPanel.open ?? true;
 
   useEffect(() => {
-    void projectsApi.listProjects().then(setProjects).catch(() => setProjects([]));
+    void projectsApi
+      .listProjects()
+      .then((p) => {
+        projectsLoadedRef.current = true;
+        setProjects(p);
+      })
+      .catch(() => {
+        projectsLoadedRef.current = true;
+        setProjects([]);
+      });
     void settingsApi.getSettings().then(setSettings).catch(() => {
       /* best-effort — surfaces as gear icon disabled until next load */
     });
@@ -134,36 +144,26 @@ export default function App() {
   useRichLinkInvalidator(activeProject?.id ?? null);
   useStatuslineSync(activeProject?.id ?? null, ws.events);
 
+  // T3.2 — global `project` signature from the identity-keyed live store. Flips
+  // ONLY when a real project.changed frame lands (any socket, active or
+  // background), never on WS array identity churn. Drives the refetch below.
+  const projectSig = useLiveGlobalSignature('project');
+
   const storeProjectChangedCursor = useCallback((cursor: string | null) => {
     if (!cursor) return;
     projectChangedCursorRef.current = maxCursor(projectChangedCursorRef.current, cursor);
     writeStoredProjectChangedCursor(projectChangedCursorRef.current);
   }, []);
 
+  // T3.2 — refetch the project list off the live store's `project` signature,
+  // NOT off WS array identity. Deps are EXACTLY [projectSig] (a stable string):
+  // setProjects returning a new array can NOT re-trigger this, which is what
+  // removes the c6288afd freeze. `projects` is read via a ref (projectsLoadedRef)
+  // on purpose — depping it would reintroduce that loop.
   useEffect(() => {
-    const scan = projectChangedScanRef.current;
-    const activeStart = ws.events.length < scan.active ? 0 : scan.active;
-    const backgroundStart = backgroundWs.events.length < scan.background ? 0 : scan.background;
-    const activeResult = scanProjectChangedEvents(
-      ws.events,
-      activeStart,
-      seenProjectChangedLiveIdsRef.current,
-    );
-    const backgroundResult = scanProjectChangedEvents(
-      backgroundWs.events,
-      backgroundStart,
-      seenProjectChangedLiveIdsRef.current,
-    );
-    const shouldRefetch =
-      activeResult.shouldRefetch || backgroundResult.shouldRefetch;
-    storeProjectChangedCursor(maxCursor(activeResult.latestCursor, backgroundResult.latestCursor));
-    projectChangedScanRef.current = {
-      active: ws.events.length,
-      background: backgroundWs.events.length,
-    };
-    if (!shouldRefetch) return;
+    if (!projectsLoadedRef.current) return; // skip before the first cold load
     void projectsApi.listProjects().then(setProjects).catch(() => {});
-  }, [ws.events, backgroundWs.events, storeProjectChangedCursor]);
+  }, [projectSig]);
 
   useEffect(() => {
     if (projects === null || replayInFlightRef.current) return;
