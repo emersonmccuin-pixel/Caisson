@@ -390,6 +390,12 @@ async function resolvePodId(
   }
 }
 
+// Slice 011 (11E) — pod-CRUD responses are LEFT RAW. `@pc/contracts/pods.ts`
+// only models pod live-events (PodChanged*), not the pod-CRUD HTTP response
+// bodies (create/get/update/delete pod, knowledge, secret, mcp-server, audit,
+// list). Adding a pod-response DTO to @pc/contracts is a STOP-and-confirm per
+// the plan §16, so these handlers keep emitting the raw res.body via the
+// existing ctx.* helpers — byte-identical, no typed-client seam.
 export async function handleAgentTool(
   name: string,
   args: Record<string, unknown>,

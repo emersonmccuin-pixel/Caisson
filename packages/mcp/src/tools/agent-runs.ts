@@ -272,7 +272,8 @@ export async function handleAgentRunTool(
       if (parentWorkItemId) payload.parentWorkItemId = parentWorkItemId;
       if (workItemId) payload.workItemId = workItemId;
       try {
-        const res = await ctx.postServer(
+        // Slice 011 — typed client parses AgentRunDto; raw body emitted verbatim.
+        const res = await ctx.client.invokeAgent(
           `/api/projects/${ctx.projectId}/agents/${encodeURIComponent(agentName)}/invoke`,
           payload,
         );
@@ -333,7 +334,7 @@ export async function handleAgentRunTool(
           dispatcherSessionId: ctx.dispatcherSessionId,
         };
         if (continueWorkItemId) continuePayload.workItemId = continueWorkItemId;
-        const res = await ctx.postServer(
+        const res = await ctx.client.continueAgent(
           `/api/projects/${ctx.projectId}/agent-runs/${encodeURIComponent(runId)}/continue`,
           continuePayload,
         );
@@ -536,7 +537,7 @@ export async function handleAgentRunTool(
       if (context !== undefined) payload.context = context;
       if (options !== undefined) payload.options = options;
       try {
-        const res = await ctx.postServer(ctx.projectPath('agent-pending-asks'), payload);
+        const res = await ctx.client.createPendingAsk(ctx.projectPath('agent-pending-asks'), payload);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }
@@ -576,7 +577,7 @@ export async function handleAgentRunTool(
         };
       }
       try {
-        const res = await ctx.postServer(
+        const res = await ctx.client.answerPendingAsk(
           ctx.projectPath(`agent-pending-asks/${encodeURIComponent(pendingAskId)}/answer`),
           { answer, answeredBy: answeredByRaw },
         );
