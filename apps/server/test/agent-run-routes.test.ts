@@ -16,11 +16,11 @@ const {
   getAgentRunRow,
   getPendingAsk,
   insertAgentRunRow,
+  listLiveOutboxRowsAfter,
   newId,
   runMigrations,
 } = await import('@pc/db');
 const { registerAgentRunRoutes } = await import('../src/features/agent-runs/routes.ts');
-const { isAgentRunChangedLiveEventFrame } = await import('@pc/contracts');
 
 before(() => runMigrations());
 after(() => {
@@ -78,7 +78,7 @@ test('reads (/agent-runs) return the legacy shimmed shape and do not emit', asyn
   assert.equal(broadcasts.length, 0);
 });
 
-test('phantom-cancel: cancelling a paused run with NO registry handle finalizes the row + emits canonical + legacy', async () => {
+test('phantom-cancel: cancelling a paused run with NO registry handle finalizes the row + writes the live outbox (no legacy broadcast)', async () => {
   const broadcasts: unknown[] = [];
   const { app } = mkApp(broadcasts);
   const project = createProject({
@@ -121,14 +121,23 @@ test('phantom-cancel: cancelling a paused run with NO registry handle finalizes 
   assert.equal(getAgentRunRow(runId)?.status, 'cancelled');
   assert.equal(getPendingAsk(askId)?.status, 'cancelled');
 
-  // Canonical frame + legacy envelope fanned out.
-  assert.ok(broadcasts.some((b) => isAgentRunChangedLiveEventFrame(b)));
+  // Slice 015b — the durable agent.run.changed fact is written to the live
+  // outbox (the relay drains + delivers it); the legacy `agent-run-changed`
+  // hand-broadcast is GONE.
+  const outboxRows = listLiveOutboxRowsAfter('0', 500);
   assert.ok(
-    broadcasts.some(
-      (b) =>
-        (b as { type?: string }).type === 'agent-run-changed' &&
-        (b as { record?: { status?: string } }).record?.status === 'cancelled',
+    outboxRows.some(
+      (r) =>
+        r.entity === 'agent-run' &&
+        r.entityId === runId &&
+        (r.payload as { run?: { status?: string } } | null)?.run?.status === 'cancelled',
     ),
+    'expected a cancelled agent-run row in the live outbox',
+  );
+  assert.equal(
+    broadcasts.filter((b) => (b as { type?: string }).type === 'agent-run-changed').length,
+    0,
+    'legacy agent-run-changed hand-broadcast must be gone',
   );
 });
 

@@ -1,21 +1,20 @@
 // Activity-panel feeder for the "Running agents" region.
 //
-// Section 18.10: now a thin wrapper around the generic `useResourceList<T>`.
-// The server's `agent-run-changed` envelope already carries the full
-// `AgentRunRecord` snapshot (Topic 5 lock — was the canonical reference
-// shape pre-rewrite). The local map drops terminal rows on the per-envelope
-// branch and then refetches, since the server's list endpoint filters
-// terminal rows out (running-agents view only).
+// Section 18.10: a thin wrapper around the generic `useResourceList<T>`.
+// Slice 015b: now consumes the canonical relay `live-event` frame
+// (entity `agent-run`, `agent.run.changed`) instead of the legacy
+// `agent-run-changed` envelope. The frame's payload carries the full
+// `AgentRunDto` snapshot with the current rev (apply-if-full-record — no
+// refetch needed). The local map drops terminal rows on the per-frame branch
+// and then refetches, since the server's list endpoint filters terminal rows
+// out (running-agents view only).
+
+import { isAgentRunChangedLivePayload } from '@pc/contracts';
 
 import type { Project } from '@/features/projects/client';
 import { agentRunsApi, type AgentRunRecord } from '@/features/agent-runs/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useResourceList } from '@/hooks/use-resource-list';
-
-interface AgentRunChangedEnvelope extends WsEnvelope {
-  type: 'agent-run-changed';
-  record: AgentRunRecord;
-}
 
 const TERMINAL = new Set<AgentRunRecord['status']>([
   'completed',
@@ -28,11 +27,13 @@ export function useProjectAgentRuns(
   events: WsEnvelope[],
 ): { runs: AgentRunRecord[] } {
   const { records } = useResourceList<AgentRunRecord>(project, events, {
-    envelopeKind: 'agent-run-changed',
-    extractSnapshot: (env, projectId) => {
-      const e = env as AgentRunChangedEnvelope;
-      if (!e.record || e.record.projectId !== projectId) return null;
-      return e.record;
+    liveEventEntity: 'agent-run',
+    extractFromLiveEvent: (event, projectId) => {
+      if (!isAgentRunChangedLivePayload(event.payload)) return null;
+      const run = event.payload.run;
+      if (run.projectId !== projectId) return null;
+      // AgentRunDto → legacy AgentRunRecord: re-add the constant `wait:false`.
+      return { ...run, wait: false } as AgentRunRecord;
     },
     getId: (r) => r.runId,
     isTerminal: (r) => TERMINAL.has(r.status),

@@ -1,3 +1,5 @@
+import { isLiveEventFrame } from '@pc/contracts';
+
 import type { SessionReplayItem, SessionTransitionResponse } from '@/features/runtime/client';
 import {
   isProjectChangedLiveEventFrame,
@@ -132,7 +134,13 @@ function applyEnvelope(
     state.projectId &&
     env.projectId !== state.projectId &&
     !isProjectChangedRefetchEnvelope(env) &&
-    !isProjectChangedLiveEventFrame(env)
+    !isProjectChangedLiveEventFrame(env) &&
+    // Slice 015b — relay-delivered `live-event` frames carry their scope in
+    // `event.projectId` (no top-level `projectId`). Keep any frame for this
+    // project (or a global-scope frame) in the timeline so the resource-list
+    // hooks can consume it; reject another project's rows.
+    !(isLiveEventFrame(env) &&
+      (env.event.projectId === null || env.event.projectId === state.projectId))
   ) {
     return state;
   }

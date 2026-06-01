@@ -16,20 +16,36 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { isLiveEventFrame, type LiveEvent, type LiveEventEntity } from '@pc/contracts';
+
 import type { Project } from '@/features/projects/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useWsEpoch } from '@/store/ws-epoch';
 
 export interface ResourceListConfig<T> {
-  /** WS envelope kind that carries snapshots for this resource. */
-  envelopeKind: string;
-  /** Extract the record from a matching envelope. Return null to skip
+  /** Legacy WS envelope kind that carries snapshots for this resource. Optional
+   *  once a subsystem has migrated to the canonical `live-event` frame path
+   *  (set `liveEventEntity` + `extractFromLiveEvent` instead). When omitted, the
+   *  legacy-envelope branch is skipped entirely. */
+  envelopeKind?: string;
+  /** Slice 015b — canonical `{type:'live-event', event}` frame consumption. When
+   *  set, the scan ALSO matches generic live-event frames whose
+   *  `event.entity === liveEventEntity` and applies `extractFromLiveEvent`. This
+   *  is the relay-delivered path; the per-entity `event.version`/record `rev`
+   *  drives the same out-of-order dedup. */
+  liveEventEntity?: LiveEventEntity;
+  /** Extract the record from a matching canonical live-event. Return null to
+   *  skip (wrong project / unusable payload). Required when `liveEventEntity`
+   *  is set. */
+  extractFromLiveEvent?: (event: LiveEvent, projectId: string) => T | null;
+  /** Extract the record from a matching legacy envelope. Return null to skip
    *  (e.g., envelope is for a different project, missing snapshot field,
    *  or otherwise doesn't apply). The hook passes the active project id
    *  so the extractor can do its own project-match check against the
    *  envelope's `projectId` (the per-project WS is already scoped, but
-   *  the defensive guard keeps the hook safe if that ever changes). */
-  extractSnapshot: (env: WsEnvelope, projectId: string) => T | null;
+   *  the defensive guard keeps the hook safe if that ever changes). Only
+   *  consulted when `envelopeKind` is set. */
+  extractSnapshot?: (env: WsEnvelope, projectId: string) => T | null;
   /** Stable id for the record — used as the map key. */
   getId: (record: T) => string;
   /** Terminal-status predicate. Terminal transitions trigger a wholesale
@@ -109,8 +125,8 @@ export function useResourceList<T>(
 
     for (let i = start; i < events.length; i++) {
       const env = events[i];
-      if (!env || env.type !== config.envelopeKind) continue;
-      const record = config.extractSnapshot(env, project.id);
+      if (!env) continue;
+      const record = extractRecord(env, project.id, config);
       if (!record) continue;
       const id = config.getId(record);
       const terminal = config.isTerminal(record);
@@ -156,4 +172,22 @@ export function useResourceList<T>(
       });
     },
   };
+}
+
+/** Pull a record out of one WS frame: the canonical relay `live-event` frame
+ *  (preferred, matched by `event.entity`) or the legacy typed envelope. Returns
+ *  null when the frame doesn't apply to this resource/project. */
+function extractRecord<T>(
+  env: WsEnvelope,
+  projectId: string,
+  config: ResourceListConfig<T>,
+): T | null {
+  if (config.liveEventEntity && config.extractFromLiveEvent && isLiveEventFrame(env)) {
+    if (env.event.entity !== config.liveEventEntity) return null;
+    return config.extractFromLiveEvent(env.event, projectId);
+  }
+  if (config.envelopeKind && config.extractSnapshot && env.type === config.envelopeKind) {
+    return config.extractSnapshot(env, projectId);
+  }
+  return null;
 }

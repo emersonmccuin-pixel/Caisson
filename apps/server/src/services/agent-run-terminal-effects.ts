@@ -98,9 +98,10 @@ export function applyAgentRunTerminalEffects(
 
   // Slice 005 — the terminal row flip + the durable agent.run.changed fact land
   // in ONE transaction through the gateway, which re-reads the post-write row
-  // for the correct rev, then we fan out canonical + legacy. When a test injects
-  // a `markTerminal` override (no real DB), fall back to the direct write +
-  // legacy broadcast so the gateway's getDb() path is never touched.
+  // for the correct rev. Slice 015b — the live-relay drains that outbox row and
+  // fans the canonical frame; the legacy `agent-run-changed` hand-broadcast is
+  // gone. When a test injects a `markTerminal` override (no real DB, no outbox),
+  // just do the direct write so the gateway's getDb() path is never touched.
   if (deps.markTerminal) {
     deps.markTerminal({
       id: input.runId,
@@ -110,7 +111,6 @@ export function applyAgentRunTerminalEffects(
       failureReason,
       completedAt,
     });
-    emitLegacyTerminalBroadcast({ input, row, completedAt, failureCause, failureReason, deps });
   } else {
     commitAgentRunTerminal(
       {
@@ -222,42 +222,6 @@ async function finishTerminalEffects(args: {
       verification,
     });
   }
-}
-
-/** Legacy-only terminal broadcast for the test-injection path (markTerminal
- *  override + no real DB). Production routes through the gateway. */
-function emitLegacyTerminalBroadcast(args: {
-  input: AgentRunTerminalEffectsInput;
-  row: AgentRunRow;
-  completedAt: number;
-  failureCause: AgentRunFailureCause | null;
-  failureReason: string | null;
-  deps: AgentRunTerminalEffectsDeps;
-}): void {
-  const { input, row, completedAt, failureCause, failureReason, deps } = args;
-  if (!deps.broadcast) return;
-  const updatedRow = (deps.getAgentRun ?? defaultGetAgentRunRow)(input.runId);
-  deps.broadcast(input.projectId, {
-    type: 'agent-run-changed',
-    record: {
-      runId: input.runId,
-      sessionId: input.ccSessionId,
-      agentName: input.podName,
-      model: 'opus',
-      projectId: input.projectId,
-      parentWorkItemId: row.parentWorkItemId,
-      dispatcherSessionId: input.dispatcherSessionId,
-      wait: false,
-      worktreeDir: input.worktreeDir,
-      startedAt: input.startedAt ?? row.queuedAt,
-      status: input.status,
-      result: input.status === 'completed' ? input.result ?? '' : '',
-      failureReason,
-      failureCause,
-      endedAt: completedAt,
-      rev: updatedRow?.rev ?? row.rev,
-    },
-  });
 }
 
 interface EmitTerminalArgs {

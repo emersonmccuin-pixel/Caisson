@@ -17,8 +17,6 @@ import {
   type AgentRunChangedPublication,
 } from '@pc/app-services';
 import {
-  buildLiveEventFrame,
-  toLegacyAgentRunRecord,
   type AgentRunChangedReason,
 } from '@pc/contracts';
 import type { AgentRunFailureCause, ULID } from '@pc/domain';
@@ -28,15 +26,18 @@ export type AgentRunBroadcast = (event: unknown) => void;
 
 const gateway = new AgentRunMutationGateway();
 
-/** Fan out a gateway publication: canonical live-event frame + legacy envelope.
- *  No-ops on a null publication (no row / replayed no-op / already terminal). */
+/** Slice 015b — the gateway writes the durable `live_outbox` row in-txn; the
+ *  live-relay drains it post-commit and fans the canonical `live-event` frame to
+ *  subscribers. The legacy `agent-run-changed` envelope + the hand live-frame
+ *  fanout are GONE (the web consumes the relay frame by `event.entity`). This
+ *  remains a no-op so existing callers stay structurally identical; the
+ *  `broadcast` arg is unused for run changes now (other envelope kinds still use
+ *  it directly at their own sites). */
 export function fanoutAgentRunChange(
-  pub: AgentRunChangedPublication | null,
-  broadcast: AgentRunBroadcast | undefined,
+  _pub: AgentRunChangedPublication | null,
+  _broadcast: AgentRunBroadcast | undefined,
 ): void {
-  if (!pub || !broadcast) return;
-  broadcast(buildLiveEventFrame(pub.liveEvent));
-  broadcast({ type: 'agent-run-changed', record: toLegacyAgentRunRecord(pub.run) });
+  /* relay-delivered; no hand fanout */
 }
 
 /** Re-read the row + announce a versioned snapshot through the durable outbox.

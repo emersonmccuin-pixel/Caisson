@@ -1,11 +1,10 @@
 import { existsSync } from 'node:fs';
 
 import {
-  AGENT_RUN_FAILURE_CAUSES,
-  type AgentRunFailureCause,
   type AgentRunRow,
   type ULID,
 } from '@pc/domain';
+import type { AgentRunChangedReason } from '@pc/contracts';
 import {
   getAgentRunRow as defaultGetAgentRunRow,
   getProjectById as defaultGetProjectById,
@@ -34,6 +33,7 @@ import {
 import {
   applyAgentRunTerminalEffects,
 } from './agent-run-terminal-effects.ts';
+import { announceAgentRunChange as defaultAnnounceAgentRunChange } from './agent-run-writer.ts';
 import type { DeliveryRouter } from './delivery-routing.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
 import {
@@ -63,6 +63,11 @@ export interface AgentHostReattachDeps {
   resolveJsonlPath?: (row: AgentRunRow) => string | null;
   jsonlExists?: (path: string) => boolean;
   broadcast?: (projectId: ULID, msg: unknown) => void;
+  /** Slice 015b — durable announce for host-driven status flips. Writes the
+   *  `live_outbox` row (relay delivers the canonical frame); replaces the old
+   *  direct `agent-run-changed` hand-broadcast. Injectable so the in-memory
+   *  reconcile tests (no real DB) can stub it. Defaults to the real gateway. */
+  announce?: typeof defaultAnnounceAgentRunChange;
   channelServer?: ChannelServer;
   /** Slice 008 — per-flow delivery gate (default channel). Forwarded to the
    *  terminal-effects envelope so host completions honor the agent gate. */
@@ -208,10 +213,12 @@ export function reconcileAgentRunsAgainstHost(
         ...(hostRun.spawnedAt !== null ? { spawnedAt: hostRun.spawnedAt } : {}),
         ...(hostRun.readyAt !== null ? { readyAt: hostRun.readyAt } : {}),
       });
-      deps.broadcast?.(row.projectId, {
-        type: 'agent-run-changed',
-        record: agentRunRecordFor(row, hostRun),
-      });
+      // Slice 015b — durable outbox row (relay delivers) instead of a direct
+      // `agent-run-changed` hand-broadcast. Re-reads the post-write row for rev.
+      (deps.announce ?? defaultAnnounceAgentRunChange)(
+        { runId: row.id, reason: hostStateToReason(hostRun.state) },
+        deps.broadcast ? (event) => deps.broadcast?.(row.projectId, event) : undefined,
+      );
       // OBJ-2A C-coherence — re-seed a registered host handle so display /
       // getState() readers + the OBJ-2 markPaused path see a fresh snapshot.
       // Convenience only; no gate reads the handle (those read the DB row).
@@ -247,10 +254,12 @@ export function applyAgentHostEvent(
           ...(event.run.spawnedAt !== null ? { spawnedAt: event.run.spawnedAt } : {}),
           ...(event.run.readyAt !== null ? { readyAt: event.run.readyAt } : {}),
         });
-        deps.broadcast?.(row.projectId, {
-          type: 'agent-run-changed',
-          record: agentRunRecordFor(row, event.run),
-        });
+        // Slice 015b — durable outbox row (relay delivers) instead of a direct
+        // `agent-run-changed` hand-broadcast. Re-reads the post-write row.
+        (deps.announce ?? defaultAnnounceAgentRunChange)(
+          { runId: row.id, reason: hostStateToReason(event.run.state) },
+          deps.broadcast ? (envt) => deps.broadcast?.(row.projectId, envt) : undefined,
+        );
         // OBJ-2A C-coherence — re-seed a registered host handle (convenience).
         const h = deps.activeRunRegistry?.get(row.id)?.run;
         if (h instanceof HostBackedActiveRunHandle) h.applySnapshot(event.run);
@@ -361,48 +370,21 @@ function resolveJsonlPath(
   return project ? jsonlPathFor(project.folderPath, row.ccSessionId) : null;
 }
 
-function agentRunRecordFor(row: AgentRunRow, snapshot: AgentHostRunSnapshot): {
-  runId: ULID;
-  sessionId: string;
-  agentName: string;
-  model: string;
-  projectId: ULID;
-  parentWorkItemId: ULID | null;
-  dispatcherSessionId: string;
-  wait: false;
-  worktreeDir: string;
-  startedAt: number;
-  status: AgentHostRunSnapshot['state'];
-  result: string;
-  failureReason: string | null;
-  failureCause: AgentRunFailureCause | null;
-  endedAt: number | null;
-  rev: number;
-} {
-  return {
-    runId: row.id,
-    sessionId: row.ccSessionId,
-    agentName: row.podName,
-    model: 'opus',
-    projectId: row.projectId,
-    parentWorkItemId: row.parentWorkItemId,
-    dispatcherSessionId: row.dispatcherSessionId,
-    wait: false,
-    worktreeDir: snapshot.worktreeDir,
-    startedAt: row.queuedAt,
-    status: snapshot.state,
-    result:
-      snapshot.terminalResult?.status === 'completed'
-        ? snapshot.terminalResult.result ?? ''
-        : row.result ?? '',
-    failureReason: snapshot.terminalResult?.failureReason ?? row.failureReason,
-    failureCause:
-      snapshot.terminalResult?.status === 'completed'
-        ? null
-        : coerceFailureCause(snapshot.terminalResult?.failureCause) ?? row.failureCause,
-    endedAt: snapshot.terminalAt ?? row.completedAt,
-    rev: row.rev,
-  };
+/** Slice 015b — map a host run state to the canonical `agent.run.changed`
+ *  reason for the durable announce. Unknown → `reconciled`. */
+function hostStateToReason(state: AgentHostRunSnapshot['state']): AgentRunChangedReason {
+  switch (state) {
+    case 'queued':
+    case 'spawning':
+    case 'running':
+    case 'paused':
+    case 'completed':
+    case 'failed':
+    case 'cancelled':
+      return state;
+    default:
+      return 'reconciled';
+  }
 }
 
 function hostSnapshotMatchesRow(
@@ -443,13 +425,6 @@ function isTerminalState(
 
 function isDbTerminal(status: AgentRunRow['status']): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
-}
-
-function coerceFailureCause(value: string | null | undefined): AgentRunFailureCause | null {
-  if (!value) return null;
-  return (AGENT_RUN_FAILURE_CAUSES as readonly string[]).includes(value)
-    ? (value as AgentRunFailureCause)
-    : null;
 }
 
 function emptyResult(): ApplyAgentHostEventResult {
