@@ -1,6 +1,21 @@
 # Next Session Handoff — refactor/auto-pathway
 
-# ▶▶ START HERE — current execution plan (updated 2026-06-01)
+# ▶▶ START HERE — current execution plan (updated 2026-06-01, late session)
+
+## ✅ THEME 3 (one-door live-UI) COMPLETE + LIVE-VERIFIED. DO NEXT = 017 Phase C.
+**This session shipped the entire 015→018 "one door" close + a second UI-freeze root-fix.** Commits in order:
+- `c6288afd` **UI freeze (2nd distinct loop) FIXED** — NOT the same as the prior Orchestrator fix. Root: App refetched the whole project list on every WS frame → fresh `activeProject` object → `useProjectWs` (keyed on the OBJECT) tore down+rebuilt the socket → new snapshot → refetch → infinite reconnect/render storm (`use-project-ws.ts:255`/`usePendingPrompts.ts`). Fix = key the socket + events memo on `project.id` (string), + make usePendingPrompts idempotent. **The old freeze memory said "fixed" — it was a DIFFERENT loop; both are now fixed.**
+- `f2996b37`+`01a7776a` mailbox **cards** (collapsed title+type, expand for body; capped) + **human titles** (server subject "Agent X completed/failed"; client skips `[pc:agent-event…]`/`[runId:]` markers) + **terminal-transcript 404** softened (unknown session → 200-empty, not 404; the remaining cross-project 404 is a benign transient in the terminal pane).
+- **THEME 3 (`548a006e`→`5d1ed1a7`):** T3.2 (project-list refetch off the store, retires the blunt pattern behind the freeze) → T3.2b (12 views) → T3.2c (attachments) → **T3.3 the CUT** (live-event frames early-return in the WS handler, never enter the chat reducer/timeline; reducer admission + reset-retention deleted) → **T3.4 gate** (static no-bypass test, allowlist EMPTY, planted-bypass self-check). **T3.1 was committed earlier (`c4542d2c`).**
+- **LIVE-VERIFIED (combined, fallback deleted):** project rename → sidebar live; mailbox dismiss → inbox live; **work-item rename → Kanban live** (payload consumer, biggest group); **0 max-update-depth / 0 console errors**. The store is now the SOLE live path; the staleness/freeze class is structurally eliminated.
+
+**DO NEXT = 017 Phase C** (delete the legacy Channel delivery path) — `build-slices/T3.3-timeline-cut.md` notes it unblocks now; the 017 plan §Phase C + `foundational-hardening-design.md` THEME 3 (~line 359) have the steps: delete `delivery-routing.ts` + its `mode(flow)` branches, the Channel fallback in `agent-delivery.ts` (`readTransportMode`/`channel-only`/`channelServer.emitToSession`), keep the external-webhook ingest → mailbox, tighten the server gate. (Host-aware kill/cancel that Phase C also lists = **T1.3**, still planned, doc `build-slices/T1.3-host-aware-kill-cancel.md`.)
+**Also remaining (small, deferred):** the vestigial unused `_events` param on the resource-list hook family (`use-resource-list.ts` + `use-project-{stages,workflows,areas,pods,agent-runs,work-items,workflow-v2-runs}.ts`) — pure dead-code cleanup; fold into any touching session. Track A (T2.x failure-policy/watchdog) + T1.3/T1.4 + 013/014 still open per below.
+**Parallel-session note:** a co-worker shipped chat diff-view work (`c632737d` + others) into this branch; `CLAUDE-difftest.md` in the repo root is their stray fixture (not mine). All my commits staged selectively to avoid sweeping theirs.
+
+---
+
+# ▶▶ (prior) START HERE — current execution plan (updated 2026-06-01)
 
 **Where we are:** slices 001–011, 015, 016, 018 DONE + live-verified; 017 Phase A done. The big live-UI staleness is FIXED (018). All remaining real work is captured below; everything else unchecked in the tracker is stale bookkeeping (see "Stale rows" at the bottom of this block).
 
