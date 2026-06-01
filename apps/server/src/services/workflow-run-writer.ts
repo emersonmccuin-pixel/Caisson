@@ -18,7 +18,6 @@ import {
   type WorkflowRunChangedPublication,
 } from '@pc/app-services';
 import {
-  buildLiveEventFrame,
   buildWorkflowRunChangedRefetchEnvelope,
   type WorkflowRunChangedReason,
 } from '@pc/contracts';
@@ -43,10 +42,13 @@ function reasonForStatus(status: WorkflowV2.WorkflowRunStatus): WorkflowRunChang
   }
 }
 
-/** Fan out a gateway publication: canonical live-event frame + legacy envelope. */
+/** Fan out a gateway publication. Slice 015b: the canonical `live-event` frame
+ *  is now delivered by the live-relay draining the in-txn `live_outbox` row —
+ *  the hand frame fanout is GONE (the web consumes the relay frame by
+ *  `event.entity`). The legacy `workflow-v2-run-changed` envelope stays for the
+ *  drawer / other consumers until slice 015c retires it. */
 function fanout(pub: WorkflowRunChangedPublication | null, broadcast: RunBroadcast): void {
   if (!pub) return;
-  broadcast(buildLiveEventFrame(pub.liveEvent));
   broadcast(
     buildWorkflowRunChangedRefetchEnvelope({ projectId: pub.run.projectId, run: pub.run }),
   );
