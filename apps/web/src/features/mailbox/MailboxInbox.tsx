@@ -99,13 +99,19 @@ function rowTitle(message: MailboxInboxItem['message']): string {
   const subject = message.subject?.trim();
   if (subject) return subject;
   const lines = message.body.split('\n').map((l) => l.trim()).filter(Boolean);
-  const humanLine = lines.find((l) => !l.startsWith('[pc:agent-event'));
+  // Agent-terminal bodies are a machine envelope ([pc:agent-event …] then
+  // [runId: …]) with no human text — derive a label from the event kind rather
+  // than echoing a marker line.
+  if (lines[0]?.startsWith('[pc:agent-event')) {
+    const markerKind = lines[0].match(/kind=([a-z-]+)/)?.[1];
+    if (markerKind === 'agent-completed') return 'Agent completed';
+    if (markerKind === 'agent-failed') return 'Agent failed';
+    if (markerKind === 'agent-queued-started') return 'Agent started';
+    return KIND_LABELS[message.kind];
+  }
+  // Otherwise the first non-empty, non-bracket-marker line is the human title.
+  const humanLine = lines.find((l) => !l.startsWith('['));
   if (humanLine) return humanLine;
-  // Body is only the agent-event marker (the historical agent-terminal case).
-  // Derive a friendly label from its `kind=` so the card isn't `[pc:agent-event…]`.
-  const markerKind = lines[0]?.match(/kind=([a-z-]+)/)?.[1];
-  if (markerKind === 'agent-completed') return 'Agent completed';
-  if (markerKind === 'agent-failed') return 'Agent failed';
   return KIND_LABELS[message.kind];
 }
 
