@@ -19,44 +19,44 @@ function clearEnv(): void {
   for (const k of Object.values(ENV_KEYS)) delete process.env[k];
 }
 
-test('default (no env) resolves every flow to channel — byte-identical to today', () => {
+test('default (no env) resolves every flow to mailbox — slice 017 Phase A flip', () => {
   clearEnv();
-  for (const flow of FLOWS) assert.equal(readDeliveryMode(flow), 'channel');
+  for (const flow of FLOWS) assert.equal(readDeliveryMode(flow), 'mailbox');
   clearEnv();
 });
 
-test('unknown / garbage value falls back to channel (fail-safe)', () => {
+test('unknown / garbage value falls back to mailbox (the new default)', () => {
   clearEnv();
   for (const flow of FLOWS) {
     process.env[ENV_KEYS[flow]] = 'nonsense';
-    assert.equal(readDeliveryMode(flow), 'channel');
+    assert.equal(readDeliveryMode(flow), 'mailbox');
   }
   clearEnv();
 });
 
-test('explicit mailbox value resolves to mailbox; case-insensitive + trimmed', () => {
+test('explicit channel value still forces channel; case-insensitive + trimmed', () => {
   clearEnv();
-  process.env.PC_DELIVERY_AGENT = '  MailBox ';
-  assert.equal(readDeliveryMode('agent'), 'mailbox');
+  process.env.PC_DELIVERY_AGENT = '  ChAnnel ';
+  assert.equal(readDeliveryMode('agent'), 'channel');
   clearEnv();
 });
 
 test('the three flows are independent', () => {
   clearEnv();
-  process.env.PC_DELIVERY_AGENT = 'mailbox';
-  // others unset
-  assert.equal(readDeliveryMode('agent'), 'mailbox');
-  assert.equal(readDeliveryMode('workflow-review'), 'channel');
-  assert.equal(readDeliveryMode('webhook'), 'channel');
+  process.env.PC_DELIVERY_AGENT = 'channel';
+  // others unset → default mailbox
+  assert.equal(readDeliveryMode('agent'), 'channel');
+  assert.equal(readDeliveryMode('workflow-review'), 'mailbox');
+  assert.equal(readDeliveryMode('webhook'), 'mailbox');
   clearEnv();
 });
 
 test('envDeliveryRouter reads from env per flow', () => {
   clearEnv();
-  process.env.PC_DELIVERY_WEBHOOK = 'mailbox';
+  process.env.PC_DELIVERY_WEBHOOK = 'channel';
   const router = envDeliveryRouter();
-  assert.equal(router.mode('webhook'), 'mailbox');
-  assert.equal(router.mode('agent'), 'channel');
+  assert.equal(router.mode('webhook'), 'channel');
+  assert.equal(router.mode('agent'), 'mailbox');
   clearEnv();
 });
 

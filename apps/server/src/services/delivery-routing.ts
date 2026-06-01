@@ -1,9 +1,10 @@
 // Slice 008 — per-flow delivery selector (Channel ↔ mailbox cutover gate).
+// Slice 017 Phase A — default flipped Channel → mailbox.
 //
-// THE SAFETY INVARIANT: every flow DEFAULTS to `'channel'`. An absent or
-// unknown env value resolves to `'channel'` (mirrors `readTransportMode()` in
-// agent-delivery.ts). With no env set, the app's delivery behavior is
-// byte-identical to today — Channel is the default + fallback, NOT deleted.
+// THE DEFAULT: every flow now DEFAULTS to `'mailbox'`. An absent or unknown env
+// value resolves to `'mailbox'` (mirrors `readTransportMode()` in
+// agent-delivery.ts). Setting `PC_DELIVERY_*=channel` still forces the legacy
+// Channel path — flipping back stays possible until Phase C deletes the gate.
 //
 // The three flows are independent and individually reversible:
 //   - PC_DELIVERY_AGENT          — agent completed/failed/queued-started/asks
@@ -23,10 +24,11 @@ const ENV_KEY: Record<DeliveryFlow, string> = {
   webhook: 'PC_DELIVERY_WEBHOOK',
 };
 
-/** Resolve a flow's mode. Unknown/missing ⟹ `'channel'` (fail-safe to today). */
+/** Resolve a flow's mode. Unknown/missing ⟹ `'mailbox'` (Phase A default).
+ *  `PC_DELIVERY_*=channel` still forces the legacy Channel path. */
 export function readDeliveryMode(flow: DeliveryFlow): DeliveryMode {
   const raw = (process.env[ENV_KEY[flow]] ?? '').trim().toLowerCase();
-  return raw === 'mailbox' ? 'mailbox' : 'channel';
+  return raw === 'channel' ? 'channel' : 'mailbox';
 }
 
 /** A pure per-flow resolver. The env-backed default is used in production;
