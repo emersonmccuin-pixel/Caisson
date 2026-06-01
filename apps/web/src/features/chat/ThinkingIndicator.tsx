@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import type { WsStatus } from '@/features/runtime/ws-types';
 import { STALL_WARN_MS } from '@/features/chat/runtimeState';
@@ -38,13 +38,21 @@ export function ThinkingIndicator({
 
   // Live "ms since last envelope" so the activity readout reflects real
   // movement and a stall becomes visible (the counter keeps climbing).
+  // Read lastEnvelopeAt through a ref + run this interval ONCE. While the agent
+  // is thinking it streams a burst of envelopes, each bumping lastEnvelopeAt; a
+  // [lastEnvelopeAt] dep tore down + recreated this interval (and fired an
+  // immediate setState) per frame, and that re-subscribe storm tripped React's
+  // "Maximum update depth" and froze the UI. The ref keeps the readout current
+  // without re-subscribing.
+  const lastEnvelopeAtRef = useRef(lastEnvelopeAt);
+  lastEnvelopeAtRef.current = lastEnvelopeAt;
   const [sinceEnvelope, setSinceEnvelope] = useState(0);
   useEffect(() => {
-    const tick = () => setSinceEnvelope(Date.now() - lastEnvelopeAt);
+    const tick = () => setSinceEnvelope(Date.now() - lastEnvelopeAtRef.current);
     tick();
     const id = setInterval(tick, 500);
     return () => clearInterval(id);
-  }, [lastEnvelopeAt]);
+  }, []);
 
   // Connection lost mid-turn: don't pretend the agent is working. The socket
   // dropped (server restart / network blip) and reconnects on a backoff.
