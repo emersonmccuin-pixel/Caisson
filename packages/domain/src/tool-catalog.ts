@@ -262,6 +262,12 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
     source: 'pc-rig',
   },
   {
+    slug: 'mcp__pc-rig__pc_list_areas',
+    label: 'List areas',
+    description: "List the project's Areas (focus buckets) + their work-item counts.",
+    source: 'pc-rig',
+  },
+  {
     slug: 'mcp__pc-rig__pc_write_claude_md',
     label: "Write project's CLAUDE.md",
     description: "Author or replace the project's CLAUDE.md.",

@@ -327,6 +327,7 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_list_stages',
     'mcp__pc-rig__pc_list_workflows',
     'mcp__pc-rig__pc_list_field_schemas',
+    'mcp__pc-rig__pc_list_areas',
   ],
   model: 'opus',
   effort: null,
