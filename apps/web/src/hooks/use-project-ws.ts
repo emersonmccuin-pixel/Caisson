@@ -258,8 +258,10 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
           if (typeof cursor === 'string') {
             advanceLiveCursor(liveCursorScopeForProject(project.id), cursor);
           }
-          // Slice 018 spike — feed the single identity-keyed live store directly
-          // from the socket, independent of the chat-timeline reducer below.
+          // Slice 018 — feed the single identity-keyed live store directly from
+          // the socket, independent of the chat-timeline reducer below. Every
+          // resource view reads the store; the chat-timeline retention of these
+          // frames is the reconcile-first fallback, removed once verified.
           useLiveStore.getState().applyEnvelope(env);
         }
         // Slice 015a — gap signal: our cursor predated the pruned outbox floor,
@@ -267,6 +269,10 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
         // reload (epoch bump) so resource lists refetch HTTP truth.
         if (env.type === 'live-reset' && project) {
           clearLiveCursor(liveCursorScopeForProject(project.id));
+          // Slice 018 — drop the identity-keyed store too so a stale frame can
+          // never re-merge over the freshly reseeded HTTP truth; the epoch bump
+          // forces resource lists to refetch.
+          useLiveStore.getState().clearAll();
           useWsEpoch.getState().bump(project.id);
           return;
         }
