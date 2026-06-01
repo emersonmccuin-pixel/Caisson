@@ -6,7 +6,6 @@
 
 import type { Project } from '@/features/projects/client';
 import type { SessionTransitionResponse } from '@/features/runtime/client';
-import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useActiveCenterTab } from '@/store/active-center-tab';
 import { useRailMode } from '@/store/rail-mode';
 import { FilesRail } from './FilesRail';
@@ -16,7 +15,8 @@ import { SessionsRail } from './SessionsRail';
 interface LeftRailProps {
   projects: Project[];
   activeProject: Project | null;
-  events: WsEnvelope[];
+  /** T3.1 — session-changed nonce for the sessions rail's lifecycle refetch. */
+  sessionChangedNonce: number;
   applySessionTransition: (transition: SessionTransitionResponse) => void;
   onCreateProject: () => void;
   onProjectDeleted: (projectId: string) => void;
@@ -27,7 +27,7 @@ interface LeftRailProps {
 export function LeftRail({
   projects,
   activeProject,
-  events,
+  sessionChangedNonce,
   applySessionTransition,
   onCreateProject,
   onProjectDeleted,
@@ -69,7 +69,7 @@ export function LeftRail({
         <div className="flex-1 overflow-hidden">
           <SessionsRail
             project={activeProject}
-            events={events}
+            sessionChangedNonce={sessionChangedNonce}
             applySessionTransition={applySessionTransition}
           />
         </div>

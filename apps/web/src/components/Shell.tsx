@@ -56,6 +56,8 @@ interface ShellProps {
   unreadProjectIds: ReadonlySet<string>;
   wsEvents: WsEnvelope[];
   wsAggregates: ChatSessionAggregates;
+  /** T3.1 — session-changed nonce for the sessions rail's lifecycle refetch. */
+  sessionChangedNonce: number;
   wsSend: (msg: WsOutbound) => boolean;
   wsStatus: WsStatus;
   wsDiagnostics: WsDiagnostics;
@@ -74,6 +76,7 @@ export function Shell({
   unreadProjectIds,
   wsEvents,
   wsAggregates,
+  sessionChangedNonce,
   wsSend,
   wsStatus,
   wsDiagnostics,
@@ -111,7 +114,7 @@ export function Shell({
           <LeftRail
             projects={projects}
             activeProject={activeProject}
-            events={wsEvents}
+            sessionChangedNonce={sessionChangedNonce}
             applySessionTransition={applySessionTransition}
             onCreateProject={onCreateProject}
             onProjectDeleted={onProjectDeleted}

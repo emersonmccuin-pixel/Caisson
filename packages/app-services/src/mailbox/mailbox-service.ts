@@ -300,7 +300,10 @@ export function buildDeliveryDraft(
   return scopeForProject(message.projectId, {
     type: 'mailbox.delivery.changed',
     entity: 'mailbox-message',
-    entityId: delivery.messageId,
+    // T3.1 — key delivery frames by the delivery row id (NOT messageId) so they
+    // stop colliding with the message-fact frame on `mailbox-message::<id>` in
+    // the client live store. Consumers read `payload.messageId`, not entityId.
+    entityId: delivery.id,
     version: delivery.attempts,
     payload,
   });

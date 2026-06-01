@@ -1,43 +1,67 @@
-// Walks the project's WS envelope stream and evicts matching rich-link cache
-// entries on:
-//   - `work-item-changed`      → invalidateByWorkItemId(workItem.id)
-//   - `attachment-changed`     → invalidateByAttachmentId(attachment.id)
+// Evicts rich-link cache entries when a work-item or attachment changes, so a
+// hovered preview re-fetches fresh data after its target mutates.
 //
-// Mount once at App / Shell level alongside the WS subscription.
+// T3.1 — driven off the identity-keyed live store (`useLiveEvents`), NOT a
+// positional scan of the chat `events[]`. The old index-cursor scan missed
+// frames after a chat-timeline rebuild during an active session. Here a
+// version-keyed evicted-set ref evicts each entity exactly once per new
+// version (not every render), and the store keying is rebuild-proof.
+//
+// Mount once at App / Shell level. Active-project scope only (the live store
+// selectors are project-scoped); no cross-project rich-link preview exists.
 
 import { useEffect, useRef } from 'react';
 
-import { isAttachmentChangedLiveEvent, isWorkItemChangedLiveEventFrame } from '@pc/contracts';
+import type { LiveEvent } from '@pc/contracts';
 
-import type { WsEnvelope } from '@/features/runtime/ws-types';
+import { useLiveEvents } from '@/store/live-store';
 import {
   invalidateByAttachmentId,
   invalidateByWorkItemId,
 } from '@/hooks/use-rich-link-data';
 
-export function useRichLinkInvalidator(events: WsEnvelope[]): void {
-  const lastIdx = useRef(0);
+/** A live event's monotonic marker: its numeric `version` when present (rev'd
+ *  entities), else the global string `cursor` (last-write-wins entities). */
+function markerOf(ev: LiveEvent): number | string {
+  return ev.version ?? ev.cursor;
+}
+
+/** Pure: given a list of live events and the per-entityId markers already
+ *  evicted, return the ids whose marker is new (so eviction happens once per
+ *  genuine change) and the updated marker map to record. Exported for tests. */
+export function collectEvictions(
+  events: readonly LiveEvent[],
+  evicted: Map<string, number | string>,
+): { ids: string[]; next: Map<string, number | string> } {
+  const ids: string[] = [];
+  const next = new Map(evicted);
+  for (const ev of events) {
+    if (!ev.entityId) continue;
+    const marker = markerOf(ev);
+    if (next.get(ev.entityId) === marker) continue;
+    next.set(ev.entityId, marker);
+    ids.push(ev.entityId);
+  }
+  return { ids, next };
+}
+
+export function useRichLinkInvalidator(projectId: string | null): void {
+  const wiEvents = useLiveEvents('work-item', projectId);
+  const attEvents = useLiveEvents('attachment', projectId);
+  // entityId → last-evicted marker. Survives re-renders; identity-keyed so a
+  // chat-timeline rebuild can't make us miss or double-fire.
+  const wiEvicted = useRef<Map<string, number | string>>(new Map());
+  const attEvicted = useRef<Map<string, number | string>>(new Map());
+
   useEffect(() => {
-    for (let i = lastIdx.current; i < events.length; i++) {
-      const env = events[i];
-      if (!env || typeof env !== 'object') continue;
-      // Slice 015b — canonical relay `work-item.changed` frame.
-      if (isWorkItemChangedLiveEventFrame(env)) {
-        const wiId = env.event.payload.workItem?.id ?? env.event.entityId;
-        if (wiId) invalidateByWorkItemId(wiId);
-      } else if (
-        (env as { type?: unknown }).type === 'live-event' &&
-        isAttachmentChangedLiveEvent((env as { event?: unknown }).event)
-      ) {
-        // Slice 017 Fix 3 — canonical relay `attachment.changed` frame.
-        const ev = (env as unknown as { event: { payload: { attachment?: { id?: string } }; entityId: string | null } }).event;
-        const attId = ev.payload.attachment?.id ?? ev.entityId;
-        if (attId) invalidateByAttachmentId(attId);
-      } else if (env.type === 'attachment-changed') {
-        const att = (env as { attachment?: { id?: string } }).attachment;
-        if (att?.id) invalidateByAttachmentId(att.id);
-      }
-    }
-    lastIdx.current = events.length;
-  }, [events]);
+    const { ids, next } = collectEvictions(wiEvents, wiEvicted.current);
+    wiEvicted.current = next;
+    for (const id of ids) invalidateByWorkItemId(id);
+  }, [wiEvents]);
+
+  useEffect(() => {
+    const { ids, next } = collectEvictions(attEvents, attEvicted.current);
+    attEvicted.current = next;
+    for (const id of ids) invalidateByAttachmentId(id);
+  }, [attEvents]);
 }

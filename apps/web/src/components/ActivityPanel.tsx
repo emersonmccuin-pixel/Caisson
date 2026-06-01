@@ -126,7 +126,7 @@ export function ActivityPanel({
         </div>
       ) : (
         <div className="flex flex-1 flex-col overflow-y-auto">
-          <MailboxRegion project={project} events={events} />
+          <MailboxRegion project={project} />
           <RunningAgentsRegion
             project={project}
             runs={agentRuns}
@@ -336,10 +336,8 @@ function RunningWorkflowCard({
 
 function MailboxRegion({
   project,
-  events,
 }: {
   project: Project;
-  events: WsEnvelope[];
 }) {
   const [expanded, setExpanded] = useState(true);
   const [count, setCount] = useState(0);
@@ -367,7 +365,6 @@ function MailboxRegion({
       <div className={expanded ? 'px-3 pb-2' : 'hidden'}>
         <MailboxInbox
           scope={{ projectId: project.id }}
-          events={events}
           onVisibleCount={setCount}
         />
       </div>

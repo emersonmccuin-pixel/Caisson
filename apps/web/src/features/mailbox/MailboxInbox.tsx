@@ -6,7 +6,6 @@
 import { useEffect, useState } from 'react';
 
 import type { MailboxMessageKind } from '@pc/contracts';
-import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { mailboxApi } from './client';
 import { useMailboxInbox } from '@/hooks/use-mailbox-inbox';
 import type { MailboxInboxItem } from './types';
@@ -14,7 +13,6 @@ import type { MailboxInboxItem } from './types';
 export interface MailboxInboxProps {
   /** Project scope, or the global single-user inbox. */
   scope: { projectId: string } | { global: true };
-  events: readonly WsEnvelope[];
   /** Called whenever the visible item count changes (used by collapse headers). */
   onVisibleCount?: (n: number) => void;
 }
@@ -40,8 +38,8 @@ const KIND_ORDER: MailboxMessageKind[] = [
   'system-notice',
 ];
 
-export function MailboxInbox({ scope, events, onVisibleCount }: MailboxInboxProps) {
-  const { items, loading, refetch } = useMailboxInbox(scope, events);
+export function MailboxInbox({ scope, onVisibleCount }: MailboxInboxProps) {
+  const { items, loading, refetch } = useMailboxInbox(scope);
 
   useEffect(() => {
     onVisibleCount?.(items.length);

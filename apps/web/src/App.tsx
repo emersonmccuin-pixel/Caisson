@@ -131,7 +131,7 @@ export default function App() {
     activeEvents: ws.events,
     backgroundEvents: backgroundWs.events,
   });
-  useRichLinkInvalidator(ws.events);
+  useRichLinkInvalidator(activeProject?.id ?? null);
   useStatuslineSync(activeProject?.id ?? null, ws.events);
 
   const storeProjectChangedCursor = useCallback((cursor: string | null) => {
@@ -458,6 +458,7 @@ export default function App() {
           unreadProjectIds={unreadProjectIds}
           wsEvents={ws.events}
           wsAggregates={ws.aggregates}
+          sessionChangedNonce={ws.sessionChangedNonce}
           wsSend={ws.send}
           wsStatus={ws.status}
           wsDiagnostics={ws.diagnostics}

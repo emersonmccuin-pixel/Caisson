@@ -169,6 +169,12 @@ test('accept/retry/dead-letter each emit a mailbox.delivery.changed fact', () =>
   assert.equal(isMailboxDeliveryChangedLiveEvent(a!.liveEvent), true);
   assert.equal(a!.liveEvent.payload.status, 'accepted');
   assert.equal(a!.liveEvent.payload.targetRef.id, 'sq1');
+  // T3.1 — delivery frames key by the delivery row id, not the messageId, so
+  // they no longer collide with the message fact on `mailbox-message::<id>`.
+  assert.equal(a!.liveEvent.entityId, 'd1');
+  // The payload still carries both ids; consumers read payload.messageId.
+  assert.equal(a!.liveEvent.payload.messageId, 'm1');
+  assert.equal(a!.liveEvent.payload.deliveryId, 'd1');
 
   const retry = mailboxHarness();
   const r = retry.service.retryDelivery({ deliveryId: 'd1' as never, lastError: 'boom', nextAttemptAt: 9999, now: 1 });
@@ -184,6 +190,28 @@ test('recipient read/action/dismiss re-emits the message fact', () => {
   const read = h.service.markRead('r1' as never, 5);
   assert.ok(read);
   assert.equal(isMailboxMessageChangedLiveEvent(read!.liveEvent), true);
+  // The message fact keeps the message id as its entityId.
+  assert.equal(read!.liveEvent.entityId, 'm1');
+});
+
+test('T3.1 — message-fact and delivery frames for the same message use DISTINCT entityIds', () => {
+  // Message fact: entityId = messageId. Delivery frame: entityId = deliveryId.
+  // For the same message these must differ so the client live store keys them
+  // on separate slots (`mailbox-message::m1` vs `mailbox-message::d1`) and they
+  // no longer overwrite / mis-dedup against each other.
+  const msgH = mailboxHarness();
+  const msgFact = msgH.service.markRead('r1' as never, 5);
+  assert.ok(msgFact);
+
+  const delH = mailboxHarness();
+  const delFact = delH.service.acceptDelivery({ deliveryId: 'd1' as never, targetRefKind: 'send-queue', targetRefId: 'sq1', now: 1 });
+  assert.ok(delFact);
+
+  assert.equal(msgFact!.liveEvent.entity, 'mailbox-message');
+  assert.equal(delFact!.liveEvent.entity, 'mailbox-message');
+  assert.notEqual(msgFact!.liveEvent.entityId, delFact!.liveEvent.entityId);
+  assert.equal(msgFact!.liveEvent.entityId, 'm1');
+  assert.equal(delFact!.liveEvent.entityId, 'd1');
 });
 
 // ── pending interaction service ──────────────────────────────────────────────

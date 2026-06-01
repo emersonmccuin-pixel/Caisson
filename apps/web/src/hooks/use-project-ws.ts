@@ -54,6 +54,9 @@ import {
 interface UseProjectWsResult {
   events: WsEnvelope[];
   aggregates: ChatSessionAggregates;
+  /** T3.1 — ticks on every session-changed (new OR resume). The sessions rail
+   *  keys its lifecycle refetch off this instead of scanning `events[]`. */
+  sessionChangedNonce: number;
   status: WsStatus;
   diagnostics: WsDiagnostics;
   clear: () => void;
@@ -427,6 +430,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
   return {
     events,
     aggregates,
+    sessionChangedNonce: sessionState.sessionChangedNonce,
     status,
     diagnostics,
     clear: () => {

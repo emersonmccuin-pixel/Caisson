@@ -64,6 +64,10 @@ export interface ChatSessionReducerState {
   unsequenced: EnvEntry[];
   terminalRaw: EnvEntry[];
   aggregates: ChatSessionAggregates;
+  // T3.1 — monotonic counter that ticks on EVERY session-changed (new OR
+  // resume), even a resume-to-the-same-id where `activeSessionId` doesn't flip.
+  // The sessions rail keys its lifecycle refetch off this (off the timeline scan).
+  sessionChangedNonce: number;
 }
 
 export type ChatSessionReducerAction =
@@ -82,6 +86,7 @@ export function createChatSessionState(projectId: string | null): ChatSessionRed
     unsequenced: [],
     terminalRaw: [],
     aggregates: EMPTY_AGGREGATES,
+    sessionChangedNonce: 0,
   };
 }
 
@@ -401,6 +406,7 @@ function applySessionChanged(
         unsequenced: preserved.unsequenced,
         terminalRaw: [],
         aggregates: EMPTY_AGGREGATES,
+        sessionChangedNonce: state.sessionChangedNonce + 1,
       },
       env,
       (candidate) => candidate.type === 'session-changed',
@@ -410,6 +416,7 @@ function applySessionChanged(
     {
       ...state,
       activeSessionId: sessionId ?? state.activeSessionId,
+      sessionChangedNonce: state.sessionChangedNonce + 1,
     },
     env,
     (candidate) => candidate.type === 'session-changed',

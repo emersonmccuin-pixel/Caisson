@@ -5,24 +5,23 @@
 
 import { useEffect, useState } from 'react';
 
-import { isLiveEventFrame } from '@pc/contracts';
-
 import type { Project } from '@/features/projects/client';
 import { runtimeApi, type OrchestratorSession, type SessionTransitionResponse } from '@/features/runtime/client';
-import type { WsEnvelope } from '@/features/runtime/ws-types';
+import { useLiveEntitySignature } from '@/store/live-store';
 import { useViewingSession } from '@/store/viewing-session';
 
 interface SessionsRailProps {
   project: Project | null;
-  /** WS event stream for the active project. We watch for session-changed
-   *  envelopes so a fresh "New session" surfaces here without a refetch. */
-  events: WsEnvelope[];
+  /** T3.1 — ticks on every session-changed (new OR resume) from the chat
+   *  reducer, so a fresh / resumed session refreshes the rail without scanning
+   *  the chat `events[]`. */
+  sessionChangedNonce: number;
   applySessionTransition: (transition: SessionTransitionResponse) => void;
 }
 
 export function SessionsRail({
   project,
-  events,
+  sessionChangedNonce,
   applySessionTransition,
 }: SessionsRailProps) {
   const [sessions, setSessions] = useState<OrchestratorSession[]>([]);
@@ -32,6 +31,9 @@ export function SessionsRail({
   const [resumeError, setResumeError] = useState<string | null>(null);
   const viewing = useViewingSession((s) => (project ? s.bySlug[project.slug] ?? null : null));
   const setViewing = useViewingSession((s) => s.setViewing);
+  // T3.1 — the canonical session.title.changed relay fact, from the live store
+  // (rebuild-proof), replaces the old `[...events].reverse().find` scan.
+  const titleSig = useLiveEntitySignature('session-title', project?.id ?? null);
 
   async function handleResume(targetId: string) {
     if (!project || resumingId) return;
@@ -73,22 +75,16 @@ export function SessionsRail({
     };
   }, [project?.id]);
 
-  // Refetch when the chat fires a session-changed (new / resume) or the
-  // canonical session.title.changed relay frame so the row's title + ordering
-  // stay live.
+  // Refetch when the chat fires a session-changed (new / resume — via the
+  // reducer nonce) or the canonical session.title.changed relay fact (via the
+  // store signature) so the row's title + ordering stay live. Both are
+  // rebuild-proof; neither scans the chat `events[]`.
   useEffect(() => {
     if (!project) return;
-    const last = [...events].reverse().find(
-      (e) =>
-        e.type === 'session-changed' ||
-        // Slice 015b — canonical relay session.title.changed frame.
-        (isLiveEventFrame(e) && e.event.entity === 'session-title'),
-    );
-    if (!last) return;
     runtimeApi.listSessions(project.id)
       .then(setSessions)
       .catch(() => {});
-  }, [events, project?.id]);
+  }, [titleSig, sessionChangedNonce, project?.id]);
 
   if (!project) {
     return (
