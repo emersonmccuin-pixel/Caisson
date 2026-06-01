@@ -68,14 +68,14 @@ function fakeSendService(opts: { throwOnce?: boolean } = {}) {
   return { svc, calls };
 }
 
-function worker(sendService: { enqueueRuntimeTurn: (i: never) => never }, addr: MailboxAddress, projectId: ULID | null, getBody = () => 'deliver me') {
+function worker(sendService: { enqueueRuntimeTurn: (i: never) => never }, addr: MailboxAddress, _projectId: ULID | null, getBody = () => 'deliver me') {
   const service = new MailboxService();
   const adapter = new MailboxOrchestratorTurnAdapter(sendService as never);
+  // Slice 015b — the worker no longer hand-fans; the delivery `live_outbox` row
+  // is written inside the service txn and the relay delivers it.
   const w = new MailboxWorker({
     service,
     orchestratorTurn: adapter,
-    broadcast: () => {},
-    getMessageProjectId: () => projectId,
     getRecipientAddress: () => addr,
     getMessageBody: getBody,
     maxAttempts: 2,
@@ -92,6 +92,45 @@ test('ui-inbox delivery accepts immediately with target_ref ui-inbox', () => {
   const delivery = getMailboxDelivery(deliveryId);
   assert.equal(delivery!.status, 'accepted');
   assert.equal(delivery!.targetRefKind, 'ui-inbox');
+});
+
+test('ui-inbox acceptance writes a committed delivery frame the relay delivers (no hand-fanout)', async () => {
+  const { LiveRelay } = await import('../src/services/live-relay.ts');
+  const fanProject = new Map<string, unknown[]>();
+  const fanGlobal: unknown[] = [];
+  const relay = new LiveRelay({
+    hub: {
+      broadcastAll(msg: unknown): number { fanGlobal.push(msg); return 1; },
+      broadcast(pid: string, msg: unknown): number {
+        const l = fanProject.get(pid) ?? [];
+        l.push(msg);
+        fanProject.set(pid, l);
+        return 1;
+      },
+    },
+  });
+  relay.primeToHead();
+
+  const addr: MailboxAddress = { kind: 'project-inbox', projectId: 'p-relay' };
+  const { deliveryId } = makeDelivery('ui-inbox', addr, 'p-relay' as ULID);
+  // makeDelivery wrote the enqueue's message-changed outbox row; advance past it
+  // so we isolate the delivery frame.
+  relay.drain();
+  const beforeProject = (fanProject.get('p-relay') ?? []).length;
+
+  const w = worker({ enqueueRuntimeTurn: (() => {}) as never }, addr, 'p-relay' as ULID);
+  assert.equal(w.runOnce().accepted, 1);
+
+  // The acceptDelivery txn wrote a `mailbox.delivery.changed` outbox row; the
+  // relay delivers it to the message's project scope. Exactly one new frame.
+  relay.drain();
+  const delivered = (fanProject.get('p-relay') ?? []).slice(beforeProject);
+  assert.equal(delivered.length, 1, 'relay delivers exactly one delivery frame');
+  assert.equal(
+    (delivered[0] as { event: { type: string; entityId: string } }).event.type,
+    'mailbox.delivery.changed',
+  );
+  assert.equal(getMailboxDelivery(deliveryId)!.status, 'accepted');
 });
 
 test('orchestrator-turn delivery wraps enqueueRuntimeTurn (stable clientMessageId, source mailbox, send-queue target_ref)', () => {

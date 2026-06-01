@@ -11,15 +11,19 @@
 // interaction; a repeated delivery is safe because action commands validate
 // current state. Live events are visibility nudges — acceptance does NOT depend
 // on the outbox publication.
+//
+// Slice 015b — delivery `mailbox.delivery.changed` frames are the relay's job.
+// `acceptDelivery`/`retryDelivery`/`deadLetterDelivery` write the canonical
+// `live_outbox` row inside their mutation txn; the 250ms relay drains it to the
+// right scope/project. The worker no longer hand-fans; the `broadcast`/
+// `getMessageProjectId` deps are gone.
 
 import {
-  buildLiveEventFrame,
   parseMailboxAddress,
   type MailboxAddress,
   type MailboxDeliveryChangedLivePayload,
 } from '@pc/contracts';
 import type {
-  MailboxDeliveryPublication,
   MailboxService,
 } from '@pc/app-services';
 import {
@@ -33,14 +37,9 @@ import type {
   MailboxOrchestratorTurnAdapter,
 } from './mailbox-orchestrator-turn-adapter.ts';
 
-export type MailboxBroadcast = (projectId: ULID | null, event: unknown) => void;
-
 export interface MailboxWorkerDeps {
   service: MailboxService;
   orchestratorTurn: MailboxOrchestratorTurnAdapter;
-  broadcast: MailboxBroadcast;
-  /** Resolve a message's projectId for fanout scope. */
-  getMessageProjectId: (messageId: ULID) => ULID | null;
   /** Resolve a recipient's address. */
   getRecipientAddress: (recipientId: ULID) => MailboxAddress | null;
   /** Resolve a message body for the orchestrator-turn channel. */
@@ -103,40 +102,35 @@ export class MailboxWorker {
       // attempts on the row is the count BEFORE this attempt; +1 = this attempt.
       const attemptsAfter = delivery.attempts + 1;
       if (!retryable || attemptsAfter >= this.d.maxAttempts) {
-        this.fanout(
-          this.d.service.deadLetterDelivery({
-            deliveryId: delivery.id,
-            messageId: delivery.messageId,
-            recipientId: delivery.recipientId,
-            reason: retryable ? 'max-retries' : 'non-retryable',
-            lastError: error,
-            now,
-          }),
-        );
+        // Outbox row written in the txn; the relay delivers the delivery frame.
+        this.d.service.deadLetterDelivery({
+          deliveryId: delivery.id,
+          messageId: delivery.messageId,
+          recipientId: delivery.recipientId,
+          reason: retryable ? 'max-retries' : 'non-retryable',
+          lastError: error,
+          now,
+        });
         return 'dead-lettered';
       }
-      this.fanout(
-        this.d.service.retryDelivery({
-          deliveryId: delivery.id,
-          lastError: error,
-          nextAttemptAt: now + backoffMs(attemptsAfter),
-          now,
-        }),
-      );
+      this.d.service.retryDelivery({
+        deliveryId: delivery.id,
+        lastError: error,
+        nextAttemptAt: now + backoffMs(attemptsAfter),
+        now,
+      });
       return 'retried';
     };
 
     if (delivery.channel === 'ui-inbox') {
       // "Available in the inbox": the recipient row exists from enqueue, so
       // acceptance is immediate. UI read/action is recipient state, not this.
-      this.fanout(
-        this.d.service.acceptDelivery({
-          deliveryId: delivery.id,
-          targetRefKind: 'ui-inbox',
-          targetRefId: delivery.recipientId,
-          now,
-        }),
-      );
+      this.d.service.acceptDelivery({
+        deliveryId: delivery.id,
+        targetRefKind: 'ui-inbox',
+        targetRefId: delivery.recipientId,
+        now,
+      });
       return 'accepted';
     }
 
@@ -153,14 +147,12 @@ export class MailboxWorker {
         text: body,
       });
       if (result.ok) {
-        this.fanout(
-          this.d.service.acceptDelivery({
-            deliveryId: delivery.id,
-            targetRefKind: 'send-queue',
-            targetRefId: result.sendQueueId,
-            now,
-          }),
-        );
+        this.d.service.acceptDelivery({
+          deliveryId: delivery.id,
+          targetRefKind: 'send-queue',
+          targetRefId: result.sendQueueId,
+          now,
+        });
         return 'accepted';
       }
       return fail(result.error, result.retryable);
@@ -168,12 +160,6 @@ export class MailboxWorker {
 
     // compat-channel is reserved but NOT wired this slice.
     return fail(`unsupported delivery channel: ${delivery.channel}`, false);
-  }
-
-  private fanout(pub: MailboxDeliveryPublication | null): void {
-    if (!pub) return;
-    const projectId = this.d.getMessageProjectId(pub.delivery.messageId);
-    this.d.broadcast(projectId, buildLiveEventFrame(pub.liveEvent));
   }
 }
 

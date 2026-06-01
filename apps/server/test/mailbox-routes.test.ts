@@ -10,10 +10,11 @@ import type { ULID } from '@pc/domain';
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-mailbox-routes-'));
 process.env.PC_DATA_DIR = tmpDir;
 
-const { closeDb, createProject, runMigrations, listDeliveriesForProject, getPendingInteraction, createPendingInteraction, newId } =
+const { closeDb, createProject, runMigrations, getPendingInteraction, createPendingInteraction, newId } =
   await import('@pc/db');
 const { MailboxService, PendingInteractionService } = await import('@pc/app-services');
 const { registerMailboxRoutes } = await import('../src/features/mailbox/routes.ts');
+const { LiveRelay } = await import('../src/services/live-relay.ts');
 
 before(() => runMigrations());
 after(() => {
@@ -23,16 +24,46 @@ after(() => {
 
 const stages = [{ id: 'todo', name: 'Todo', order: 0 }];
 
+interface Fan {
+  globalAll: unknown[];
+  perProject: Map<string, unknown[]>;
+}
+
+// Slice 015b — the mailbox routes no longer hand-fan message frames; the relay
+// delivers them from the committed outbox row. The test harness drives a relay
+// over the same DB (mirroring the live 250ms drain) and asserts delivery there.
+// `broadcasts` now only ever receives pending-interaction (`/answer`) frames —
+// the one fanout the mailbox routes still own this commit.
 function makeApp() {
   const app = new Hono();
   const broadcasts: { projectId: ULID | null; event: unknown }[] = [];
+  const fan: Fan = { globalAll: [], perProject: new Map() };
+  const relay = new LiveRelay({
+    hub: {
+      broadcastAll(msg: unknown): number {
+        fan.globalAll.push(msg);
+        return 1;
+      },
+      broadcast(projectId: string, msg: unknown): number {
+        const list = fan.perProject.get(projectId) ?? [];
+        list.push(msg);
+        fan.perProject.set(projectId, list);
+        return 1;
+      },
+    },
+  });
+  relay.primeToHead();
   registerMailboxRoutes(app, {
     mailbox: new MailboxService(),
     interactions: new PendingInteractionService(),
     broadcastTo: (projectId, event) => broadcasts.push({ projectId, event }),
-    broadcastAll: (event) => broadcasts.push({ projectId: null, event }),
   });
-  return { app, broadcasts };
+  // Drain the relay and return what reached each scope.
+  const drain = () => {
+    relay.drain();
+    return fan;
+  };
+  return { app, broadcasts, drain, fan };
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -40,7 +71,7 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 test('enqueue → project inbox lists it → read/dismiss updates recipient state', async () => {
-  const { app, broadcasts } = makeApp();
+  const { app, broadcasts, drain, fan } = makeApp();
   const project = createProject({
     slug: `mbx-${Date.now()}`,
     name: 'Mailbox P',
@@ -63,8 +94,19 @@ test('enqueue → project inbox lists it → read/dismiss updates recipient stat
   assert.equal(enqBody.ok, true);
   assert.equal(enqBody.created, true);
   const recipientId = enqBody.recipients[0]!.id;
-  // enqueue fanned out a canonical frame
-  assert.ok(broadcasts.some((b) => b.projectId === project.id));
+  // Slice 015b — the route does NOT hand-fan; the relay delivers the canonical
+  // `mailbox.message.changed` frame from the committed outbox row, exactly once,
+  // to this project's scope. No message frame lands on the hand `broadcasts`.
+  drain();
+  const projectFan = fan.perProject.get(project.id) ?? [];
+  assert.equal(projectFan.length, 1, 'relay delivers exactly one frame for the project');
+  assert.equal((projectFan[0] as { type: string }).type, 'live-event');
+  assert.equal(
+    (projectFan[0] as { event: { type: string } }).event.type,
+    'mailbox.message.changed',
+  );
+  assert.equal(fan.globalAll.length, 0, 'project enqueue must not reach the global scope');
+  assert.equal(broadcasts.length, 0, 'no mailbox-message hand-fanout remains');
 
   const list = await app.request(`/api/projects/${project.id}/mailbox`);
   const listBody = await json<{ items: { recipient: { id: string }; message: { body: string } }[] }>(list);
@@ -78,6 +120,42 @@ test('enqueue → project inbox lists it → read/dismiss updates recipient stat
 
   const unread = await app.request(`/api/projects/${project.id}/mailbox?unreadOnly=1`);
   assert.equal((await json<{ items: unknown[] }>(unread)).items.length, 0);
+});
+
+test('a rolled-back mailbox enqueue delivers nothing (no committed outbox row)', async () => {
+  const { drain, fan } = makeApp();
+  const { getDb, insertLiveEvent } = await import('@pc/db');
+  const project = createProject({
+    slug: `mbx-rb-${Date.now()}`,
+    name: 'Mailbox Rollback',
+    stages,
+    folderPath: join(tmpDir, 'mbx-rb'),
+  });
+  // createProject wrote rows; advance the relay cursor past them.
+  drain();
+  const baseGlobal = fan.globalAll.length;
+  const baseProject = (fan.perProject.get(project.id) ?? []).length;
+
+  // Simulate a mailbox-message outbox write that rolls back — the relay must
+  // never deliver it (delivery ≡ a COMMITTED outbox row).
+  assert.throws(() => {
+    getDb().transaction((tx) => {
+      insertLiveEvent(tx, {
+        scope: 'project',
+        projectId: project.id,
+        type: 'mailbox.message.changed',
+        entity: 'mailbox-message',
+        entityId: newId(),
+        version: null,
+        payload: {},
+      });
+      throw new Error('boom — roll back');
+    });
+  }, /boom/);
+
+  drain();
+  assert.equal(fan.globalAll.length, baseGlobal, 'rolled-back row must not reach global');
+  assert.equal((fan.perProject.get(project.id) ?? []).length, baseProject, 'rolled-back row must not reach the project');
 });
 
 test('enqueue is idempotent by key (replay → created:false)', async () => {
@@ -140,7 +218,7 @@ test('delivery inspector returns deliveries; bad request is 400', async () => {
 });
 
 test('app-level enqueue with a project-less user-inbox recipient → global inbox', async () => {
-  const { app, broadcasts } = makeApp();
+  const { app, broadcasts, drain, fan } = makeApp();
   const enq = await app.request('/api/mailbox/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -158,8 +236,17 @@ test('app-level enqueue with a project-less user-inbox recipient → global inbo
   assert.equal(enqBody.ok, true);
   // The message is stored project-less so it lands in the global inbox…
   assert.equal(enqBody.message.projectId, null);
-  // …and fanned out on the global (project-less) channel.
-  assert.ok(broadcasts.some((b) => b.projectId === null));
+  // …and the relay delivers a global (`scope:'global'`) frame to all sockets.
+  // The web `shouldAcceptMailboxWsEnvelope` accepts canonical frames regardless
+  // of projectId, so `broadcastAll` reaches the single-user inbox consumer.
+  drain();
+  assert.ok(
+    fan.globalAll.some(
+      (m) => (m as { event?: { type?: string } }).event?.type === 'mailbox.message.changed',
+    ),
+    'relay delivers the global mailbox frame to all sockets',
+  );
+  assert.equal(broadcasts.length, 0, 'no mailbox-message hand-fanout remains');
 
   const list = await app.request('/api/mailbox');
   const body = await json<{ items: { message: { body: string } }[] }>(list);

@@ -2,15 +2,20 @@
 //
 // Project-scoped inbox + delivery inspector + an app-level global single-user
 // inbox + a pending-interaction answer route. All NEW routes (no legacy parity).
-// Contract parsers gate input; reads never emit; mutations fan out the canonical
-// {type:'live-event'} frame after the service commit. No webhook route this
-// slice (Channel stays). The mailbox runs alongside Channel — no cutover.
+// Contract parsers gate input; reads never emit.
+//
+// Slice 015b — mailbox-message delivery is now the relay's job. The mailbox
+// service writes the canonical `live_outbox` row inside its mutation txn; the
+// 250ms relay drains it to subscribers per scope/project. The ad-hoc
+// `broadcastTo`/`broadcastAll` message fanout that used to live here is DELETED
+// (the relay delivers the identical frame, deduped by `event.id`). The
+// pending-interaction `/answer` fanout (`fanoutInteraction`) is the SEPARATE
+// pending-interactions subsystem and migrates in its own commit; it keeps
+// `broadcastTo` until then.
 
 import type { Hono } from 'hono';
 import type {
-  MailboxDeliveryPublication,
   MailboxEnqueuePublication,
-  MailboxMessagePublication,
   MailboxService,
   PendingInteractionPublication,
   PendingInteractionService,
@@ -33,6 +38,8 @@ import {
   newId,
   type MailboxRecipientRow,
 } from '@pc/db';
+// NOTE: `getMailboxMessage` stays imported for `filterInbox` typing + the
+// delivery inspector; the mailbox-message fanout that also used it is gone.
 import type { ULID } from '@pc/domain';
 
 import {
@@ -44,29 +51,14 @@ import {
 export interface MailboxRouteDeps {
   mailbox: MailboxService;
   interactions: PendingInteractionService;
+  /** Pending-interaction (`/answer`) fanout only. Mailbox-message delivery is the
+   *  relay's job (015b); this dep migrates with the pending-interaction subsystem. */
   broadcastTo(projectId: ULID, msg: unknown): void;
-  /** Global (project-less) fanout for user-inbox events. */
-  broadcastAll(msg: unknown): void;
   now?: () => number;
 }
 
 export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
   const now = deps.now ?? (() => Date.now());
-
-  const fanoutMessage = (pub: MailboxMessagePublication | MailboxEnqueuePublication | null): void => {
-    if (!pub) return;
-    const frame = buildLiveEventFrame(pub.liveEvent);
-    if (pub.message.projectId === null) deps.broadcastAll(frame);
-    else deps.broadcastTo(pub.message.projectId, frame);
-  };
-
-  const fanoutDelivery = (pub: MailboxDeliveryPublication | null): void => {
-    if (!pub) return;
-    const message = getMailboxMessage(pub.delivery.messageId);
-    const frame = buildLiveEventFrame(pub.liveEvent);
-    if (!message || message.projectId === null) deps.broadcastAll(frame);
-    else deps.broadcastTo(message.projectId, frame);
-  };
 
   const fanoutInteraction = (pub: PendingInteractionPublication | null): void => {
     if (!pub) return;
@@ -101,7 +93,7 @@ export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
       })),
       now: now(),
     });
-    fanoutMessage(pub);
+    // Outbox row written in the enqueue txn; the relay delivers it. No hand-fanout.
     return pub;
   };
 
@@ -156,24 +148,21 @@ export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
   app.post('/api/projects/:projectId/mailbox/recipients/:recipientId/read', (c) => {
     const recipientId = c.req.param('recipientId') as ULID;
     if (!getMailboxRecipient(recipientId)) return c.json({ ok: false, error: 'unknown recipient' }, 404);
-    const pub = deps.mailbox.markRead(recipientId, now());
-    fanoutMessage(pub);
+    deps.mailbox.markRead(recipientId, now());
     return c.json({ ok: true });
   });
 
   app.post('/api/projects/:projectId/mailbox/recipients/:recipientId/action', (c) => {
     const recipientId = c.req.param('recipientId') as ULID;
     if (!getMailboxRecipient(recipientId)) return c.json({ ok: false, error: 'unknown recipient' }, 404);
-    const pub = deps.mailbox.markActioned(recipientId, now());
-    fanoutMessage(pub);
+    deps.mailbox.markActioned(recipientId, now());
     return c.json({ ok: true });
   });
 
   app.post('/api/projects/:projectId/mailbox/recipients/:recipientId/dismiss', (c) => {
     const recipientId = c.req.param('recipientId') as ULID;
     if (!getMailboxRecipient(recipientId)) return c.json({ ok: false, error: 'unknown recipient' }, 404);
-    const pub = deps.mailbox.markDismissed(recipientId, now());
-    fanoutMessage(pub);
+    deps.mailbox.markDismissed(recipientId, now());
     return c.json({ ok: true });
   });
 

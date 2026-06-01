@@ -411,11 +411,8 @@ const mailboxOrchestratorTurnAdapter = new MailboxOrchestratorTurnAdapter(mailbo
 const mailboxWorker = new MailboxWorker({
   service: mailboxService,
   orchestratorTurn: mailboxOrchestratorTurnAdapter,
-  broadcast: (projectId, event) => {
-    if (projectId === null) broadcastAll(event);
-    else broadcastTo(projectId, event);
-  },
-  getMessageProjectId: (messageId) => getMailboxMessage(messageId)?.projectId ?? null,
+  // Slice 015b — delivery frames ride the relay (outbox row written in the
+  // service txn); no hand-fanout. `broadcast`/`getMessageProjectId` removed.
   getRecipientAddress: (recipientId) => {
     const row = getMailboxRecipient(recipientId);
     if (!row) return null;
@@ -433,12 +430,11 @@ const mailboxWorker = new MailboxWorker({
 // the slice-007 worker then drains the delivery + fans delivery frames.
 const deliveryRouter = envDeliveryRouter();
 
+// Slice 015b — the enqueue writes the canonical `mailbox.message.changed`
+// outbox row inside its txn; the relay delivers it. No hand-fanout. (Name kept
+// for the delivery-router cutover call sites; it is now a thin enqueue.)
 function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqueuePublication {
-  const pub = mailboxService.enqueue(input);
-  const frame = buildLiveEventFrame(pub.liveEvent);
-  if (pub.message.projectId === null) broadcastAll(frame);
-  else broadcastTo(pub.message.projectId, frame);
-  return pub;
+  return mailboxService.enqueue(input);
 }
 
 // Boot-time agent-run reconciliation. Phase C can reattach through an
@@ -579,8 +575,9 @@ registerChatBridgeRoutes(app, {
 registerMailboxRoutes(app, {
   mailbox: mailboxService,
   interactions: pendingInteractionService,
+  // Mailbox-message delivery rides the relay (015b). `broadcastTo` remains only
+  // for the pending-interaction `/answer` fanout (migrates next commit).
   broadcastTo,
-  broadcastAll,
 });
 
 // Flow B — workflow-review cutover seam. Hoisted so the ProjectRegistry built at
