@@ -16,6 +16,7 @@ import { isLiveEventFrame, isWorkItemChangedLiveEventFrame } from '@pc/contracts
 import type { Project } from '@/features/projects/client';
 import type { Area } from '@/features/areas/client';
 import { WORK_ITEM_TYPES, WorkItemConflictError, WorkItemFieldValidationError, workItemsApi, type Attachment, type FieldSchema, type WorkItem, type WorkItemPatch, type WorkItemType } from '@/features/work-items/client';
+import { attachmentChangedFromLiveFrame } from '@/features/work-items/attachment-live-events';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useProjectAreas } from '@/hooks/use-project-areas';
 import { TypedFieldEditor } from './TypedFieldEditor';
@@ -899,6 +900,12 @@ function AttachmentsTab({
         refetch();
         break;
       }
+      // Slice 017 Fix 3 — also react to the canonical relay frame.
+      const live = attachmentChangedFromLiveFrame(env);
+      if (live && live.workItemId === workItemId) {
+        refetch();
+        break;
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, workItemId]);
@@ -1076,6 +1083,12 @@ function ActivityTab({
     for (let i = start; i < events.length; i++) {
       const env = events[i];
       if (env?.type === 'attachment-changed' && env.workItemId === workItem.id) {
+        refetchAttachments();
+        break;
+      }
+      // Slice 017 Fix 3 — also react to the canonical relay frame.
+      const live = attachmentChangedFromLiveFrame(env);
+      if (live && live.workItemId === workItem.id) {
         refetchAttachments();
         break;
       }

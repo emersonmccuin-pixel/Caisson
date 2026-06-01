@@ -7,12 +7,45 @@
 // through one consistent code path.
 
 import type { Attachment, AttachmentSource, ULID, WorkItem } from '@pc/domain';
+import type { AttachmentChangedLivePayload, AttachmentChangedReason } from '@pc/contracts';
 import {
   createAttachment as dbCreateAttachment,
   deleteAttachment as dbDeleteAttachment,
   getAttachment as dbGetAttachment,
+  getDb,
+  insertLiveEvent,
   listAttachmentsForWorkItem,
 } from '@pc/db';
+
+// Slice 017 Fix 3 — durable live_outbox write for attachments (mirrors the
+// work-item gateway pattern in work-item-writer.ts). Attachments have no
+// version counter, so `version` is null. The relay drains the committed row
+// post-commit and fans the canonical `attachment.changed` live-event frame.
+// NEVER call broadcast inside the txn — just insertLiveEvent.
+function announceAttachment(
+  attachment: Attachment,
+  projectId: ULID,
+  reason: AttachmentChangedReason,
+): void {
+  const payload: AttachmentChangedLivePayload = {
+    reason,
+    workItemId: attachment.workItemId,
+    // Domain Attachment matches the contract AttachmentDto field-for-field;
+    // cast through unknown to bridge the nominal types (cf. work-item-writer).
+    attachment: attachment as unknown as AttachmentChangedLivePayload['attachment'],
+  };
+  getDb().transaction((tx) => {
+    insertLiveEvent(tx, {
+      scope: 'project',
+      projectId,
+      type: 'attachment.changed',
+      entity: 'attachment',
+      entityId: attachment.id,
+      version: null,
+      payload,
+    });
+  });
+}
 
 export type AttachmentBroadcast = (event: {
   type: 'attachment-changed';
@@ -74,6 +107,10 @@ export class AttachmentService {
     if (!attachment) throw new AttachmentNotInProjectError(id);
     this.assertWorkItemInProject(attachment.workItemId);
     dbDeleteAttachment(id);
+    // Durable door (relay-delivered). Captured row passed pre-delete so the
+    // payload carries the full attachment. KEEP the legacy bare broadcast
+    // beside it during Phase A (reconcile-first); Phase C deletes the bare one.
+    announceAttachment(attachment, this.opts.projectId, 'deleted');
     this.opts.broadcast({
       type: 'attachment-changed',
       change: 'deleted',
@@ -85,6 +122,8 @@ export class AttachmentService {
   create(input: CreateAttachmentServiceInput): Attachment {
     this.assertWorkItemInProject(input.workItemId);
     const attachment = dbCreateAttachment(input);
+    // Durable door beside the legacy bare broadcast (Phase A reconcile-first).
+    announceAttachment(attachment, this.opts.projectId, 'created');
     this.opts.broadcast({
       type: 'attachment-changed',
       change: 'created',

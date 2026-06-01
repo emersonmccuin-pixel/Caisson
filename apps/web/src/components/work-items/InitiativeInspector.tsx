@@ -17,6 +17,7 @@ import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
 import type { Project, Stage } from '@/features/projects/client';
 import { useProjectAreas } from '@/hooks/use-project-areas';
 import { WorkItemConflictError, workItemsApi, type Attachment, type WorkItem, type WorkItemStatus, type WorkItemType } from '@/features/work-items/client';
+import { attachmentChangedFromLiveFrame } from '@/features/work-items/attachment-live-events';
 import {
   WORK_ITEM_STATUS_GLYPH,
   WORK_ITEM_STATUS_GROUP_ORDER,
@@ -707,7 +708,9 @@ function ActivityTab({
     if (start >= events.length) return;
     for (let i = start; i < events.length; i++) {
       const env = events[i];
-      if (env?.type === 'attachment-changed' && env.workItemId === workItem.id) {
+      const live = attachmentChangedFromLiveFrame(env);
+      const legacyMatch = env?.type === 'attachment-changed' && env.workItemId === workItem.id;
+      if (legacyMatch || (live && live.workItemId === workItem.id)) {
         workItemsApi.listAttachments(project.id, workItem.id)
           .then(setAttachments)
           .catch(() => {
@@ -982,7 +985,9 @@ function DocumentsTab({
     if (start >= events.length) return;
     for (let i = start; i < events.length; i++) {
       const env = events[i];
-      if (env?.type === 'attachment-changed' && env.workItemId === workItem.id) {
+      const live = attachmentChangedFromLiveFrame(env);
+      const legacyMatch = env?.type === 'attachment-changed' && env.workItemId === workItem.id;
+      if (legacyMatch || (live && live.workItemId === workItem.id)) {
         refetch();
         break;
       }
