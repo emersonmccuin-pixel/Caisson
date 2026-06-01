@@ -7,6 +7,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { isLiveEventFrame } from '@pc/contracts';
+
 import type { Project } from '@/features/projects/client';
 import type { OrchestratorSurfacePreference } from '@/features/settings/client';
 import { runtimeApi, type OrchestratorRuntimeHealth, type OrchestratorRuntimeSnapshot, type OrchestratorSession, type SessionTransitionResponse } from '@/features/runtime/client';
@@ -298,9 +300,17 @@ export function Orchestrator({
   useEffect(() => {
     for (let i = events.length - 1; i >= 0; i--) {
       const e = events[i]!;
-      if (e.type === 'session-changed' || e.type === 'session-title-updated') {
+      if (e.type === 'session-changed') {
         setSession((e as WsEnvelope & { session: OrchestratorSession }).session);
         break;
+      }
+      // Slice 015b — canonical relay session.title.changed frame.
+      if (isLiveEventFrame(e) && e.event.entity === 'session-title') {
+        const session = (e.event.payload as { session?: OrchestratorSession }).session;
+        if (session) {
+          setSession(session);
+          break;
+        }
       }
     }
   }, [events]);

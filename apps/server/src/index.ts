@@ -47,6 +47,7 @@ import {
 import { OrchestratorRuntimeSnapshots } from './services/orchestrator-runtime-snapshot.ts';
 import { ProjectWebSocketHub } from './services/websocket-hub.ts';
 import { LiveRelay } from './services/live-relay.ts';
+import { announceSessionTitle } from './services/session-title-writer.ts';
 import { drainPendingForSession } from './services/agent-delivery.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
 import { sweepEphemeralWorkItems } from './services/ephemeral-work-item-sweep.ts';
@@ -749,7 +750,9 @@ function maybeSetSessionTitle(projectId: ULID, event: unknown): void {
   if (!title) return;
   setOrchestratorSessionTitle(active.id, title);
   const updated = getActiveOrchestratorSession(projectId);
-  if (updated) broadcastTo(projectId, { type: 'session-title-updated', session: updated });
+  // Slice 015b — announce through the durable door; the relay delivers the
+  // canonical session.title.changed frame. No hand-fanout.
+  if (updated) announceSessionTitle(projectId, updated);
 }
 
 /** Section 31.9 — bind the rail session row title + chat title bar to CC's
@@ -770,7 +773,9 @@ function maybeApplyAiTitle(projectId: ULID, event: unknown): void {
   if (active.title === title) return;
   setOrchestratorSessionTitle(active.id, title);
   const updated = getActiveOrchestratorSession(projectId);
-  if (updated) broadcastTo(projectId, { type: 'session-title-updated', session: updated });
+  // Slice 015b — announce through the durable door; the relay delivers the
+  // canonical session.title.changed frame. No hand-fanout.
+  if (updated) announceSessionTitle(projectId, updated);
 }
 
 /** First non-empty line, collapsed whitespace, truncated to ~60 chars. Skips

@@ -29,6 +29,9 @@ const { announceWorkItem, announceWorkItemRow } = await import(
 );
 const { announceStageList } = await import('../src/services/stage-writer.ts');
 const { FieldSchemaService } = await import('../src/services/field-schema.ts');
+const { announceSessionTitle } = await import('../src/services/session-title-writer.ts');
+const { createOrchestratorSession, setOrchestratorSessionTitle, getOrchestratorSession } =
+  await import('@pc/db');
 
 before(() => runMigrations());
 after(() => {
@@ -116,6 +119,24 @@ test('FieldSchemaService.replace writes a field-schema.list.changed outbox row',
   const payload = row?.payload as { schemas?: unknown[]; reason?: string };
   assert.equal(payload.reason, 'replaced');
   assert.equal(payload.schemas?.length, 1);
+});
+
+test('announceSessionTitle writes a session.title.changed outbox row', () => {
+  const projectId = seedProject();
+  const session = createOrchestratorSession({ projectId, providerSessionId: 'prov-1' });
+  setOrchestratorSessionTitle(session.id as ULID, 'My chat');
+  const updated = getOrchestratorSession(session.id as ULID)!;
+  const before = getLiveEventHighWater() ?? '0';
+
+  announceSessionTitle(projectId, updated);
+
+  const rows = listLiveOutboxRowsAfter(before, 500);
+  const row = rows.find((r) => r.entity === 'session-title' && r.entityId === session.id);
+  assert.ok(row, 'expected a session-title row in the live outbox');
+  assert.equal(row?.type, 'session.title.changed');
+  assert.equal(row?.scope, 'project');
+  assert.equal(row?.projectId, projectId);
+  assert.equal((row?.payload as { session?: { title?: string } }).session?.title, 'My chat');
 });
 
 test('a rolled-back txn delivers no work-item outbox row', async () => {

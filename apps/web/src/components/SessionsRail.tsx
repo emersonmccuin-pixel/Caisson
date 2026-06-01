@@ -5,6 +5,8 @@
 
 import { useEffect, useState } from 'react';
 
+import { isLiveEventFrame } from '@pc/contracts';
+
 import type { Project } from '@/features/projects/client';
 import { runtimeApi, type OrchestratorSession, type SessionTransitionResponse } from '@/features/runtime/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
@@ -76,7 +78,10 @@ export function SessionsRail({
   useEffect(() => {
     if (!project) return;
     const last = [...events].reverse().find(
-      (e) => e.type === 'session-changed' || e.type === 'session-title-updated',
+      (e) =>
+        e.type === 'session-changed' ||
+        // Slice 015b — canonical relay session.title.changed frame.
+        (isLiveEventFrame(e) && e.event.entity === 'session-title'),
     );
     if (!last) return;
     runtimeApi.listSessions(project.id)
