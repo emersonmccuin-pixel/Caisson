@@ -1113,7 +1113,7 @@ const server = serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (i
   console.log(`[pc] http://127.0.0.1:${info.port}`);
 });
 
-registerRuntimeHostWebSocketServer<ReturnType<ProjectRuntime['ensurePty']>, ProjectRuntime>({
+const wss = registerRuntimeHostWebSocketServer<ReturnType<ProjectRuntime['ensurePty']>, ProjectRuntime>({
   server,
   path: '/ws',
   wsHub,
@@ -1141,6 +1141,14 @@ function gracefulShutdown(): void {
   clearInterval(mailboxWorkerSweep);
   clearInterval(liveRelayDrainSweep);
   clearInterval(liveOutboxPruneSweep);
+  // Send clean close frames (1001 "going away") to every live WS client so
+  // browsers observe the close and reconnect immediately instead of waiting
+  // out the heartbeat timeout. Best-effort: don't hang shutdown on any one
+  // socket. wss.close() stops accepting new connections.
+  for (const client of wss.clients) {
+    try { client.close(1001, 'server going away'); } catch { /* best-effort */ }
+  }
+  try { wss.close(); } catch { /* best-effort */ }
   hostConnection.close();
   projectRegistry.shutdownAll();
   channelServer.shutdown();
