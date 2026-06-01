@@ -31,7 +31,9 @@ async function json<T>(res: Response): Promise<T> {
 function setup(opts: { askTimeoutMs?: number; realTimeout?: boolean } = {}) {
   const app = new Hono();
   const pendingAsks = createPendingAskStore();
-  const askShadow = new AskShadow({ broadcastTo: () => {} });
+  // Slice 015b — the shadow no longer hand-fans; pending-interaction.changed
+  // frames ride the relay from the committed outbox row.
+  const askShadow = new AskShadow();
   registerChatBridgeRoutes(app, {
     broadcastTo: () => {},
     pendingAsks,
@@ -99,6 +101,95 @@ test('/api/ask timeout terminalizes the shadow expired with the current timeout 
   assert.deepEqual(await json(res), { answer: '(timeout — no user response)' });
   const row = db.listPendingInteractionsForProject(project.id).find((r) => r.sourceId === toolUseId);
   assert.equal(row!.status, 'expired');
+});
+
+test('onAsk + onResolved each ride the relay exactly once (no hand-fanout), project-scoped', async () => {
+  const { LiveRelay } = await import('../src/services/live-relay.ts');
+  const fanProject = new Map<string, unknown[]>();
+  const fanGlobal: unknown[] = [];
+  const relay = new LiveRelay({
+    hub: {
+      broadcastAll(msg: unknown): number { fanGlobal.push(msg); return 1; },
+      broadcast(pid: string, msg: unknown): number {
+        const l = fanProject.get(pid) ?? [];
+        l.push(msg);
+        fanProject.set(pid, l);
+        return 1;
+      },
+    },
+  });
+  relay.primeToHead();
+
+  const project = createProject({
+    slug: `ask-relay-${Date.now()}`,
+    name: 'Ask Relay',
+    stages,
+    folderPath: join(tmpDir, 'ask-relay'),
+  });
+  relay.drain(); // advance past createProject's outbox rows
+  const base = (fanProject.get(project.id) ?? []).length;
+
+  const shadow = new AskShadow();
+  const toolUseId = `tool-relay-${Date.now()}`;
+  shadow.onAsk({ projectId: project.id, toolUseId, toolName: 'AskUserQuestion', prompt: 'pick?' });
+
+  relay.drain();
+  const afterAsk = (fanProject.get(project.id) ?? []).slice(base);
+  assert.equal(afterAsk.length, 1, 'create delivers exactly one frame via the relay');
+  assert.equal(
+    (afterAsk[0] as { event: { type: string } }).event.type,
+    'pending-interaction.changed',
+  );
+  assert.equal(fanGlobal.length, 0, 'pending-interactions are project-scoped, never global');
+
+  shadow.onResolved(toolUseId, 'yes');
+  relay.drain();
+  const afterResolve = (fanProject.get(project.id) ?? []).slice(base);
+  assert.equal(afterResolve.length, 2, 'terminalize delivers a second frame via the relay');
+});
+
+test('a rolled-back pending-interaction write delivers nothing', async () => {
+  const { getDb, insertLiveEvent } = db;
+  const { LiveRelay } = await import('../src/services/live-relay.ts');
+  const fanProject = new Map<string, unknown[]>();
+  const relay = new LiveRelay({
+    hub: {
+      broadcastAll(): number { return 1; },
+      broadcast(pid: string, msg: unknown): number {
+        const l = fanProject.get(pid) ?? [];
+        l.push(msg);
+        fanProject.set(pid, l);
+        return 1;
+      },
+    },
+  });
+  relay.primeToHead();
+  const project = createProject({
+    slug: `ask-rb-${Date.now()}`,
+    name: 'Ask Rollback',
+    stages,
+    folderPath: join(tmpDir, 'ask-rb'),
+  });
+  relay.drain();
+  const base = (fanProject.get(project.id) ?? []).length;
+
+  assert.throws(() => {
+    getDb().transaction((tx) => {
+      insertLiveEvent(tx, {
+        scope: 'project',
+        projectId: project.id,
+        type: 'pending-interaction.changed',
+        entity: 'pending-interaction',
+        entityId: newId(),
+        version: 0,
+        payload: {},
+      });
+      throw new Error('boom — roll back');
+    });
+  }, /boom/);
+
+  relay.drain();
+  assert.equal((fanProject.get(project.id) ?? []).length, base, 'rolled-back row never delivers');
 });
 
 test('boot-sweep expires orphaned open shadow rows', () => {

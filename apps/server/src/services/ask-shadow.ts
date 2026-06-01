@@ -10,9 +10,7 @@
 
 import {
   PendingInteractionService,
-  type PendingInteractionPublication,
 } from '@pc/app-services';
-import { buildLiveEventFrame } from '@pc/contracts';
 import {
   expireOpenPendingInteractions,
   findOpenPendingInteractionBySource,
@@ -24,20 +22,22 @@ import type { AskShadowPort } from '../features/chat-bridges/routes.ts';
 
 const SOURCE_KIND = 'runtime-hook';
 
+// Slice 015b — pending-interaction.changed frames ride the relay. The service
+// writes the canonical live_outbox row inside its create/terminalize txn; the
+// 250ms relay drains it to the interaction's project scope. The ad-hoc
+// broadcastTo hand-fanout is deleted (the relay delivers the identical frame,
+// deduped by event.id).
 export interface AskShadowDeps {
   interactions?: PendingInteractionService;
-  broadcastTo(projectId: ULID, msg: unknown): void;
   now?: () => number;
 }
 
 export class AskShadow implements AskShadowPort {
   private readonly interactions: PendingInteractionService;
-  private readonly broadcast: (projectId: ULID, msg: unknown) => void;
   private readonly now: () => number;
 
-  constructor(deps: AskShadowDeps) {
+  constructor(deps: AskShadowDeps = {}) {
     this.interactions = deps.interactions ?? new PendingInteractionService();
-    this.broadcast = deps.broadcastTo;
     this.now = deps.now ?? (() => Date.now());
   }
 
@@ -45,7 +45,8 @@ export class AskShadow implements AskShadowPort {
     try {
       const existing = findOpenPendingInteractionBySource(SOURCE_KIND, input.toolUseId);
       if (existing) return; // a re-ask for the same toolUseId reuses the open row
-      const pub = this.interactions.create({
+      // Outbox row written in the create txn; the relay delivers it.
+      this.interactions.create({
         id: newId(),
         projectId: input.projectId,
         kind: 'runtime-hook-ask',
@@ -55,7 +56,6 @@ export class AskShadow implements AskShadowPort {
         prompt: input.prompt,
         now: this.now(),
       });
-      this.fanout(pub);
     } catch {
       // The shadow is best-effort; never break the blocking /api/ask path.
     }
@@ -66,7 +66,7 @@ export class AskShadow implements AskShadowPort {
     try {
       const row = findOpenPendingInteractionBySource(SOURCE_KIND, toolUseId);
       if (!row) return;
-      this.fanout(this.interactions.answer({ id: row.id, answer, answeredBy: 'user', now: this.now() }));
+      this.interactions.answer({ id: row.id, answer, answeredBy: 'user', now: this.now() });
     } catch {
       // best-effort
     }
@@ -76,15 +76,10 @@ export class AskShadow implements AskShadowPort {
     try {
       const row = findOpenPendingInteractionBySource(SOURCE_KIND, toolUseId);
       if (!row) return;
-      this.fanout(this.interactions.expire({ id: row.id, now: this.now() }));
+      this.interactions.expire({ id: row.id, now: this.now() });
     } catch {
       // best-effort
     }
-  }
-
-  private fanout(pub: PendingInteractionPublication | null): void {
-    if (!pub) return;
-    this.broadcast(pub.interaction.projectId, buildLiveEventFrame(pub.liveEvent));
   }
 }
 

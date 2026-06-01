@@ -4,24 +4,20 @@
 // inbox + a pending-interaction answer route. All NEW routes (no legacy parity).
 // Contract parsers gate input; reads never emit.
 //
-// Slice 015b — mailbox-message delivery is now the relay's job. The mailbox
-// service writes the canonical `live_outbox` row inside its mutation txn; the
-// 250ms relay drains it to subscribers per scope/project. The ad-hoc
-// `broadcastTo`/`broadcastAll` message fanout that used to live here is DELETED
-// (the relay delivers the identical frame, deduped by `event.id`). The
-// pending-interaction `/answer` fanout (`fanoutInteraction`) is the SEPARATE
-// pending-interactions subsystem and migrates in its own commit; it keeps
-// `broadcastTo` until then.
+// Slice 015b — mailbox-message AND pending-interaction delivery are now the
+// relay's job. The mailbox + pending-interaction services write the canonical
+// `live_outbox` row inside their mutation txn; the 250ms relay drains it to
+// subscribers per scope/project. ALL ad-hoc `broadcastTo`/`broadcastAll` fanout
+// that used to live here is DELETED (the relay delivers the identical frame,
+// deduped by `event.id`). No fanout deps remain on these routes.
 
 import type { Hono } from 'hono';
 import type {
   MailboxEnqueuePublication,
   MailboxService,
-  PendingInteractionPublication,
   PendingInteractionService,
 } from '@pc/app-services';
 import {
-  buildLiveEventFrame,
   mailboxAddressProjectId,
   parseEnqueueMailboxMessageRequest,
   parseListMailboxQuery,
@@ -51,19 +47,11 @@ import {
 export interface MailboxRouteDeps {
   mailbox: MailboxService;
   interactions: PendingInteractionService;
-  /** Pending-interaction (`/answer`) fanout only. Mailbox-message delivery is the
-   *  relay's job (015b); this dep migrates with the pending-interaction subsystem. */
-  broadcastTo(projectId: ULID, msg: unknown): void;
   now?: () => number;
 }
 
 export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
   const now = deps.now ?? (() => Date.now());
-
-  const fanoutInteraction = (pub: PendingInteractionPublication | null): void => {
-    if (!pub) return;
-    deps.broadcastTo(pub.interaction.projectId, buildLiveEventFrame(pub.liveEvent));
-  };
 
   // Shared enqueue. The message's projectId is DERIVED from its recipient
   // addresses (the live-event scope invariant is `global ⟺ projectId IS NULL`),
@@ -188,7 +176,7 @@ export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
       now: now(),
     });
     if (!pub) return c.json({ ok: false, error: 'interaction not open' }, 409);
-    fanoutInteraction(pub);
+    // Outbox row written in the answer txn; the relay delivers it.
     return c.json({ ok: true });
   });
 }

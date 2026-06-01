@@ -562,7 +562,7 @@ registerMcpBridgeRoutes(app, {
 // the agent delivery gate without a const TDZ. The routes + worker setInterval
 // stay here.
 const pendingInteractionService = new PendingInteractionService();
-const askShadow = new AskShadow({ interactions: pendingInteractionService, broadcastTo });
+const askShadow = new AskShadow({ interactions: pendingInteractionService });
 
 registerChatBridgeRoutes(app, {
   broadcastTo,
@@ -575,9 +575,8 @@ registerChatBridgeRoutes(app, {
 registerMailboxRoutes(app, {
   mailbox: mailboxService,
   interactions: pendingInteractionService,
-  // Mailbox-message delivery rides the relay (015b). `broadcastTo` remains only
-  // for the pending-interaction `/answer` fanout (migrates next commit).
-  broadcastTo,
+  // Mailbox-message AND pending-interaction delivery ride the relay (015b);
+  // no fanout deps.
 });
 
 // Flow B — workflow-review cutover seam. Hoisted so the ProjectRegistry built at
