@@ -28,6 +28,7 @@ const { announceWorkItem, announceWorkItemRow } = await import(
   '../src/services/work-item-writer.ts'
 );
 const { announceStageList } = await import('../src/services/stage-writer.ts');
+const { FieldSchemaService } = await import('../src/services/field-schema.ts');
 
 before(() => runMigrations());
 after(() => {
@@ -98,6 +99,23 @@ test('announceStageList writes a stage.list.changed outbox row with the new rev'
   assert.equal(payload.reason, 'replaced');
   assert.equal(payload.stagesRev, (stamped[0] as { rev?: number }).rev);
   assert.equal(payload.stages?.length, 2);
+});
+
+test('FieldSchemaService.replace writes a field-schema.list.changed outbox row', () => {
+  const projectId = seedProject();
+  const before = getLiveEventHighWater() ?? '0';
+  const svc = new FieldSchemaService({ projectId });
+  svc.replace([{ key: 'sev', label: 'Severity', type: 'text', required: false, order: 0 }]);
+
+  const rows = listLiveOutboxRowsAfter(before, 500);
+  const row = rows.find((r) => r.entity === 'field-schema' && r.projectId === projectId);
+  assert.ok(row, 'expected a field-schema row in the live outbox');
+  assert.equal(row?.type, 'field-schema.list.changed');
+  assert.equal(row?.scope, 'project');
+  assert.equal(row?.entityId, null);
+  const payload = row?.payload as { schemas?: unknown[]; reason?: string };
+  assert.equal(payload.reason, 'replaced');
+  assert.equal(payload.schemas?.length, 1);
 });
 
 test('a rolled-back txn delivers no work-item outbox row', async () => {

@@ -1,23 +1,22 @@
 // FieldSchemaService — project-scoped facade over the field-schemas repo.
 //
-// list + replace; replace broadcasts so any open Overview tab can re-render
-// its typed editors without a refetch.
+// list + replace. Slice 015b: replace writes a durable `field-schema.list.changed`
+// live_outbox row in-txn; the live-relay drains the committed row and fans the
+// canonical `{type:'live-event'}` frame to the project's subscribers. The old
+// hand-written `field-schemas-changed` envelope fanout is GONE.
 
 import type { FieldSchema, ULID } from '@pc/domain';
+import type { FieldSchemaListChangedLivePayload } from '@pc/contracts';
 import {
+  getDb,
+  insertLiveEvent,
   listFieldSchemas,
   replaceFieldSchemas,
   type ReplaceFieldSchemasInput,
 } from '@pc/db';
 
-export type FieldSchemaBroadcast = (event: {
-  type: 'field-schemas-changed';
-  items: FieldSchema[];
-}) => void;
-
 export interface FieldSchemaServiceOptions {
   projectId: ULID;
-  broadcast: FieldSchemaBroadcast;
 }
 
 export class FieldSchemaService {
@@ -29,7 +28,22 @@ export class FieldSchemaService {
 
   replace(items: ReplaceFieldSchemasInput['items']): FieldSchema[] {
     const out = replaceFieldSchemas({ projectId: this.opts.projectId, items });
-    this.opts.broadcast({ type: 'field-schemas-changed', items: out });
+    const payload: FieldSchemaListChangedLivePayload = {
+      // Domain FieldSchema is structurally compatible with the contract DTO.
+      schemas: out as unknown as FieldSchemaListChangedLivePayload['schemas'],
+      reason: 'replaced',
+    };
+    getDb().transaction((tx) => {
+      insertLiveEvent(tx, {
+        scope: 'project',
+        projectId: this.opts.projectId,
+        type: 'field-schema.list.changed',
+        entity: 'field-schema',
+        entityId: null,
+        version: null,
+        payload,
+      });
+    });
     return out;
   }
 }

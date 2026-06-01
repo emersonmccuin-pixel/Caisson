@@ -422,7 +422,6 @@ export class ProjectRuntime {
     if (!this.fieldSchemaSvc) {
       this.fieldSchemaSvc = new FieldSchemaService({
         projectId: this.project.id,
-        broadcast: this.opts.broadcast,
       });
     }
     return this.fieldSchemaSvc;

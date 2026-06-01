@@ -11,7 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
-import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
+import { isLiveEventFrame, isWorkItemChangedLiveEventFrame } from '@pc/contracts';
 
 import type { Project } from '@/features/projects/client';
 import { WORK_ITEM_TYPES, WorkItemConflictError, WorkItemFieldValidationError, workItemsApi, type Attachment, type FieldSchema, type WorkItem, type WorkItemPatch, type WorkItemType } from '@/features/work-items/client';
@@ -140,8 +140,11 @@ export function WorkItemDetailModal({
     if (start >= events.length) return;
     for (let i = events.length - 1; i >= start; i--) {
       const env = events[i];
-      if (env?.type === 'field-schemas-changed' && Array.isArray(env.items)) {
-        setFieldSchemas(env.items as FieldSchema[]);
+      // Slice 015b — canonical relay `field-schema.list.changed` frame.
+      if (!isLiveEventFrame(env) || env.event.entity !== 'field-schema') continue;
+      const schemas = (env.event.payload as { schemas?: unknown }).schemas;
+      if (Array.isArray(schemas)) {
+        setFieldSchemas(schemas as FieldSchema[]);
         break;
       }
     }
