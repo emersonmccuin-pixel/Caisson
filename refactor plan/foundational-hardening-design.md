@@ -13,6 +13,46 @@ on the client. Theme 4 (pod provenance) is already effectively resolved.
 
 ---
 
+## Architectural alignment (this is north-star completion, not new architecture)
+
+Verified against `target-architecture.md` + `holistic-architecture-synthesis.md`. Every
+theme is the server/client completion of a Gap those docs already name — nothing here
+invents a parallel pattern or a second state store.
+
+- **Theme 1 (HostConnection) = Gap #2 "Runtime Host Boundary"** (rated *Far*; synthesis
+  line 278 scopes the host to "process spawn, PTY IO, readiness, **health**"). It is the
+  server's *side* of that boundary — a clean explicit interface — NOT the "split runtime-host
+  internals" item (north-star migration step #11, explicitly last); that decomposes the host
+  *process*, and its prereq ("after replay/cursor/mailbox contracts are stable") is already
+  met (015/016/018). It also satisfies *"no important app state in memory… in-memory maps
+  allowed only as rebuildable runtime projections"*: the frozen baseUrl was in-memory state
+  acting as authority; the fix makes the **lock file the source of truth**, the connection a
+  projection (same principle as the state-propagation ADR's reconciled-row-not-stale-handle).
+- **The `host-health` live-event entity is the sanctioned mechanism, not a side channel.**
+  Target §Live Event Flow: *"the payload can vary by subsystem, but the envelope should
+  not."* It's a new global-scope payload under the existing canonical `LiveEvent` envelope
+  (synthesis line 336 `scope:'global', projectId:null`), derived from the lock file and
+  *announced* over the durable door — honoring *"do not make websocket events the source of
+  truth."*
+- **Theme 3 (one-door client close) = Gap #3 "Canonical Live Events" + Gap #5 "UI Fetch
+  Discipline."** *"Components do not decode raw websocket envelopes; feature hooks subscribe
+  to canonical live events."* The positional `events[]` scans ARE that violation; migrating
+  to `useLiveEvents`/`useLiveEntitySignature` + the client no-bypass gate (T3.4) enforces the
+  rule.
+- **017 Phase C (slice #11) = Gap #4 "Mailbox Instead Of Channel"** (*Far*): *"Channels
+  should be removed entirely… do not build new dependencies on Channel."* Sequenced
+  correctly — Gap #3 before Gap #4, the doc's own migration order (steps 5→6).
+- **Theme 4 = the locked invariants unchanged** (pod content source-owned, DB is a
+  materialization, `tools_json` = grants only, definitions in `@pc/domain`) — matches "MCP
+  tools stay CODE not DB" and *"do not create a second state store beside SQLite."*
+- **Honest caveat — Theme 2** is the only theme not among the top-5 named Gaps: it's
+  *operational* hardening, but serves the architecture's stated reliability properties
+  directly (*"UI recovery does not depend on best-effort in-memory broadcasts"* + the DoD's
+  reconnect/replay testing) and adds nothing structurally new (the watchdog rides the
+  existing run-state model; T2-B reuses Theme 1's `host-health` entity).
+
+---
+
 ## §0 Cross-theme map (what depends on what)
 
 ```
