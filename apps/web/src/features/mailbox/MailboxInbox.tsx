@@ -91,6 +91,16 @@ export function MailboxInbox({ scope, onVisibleCount }: MailboxInboxProps) {
   );
 }
 
+/** Single-line title for the collapsed card: subject, else the first non-empty
+ *  line of the body, else the kind label. Keeps long bodies out of the list. */
+function rowTitle(message: MailboxInboxItem['message']): string {
+  const subject = message.subject?.trim();
+  if (subject) return subject;
+  const firstLine = message.body.split('\n').map((l) => l.trim()).find(Boolean);
+  if (firstLine) return firstLine;
+  return KIND_LABELS[message.kind];
+}
+
 function MailboxInboxRow({ item, onChanged }: { item: MailboxInboxItem; onChanged: () => void }) {
   const { recipient, message } = item;
   const projectId = message.projectId;
@@ -101,6 +111,9 @@ function MailboxInboxRow({ item, onChanged }: { item: MailboxInboxItem; onChange
     recipient.dismissedAt === null;
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);
+  // Collapsed by default — the card shows a title + type; the full body lives
+  // behind a click so completed-agent dumps don't flood the rail.
+  const [expanded, setExpanded] = useState(false);
 
   // Project-scoped actions need a projectId; the global user-inbox messages are
   // project-less, so action/answer routes are unavailable for them (read/dismiss
@@ -118,24 +131,40 @@ function MailboxInboxRow({ item, onChanged }: { item: MailboxInboxItem; onChange
   return (
     <li
       className={[
-        'rounded border border-border p-2 text-[12px]',
+        'rounded border border-border text-[12px]',
         unread ? 'bg-primary/5' : 'bg-card',
       ].join(' ')}
     >
-      {/* Meta: kind badge + subject */}
-      <div className="mb-1.5 flex items-baseline gap-1.5">
+      {/* Collapsed header — click to expand the body + actions */}
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-1.5 p-2 text-left"
+      >
+        <span className="text-[9px] text-muted-foreground/60">{expanded ? '▾' : '▸'}</span>
+        {unread && <span className="size-1.5 shrink-0 rounded-full bg-primary" aria-label="unread" />}
         <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
           {message.kind}
         </span>
-        {message.subject && (
-          <span className={`truncate${unread ? ' font-medium text-foreground' : ' text-foreground/80'}`}>
-            {message.subject}
+        <span className={`min-w-0 flex-1 truncate${unread ? ' font-medium text-foreground' : ' text-foreground/80'}`}>
+          {rowTitle(message)}
+        </span>
+        {actionable && (
+          <span className="shrink-0 rounded bg-primary/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-primary">
+            Action
           </span>
         )}
-      </div>
+        <span className="shrink-0 text-[9px] tabular-nums text-muted-foreground/60">
+          {formatRelativeTime(message.createdAt)}
+        </span>
+      </button>
 
-      {/* Body */}
-      <div className="mb-2 text-[11px] leading-relaxed text-foreground/80">{message.body}</div>
+      {!expanded ? null : (
+      <div className="px-2 pb-2">
+      {/* Body — capped so even an expanded completion can't run away */}
+      <div className="mb-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground/80">
+        {message.body}
+      </div>
 
       {/* Answer form */}
       {actionable && message.interactionId && projectId && (
@@ -191,6 +220,19 @@ function MailboxInboxRow({ item, onChanged }: { item: MailboxInboxItem; onChange
           </button>
         )}
       </div>
+      </div>
+      )}
     </li>
   );
+}
+
+function formatRelativeTime(epochMs: number): string {
+  const diffSec = Math.max(0, Math.round((Date.now() - epochMs) / 1000));
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}min ago`;
+  const diffHr = Math.round(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.round(diffHr / 24);
+  return `${diffDay}d ago`;
 }

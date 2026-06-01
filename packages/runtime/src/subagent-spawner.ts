@@ -326,6 +326,13 @@ export function spawnSubagent(
     }
   });
 
+  // Reset the idle timer on ANY raw output, not only completed JSONL messages.
+  // A long thinking / composing turn streams PTY output continuously but writes
+  // no new transcript line for minutes; keying idle off jsonl-events alone
+  // false-killed healthy agents mid-turn. The 2h wall-clock cap remains the hard
+  // ceiling for genuinely-stuck runs that emit no output at all.
+  spawn.on('raw', () => resetIdleTimer());
+
   spawn.on('exit', (code: number | null, signal: number | null) => {
     if (resolved) return;
     fail(

@@ -175,7 +175,18 @@ export type JsonlEvent =
       artifactUrls: unknown;
       timestamp: string | null;
       raw: unknown;
-    };
+    }
+  /** Mid-loop or preamble assistant text. Emitted for assistant entries whose
+   *  stop_reason is `tool_use` or `pause_turn` (the model wrote text blocks
+   *  as a preamble before its tool calls). Previously this text was dropped
+   *  entirely — the turn-end extraction only ran for !isMidLoop entries.
+   *  `midLoop: true` on every emission from this path. */
+  | { kind: 'jsonl-assistant-text'; text: string; midLoop: boolean }
+  /** Extended-thinking block emitted by the model. Present when the model's
+   *  response includes a `type: 'thinking'` content block (Claude 3.7+
+   *  extended-thinking). Fires for both mid-loop and turn-end assistant
+   *  entries. Rendered as a collapsible Thinking block in chat. */
+  | { kind: 'jsonl-thinking'; text: string };
 
 export interface JsonlTailerOptions {
   filePath: string;
@@ -404,6 +415,25 @@ export class JsonlTailer extends EventEmitter {
           } satisfies JsonlEvent);
         }
       }
+
+      // Thinking blocks (extended thinking). Emit for any assistant entry
+      // regardless of stop_reason — thinking appears in both mid-loop and
+      // turn-end messages. `block.thinking` is the text field (not `text`).
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (!block || typeof block !== 'object') continue;
+          const b = block as Record<string, unknown>;
+          if (b.type !== 'thinking') continue;
+          const thinkingText = typeof b.thinking === 'string' ? b.thinking : '';
+          if (thinkingText) {
+            this.emit('event', {
+              kind: 'jsonl-thinking',
+              text: thinkingText,
+            } satisfies JsonlEvent);
+          }
+        }
+      }
+
       // Usage block — Anthropic SDK response shape. Emit once per assistant
       // entry (whether mid-loop or turn-end), client sums for the session.
       // Section 31 enriches with `speed` (downgrade indicator) + the message's
@@ -443,6 +473,27 @@ export class JsonlTailer extends EventEmitter {
       const stopReason = message.stop_reason as string | null | undefined;
       const isMidLoop = stopReason === 'tool_use' || stopReason === 'pause_turn';
       const hasStopReasonField = 'stop_reason' in message;
+      // Mid-loop assistant text (preamble written before tool calls). Previously
+      // dropped — the turn-end branch below only runs for !isMidLoop entries.
+      if (isMidLoop && Array.isArray(content)) {
+        const midText = content
+          .filter(
+            (b): b is Record<string, unknown> =>
+              !!b &&
+              typeof b === 'object' &&
+              (b as Record<string, unknown>).type === 'text' &&
+              typeof (b as Record<string, unknown>).text === 'string',
+          )
+          .map((b) => b.text as string)
+          .join('\n');
+        if (midText) {
+          this.emit('event', {
+            kind: 'jsonl-assistant-text',
+            text: midText,
+            midLoop: true,
+          } satisfies JsonlEvent);
+        }
+      }
       if (hasStopReasonField && !isMidLoop) {
         const text = Array.isArray(content)
           ? content

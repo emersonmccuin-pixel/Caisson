@@ -121,6 +121,13 @@ export function normalizeJsonlEnvelope(env: WsEnvelope): WsEnvelope | null {
         type: 'event',
         event: { kind: 'assistant', text: ev.text },
       };
+    case 'jsonl-assistant-text':
+      if (!ev.text) return null;
+      return {
+        projectId: env.projectId,
+        type: 'event',
+        event: { kind: 'assistant', text: ev.text, midLoop: ev.midLoop },
+      };
     case 'jsonl-tool-call':
       return {
         projectId: env.projectId,
@@ -230,6 +237,13 @@ export function normalizeJsonlEnvelope(env: WsEnvelope): WsEnvelope | null {
         event: { kind: 'sidechain', role: step.role, text: step.text },
       };
     }
+    case 'jsonl-thinking':
+      if (!ev.text) return null;
+      return {
+        projectId: env.projectId,
+        type: 'event',
+        event: { kind: 'thinking', text: ev.text },
+      };
     case 'jsonl-ai-title':
     case 'jsonl-last-prompt':
     case 'jsonl-file-history':

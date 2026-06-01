@@ -87,6 +87,17 @@ export interface AssistantEvent extends ChatEventBase {
   kind: 'assistant';
   text: string;
   transcriptPath?: string | null;
+  /** True for preamble text emitted before tool calls (stop_reason: tool_use
+   *  or pause_turn). Renders a subtle badge to distinguish from a normal
+   *  turn-end assistant message. */
+  midLoop?: boolean;
+}
+
+/** Extended-thinking block from the model. Renders as a collapsed-by-default
+ *  Thinking block distinct from normal assistant messages. */
+export interface ThinkingEvent extends ChatEventBase {
+  kind: 'thinking';
+  text: string;
 }
 
 /** One row of a sub-agent (sidechain) turn, parsed from a `jsonl-sidechain`
@@ -310,6 +321,7 @@ export interface ToolProgressEvent extends ChatEventBase {
 export type ChatEvent =
   | UserEvent
   | AssistantEvent
+  | ThinkingEvent
   | SidechainStepEvent
   | ToolStartEvent
   | ToolEndEvent
@@ -516,6 +528,24 @@ export interface JsonlPostTurnSummaryEvent {
   raw: unknown;
 }
 
+/** Mid-loop or preamble assistant text. Text blocks from an assistant entry
+ *  whose stop_reason is `tool_use` or `pause_turn`; previously dropped by
+ *  the tailer (turn-end extraction only ran for !isMidLoop entries). Renders
+ *  as a normal assistant bubble in both normal and raw modes. */
+export interface JsonlAssistantTextEvent {
+  kind: 'jsonl-assistant-text';
+  text: string;
+  midLoop: boolean;
+}
+
+/** Extended-thinking block emitted by the model. Present when the model's
+ *  response includes a `type: 'thinking'` content block (Claude 3.7+
+ *  extended-thinking). Mirrors `jsonl-thinking` in the tailer's JsonlEvent. */
+export interface JsonlThinkingEvent {
+  kind: 'jsonl-thinking';
+  text: string;
+}
+
 export type JsonlEvent =
   | JsonlUserEvent
   | JsonlTurnEndEvent
@@ -536,7 +566,9 @@ export type JsonlEvent =
   | JsonlCompactEvent
   | JsonlMicrocompactEvent
   | JsonlTurnDurationEvent
-  | JsonlPostTurnSummaryEvent;
+  | JsonlPostTurnSummaryEvent
+  | JsonlAssistantTextEvent
+  | JsonlThinkingEvent;
 
 // Outbound WS messages (Q8 chat send + interrupt + ask-reply)
 

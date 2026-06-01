@@ -115,6 +115,12 @@ export function rowPolicy(ev: JsonlEvent): RowPolicy {
     case 'jsonl-stream-event':
       return { visibility: 'hidden', lane: 'chat' };
 
+    case 'jsonl-assistant-text':
+      return { visibility: ev.text ? 'shown' : 'hidden', lane: 'chat' };
+
+    case 'jsonl-thinking':
+      return { visibility: ev.text ? 'shown' : 'hidden', lane: 'chat' };
+
     default: {
       // Compile-time exhaustiveness: a new JsonlEvent kind fails the build here
       // until it is given an explicit policy.

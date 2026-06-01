@@ -252,9 +252,17 @@ export function TerminalModePanel({
     let second: number | null = null;
     const first = window.requestAnimationFrame(() => {
       fitAndResize();
+      // The WebGL renderer caches glyph tiles in a GPU texture atlas keyed by
+      // the cell geometry at draw time. When the pane is revealed and re-fit to
+      // a different size, stale tiles can survive and render as overlapping /
+      // garbled text. Clearing the atlas + forcing a full repaint after the fit
+      // rebuilds it against the current geometry. (No-op on the DOM fallback.)
+      webglRef.current?.clearTextureAtlas();
       second = window.requestAnimationFrame(() => {
+        const term = termRef.current;
+        if (term) term.refresh(0, term.rows - 1);
         setReadyToReveal(true);
-        termRef.current?.focus();
+        term?.focus();
       });
     });
     return () => {

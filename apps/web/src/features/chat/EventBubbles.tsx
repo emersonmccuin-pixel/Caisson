@@ -14,6 +14,7 @@ import type {
   SystemEvent,
   TaskEndEvent,
   TaskStartEvent,
+  ThinkingEvent,
   TodosEvent,
   UserEvent,
 } from '@/features/runtime/ws-types';
@@ -183,6 +184,8 @@ export function EventBubble({
       return <UserBubble event={event as UserEvent} projectId={projectId} />;
     case 'assistant':
       return <AssistantBubble event={event as AssistantEvent} projectId={projectId} />;
+    case 'thinking':
+      return <ThinkingBubble event={event as ThinkingEvent} />;
     case 'tool-start':
     case 'tool-end':
       return null;
@@ -461,6 +464,32 @@ function renderInlinePart(part: UserPart, key: number, projectId: string) {
   return <span key={key}>{part.text}</span>;
 }
 
+export function ThinkingBubble({ event }: { event: ThinkingEvent }) {
+  const [expanded, setExpanded] = useState(false);
+  const text = event.text ?? '';
+  const preview = text.replace(/\s+/g, ' ').trim();
+  return (
+    <button
+      type="button"
+      onClick={() => setExpanded((e) => !e)}
+      title={expanded ? 'Collapse thinking' : 'Expand thinking'}
+      className="w-full text-left text-[11px] italic text-muted-foreground/55 hover:text-muted-foreground/80 transition-colors"
+    >
+      {expanded ? (
+        <div className="whitespace-pre-wrap font-mono text-muted-foreground/75">
+          <span className="mr-1 not-italic opacity-60">💭</span>
+          {text}
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5">
+          <span className="shrink-0 not-italic opacity-60">💭</span>
+          <span className="truncate">{preview || 'Thinking'}</span>
+        </div>
+      )}
+    </button>
+  );
+}
+
 export function AssistantBubble({ event, projectId }: { event: AssistantEvent; projectId: string }) {
   const text = event.text ?? '';
   if (!text) {
@@ -475,6 +504,11 @@ export function AssistantBubble({ event, projectId }: { event: AssistantEvent; p
   const Anchor = useMemo(() => makeMarkdownAnchor(projectId), [projectId]);
   return (
     <div className="group relative text-sm text-foreground">
+      {event.midLoop && (
+        <div className="mb-1.5 inline-block border border-border/40 bg-muted/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground/60">
+          preamble
+        </div>
+      )}
       <div className="markdown-body">
         <ReactMarkdown
           remarkPlugins={[remarkGfm, remarkBreaks]}

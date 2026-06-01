@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
 
+import { DiffView } from '@/features/chat/DiffView';
 import { summarizeInput } from '@/features/chat/runtimeState';
 import type { ToolCall } from '@/features/chat/types';
 
@@ -111,40 +112,14 @@ export function EditDiff({ input }: { input: Record<string, unknown> }) {
   const path = typeof input.file_path === 'string' ? (input.file_path as string) : '';
   const oldStr = typeof input.old_string === 'string' ? (input.old_string as string) : '';
   const newStr = typeof input.new_string === 'string' ? (input.new_string as string) : '';
-  return (
-    <div className="flex flex-col gap-1">
-      {path && (
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-          edit · {path}
-        </div>
-      )}
-      <div className="flex flex-col gap-1">
-        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words border border-destructive/40 bg-destructive/5 p-1.5 font-mono text-[11px] text-foreground">
-          {oldStr || '(empty)'}
-        </pre>
-        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words border border-success/40 bg-success/5 p-1.5 font-mono text-[11px] text-foreground">
-          {newStr || '(empty)'}
-        </pre>
-      </div>
-    </div>
-  );
+  return <DiffView oldText={oldStr} newText={newStr} path={path || undefined} />;
 }
 
 export function WritePreview({ input }: { input: Record<string, unknown> }) {
   const path = typeof input.file_path === 'string' ? (input.file_path as string) : '';
   const content = typeof input.content === 'string' ? (input.content as string) : '';
-  return (
-    <div className="flex flex-col gap-1">
-      {path && (
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-          write · {path}
-        </div>
-      )}
-      <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words border border-success/40 bg-success/5 p-1.5 font-mono text-[11px] text-foreground">
-        {content || '(empty)'}
-      </pre>
-    </div>
-  );
+  // Write = new file: show as all-additions diff (oldText = "")
+  return <DiffView oldText="" newText={content} path={path || undefined} />;
 }
 
 function ExpandCollapseChips({

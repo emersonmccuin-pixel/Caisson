@@ -174,6 +174,19 @@ export function useChatTimelineRenderer({
           />
         );
       }
+      // Thinking blocks render as a self-contained collapsed row — no avatar/
+      // speaker chrome. The ThinkingBubble handles its own expand/collapse.
+      if (ev.kind === 'thinking') {
+        return (
+          <EventBubble
+            key={item.key}
+            event={ev}
+            projectId={projectId}
+            resolvedApprovals={resolvedApprovals}
+            onApprovalResolved={markApprovalResolved}
+          />
+        );
+      }
       if (ev.kind === 'system') {
         const sys = ev as SystemEvent;
         if (SUPPRESSED_SYSTEM_SUBTYPES.has(sys.subtype)) {

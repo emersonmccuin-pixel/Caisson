@@ -68,6 +68,19 @@ export function ChatTimeline({
     if (el) el.scrollTop = el.scrollHeight;
   }, [autoFollowKey, pinnedToBottom]);
 
+  // When the terminal closes, the timeline un-hides and re-renders its bubbles.
+  // While it was hidden the scroller collapsed to zero height and the browser
+  // reset scrollTop to 0, so restore the bottom-pin after the bubbles lay out.
+  useEffect(() => {
+    if (terminalActive || !pinnedToBottom) return;
+    const el = scrollerRef.current;
+    if (!el) return;
+    const raf = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [terminalActive, pinnedToBottom]);
+
   useEffect(() => {
     setPinnedToBottom(true);
     setVisibleCount(DEFAULT_HISTORY_WINDOW);
