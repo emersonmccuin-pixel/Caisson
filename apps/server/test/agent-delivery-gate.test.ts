@@ -73,6 +73,8 @@ test('gate=mailbox — enqueues orchestrator-session + orchestrator-turn with th
   assert.equal(input.message.kind, 'agent-terminal');
   assert.equal(input.message.idempotencyKey, 'agent:run-1:agent-completed');
   assert.equal(input.message.body, 'agent completed body');
+  // Human subject for the inbox card title (vs the raw [pc:agent-event …] body).
+  assert.equal(input.message.subject, 'Agent pc-orchestrator completed');
   assert.equal(input.recipients.length, 1);
   const r = input.recipients[0]!;
   assert.equal(r.channel, 'orchestrator-turn');
@@ -106,6 +108,26 @@ test('message-kind mapping: asks ⟹ agent-question, approval ⟹ agent-approval
       },
     );
     assert.equal(mb.calls[0]!.message.kind, expected, `kind ${kind}`);
+  }
+});
+
+test('mailbox subject — human title per kind (completed/failed/started use the agent slug)', () => {
+  const cases: Array<[DeliverAgentEnvelopeInput['kind'], string]> = [
+    ['agent-completed', 'Agent pc-orchestrator completed'],
+    ['agent-failed', 'Agent pc-orchestrator failed'],
+    ['agent-queued-started', 'Agent pc-orchestrator started'],
+  ];
+  for (const [kind, expected] of cases) {
+    const mb = fakeMailbox();
+    deliverAgentEnvelope(
+      { ...baseInput, kind },
+      {
+        channelServer: fakeChannelServer().cs as never,
+        router: fixedDeliveryRouter({ agent: 'mailbox' }),
+        mailboxEnqueue: mb.port,
+      },
+    );
+    assert.equal(mb.calls[0]!.message.subject, expected, `subject for ${kind}`);
   }
 });
 

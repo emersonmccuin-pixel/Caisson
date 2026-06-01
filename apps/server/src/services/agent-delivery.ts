@@ -198,6 +198,22 @@ export function drainPendingForSession(
 export type MailboxEnqueuePort = (input: EnqueueMailboxMessageInput) => unknown;
 
 /** Map the agent inbox event kind onto the mailbox message kind (spec §7). */
+/** A human subject for the mailbox card title, so the inbox shows e.g.
+ *  "Agent researcher completed" instead of the raw `[pc:agent-event …]` body
+ *  marker. `slug` is the agent name. */
+function mailboxSubjectFor(kind: AgentInboxEventKind, slug: string): string | null {
+  const agent = slug.trim() || 'agent';
+  switch (kind) {
+    case 'agent-completed':       return `Agent ${agent} completed`;
+    case 'agent-failed':          return `Agent ${agent} failed`;
+    case 'agent-queued-started':  return `Agent ${agent} started`;
+    case 'agent-asks-orchestrator':
+    case 'agent-asks-user':       return `Agent ${agent} is asking a question`;
+    case 'agent-approval-request': return `Agent ${agent} needs approval`;
+    default:                      return `Agent ${agent}`;
+  }
+}
+
 function mailboxMessageKindFor(kind: AgentInboxEventKind): MailboxMessageKind {
   switch (kind) {
     case 'agent-asks-orchestrator':
@@ -241,6 +257,7 @@ export function deliverAgentEnvelope(
         id: newId(),
         projectId: input.projectId,
         kind: mailboxMessageKindFor(input.kind),
+        subject: mailboxSubjectFor(input.kind, input.slug),
         body: input.body,
         sourceKind: 'agent',
         sourceId: input.sourceId ?? null,

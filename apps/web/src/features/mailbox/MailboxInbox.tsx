@@ -92,12 +92,20 @@ export function MailboxInbox({ scope, onVisibleCount }: MailboxInboxProps) {
 }
 
 /** Single-line title for the collapsed card: subject, else the first non-empty
- *  line of the body, else the kind label. Keeps long bodies out of the list. */
+ *  body line that isn't a machine marker, else a label derived from any
+ *  `[pc:agent-event kind=… ]` marker, else the kind label. Keeps long bodies —
+ *  and raw envelope markers — out of the list. */
 function rowTitle(message: MailboxInboxItem['message']): string {
   const subject = message.subject?.trim();
   if (subject) return subject;
-  const firstLine = message.body.split('\n').map((l) => l.trim()).find(Boolean);
-  if (firstLine) return firstLine;
+  const lines = message.body.split('\n').map((l) => l.trim()).filter(Boolean);
+  const humanLine = lines.find((l) => !l.startsWith('[pc:agent-event'));
+  if (humanLine) return humanLine;
+  // Body is only the agent-event marker (the historical agent-terminal case).
+  // Derive a friendly label from its `kind=` so the card isn't `[pc:agent-event…]`.
+  const markerKind = lines[0]?.match(/kind=([a-z-]+)/)?.[1];
+  if (markerKind === 'agent-completed') return 'Agent completed';
+  if (markerKind === 'agent-failed') return 'Agent failed';
   return KIND_LABELS[message.kind];
 }
 

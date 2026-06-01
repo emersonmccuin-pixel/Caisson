@@ -78,7 +78,14 @@ export function readTerminalTranscriptTail(input: {
   tailBytes: number;
 }): TerminalTranscriptResult {
   const { projectId, sessionId, session, runtime } = input;
-  if (!session || session.id !== sessionId || session.projectId !== projectId) {
+  if (!session) {
+    // Unknown session — a stale/replaced id (e.g. after a project switch) or
+    // one not persisted yet. The terminal surface has nothing to show, so
+    // return empty (matching the missing-transcript case below) rather than a
+    // 404 that spams the console. Live raw bytes still arrive via the WS.
+    return { ok: true, sessionId, bytes: '', truncated: false, mtimeMs: null };
+  }
+  if (session.id !== sessionId || session.projectId !== projectId) {
     return { ok: false, status: 404, error: 'Session not found for project' };
   }
 
