@@ -112,12 +112,25 @@ terminal events, kill, and cancel all flowing through ONE conduit.
   NOT respawn at all** (`apps/desktop/src/main.ts:198`) — so T1-A is primarily a *dev-mode*
   repro today; packaged mode just leaves the host dead. Same fix serves both.
 - **Capture inconsistency (the structural core).** Consumers split two ways:
-  - *by-closure (re-reads live value, correct):* ProjectRegistry `getHostClient`
+  - *by-closure (re-reads the live VARIABLE):* ProjectRegistry `getHostClient`
     (`index.ts:279`), `project-runtime.ts:287`, mcp-bridge (`index.ts:577`), reconcile sweep
     (`index.ts:505`).
   - *by-value (frozen at registration, broken):* work-item routes (`index.ts:1000`),
     agent-run routes (`index.ts:1016`). These bind whatever the client was at boot (or `null`
     if boot found no host) and never see a swap. **Fixing this capture is most of T1-A.**
+
+  > **CORRECTION (investigation 2026-06-01, post-T1.1).** Calling the by-closure consumers
+  > "correct" is misleading. After T1.1, only the work-item + agent-run ROUTES were repointed
+  > at the self-healing `hostConnection`; the four by-closure consumers above still close over
+  > `agentHostClientForDispatch` — the OLD frozen `HttpAgentHostClient` (baseUrl cached at
+  > construction, `agent-host-client.ts:321`) — which T1.1 leaves untouched (reconcile-first).
+  > Re-reading the variable doesn't help while the variable still holds the frozen client, so
+  > **the reconcile sweep (`index.ts:505`/`515`), mcp-bridge (`index.ts:577`), and
+  > ProjectRegistry/factory (`index.ts:279`) STILL have the exact T1-A fragility** — after a
+  > host port change they hit a dead URL and never re-discover (the sweep just `console.warn`s
+  > every 15s forever). **T1.2 must repoint all of these at `hostConnection` (or pass
+  > `getHostConnection`), explicitly including mcp-bridge** — do NOT treat mcp-bridge as
+  > already-fine.
 - **Four independent terminal-event consumers** on one raw stream (T1-D): boot reattach
   (`agent-host-reattach.ts:148`), per-dispatch factory (`agent-run-factory.ts:628`), reconcile
   sweep (`index.ts:512`), workflow spawner (`dag-run-service.ts:196`). Idempotency in
@@ -250,6 +263,16 @@ timeout escalates to a visible, actionable state.
    transient throw, not 500 (`live-events/routes.ts` + siblings). **Client `getJson` honors
    503/network-refused with bounded short-backoff retry** — this single change fixes the
    dominant restart-window symptom (and TCP-refused lands here too).
+   > **CORRECTION (investigation 2026-06-01) — a SECOND no-retry client, not just the web one.**
+   > T2.1 as written only hardens the WEB client (`apps/web/src/api/http.ts`). But the spawned
+   > agents' `pc-rig` MCP server also calls back into the API over localhost with a raw
+   > `http.request` that rejects on any connection error with **no retry**
+   > (`packages/mcp/src/tools/context.ts:90,112`; fixed port from `PC_SERVER_PORT`). So during
+   > an API restart an *agent's* tool call fails outright — invisible to the web-client fix.
+   > **T2.1 must also wrap the rig's localhost client in the same bounded retry** (it can't
+   > import `apps/server`'s `failure-policy.ts`, so either duplicate a tiny retry in
+   > `packages/mcp` or lift the retry helper into a shared package). Same `503/ECONNREFUSED`
+   > backoff contract.
 3. **Host-health surface (T2-B):** consume the `host-health` relay frame defined in T1.1; show
    ONE "agent host unreachable" banner instead of N look-alike `failed` cards; the boot-connect
    swallow emits `down` instead of silently degrading.
