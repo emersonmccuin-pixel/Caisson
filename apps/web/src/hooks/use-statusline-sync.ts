@@ -8,6 +8,7 @@ import { runtimeApi } from '@/features/runtime/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useOrchestratorTelemetry } from '@/store/orchestrator-telemetry';
 import { type StatuslineSnapshot, useStatuslineStore } from '@/store/statusline';
+import { useWsEpoch } from '@/store/ws-epoch';
 
 function publishContextPct(snapshot: StatuslineSnapshot | null): void {
   useOrchestratorTelemetry
@@ -17,10 +18,17 @@ function publishContextPct(snapshot: StatuslineSnapshot | null): void {
 
 export function useStatuslineSync(projectId: string | null, events: WsEnvelope[]): void {
   const lastIdx = useRef(0);
+  // Statusline is a separate-channel snapshot (not on the durable outbox) and
+  // is NOT re-pushed on the WS connect handshake — it lands only when CC's
+  // statusLine hook POSTs. So on a same-project reconnect (blip), re-fetch the
+  // server's cached snapshot keyed off the WS epoch, the same reconcile signal
+  // resource-list hooks use. Without this an idle reconnected tab can hold a
+  // stale snapshot until the next CC refresh.
+  const wsEpoch = useWsEpoch((s) => (projectId ? (s.byProject[projectId] ?? 0) : 0));
 
   // Reset envelope-scan cursor when project changes; also prime the store
   // with the server's latest cached snapshot so the rail isn't blank on
-  // first paint after the user opens PC mid-session.
+  // first paint after the user opens PC mid-session, and re-prime on reconnect.
   useEffect(() => {
     lastIdx.current = 0;
     if (!projectId) {
@@ -41,7 +49,7 @@ export function useStatuslineSync(projectId: string | null, events: WsEnvelope[]
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, wsEpoch]);
 
   useEffect(() => {
     if (!projectId) return;
