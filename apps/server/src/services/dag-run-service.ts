@@ -35,6 +35,7 @@ import {
 } from '@pc/runtime';
 import { DagExecutor, type DagExecutorDeps, type DagNodeContext, type NodeOutcome } from './dag-executor.ts';
 import { announceRunCreated, writeDagAndStatus } from './workflow-run-writer.ts';
+import { announceAgentRunChange } from './agent-run-writer.ts';
 import { WorkflowRunMutationGateway } from '@pc/app-services';
 import {
   buildLiveEventFrame,
@@ -515,34 +516,18 @@ export function makeExecutorDeps(
     });
     setAssignedAgentRunId(childWi.id as ULID, agentRunId);
 
-    // Helper to broadcast agent-run-changed in the Activity Panel shape.
-    // Reads rev from DB after each write to carry a correct version stamp.
+    // Slice 015b — durable agent.run.changed announce for the workflow
+    // subagent's run. Writes the in-txn `live_outbox` row (the live-relay
+    // delivers the canonical frame) + re-reads the post-write row for the
+    // correct rev. Replaces the old direct `agent-run-changed` hand-broadcast
+    // (which the web no longer reads and wrote no outbox row).
     const broadcastRun = (
       status: 'queued' | 'running' | 'completed' | 'failed',
-      extra: { result?: string; failureReason?: string | null; failureCause?: AgentRunFailureCause | null; endedAt?: number } = {}
     ): void => {
-      const currentRev = getAgentRunRow(agentRunId)?.rev ?? 0;
-      opts.broadcast({
-        type: 'agent-run-changed',
-        record: {
-          runId: agentRunId,
-          sessionId: wfCcSessionId,
-          agentName: node.agent,
-          model: 'opus',
-          projectId: opts.projectId,
-          parentWorkItemId: childWi.id as ULID,
-          dispatcherSessionId: pcSessionId,
-          wait: false,
-          worktreeDir,
-          startedAt: queuedAt,
-          status,
-          result: extra.result ?? '',
-          failureReason: extra.failureReason ?? null,
-          failureCause: extra.failureCause ?? null,
-          endedAt: extra.endedAt ?? null,
-          rev: currentRev,
-        },
-      });
+      announceAgentRunChange(
+        { runId: agentRunId, reason: status, worktreeDir, startedAt: queuedAt },
+        opts.broadcast,
+      );
     };
     broadcastRun('queued');
 
@@ -616,12 +601,9 @@ export function makeExecutorDeps(
       failureReason: failureReason,
       completedAt,
     });
-    broadcastRun(terminalStatus, {
-      result: failed ? '' : '',
-      failureReason,
-      failureCause: mappedCause,
-      endedAt: completedAt,
-    });
+    // Terminal row already persisted by markAgentRunTerminal above; announce
+    // re-reads it for the canonical frame.
+    broadcastRun(terminalStatus);
 
     return {
       state: failed ? 'failed' : 'completed',
