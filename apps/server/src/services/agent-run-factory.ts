@@ -356,6 +356,26 @@ export async function dispatchFreshAgent(
     queuedAt: now,
   });
 
+  // Slice 017 Fix 2 — the raw `queued` insert had no announce, so the first
+  // `queued` state never wrote a live_outbox row → never propagated live.
+  // Announce immediately after the insert (gateway re-reads the post-write row).
+  try {
+    const queuedBroadcast = deps.broadcast
+      ? (event: unknown) => deps.broadcast?.(event as { type: string; [key: string]: unknown })
+      : undefined;
+    announceAgentRunChange(
+      {
+        runId: agentRunId,
+        reason: 'queued',
+        worktreeDir: input.worktreeDir,
+        startedAt: now,
+      },
+      queuedBroadcast,
+    );
+  } catch {
+    /* best-effort */
+  }
+
   // Section 26.6 — point the contract WI at the run that's about to produce
   // its report. Reject (`pc_reject_work_item`) reads this to know which run
   // to wake with feedback. Best-effort: skip silently if the WI vanished.
@@ -823,7 +843,9 @@ function broadcastAgentRunChanged(
   args: ConstructAndStartArgs,
   status: AgentHostRunSnapshot['state'],
 ): void {
-  if (!args.deps.broadcast) return;
+  // Slice 017 Fix 2 — the durable announce (writes the live_outbox row) must
+  // never depend on the in-memory broadcast hook. factoryBroadcast(args)
+  // returns undefined when no hook; the legacy fanout tolerates undefined.
   const reason = hostStateToReason(status);
   try {
     announceAgentRunChange(
@@ -946,7 +968,8 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
   const broadcastStateChanged = (
     status: 'queued' | 'spawning' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled',
   ): void => {
-    if (!args.deps.broadcast) return;
+    // Slice 017 Fix 2 — durable announce always fires (broadcast hook is an
+    // optional fanout, not a gate on the live_outbox write).
     try {
       announceAgentRunChange(
         {
