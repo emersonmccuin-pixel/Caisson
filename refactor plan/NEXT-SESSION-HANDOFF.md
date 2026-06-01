@@ -4,22 +4,22 @@
 
 **Where we are:** slices 001–011, 015, 016, 018 DONE + live-verified; 017 Phase A done. The big live-UI staleness is FIXED (018). All remaining real work is captured below; everything else unchecked in the tracker is stale bookkeeping (see "Stale rows" at the bottom of this block).
 
+**ROW 61 (research+scope) DONE 2026-06-01.** The foundational design + 13-slice build plan is in **`refactor plan/foundational-hardening-design.md`** — read it FIRST for the next build session. Four opus read-only research subagents mapped each theme; the doc folds them into one coherent design, with the HostConnection contract, the failure-policy + watchdog design, the client one-door close (incl. the 017-Phase-C unblock), and the Theme-4 verdict (pod content stays source-owned; edits already committed in c390a299). It corrects several backlog assumptions where the code disagreed (see the design doc's inline "correction" notes + the row-61 tracker cell).
+
 **The remaining real work, and ONLY this:**
-- **Foundational hardening** — read `refactor plan/foundational-hardening-backlog.md`. 4 themes (T1 server↔host boundary / T2 failure discipline / T3 finish the one-door live-UI arc incl. 017 Phase C / T4 pod seed-hygiene). Tracker rows **61 (research+scope) → 62 (build)**.
+- **Foundational hardening BUILD (tracker row 62)** — build the slices in `foundational-hardening-design.md §6`, leverage order, T1.1 HostConnection first. 017 Phase C is slice #11 (lands after Theme 3 closes the client door).
 - **Slice 013** — agent contracts first-class (rows 44–46; plan doc pre-drafted, not built).
 - **Slice 014** — reliable deliverables (rows 47–49; needs 013 + T1; owns the tier-1 verifier side-effect gap).
 
-## DO NEXT (one fresh session, solo) = ROW 61 — research + scope
-Holistic, first-principles, **NOT hole-patching**. Use opus subagents (sequential if Playwright). Read the backlog doc, then per theme decide "what do we actually want" and design the FOUNDATION. Output = a foundational design doc + a sliced build plan sequenced by leverage. Do NOT build in this session. **This is the gate — everything downstream depends on its output.**
+## DO NEXT (fresh session) = BUILD slice T1.1 (HostConnection) — the keystone
+Read `foundational-hardening-design.md` (esp. Theme 1 + §6). T1.1 = one `HostConnection` owning lock-file discovery + liveness (pid + the unused `/health` + hostId/protocol) + auto-reconnect + the single multiplexed event stream + the `host-health` relay frame; **the immediate T1-A kill is changing the by-value route capture (`index.ts:1000/1016`) to a `getHostConnection` closure.** Build it BESIDE the existing client (reconcile-first); live-verify by crashing the host (dev-supervisor respawns it on a new port) and dispatching again with NO API restart. Opus plan+build subagents; re-run gates yourself.
 
-## Order across fresh sessions (recommended)
-1. **Row 61** — research+scope (solo; the gate).
-2. **Theme 1 — HostConnection** (highest leverage: makes agent dispatch reliable → unblocks live-verifying everything else).
-3. **Theme 3 — finish the one-door arc + 017 Phase C** (client/delivery; low risk; closes the 015→018 architecture).
-4. **Theme 2 — failure discipline + run watchdog** (sits on the Theme-1 connection; after T1).
-5. **Slice 013 — agent contracts first-class.**
-6. **Slice 014 — reliable deliverables** (after 013 AND Theme 1).
-7. **T4 — pod seed/source hygiene** (trivial; fold into any pod-touching session).
+## Build order across fresh sessions (recommended; design doc §6)
+1. **T1.1** HostConnection + by-value fix + host-health frame (solo; keystone — unblocks every other live-verify).
+2. **T1.2** single event-stream owner → **T1.3** host-aware kill/cancel.
+3. Then optionally split: **Track B** (T3.1 stragglers → T3.2 background scan → T3.3 step-4 cut → T3.4 client gate → **017 Phase C**) ∥ **Track A cont.** (T2.1 failure-policy+route-readiness, T2.2 watchdog+`stalled`, then **T1.4+T2.3** host-mode stall terminal + host-health surface — pair them, same liveness substrate).
+4. **Slice 013 → 014** (Track C; 014 waits on T1).
+5. **T4-A** (5-line stale-header fix in `stock-pod-seed.ts:7-15`) — fold into any pod-touching session.
 
 ## What can truly run in PARALLEL (after row 61)
 Three tracks touch disjoint code:
