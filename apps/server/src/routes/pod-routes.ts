@@ -10,8 +10,11 @@
 // Agents tab displays); without the query, returns globals only.
 //
 // Mutating routes emit two effects after the DB write:
-//   1. `deps.broadcastAll({ type: 'pod-changed', ... })` — global broadcast
-//      so every connected project's WS picks it up (pods are global-scope).
+//   1. `announcePod(...)` / `announcePodDeleted(...)` — writes a durable
+//      `pod.changed` live_outbox row IN-TXN (slice 015b-tail); the live-relay
+//      drains it post-commit and fans the canonical frame. Global pods emit a
+//      global frame (reaches every project socket); project pods emit a project
+//      frame. No more hand-fanout — the relay is the sole delivery path.
 //   2. `deps.onPodChanged?.(name, change)` — optional restart-on-edit hook
 //      (17d.10). The default test wiring omits it; production wires the
 //      agent-run-manager + project-runtime kill+respawn paths.
@@ -71,12 +74,8 @@ import { announcePod, announcePodDeleted } from '../services/pod-writer.ts';
 export type PodMutationKind = 'created' | 'updated' | 'deleted';
 
 export interface PodRoutesDeps {
-  /** Broadcast to every connected project's WS. Pods are global; consumers
-   *  filter by `type` rather than by `projectId`. Helper added to index.ts
-   *  alongside `broadcastTo` in 17d.1. */
-  broadcastAll: (msg: unknown) => void;
   /** Optional restart-on-edit hook (17d.10). Called after every successful
-   *  pod mutation lands its broadcast. Receives the pod's name + change
+   *  pod mutation lands its outbox row. Receives the pod's name + change
    *  kind so the caller can decide whether to kill+respawn anything. */
   onPodChanged?: (podName: string, change: PodMutationKind) => void;
   /** Reset a stock pod's scalar fields to its seeded canonical content.
@@ -367,7 +366,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
       const status = /required|invalid|UNIQUE/i.test(msg) ? 400 : 500;
       return c.json({ ok: false, error: msg }, status);
     }
-    announcePod(row.id, deps.broadcastAll, 'created');
+    announcePod(row.id, 'created');
     deps.onPodChanged?.(row.name, 'created');
     return c.json({ ok: true, pod: row }, 201);
   });
@@ -402,7 +401,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
       return c.json({ ok: false, error: msg }, 400);
     }
     if (!row) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    announcePod(row.id, deps.broadcastAll, 'updated');
+    announcePod(row.id, 'updated');
     deps.onPodChanged?.(row.name, 'updated');
     return c.json({ ok: true, pod: row });
   });
@@ -444,7 +443,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
       }
       return c.json({ ok: false, error: msg }, 400);
     }
-    announcePod(result.agent.id, deps.broadcastAll, 'created');
+    announcePod(result.agent.id, 'created');
     deps.onPodChanged?.(result.agent.name, 'created');
     return c.json(
       { ok: true, pod: result.agent, copied: result.copied },
@@ -489,7 +488,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     }
     if (result.resetFields.length > 0) {
       // Use route :id (the live DB row) — result.agent.id may be from a stub in tests.
-      announcePod(id, deps.broadcastAll, 'updated');
+      announcePod(id, 'updated');
       deps.onPodChanged?.(result.agent.name, 'updated');
     }
     return c.json({
@@ -551,7 +550,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
       }
       reset.push({ name, resetFields: result.resetFields });
       // Use live.id (the actual DB row) — result.agent.id may differ in tests.
-      announcePod(live.id, deps.broadcastAll, 'updated');
+      announcePod(live.id, 'updated');
       deps.onPodChanged?.(name, 'updated');
     }
 
@@ -594,7 +593,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
       return c.json({ ok: false, error: (err as Error).message }, 400);
     }
     if (!updated) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    announcePod(updated.id, deps.broadcastAll, 'updated');
+    announcePod(updated.id, 'updated');
     deps.onPodChanged?.(updated.name, 'updated');
     return c.json({ ok: true, pod: updated });
   });
@@ -619,7 +618,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     const qs = new URL(c.req.url).searchParams;
     const deleted = softDeleteAgent(id, auditFromQuery(qs, 'user', 'ui-delete'));
     if (!deleted) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    announcePodDeleted(id, existing.name, deps.broadcastAll);
+    announcePodDeleted(id, existing.name, existing.scope, existing.projectId);
     deps.onPodChanged?.(existing.name, 'deleted');
     return c.json({ ok: true });
   });
@@ -659,7 +658,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
       return c.json({ ok: false, error: (err as Error).message }, 400);
     }
     bumpAgentRev(id);
-    announcePod(id, deps.broadcastAll, 'updated');
+    announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
     return c.json({ ok: true, knowledge: row }, 201);
   });
@@ -712,7 +711,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     }
     if (!updated) return c.json({ ok: false, error: `unknown knowledge: ${knowledgeId}` }, 404);
     bumpAgentRev(id);
-    announcePod(id, deps.broadcastAll, 'updated');
+    announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
     return c.json({ ok: true, knowledge: updated });
   });
@@ -733,7 +732,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     );
     if (!removed) return c.json({ ok: false, error: `unknown knowledge: ${knowledgeId}` }, 404);
     bumpAgentRev(id);
-    announcePod(id, deps.broadcastAll, 'updated');
+    announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
     return c.json({ ok: true });
   });
@@ -773,7 +772,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
       return c.json({ ok: false, error: (err as Error).message }, 400);
     }
     bumpAgentRev(id);
-    announcePod(id, deps.broadcastAll, 'updated');
+    announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
     return c.json({ ok: true, secret: publicSecret(row) }, 201);
   });
@@ -791,7 +790,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     const removed = deleteSecret(secretId, auditFromQuery(qs, 'user', 'ui-delete-secret'));
     if (!removed) return c.json({ ok: false, error: `unknown secret: ${secretId}` }, 404);
     bumpAgentRev(id);
-    announcePod(id, deps.broadcastAll, 'updated');
+    announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
     return c.json({ ok: true });
   });
@@ -828,7 +827,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
       return c.json({ ok: false, error: (err as Error).message }, 400);
     }
     bumpAgentRev(id);
-    announcePod(id, deps.broadcastAll, 'updated');
+    announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
     return c.json({ ok: true, mcpServer: row }, 201);
   });
@@ -846,7 +845,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     const removed = deleteMcpServer(mcpId, auditFromQuery(qs, 'user', 'ui-delete-mcp'));
     if (!removed) return c.json({ ok: false, error: `unknown mcp server: ${mcpId}` }, 404);
     bumpAgentRev(id);
-    announcePod(id, deps.broadcastAll, 'updated');
+    announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
     return c.json({ ok: true });
   });

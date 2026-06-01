@@ -202,15 +202,6 @@ function broadcastTo(projectId: ULID, msg: unknown): void {
   wsHub.broadcast(projectId, msg);
 }
 
-/**
- * Global broadcast (17d.1) — fan out to every subscribed WebSocket regardless
- * of project. Used for envelopes that aren't project-scoped (pods are global
- * in v1). No `projectId` tag is injected; consumers filter by `type`.
- */
-function broadcastAll(msg: unknown): void {
-  wsHub.broadcastAll(msg);
-}
-
 // Slice 015a — the single live-event relay. Drains committed `live_outbox` rows
 // to the hub's subscribers per scope/project, and serves the per-socket
 // subscribe handshake (cursor catch-up). It ships BESIDE the existing
@@ -384,7 +375,7 @@ channelServer.start();
 // TDZ. Constructing them here (before :369) removes the hazard. The mailbox
 // ROUTES + worker setInterval + boot sweeps stay at their original sites; only
 // these six value bindings moved up. All closed-over values are available here:
-// broadcastTo (:198), broadcastAll (:207), broadcastSendQueueSnapshot (:217),
+// broadcastTo, broadcastSendQueueSnapshot,
 // parseMailboxAddress (imported), getMailboxMessage/
 // getMailboxRecipient (imported), resolveProject (hoisted fn :466, called only
 // at delivery time inside these closures).
@@ -920,7 +911,6 @@ registerWorkflowRoutes(app, {
 });
 
 registerPodRoutes(app, {
-  broadcastAll,
   resetStockPodToDefault: (name, reason) => {
     const r = resetStockPodToDefault(name, reason);
     return { agent: r.agent, resetFields: r.resetFields };

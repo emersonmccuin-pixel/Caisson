@@ -7,6 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { isPodChangedLiveEventFrame } from '@pc/contracts';
 import type { Project, ULID } from '@/features/projects/client';
 import { agentsApi, resolveModelLabel, type Pod, type PodBundle } from '@/features/agents/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
@@ -393,10 +394,10 @@ function DetailPane({
     };
   }, [pod.id]);
 
-  // Refetch bundle when a WS envelope says this pod changed (typically a
-  // nested mutation — knowledge add/edit/delete from elsewhere). Scan every
-  // new envelope since the last processed index — not just the last one — so
-  // a pod-changed buried in a batched flush isn't missed (UI spine).
+  // Refetch bundle when a pod.changed relay frame says THIS pod changed
+  // (typically a nested mutation — knowledge add/edit/delete from elsewhere).
+  // Scan every new envelope since the last processed index — not just the last
+  // one — so a frame buried in a batched flush isn't missed (UI spine).
   const bundleLastIdx = useRef(0);
   useEffect(() => {
     if (events.length < bundleLastIdx.current) bundleLastIdx.current = 0;
@@ -405,10 +406,8 @@ function DetailPane({
     if (start >= events.length) return;
     for (let i = start; i < events.length; i++) {
       const env = events[i];
-      if (!env || env.type !== 'pod-changed') continue;
-      const e = env as { podId?: string; pod?: { id: string } };
-      const changedId = e.podId ?? e.pod?.id;
-      if (changedId === pod.id) {
+      if (!env || !isPodChangedLiveEventFrame(env)) continue;
+      if (env.event.payload.podId === pod.id) {
         void loadBundle();
         break;
       }

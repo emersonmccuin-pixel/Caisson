@@ -7,6 +7,8 @@ import {
   isLiveEventFrame,
   isLiveEventResetFrame,
   isLiveEventSubscribe,
+  isPodChangedLiveEvent,
+  isPodChangedLiveEventFrame,
   isProjectChangedLiveEvent,
   isProjectChangedLiveEventFrame,
   parseListLiveEventsQuery,
@@ -105,6 +107,45 @@ test('project.changed live event adapts to the legacy refetch envelope', () => {
   });
 });
 
+test('pod.changed guards accept global + project frames and stay narrow', () => {
+  const globalEvent = {
+    id: 'evt-pod-1',
+    cursor: '5',
+    scope: 'global' as const,
+    projectId: null,
+    type: 'pod.changed' as const,
+    entity: 'pod' as const,
+    entityId: 'pod-1',
+    version: null,
+    createdAt: 1,
+    payload: { change: 'created' as const, podId: 'pod-1', name: 'helper' },
+  };
+  assert.equal(isPodChangedLiveEvent(globalEvent), true);
+  assert.equal(isPodChangedLiveEventFrame(buildLiveEventFrame(globalEvent)), true);
+
+  const projectEvent = {
+    ...globalEvent,
+    id: 'evt-pod-2',
+    scope: 'project' as const,
+    projectId: 'p1',
+    payload: { change: 'deleted' as const, podId: 'pod-2' },
+  };
+  assert.equal(isPodChangedLiveEvent(projectEvent), true);
+
+  // Wrong type / entity / payload are rejected.
+  assert.equal(isPodChangedLiveEvent({ ...globalEvent, type: 'project.changed' }), false);
+  assert.equal(isPodChangedLiveEvent({ ...globalEvent, entity: 'project' }), false);
+  assert.equal(
+    isPodChangedLiveEvent({ ...globalEvent, payload: { change: 'bogus', podId: 'x' } }),
+    false,
+  );
+  assert.equal(
+    isPodChangedLiveEvent({ ...globalEvent, payload: { change: 'created' } }),
+    false,
+  );
+  assert.equal(isPodChangedLiveEventFrame({ type: 'live-event' }), false);
+});
+
 test('live replay query parser validates cursors, type, and clamps limit', () => {
   assert.deepEqual(parseListLiveEventsQuery({ after: '2', includeGlobal: '1', limit: '999' }), {
     ok: true,
@@ -151,6 +192,10 @@ test('live replay query parser validates cursors, type, and clamps limit', () =>
   assert.deepEqual(parseListLiveEventsQuery({ type: 'pending-interaction.changed' }), {
     ok: true,
     value: { includeGlobal: false, limit: 100, type: 'pending-interaction.changed' },
+  });
+  assert.deepEqual(parseListLiveEventsQuery({ type: 'pod.changed' }), {
+    ok: true,
+    value: { includeGlobal: false, limit: 100, type: 'pod.changed' },
   });
   assert.deepEqual(parseListLiveEventsQuery({ type: 'bogus.type' }), {
     ok: false,

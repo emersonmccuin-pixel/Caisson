@@ -106,19 +106,12 @@ const ALLOWLIST: Record<string, string> = {
   // NOTE: agent-run-factory.ts fans `agent-jsonl-event` (live-transcript modal,
   // ADR §4 pass-through) but through a bare `broadcast` param, so it is not a
   // gated-symbol site and needs no allowlist entry.
-
-  // ── DEFERRED-MIGRATION (pre-existing DB-owned facts 015b did NOT migrate) ──
-  // HONEST flag: these are NOT pass-through. They are DB-owned facts still on the
-  // hand-fanout because 015b stopped before them. Allowlisted to keep the gate
-  // truthful (no silent failure) while the migration is tracked as follow-up.
-  // Removing them from the relay's blind spot is a future 015b-tail vertical.
-  'apps/server/src/routes/pod-routes.ts':
-    'DEFERRED: pod-changed is a DB-owned fact (agents rows) still hand-fanned via broadcastAll — 015b did not migrate pods. Tracked for a follow-up relay vertical, not pass-through.',
 };
 
-// announcePod() in pod-writer.ts takes an injected `broadcast` lambda but the
-// raw broadcastAll call lives in pod-routes.ts (allowlisted above); pod-writer
-// only invokes the param, so it never trips the gated-symbol scan.
+// Slice 015b-tail: pods migrated onto the relay. pod-routes.ts no longer
+// hand-fans `pod-changed`; the pod-writer writes a `pod.changed` live_outbox
+// row in-txn and the relay delivers it. The pod-routes DEFERRED allowlist entry
+// was removed (no gated symbol remains there).
 
 function listSourceFiles(dir: string): string[] {
   const out: string[] = [];

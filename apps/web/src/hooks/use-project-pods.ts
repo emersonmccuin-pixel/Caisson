@@ -1,47 +1,30 @@
-// UI Spine step 3 — version-aware id-keyed store slice for pods.
+// UI Spine step 3 / slice 015b-tail — id-keyed store slice for pods.
 //
-// Replaces the bespoke Map loop with useResourceList<Pod>. Each pod-changed
-// envelope now carries a versioned full snapshot (the PodAgentRow with `rev`).
-// Stale or duplicate WS deliveries are discarded when incoming rev ≤ stored rev.
+// Pod (agent-definition) changes are DB-owned facts. The server writes a
+// `pod.changed` live_outbox row in-txn on every pod mutation and the relay fans
+// the canonical `{type:'live-event', event}` frame: a GLOBAL frame for global
+// pods (reaches every project socket → the stock-globals row refreshes) and a
+// PROJECT frame for project pods. We refetch the roster on any matching frame
+// (the payload is minimal by design — the list endpoint is the source of truth).
 //
-// Scope filter: only project-scope pods for this project + stock globals.
-// Cross-project envelopes from broadcastAll() are rejected by the extractor.
-//
-// Pod deletions: the delete envelope carries only podId + name (no full pod),
-// so the useResourceList extractor skips it. A separate scan effect detects
-// the delete and triggers refetch to purge the row from the map.
+// Scope filter for the roster: only project-scope pods for THIS project + stock
+// globals. The list endpoint already applies that filter (listProjectVisibleAgents).
 
 import { useEffect, useRef, useMemo } from 'react';
+import { isPodChangedLiveEventFrame } from '@pc/contracts';
 import type { Project, ULID } from '@/features/projects/client';
 import { agentsApi, type Pod } from '@/features/agents/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useResourceList } from '@/hooks/use-resource-list';
 
-interface PodChangedEnvelope extends WsEnvelope {
-  type: 'pod-changed';
-  change: 'created' | 'updated' | 'deleted';
-  pod?: Pod;
-  podId?: ULID;
-  name?: string;
-}
-
 export function useProjectPods(
   project: Project | null,
   events: WsEnvelope[],
 ): { pods: Pod[]; refetch: () => void } {
+  // useResourceList drives the HTTP list + on-(re)connect reconciliation. We do
+  // NOT wire a live-event extractor here: the pod.changed payload is minimal, so
+  // every matching frame triggers a wholesale refetch (below) instead.
   const { records, refetch } = useResourceList<Pod>(project, events, {
-    envelopeKind: 'pod-changed',
-    extractSnapshot: (env, projectId) => {
-      const e = env as PodChangedEnvelope;
-      if (e.type !== 'pod-changed') return null;
-      if (e.change === 'deleted') return null; // handled separately below
-      if (!e.pod) return null;
-      // Accept: project-scope pods for this project + stock globals.
-      const pod = e.pod;
-      if (pod.scope === 'project' && pod.projectId !== projectId) return null;
-      if (pod.scope === 'global' && pod.origin !== 'stock') return null;
-      return pod;
-    },
     getId: (pod) => pod.id,
     isTerminal: () => false,
     dropOnTerminal: false,
@@ -49,17 +32,18 @@ export function useProjectPods(
     list: (projectId) => agentsApi.listPods(projectId as ULID),
   });
 
-  // Detect pod-deleted envelopes and refetch so the deleted row is purged.
-  const deleteIdx = useRef(0);
+  // Refetch on any pod.changed relay frame (created / updated / deleted). Scan
+  // every new envelope since the last processed index so a frame buried in a
+  // batched flush isn't missed (UI spine).
+  const scanIdx = useRef(0);
   useEffect(() => {
-    if (events.length < deleteIdx.current) deleteIdx.current = 0;
-    const start = deleteIdx.current;
-    deleteIdx.current = events.length;
+    if (events.length < scanIdx.current) scanIdx.current = 0;
+    const start = scanIdx.current;
+    scanIdx.current = events.length;
     if (start >= events.length) return;
     for (let i = start; i < events.length; i++) {
       const env = events[i];
-      if (!env || env.type !== 'pod-changed') continue;
-      if ((env as PodChangedEnvelope).change === 'deleted') {
+      if (env && isPodChangedLiveEventFrame(env)) {
         refetch();
         return;
       }

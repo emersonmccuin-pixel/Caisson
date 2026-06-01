@@ -99,6 +99,7 @@ export const liveOutbox = sqliteTable(
         | 'mailbox-message'
         | 'pending-interaction'
         | 'session-title'
+        | 'pod'
       >(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),

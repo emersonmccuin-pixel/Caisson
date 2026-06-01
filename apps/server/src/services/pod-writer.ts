@@ -1,52 +1,62 @@
-// UI Spine step 3 — announcing write-door for agents (pods).
+// Slice 015b-tail — announcing write-door for agents (pods).
 //
-// Every mutation of an agents row MUST go through getAgentById + broadcast
-// immediately after. The door: (1) reads back the full row (including the
-// bumped rev), (2) broadcasts a versioned full-snapshot WS delta.
+// A pod change is a DB-owned fact (the `agents` roster the Agents tab renders).
+// The writer writes a durable `pod.changed` live_outbox row IN-TXN; the
+// live-relay drains the committed row post-commit and fans the canonical
+// `{type:'live-event', event}` frame to the right subscribers. Replaces the old
+// hand-written `pod-changed` broadcastAll envelope (no more bypass).
 //
-// Pods are global (no project scope on the WS); consumers filter by scope /
-// projectId. The broadcast function here is the global broadcastAll variant.
+// Scope: a GLOBAL pod emits a global frame (relay → broadcastAll → every project
+// socket, so each Agents tab's stock-globals refresh); a PROJECT pod emits a
+// project frame for its owning project (relay → broadcast(projectId)). The
+// payload is minimal — the roster refetches on the frame, it does not apply the
+// snapshot inline — so `version` is left null (no per-record dedup needed).
+//
+// NEVER call the relay/broadcast inside the txn — just `insertLiveEvent`; the
+// relay drains the committed row post-commit.
 
-import type { ULID, PodAgentRow } from '@pc/domain';
-import { getAgentById } from '@pc/db';
+import type { ULID, PodScope } from '@pc/domain';
+import type { PodChangedKind } from '@pc/contracts';
+import { getAgentById, getDb, insertLiveEvent } from '@pc/db';
 
-export type PodBroadcast = (event: unknown) => void;
-
-export interface PodChangedEnvelope {
-  type: 'pod-changed';
-  change: 'created' | 'updated' | 'deleted';
-  pod: PodAgentRow;
-}
-
-export interface PodDeletedEnvelope {
-  type: 'pod-changed';
-  change: 'deleted';
-  podId: ULID;
-  name: string;
-}
-
-function buildSnapshot(pod: PodAgentRow): PodChangedEnvelope {
-  return { type: 'pod-changed', change: 'updated', pod };
-}
-
-/** Read back the current pod row and broadcast a versioned snapshot. No-ops if
- *  the row is gone. Pass `change: 'created'` for new rows. */
-export function announcePod(
-  id: ULID,
-  broadcast: PodBroadcast,
-  change: 'created' | 'updated' = 'updated',
-): void {
+/** Emit a `pod.changed` outbox row for a live (non-deleted) pod. Reads the row
+ *  back for its scope/projectId so the frame is routed correctly. No-ops if the
+ *  row is gone. Pass `change: 'created'` for new rows. */
+export function announcePod(id: ULID, change: 'created' | 'updated' = 'updated'): void {
   const pod = getAgentById(id);
   if (!pod) return;
-  broadcast({ ...buildSnapshot(pod), change });
+  writePodChanged({ podId: id, name: pod.name, change, scope: pod.scope, projectId: pod.projectId });
 }
 
-/** Announce a pod that was just soft-deleted (not readable via getAgentById). */
+/** Emit a `pod.changed` outbox row for a pod that was just soft-deleted (no
+ *  longer readable via getAgentById). The caller supplies the row's scope +
+ *  projectId (captured before the delete) so the frame routes correctly. */
 export function announcePodDeleted(
   podId: ULID,
   name: string,
-  broadcast: PodBroadcast,
+  scope: PodScope,
+  projectId: ULID | null,
 ): void {
-  const envelope: PodDeletedEnvelope = { type: 'pod-changed', change: 'deleted', podId, name };
-  broadcast(envelope);
+  writePodChanged({ podId, name, change: 'deleted', scope, projectId });
+}
+
+function writePodChanged(input: {
+  podId: ULID;
+  name: string;
+  change: PodChangedKind;
+  scope: PodScope;
+  projectId: ULID | null;
+}): void {
+  const scope = input.scope === 'project' ? 'project' : 'global';
+  getDb().transaction((tx) => {
+    insertLiveEvent(tx, {
+      scope,
+      projectId: scope === 'project' ? input.projectId : null,
+      type: 'pod.changed',
+      entity: 'pod',
+      entityId: input.podId,
+      version: null,
+      payload: { change: input.change, podId: input.podId, name: input.name },
+    });
+  });
 }
