@@ -45,6 +45,7 @@ import {
 } from './dag-run-service.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import { WorkItemService } from './work-item.ts';
+import { announceWorkItemRow } from './work-item-writer.ts';
 import { AttachmentService } from './attachment.ts';
 import { FieldSchemaService } from './field-schema.ts';
 import { getWorkItem, listFieldSchemas } from '@pc/db';
@@ -346,7 +347,9 @@ export class ProjectRuntime {
       const out = moveWorkItemStage(args.id as ULID, args.toStage, targetStatus, args.notes ?? null);
       if (!out) throw new Error(`unknown work item: ${args.id}`);
       moved = out;
-      this.opts.broadcast({ type: 'work-item-changed', projectId: this.project.id, workItem: moved });
+      // Slice 015b — announce through the durable door (outbox row); the relay
+      // delivers the canonical work-item.changed frame. No hand-fanout.
+      announceWorkItemRow(moved, this.project.id, 'moved');
     }
 
     if (fromStageId !== args.toStage) {
@@ -396,7 +399,6 @@ export class ProjectRuntime {
         projectId: this.project.id,
         getProject: () => this.project,
         getFieldSchemas: () => listFieldSchemas(this.project.id),
-        broadcast: this.opts.broadcast,
       });
     }
     return this.workItemSvc;

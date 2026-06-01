@@ -11,6 +11,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
+import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
+
 import type { Project } from '@/features/projects/client';
 import { WORK_ITEM_TYPES, WorkItemConflictError, WorkItemFieldValidationError, workItemsApi, type Attachment, type FieldSchema, type WorkItem, type WorkItemPatch, type WorkItemType } from '@/features/work-items/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
@@ -1094,8 +1096,8 @@ function ActivityTab({
     }
     // Live broadcasts captured this session that reference this work item.
     for (const env of events) {
-      if (env.type === 'work-item-changed') {
-        const wi = (env as { workItem?: WorkItem }).workItem;
+      if (isWorkItemChangedLiveEventFrame(env)) {
+        const wi = env.event.payload.workItem as WorkItem | undefined;
         if (wi?.id === workItem.id) {
           out.push({
             ts: wi.updatedAt,

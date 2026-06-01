@@ -9,10 +9,12 @@
 // stages, each pre-stamped with rev by updateProjectStages on the server).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+import { isLiveEventFrame } from '@pc/contracts';
+
 import type { Project, Stage, ULID } from '@/features/projects/client';
 import { projectsApi } from '@/features/projects/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
-import type { StagesChangedEnvelope } from '@/features/runtime/ws-types';
 
 export function useProjectStages(
   project: Project | null,
@@ -47,7 +49,9 @@ export function useProjectStages(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
 
-  // Scan new stages-changed envelopes; apply version-aware batch replacement.
+  // Slice 015b — scan new canonical `stage.list.changed` relay frames; apply
+  // version-aware batch replacement. Stages are always replaced atomically, so
+  // every stage in a batch shares the same `rev`.
   useEffect(() => {
     if (!project || events.length === 0) {
       lastIdx.current = events.length;
@@ -60,10 +64,15 @@ export function useProjectStages(
 
     for (let i = start; i < events.length; i++) {
       const env = events[i];
-      if (!env || env.type !== 'stages-changed') continue;
-      const e = env as StagesChangedEnvelope;
-      if (!Array.isArray(e.stages) || e.stages.length === 0) continue;
-      const incomingRev = (e.stages[0] as Stage).rev ?? 0;
+      // Slice 015b — match the canonical relay frame by entity. The server emits
+      // domain stages (carry `order` + `rev`); the contract StageDto guard uses
+      // `position`, so gate by entity/scope rather than the strict payload guard.
+      if (!isLiveEventFrame(env) || env.event.entity !== 'stage') continue;
+      if (env.event.projectId !== project.id) continue;
+      const payload = env.event.payload as { stagesRev?: number; stages?: Stage[] };
+      const stages = payload.stages;
+      if (!Array.isArray(stages) || stages.length === 0) continue;
+      const incomingRev = payload.stagesRev ?? (stages[0] as Stage).rev ?? 0;
 
       setMap((prev) => {
         // If any stored stage has a higher-or-equal rev, the batch is stale.
@@ -72,7 +81,7 @@ export function useProjectStages(
             if ((s.rev ?? 0) >= incomingRev) return prev; // stale — discard
           }
         }
-        return new Map((e.stages as Stage[]).map((s) => [s.id, s]));
+        return new Map(stages.map((s) => [s.id, s]));
       });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps

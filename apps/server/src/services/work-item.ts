@@ -11,10 +11,11 @@
 // becomes a shim that delegates here (per the 2b spec — single place that does
 // stage + field validation).
 //
-// Broadcasts: every successful mutation fires a `work-item-changed` (singular)
-// full-snapshot envelope via the provided broadcast fn. The version stamp is
-// the work item's existing `version` counter — the frontend discards stale
-// or duplicate WS deliveries where incoming version ≤ stored version.
+// Announces: every successful mutation writes a durable `work-item.changed`
+// live_outbox row (Slice 015b) via announceWorkItemRow; the live-relay fans the
+// canonical frame to subscribers. The version stamp is the work item's existing
+// `version` counter — the frontend discards stale or duplicate deliveries where
+// incoming version ≤ stored version.
 
 import type {
   AcceptanceCriteria,
@@ -42,7 +43,7 @@ import {
   softDeleteWorkItem as dbSoftDeleteWorkItem,
   WorkItemVersionConflictError,
 } from '@pc/db';
-import { announceWorkItemRow, type WorkItemBroadcast } from './work-item-writer.ts';
+import { announceWorkItemRow } from './work-item-writer.ts';
 
 /** Crockford base-32 ULID — 26 chars, no I/L/O/U. Case-insensitive.
  *  Used to discriminate a ULID reference from a callsign in the modal
@@ -72,8 +73,6 @@ export function resolveWorkItemRef(projectId: ULID, ref: string): WorkItem | nul
   return dbGetWorkItemByCallsign(projectId, trimmed);
 }
 
-export type { WorkItemBroadcast };
-
 export interface WorkItemServiceOptions {
   projectId: ULID;
   /** Resolves the current Project (used for stage assertion). Callable each
@@ -82,7 +81,6 @@ export interface WorkItemServiceOptions {
   /** Resolves the current per-project field schemas. Called fresh on each
    *  create/patch so a schema edit lands without service restart. */
   getFieldSchemas: () => FieldSchema[];
-  broadcast: WorkItemBroadcast;
 }
 
 export interface CreateWorkItemServiceInput {
@@ -296,7 +294,7 @@ export class WorkItemService {
         : {}),
       ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
     });
-    announceWorkItemRow(workItem, this.opts.projectId, this.opts.broadcast);
+    announceWorkItemRow(workItem, this.opts.projectId, 'created');
     return workItem;
   }
 
@@ -329,7 +327,7 @@ export class WorkItemService {
       ...(fields !== undefined ? { fields } : {}),
     });
     if (!patched) throw new Error(`unknown work item: ${id}`);
-    announceWorkItemRow(patched, this.opts.projectId, this.opts.broadcast);
+    announceWorkItemRow(patched, this.opts.projectId, 'patched');
     return patched;
   }
 
@@ -378,21 +376,21 @@ export class WorkItemService {
         result = moved;
       }
     }
-    announceWorkItemRow(result, this.opts.projectId, this.opts.broadcast);
+    announceWorkItemRow(result, this.opts.projectId, 'moved');
     return result;
   }
 
   softDelete(id: ULID): WorkItem {
     const deleted = dbSoftDeleteWorkItem(id);
     if (!deleted) throw new Error(`unknown work item: ${id}`);
-    announceWorkItemRow(deleted, this.opts.projectId, this.opts.broadcast);
+    announceWorkItemRow(deleted, this.opts.projectId, 'soft-deleted');
     return deleted;
   }
 
   restore(id: ULID): WorkItem {
     const restored = dbRestoreWorkItem(id);
     if (!restored) throw new Error(`unknown work item: ${id} (or not archived)`);
-    announceWorkItemRow(restored, this.opts.projectId, this.opts.broadcast);
+    announceWorkItemRow(restored, this.opts.projectId, 'restored');
     return restored;
   }
 

@@ -36,6 +36,8 @@ import {
   WorkItemVersionConflictError,
   type WorkItemService,
 } from '../../services/work-item.ts';
+import { announceWorkItemRow } from '../../services/work-item-writer.ts';
+import { announceStageList } from '../../services/stage-writer.ts';
 
 export interface WorkItemRoutesRuntime {
   project: Project;
@@ -191,8 +193,9 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       }
       const workItem = dbUpdateWorkItemFields(wiId as ULID, fields!);
       if (!workItem) return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
-      // dbUpdateWorkItemFields bypasses the service; announce through the door.
-      deps.broadcastTo(id as ULID, { type: 'work-item-changed', projectId: id as ULID, workItem });
+      // dbUpdateWorkItemFields bypasses the service; announce through the durable
+      // door (outbox row). The relay delivers the canonical work-item.changed frame.
+      announceWorkItemRow(workItem, id as ULID, 'patched');
       return c.json({ ok: true, workItem });
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 500);
@@ -700,9 +703,10 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     const updated = getProjectById(id);
     if (!updated) return c.json({ ok: false, error: 'project disappeared after stage update' }, 500);
     deps.refreshProject(updated);
-    // Carry the stamped stages (with rev) in the envelope so the frontend
-    // version-aware store-slice can discard stale/duplicate WS deliveries.
-    deps.broadcastTo(id, { type: 'stages-changed', stages: stamped });
+    // Slice 015b — announce through the durable door (stage.list.changed outbox
+    // row); the relay delivers the canonical frame. The stamped stages carry the
+    // monotonic `rev` the consumer dedupes by. No hand-fanout.
+    announceStageList(id, stamped);
     return c.json({ ok: true, project: updated });
   });
 

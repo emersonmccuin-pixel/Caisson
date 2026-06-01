@@ -7,6 +7,8 @@
 
 import { useEffect, useRef } from 'react';
 
+import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
+
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import {
   invalidateByAttachmentId,
@@ -19,9 +21,10 @@ export function useRichLinkInvalidator(events: WsEnvelope[]): void {
     for (let i = lastIdx.current; i < events.length; i++) {
       const env = events[i];
       if (!env || typeof env !== 'object') continue;
-      if (env.type === 'work-item-changed') {
-        const wi = (env as { workItem?: { id?: string } }).workItem;
-        if (wi?.id) invalidateByWorkItemId(wi.id);
+      // Slice 015b — canonical relay `work-item.changed` frame.
+      if (isWorkItemChangedLiveEventFrame(env)) {
+        const wiId = env.event.payload.workItem?.id ?? env.event.entityId;
+        if (wiId) invalidateByWorkItemId(wiId);
       } else if (env.type === 'attachment-changed') {
         const att = (env as { attachment?: { id?: string } }).attachment;
         if (att?.id) invalidateByAttachmentId(att.id);

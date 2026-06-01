@@ -25,6 +25,7 @@ import { applyAgentVerification, getWorkItem } from '@pc/db';
 import type { Project, ULID, WorkItem } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
+import { announceWorkItemRow } from './work-item-writer.ts';
 import type { ChannelServer } from './channel-server.ts';
 import {
   dispatchContinueAgent,
@@ -83,8 +84,13 @@ export function approveAgentWorkItem(input: ApproveAgentWorkItemInput): WorkItem
   }
   if (input.project) {
     const advanced = autoAdvanceToDoneStage(wi.id, input.project);
-    if (advanced) return advanced;
+    if (advanced) {
+      // Slice 015b — announce through the durable door; relay delivers the frame.
+      announceWorkItemRow(advanced, advanced.projectId, 'auto-advanced');
+      return advanced;
+    }
   }
+  announceWorkItemRow(updated, updated.projectId, 'approved');
   return updated;
 }
 
@@ -151,6 +157,8 @@ export async function rejectAgentWorkItem(
   if (!updated) {
     throw new VerificationReviewError('wi-not-found', `work item ${wi.id} disappeared mid-write`);
   }
+  // Slice 015b — announce the WI flip through the durable door; relay delivers.
+  announceWorkItemRow(updated, updated.projectId, 'rejected');
 
   // Phrase the resumed-agent's next user message so the agent treats this as
   // a critique-and-retry, not a fresh ask. The agent already has its prior

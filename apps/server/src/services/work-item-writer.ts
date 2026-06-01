@@ -1,46 +1,68 @@
-// UI Spine step 3 — announcing write-door for work_items.
+// UI Spine step 3 / Slice 015b — announcing write-door for work_items.
 //
 // EVERY mutating write of a work_items row MUST be announced through
 // announceWorkItem (or one of the WorkItemService methods that call it).
-// The door: (1) reads back the full row, (2) broadcasts a versioned
-// full-snapshot WS delta. "Forgetting to announce" is structurally
-// impossible when callers only call the announcing functions.
+// The door now writes a durable `live_outbox` row (`work-item.changed`)
+// inside a DB transaction; the live-relay drains the committed row and fans
+// the canonical `{type:'live-event'}` frame to subscribers per scope. The old
+// hand-written `work-item-changed` envelope fanout is GONE — "forgetting to
+// announce" stays structurally impossible (callers only call the announcing
+// functions), and "announcement without durability" is now impossible too.
 //
-// Work items already carry a monotonic `version` counter — no new `rev`
-// column needed (mirrors the existing optimistic-concurrency field).
+// Work items already carry a monotonic `version` counter; it doubles as the
+// per-entity rev stamped on the live event so the client discards stale /
+// out-of-order deliveries.
+//
+// NEVER call the relay/broadcast inside the txn — just `insertLiveEvent`; the
+// relay drains the committed row post-commit.
 
 import type { ULID, WorkItem } from '@pc/domain';
-import { getWorkItem } from '@pc/db';
+import type { WorkItemChangedLivePayload, WorkItemMutationReason } from '@pc/contracts';
+import { getDb, getWorkItem, insertLiveEvent } from '@pc/db';
 
-export type WorkItemBroadcast = (event: WorkItemChangedEnvelope) => void;
-
-export interface WorkItemChangedEnvelope {
-  type: 'work-item-changed';
-  projectId: ULID;
-  workItem: WorkItem;
+/** Build the canonical `work-item.changed` outbox draft from a row. */
+function workItemChangedDraft(
+  workItem: WorkItem,
+  projectId: ULID,
+  reason: WorkItemMutationReason,
+) {
+  const payload: WorkItemChangedLivePayload = {
+    reason,
+    // Domain WorkItem is a superset of the contract WorkItemDto (carries
+    // `history`); the consumer reads the snapshot fields only.
+    workItem: workItem as unknown as WorkItemChangedLivePayload['workItem'],
+  };
+  return {
+    scope: 'project' as const,
+    projectId,
+    type: 'work-item.changed',
+    entity: 'work-item' as const,
+    entityId: workItem.id,
+    version: workItem.version,
+    payload,
+  };
 }
 
-function buildDelta(workItem: WorkItem, projectId: ULID): WorkItemChangedEnvelope {
-  return { type: 'work-item-changed', projectId, workItem };
-}
-
-/** Read the current row and broadcast a versioned snapshot. No-ops if the
- *  row is gone (caller's write was a no-op too). */
+/** Read the current row and write a durable `work-item.changed` outbox row.
+ *  No-ops if the row is gone (caller's write was a no-op too). */
 export function announceWorkItem(
   id: ULID,
   projectId: ULID,
-  broadcast: WorkItemBroadcast,
+  reason: WorkItemMutationReason,
 ): void {
   const wi = getWorkItem(id);
   if (!wi) return;
-  broadcast(buildDelta(wi, projectId));
+  announceWorkItemRow(wi, projectId, reason);
 }
 
-/** Broadcast an already-fetched row (e.g. right after create). */
+/** Write a durable `work-item.changed` outbox row for an already-fetched row
+ *  (e.g. right after create). The relay delivers it post-commit. */
 export function announceWorkItemRow(
   workItem: WorkItem,
   projectId: ULID,
-  broadcast: WorkItemBroadcast,
+  reason: WorkItemMutationReason,
 ): void {
-  broadcast(buildDelta(workItem, projectId));
+  getDb().transaction((tx) => {
+    insertLiveEvent(tx, workItemChangedDraft(workItem, projectId, reason));
+  });
 }

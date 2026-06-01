@@ -9,7 +9,7 @@
 //    + position, horizontal scroll affordance (fade + chevrons on overflow).
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { WorkItemChangedEnvelope } from '@/features/runtime/ws-types';
+import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
 import {
   DndContext,
   DragOverlay,
@@ -144,10 +144,12 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
 
     for (let i = start; i < events.length; i++) {
       const env = events[i];
-      if (!env || env.type !== 'work-item-changed') continue;
-      const e = env as WorkItemChangedEnvelope;
-      if (!e.workItem || e.workItem.projectId !== project.id) continue;
-      const wi = e.workItem as unknown as WorkItem;
+      // Slice 015b — consume the canonical relay `work-item.changed` frame.
+      if (!isWorkItemChangedLiveEventFrame(env)) continue;
+      if (env.event.projectId !== project.id) continue;
+      const snapshot = env.event.payload.workItem;
+      if (!snapshot || snapshot.projectId !== project.id) continue;
+      const wi = snapshot as unknown as WorkItem;
       if (wi.deletedAt != null) removes.push(wi.id);
       else patches.push(wi);
     }

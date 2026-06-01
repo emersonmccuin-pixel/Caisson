@@ -49,6 +49,7 @@ import { preparePodSpawn } from './pod-spawn.ts';
 import { registerWorkflowSubagentHandshake } from './workflow-subagent-handshake.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import type { WorkItemService } from './work-item.ts';
+import { announceWorkItemRow } from './work-item-writer.ts';
 import type { WorktreeService } from './worktree.ts';
 
 const execFileAsync = promisify(execFile);
@@ -646,9 +647,9 @@ export function makeExecutorDeps(
     }
     const moved = moveWorkItemStage(run.workItemId, node.to_stage);
     if (moved) {
-      // Full-snapshot announce (write-door pattern): read back the updated row
-      // and broadcast so the frontend can patch in place by id + version.
-      opts.broadcast({ type: 'work-item-changed', projectId: opts.projectId, workItem: moved });
+      // Slice 015b — announce through the durable door (outbox row); the relay
+      // delivers the canonical work-item.changed frame. No hand-fanout.
+      announceWorkItemRow(moved, opts.projectId, 'moved');
     }
     return { state: 'completed', output: node.to_stage };
   };

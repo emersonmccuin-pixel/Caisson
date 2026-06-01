@@ -12,6 +12,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
+import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
+
 import type { Project, Stage } from '@/features/projects/client';
 import { WorkItemConflictError, workItemsApi, type Attachment, type WorkItem, type WorkItemStatus, type WorkItemType } from '@/features/work-items/client';
 import {
@@ -299,7 +301,8 @@ function ChildrenTab({
     wiLastIdx.current = events.length;
     if (start >= events.length) return;
     for (let i = start; i < events.length; i++) {
-      if (events[i]?.type === 'work-item-changed') {
+      // Slice 015b — canonical relay `work-item.changed` frame.
+      if (isWorkItemChangedLiveEventFrame(events[i])) {
         refetch();
         break;
       }
@@ -689,8 +692,8 @@ function ActivityTab({
       });
     }
     for (const env of events) {
-      if (env.type === 'work-item-changed') {
-        const wi = (env as { workItem?: WorkItem }).workItem;
+      if (isWorkItemChangedLiveEventFrame(env)) {
+        const wi = env.event.payload.workItem as WorkItem | undefined;
         if (wi?.id === workItem.id) {
           const change = 'updated';
           out.push({

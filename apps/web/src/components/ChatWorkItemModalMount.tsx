@@ -7,6 +7,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+import { isWorkItemChangedLiveEventFrame } from '@pc/contracts';
+
 import type { Project } from '@/features/projects/client';
 import { workItemsApi, type WorkItem } from '@/features/work-items/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
@@ -57,7 +59,8 @@ export function ChatWorkItemModalMount({ project, events }: ChatWorkItemModalMou
     if (!workItemId || start >= events.length) return;
     let changed = false;
     for (let i = start; i < events.length; i++) {
-      if (events[i]?.type === 'work-item-changed') {
+      // Slice 015b — canonical relay `work-item.changed` frame.
+      if (isWorkItemChangedLiveEventFrame(events[i])) {
         changed = true;
         break;
       }
