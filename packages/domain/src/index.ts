@@ -220,6 +220,15 @@ export {
   lookupTool,
   mergeRequiredAgentTools,
 } from './tool-catalog.ts';
+export type {
+  CapabilityFamily,
+  JsonSchemaObject,
+  PcRigToolDef,
+} from './tool-registry.ts';
+export {
+  PC_RIG_TOOL_REGISTRY,
+  PC_RIG_TOOL_REGISTRY_NAMES,
+} from './tool-registry.ts';
 export {
   AGENT_BODY_VARIABLES,
   AgentBodyTemplateError,

@@ -1,0 +1,1600 @@
+// Slice 016 — ONE canonical pc-rig tool registry.
+//
+// THE single ordered source of truth for every pc-rig tool view. ListTools
+// (`TOOLS` in @pc/mcp), `PC_RIG_TOOL_NAMES`, the `TOOL_CATALOG` pc-rig partition,
+// and `CAPABILITIES` ALL DERIVE from this array, in this order. Adding a tool is
+// ONE edit here (+ one handler in @pc/mcp's PC_RIG_HANDLERS); the slice-016
+// parity test fails the build if the two halves drift.
+//
+// WIRE-FROZEN: `name`, `inputSchema` (the MCP input schema, relocated VERBATIM
+// from the per-tool `*_TOOL` consts), and `description` (agent-facing, fed to
+// ListTools) are the agent wire — do not mutate. Order IS the ListTools order.
+//
+// Two descriptions are preserved per tool because they differ for every tool
+// today (agent-facing vs UI/prompt — slice-016 verified 0/52 byte-identical):
+//   - `description`        -> agent-facing, consumed by `TOOLS`/ListTools.
+//   - `catalogDescription` -> UI/prompt copy, consumed by `descriptionOf` via the
+//                             derived `TOOL_CATALOG` entry.
+//
+// @pc/domain MUST stay browser-safe — this file is plain data only (no node:/
+// SDK/HTTP imports). inputSchema is a plain JSON-Schema object.
+
+/** The contract family a tool's internals route through. `none` = no
+ *  apps/server HTTP round-trip whose response a contract covers. */
+export type CapabilityFamily =
+  | 'work-item'
+  | 'project'
+  | 'workflow'
+  | 'agent'
+  | 'agent-run'
+  | 'none';
+
+/** A plain-data JSON-Schema object (the MCP tool input schema). */
+export type JsonSchemaObject = Record<string, unknown>;
+
+/** One pc-rig tool's full agent-facing definition + UI metadata. */
+export interface PcRigToolDef {
+  /** Bare tool name (e.g. `pc_create_work_item`). */
+  name: string;
+  /** Contract family for routing/lookup. */
+  family: CapabilityFamily;
+  /** Friendly UI label (TOOL_CATALOG label). */
+  label: string;
+  /** Agent-facing description — consumed by `TOOLS`/ListTools. */
+  description: string;
+  /** UI/prompt description — consumed by `descriptionOf` via TOOL_CATALOG. */
+  catalogDescription: string;
+  /** MCP input schema (relocated verbatim from the per-tool `*_TOOL` const). */
+  inputSchema: JsonSchemaObject;
+}
+
+/** The ONE canonical registry, in canonical ListTools order. */
+export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
+  {
+    "name": "pc_create_work_item",
+    "family": "work-item",
+    "label": "Create work item",
+    "description": "Create a new work item in the given stage. Returns the new WorkItem with its generated ULID id. Use this when the user asks for a fresh card / task / item; do not seed one via pc_update_work_item. Pass `targetProjectId` to write into a different project (cross-project capture); omit to write into the current project. When `targetProjectId` is set, `stageId` is optional — the server defaults to the target project's first (intake) stage.",
+    "catalogDescription": "Make a new card in one of the project's stages.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "short title for the work item"
+        },
+        "stageId": {
+          "type": "string",
+          "description": "destination stage id (slug, e.g. \"draft\" / \"review\" / \"done\"). Optional when targetProjectId is set — defaults to the target project's first stage."
+        },
+        "body": {
+          "type": "string",
+          "description": "optional free-form body / spec"
+        },
+        "targetProjectId": {
+          "type": "string",
+          "description": "optional project id (ULID) to write the work item into a different project. When absent the work item lands in the current project (PC_PROJECT_ID). Single-user app — no ownership gate; a future multi-user pass should revisit."
+        },
+        "area_id": {
+          "type": "string",
+          "description": "optional Area id (ULID) to file the work item under. Omit (or pass null) for Uncaptured. See pc_list_areas."
+        }
+      },
+      "required": [
+        "title"
+      ]
+    }
+  },
+  {
+    "name": "pc_create_agent_work_item",
+    "family": "work-item",
+    "label": "Create agent work item",
+    "description": "Create a dispatch contract for a subagent. Use this — NOT pc_create_work_item — whenever you're about to delegate to a specialist pod via pc_invoke_agent. The work item IS the contract: title + task (body) + pod + expected output shape (drives auto-verification of \"done\"). The new work item is_agent_task=true (hidden from the kanban by default; surfaces inline in chat). Returns the new WorkItem; pass its id to pc_invoke_agent so the worker fetches its assignment on boot. `expected_output` defaults to the pod's standard shape when omitted; override for non-standard tasks. `verification_tier` defaults to 'auto' (structured predicates). Set `ephemeral: true` for throwaway lookups (auto-archives 24h after done).",
+    "catalogDescription": "Dispatch contract for an agent — title + task + pod + expected output shape; AC is derived.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "short scannable title for the dispatch"
+        },
+        "task": {
+          "type": "string",
+          "description": "free-form task description — this becomes the work item's body and the agent reads it on boot via pc_get_work_item"
+        },
+        "pod": {
+          "type": "string",
+          "description": "pod name to dispatch (researcher / writer / code-writer / reviewer / planner / extractor / agent-designer or a custom pod). Drives default expected_output."
+        },
+        "expected_output": {
+          "type": "object",
+          "description": "structured spec for what the agent's output should look like. kind ∈ {text, files, structured, side-effect, mixed}. Falls back to the pod's default if omitted. AC is derived from this; the agent's prompt also surfaces it so the agent knows what's being checked.",
+          "additionalProperties": true
+        },
+        "verification_tier": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "orchestrator-review",
+            "human-review"
+          ],
+          "description": "who verifies 'done'. 'auto' (default) runs structured predicates. 'orchestrator-review' wakes you on agent-done to approve / reject. 'human-review' queues in the Human Review inbox."
+        },
+        "parent_work_item_id": {
+          "type": "string",
+          "description": "optional parent work item id (ULID). Use to link to an in-flight workflow root or to thread agent dispatches under a parent task."
+        },
+        "stage_id": {
+          "type": "string",
+          "description": "stage to land the work item in. Defaults to the project's first stage when omitted. Agent work items are hidden from the kanban by default regardless of stage."
+        },
+        "worktree": {
+          "type": "string",
+          "description": "optional absolute path to a worktree the agent should write into."
+        },
+        "ephemeral": {
+          "type": "boolean",
+          "description": "true marks the work item for auto-archive 24h after reaching 'done'. Use for throwaway lookups ('what's Node LTS?'). Defaults to false."
+        },
+        "raw_acceptance_criteria": {
+          "type": "array",
+          "description": "Escape hatch: override the derived AC predicate list. Rare-use; prefer expected_output. Each entry needs a 'kind' from: files_exist, fields_populated, field_matches, bash_exit_zero, attachments_present, body_contains, child_work_items_done.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "title",
+        "task",
+        "pod"
+      ]
+    }
+  },
+  {
+    "name": "pc_approve_work_item",
+    "family": "work-item",
+    "label": "Approve agent work item",
+    "description": "Approve a tier-2/3 agent work item that's parked in `awaiting-verification`. Flips the work item to `complete` + `verification_status: 'passed'`. Use after reading the agent's report (body / attachments / fields via pc_get_work_item) when the work meets the bar. Optional `notes` get persisted on the work item as `verificationNotes` + an audit-logged history entry. The producer agent run is already terminal — no further dispatch is triggered. `id` accepts ULID or callsign (e.g. `pc-2.1`). Fails 404 if the id is unknown, 400 if it's not an agent contract, 409 if it isn't currently awaiting verification.",
+    "catalogDescription": "Approve a tier-2/3 agent contract sitting in awaiting-verification — flips to complete.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "work item id (ULID or callsign like pc-2.1)"
+        },
+        "notes": {
+          "type": "string",
+          "description": "optional reviewer note — persists on the work item + history"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "pc_reject_work_item",
+    "family": "work-item",
+    "label": "Reject agent work item",
+    "description": "Reject a tier-2/3 agent work item that's parked in `awaiting-verification` and wake the producer agent with feedback. Flips the work item to `in-progress` + `verification_status: 'failed'` with the feedback in `verificationNotes`, then spawns a continuation of the producer's agent run (via the Section 21 `pc_continue_agent` primitive) so the same agent gets the feedback in its conversation and tries again. Returns `{ ok, workItem, continuation: { ok, runId, sessionId, agentName, status, continues } }` so you can track the new run. `id` accepts ULID or callsign (e.g. `pc-2.1`). `feedback` is required + non-empty. Fails 404 if the id is unknown, 400 if it's not an agent contract or feedback is missing, 409 if it isn't currently awaiting verification or has no assigned agent run.",
+    "catalogDescription": "Reject a tier-2/3 agent contract with feedback — wakes the agent via continuation to retry.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "work item id (ULID or callsign like pc-2.1)"
+        },
+        "feedback": {
+          "type": "string",
+          "description": "free-form rejection feedback — what's wrong, what the agent should do differently. Becomes the agent's next user message on resume."
+        }
+      },
+      "required": [
+        "id",
+        "feedback"
+      ]
+    }
+  },
+  {
+    "name": "pc_log_bug",
+    "family": "work-item",
+    "label": "Log a bug",
+    "description": "File a bug in the user's Caisson dogfood tracker, no matter which project this chat is bound to. Reads the target project id from GlobalSettings.bugLogTargetProjectId; if unset, returns an error telling the user to configure 'Bug log target' in App Settings. The new work item is created with type='bug', dropped into the target project's FIRST stage, and the body is prefixed with 'Logged from project: <source-name> · session: <id>' so the bug carries its origin context. Use whenever the user says something like 'log a bug', 'log this as a bug', 'file a bug report', or otherwise reports a defect they want tracked.",
+    "catalogDescription": "File a bug to the user's PC dogfood tracker.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "short, scannable bug title"
+        },
+        "description": {
+          "type": "string",
+          "description": "free-form bug description (steps, expected, actual, anything useful). Optional but strongly recommended."
+        }
+      },
+      "required": [
+        "title"
+      ]
+    }
+  },
+  {
+    "name": "pc_move_work_item",
+    "family": "work-item",
+    "label": "Move work item to a stage",
+    "description": "Move a work item to a different stage. Pass EITHER `toStage` (an explicit stage slug) OR `toFlag` (one of 'done' | 'cancelled' | 'new' — the system resolves to whichever stage carries that flag, surviving renames). When the destination has an `on_enter` workflow trigger, that workflow fires automatically against the bound wi-<id> worktree. Landing in an is_done stage flips status to `complete`; is_cancelled → `cancelled`. Use the optional `notes` to capture a reason (e.g. when cancelling) — lands on the card's move history. `id` accepts ULID or callsign (e.g. `pc-2.1`).",
+    "catalogDescription": "Advance / move a card to a different stage.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "work item id (ULID or callsign like pc-2.1)"
+        },
+        "toStage": {
+          "type": "string",
+          "description": "destination stage id (use exactly one of toStage / toFlag)"
+        },
+        "toFlag": {
+          "type": "string",
+          "enum": [
+            "done",
+            "cancelled",
+            "new"
+          ],
+          "description": "resolve the destination stage by flag instead of slug. 'done' = terminal-success stage; 'cancelled' = terminal-abandon stage; 'new' = intake stage. Errors if no stage in the project carries that flag."
+        },
+        "notes": {
+          "type": "string",
+          "description": "optional free-form line saved to the card's move-history entry (cancellation reason, context)."
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "pc_update_work_item",
+    "family": "work-item",
+    "label": "Update work item",
+    "description": "Merge fields and/or set body/title on a work item. At least one of fields, body, or title is required. `id` accepts ULID or callsign (e.g. `pc-2.1`).",
+    "catalogDescription": "Edit a card's title, body, fields, or status.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "work item id (ULID or callsign like pc-2.1)"
+        },
+        "title": {
+          "type": "string",
+          "description": "new title for the work item"
+        },
+        "body": {
+          "type": "string",
+          "description": "new body / spec for the work item (replaces current body)"
+        },
+        "fields": {
+          "type": "object",
+          "description": "fields to merge into workItem.fields (shallow merge)",
+          "additionalProperties": true
+        },
+        "area_id": {
+          "type": "string",
+          "description": "set the work item's Area (ULID). Pass null to move it to Uncaptured. See pc_list_areas."
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "pc_create_agent",
+    "family": "agent",
+    "label": "Create an agent pod",
+    "description": "Create a NEW agent pod (DB-resident). Returns the new pod row with its ULID id. Defaults to scope='project' (pod is owned by the current project — set via PC_PROJECT_ID). Pass scope='global' only when the user explicitly says this agent should be reusable across every project. Use this for fresh agent design — the user said 'build me an agent that does X'. For structural design from scratch you should usually dispatch agent-designer first (pc_invoke_agent agent='agent-designer') so the design conversation happens in its specialised pod; call pc_create_agent directly only for trivial extractors / utilities or when continuing a design conversation. Stock-pod names (orchestrator/researcher/writer/code-writer/reviewer/planner/extractor/agent-designer) are reserved — 400 if name collides with a global. Broadcasts pod-changed on success.",
+    "catalogDescription": "Author a new agent pod row (use for fresh-design flows).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "lowercase kebab-case agent name (letters/numbers/dashes)"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "project",
+            "global"
+          ],
+          "description": "scope. Default 'project' — pod is owned by the current project. Use 'global' only when the user explicitly wants the pod reusable across every project."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "the agent's system prompt body (markdown)"
+        },
+        "description": {
+          "type": "string",
+          "description": "one-line description for the dispatch picker"
+        },
+        "model": {
+          "type": "string",
+          "description": "model slug (e.g. 'opus' / 'sonnet' / 'haiku')"
+        },
+        "effort": {
+          "type": "string",
+          "description": "reasoning effort: low / medium / high / xhigh / max"
+        },
+        "maxTurns": {
+          "type": "integer",
+          "description": "optional cap on the number of conversation turns"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "allowlist of tool slugs (e.g. ['Read','Grep','mcp__pc-rig__pc_get_work_item']). Empty = inherit all."
+        },
+        "outputDestination": {
+          "type": "string",
+          "description": "where the agent's output goes (per AgentOutputDestination enum)"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  {
+    "name": "pc_get_agent",
+    "family": "agent",
+    "label": "Read an agent's config",
+    "description": "Fetch the full pod bundle for an agent: prompt + knowledge docs + secret env-var names (NEVER values) + MCP servers + scalar settings. Use when you need to read an agent's current configuration before recommending a change, answering 'what does <agent> know about X?', or auditing a pod's setup. Accepts either { id } (ULID) or { name } (resolved to id via list lookup).",
+    "catalogDescription": "Fetch a pod bundle: prompt + knowledge + secrets + MCP.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with name)"
+        },
+        "name": {
+          "type": "string",
+          "description": "pod name (looked up if id absent)"
+        }
+      }
+    }
+  },
+  {
+    "name": "pc_update_agent_prompt",
+    "family": "agent",
+    "label": "Update an agent's prompt",
+    "description": "Replace an agent's system prompt body. Most-used edit path: 'make orchestrator terser', 'teach researcher to cite sources'. Audits as actor='orchestrator'. Stock-pod prompts (orchestrator/researcher/...) are editable — be deliberate; danger-zone editing in the UI is gated for a reason. Accepts either { id } or { name }. Triggers restart-on-edit for any live session.",
+    "catalogDescription": "Replace a pod's system prompt body.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with name)"
+        },
+        "name": {
+          "type": "string",
+          "description": "pod name (looked up if id absent)"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "the new system prompt body (markdown)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      },
+      "required": [
+        "prompt"
+      ]
+    }
+  },
+  {
+    "name": "pc_update_agent_settings",
+    "family": "agent",
+    "label": "Update an agent's settings",
+    "description": "Update an agent's scalar settings: model, effort, maxTurns, tools, outputDestination, description, or name. Pass only the fields you want to change. For prompt edits use pc_update_agent_prompt instead. Audits as actor='orchestrator'; multi-field updates audit under a shared change-set. Accepts either { id } or { name }.",
+    "catalogDescription": "Change model / tools / effort / output destination etc.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with name)"
+        },
+        "name": {
+          "type": "string",
+          "description": "pod name (looked up if id absent)"
+        },
+        "newName": {
+          "type": "string",
+          "description": "rename (lowercase kebab-case)"
+        },
+        "description": {
+          "type": "string",
+          "description": "new one-line description"
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "description": "low / medium / high / xhigh / max"
+        },
+        "maxTurns": {
+          "type": "integer"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outputDestination": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      }
+    }
+  },
+  {
+    "name": "pc_delete_agent",
+    "family": "agent",
+    "label": "Delete an agent pod",
+    "description": "Soft-delete an agent pod. Stock pods (orchestrator/researcher/writer/code-writer/reviewer/planner/extractor/agent-designer) are NOT deletable — returns 409. The pod can be restored via the History tab. Audits as actor='orchestrator'. Accepts either { id } or { name }.",
+    "catalogDescription": "Soft-delete a non-stock pod.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with name)"
+        },
+        "name": {
+          "type": "string",
+          "description": "pod name (looked up if id absent)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      }
+    }
+  },
+  {
+    "name": "pc_create_knowledge",
+    "family": "agent",
+    "label": "Add a knowledge doc",
+    "description": "Attach a knowledge document to an agent (reference material the agent can read at runtime via pc_knowledge_read). Low-friction add path: paste the content, omit the docName and we'll auto-derive from the first markdown heading or first non-empty line. Use this when the user says 'teach <agent> about <topic>: …'. Accepts either { agentId } or { agentName }. Audits as actor='orchestrator'. Returns the new knowledge row including its id.",
+    "catalogDescription": "Attach a reference document to an agent.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with agentName)"
+        },
+        "agentName": {
+          "type": "string",
+          "description": "pod name (looked up if agentId absent)"
+        },
+        "content": {
+          "type": "string",
+          "description": "document body (markdown / plain text)"
+        },
+        "docName": {
+          "type": "string",
+          "description": "optional doc name — auto-derived from H1 / first line if omitted"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      },
+      "required": [
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "pc_update_knowledge",
+    "family": "agent",
+    "label": "Update a knowledge doc",
+    "description": "Wholesale-replace a knowledge document's content (and optionally its name). The prior version is preserved in the audit log for revert. Use for 'the pricing tiers changed — update <agent>'s pricing doc: …'. Audits as actor='orchestrator'. Accepts either { agentId } or { agentName } plus { knowledgeId }.",
+    "catalogDescription": "Replace a knowledge doc's content.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with agentName)"
+        },
+        "agentName": {
+          "type": "string",
+          "description": "pod name (looked up if agentId absent)"
+        },
+        "knowledgeId": {
+          "type": "string",
+          "description": "knowledge doc ULID id"
+        },
+        "content": {
+          "type": "string",
+          "description": "new document body"
+        },
+        "docName": {
+          "type": "string",
+          "description": "optional rename"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      },
+      "required": [
+        "knowledgeId"
+      ]
+    }
+  },
+  {
+    "name": "pc_delete_knowledge",
+    "family": "agent",
+    "label": "Delete a knowledge doc",
+    "description": "Remove a knowledge document from an agent. Audits as actor='orchestrator'. Accepts either { agentId } or { agentName } plus { knowledgeId }.",
+    "catalogDescription": "Remove a knowledge doc from an agent.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with agentName)"
+        },
+        "agentName": {
+          "type": "string",
+          "description": "pod name (looked up if agentId absent)"
+        },
+        "knowledgeId": {
+          "type": "string",
+          "description": "knowledge doc ULID id"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      },
+      "required": [
+        "knowledgeId"
+      ]
+    }
+  },
+  {
+    "name": "pc_knowledge_read",
+    "family": "agent",
+    "label": "Read a knowledge doc",
+    "description": "Read a single knowledge document's full content by id. Worker agents call this at runtime to pull reference material (the agent's spawn-time prompt lists available docs + their ids). The orchestrator uses it to surface knowledge content inline ('what does <agent> know about <topic>?'). Accepts either { agentId } or { agentName } plus { knowledgeId }.",
+    "catalogDescription": "Runtime: pull a knowledge doc by id (worker agents).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with agentName)"
+        },
+        "agentName": {
+          "type": "string",
+          "description": "pod name (looked up if agentId absent)"
+        },
+        "knowledgeId": {
+          "type": "string",
+          "description": "knowledge doc ULID id"
+        }
+      },
+      "required": [
+        "knowledgeId"
+      ]
+    }
+  },
+  {
+    "name": "pc_create_agent_secret",
+    "family": "agent",
+    "label": "Add an agent secret",
+    "description": "Attach a plaintext env-var secret to an agent. The value is stored in plain text in v1 (encryption lands in v2) — the user has been warned via the UI banner. Pod gets `envVarName=value` materialised into its environment at spawn. Use for things like API keys / tokens needed by per-pod MCP servers. Audits event-only (value never logged). Accepts either { agentId } or { agentName }.",
+    "catalogDescription": "Attach an env-var secret to an agent (plaintext v1).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with agentName)"
+        },
+        "agentName": {
+          "type": "string",
+          "description": "pod name (looked up if agentId absent)"
+        },
+        "envVarName": {
+          "type": "string",
+          "description": "environment variable name (e.g. GMAIL_TOKEN)"
+        },
+        "valuePlaintext": {
+          "type": "string",
+          "description": "secret value (stored plaintext in v1)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      },
+      "required": [
+        "envVarName",
+        "valuePlaintext"
+      ]
+    }
+  },
+  {
+    "name": "pc_delete_agent_secret",
+    "family": "agent",
+    "label": "Remove an agent secret",
+    "description": "Detach a secret env-var from an agent. Audits as actor='orchestrator'. Accepts either { agentId } or { agentName } plus { secretId }.",
+    "catalogDescription": "Detach a secret env var from an agent.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with agentName)"
+        },
+        "agentName": {
+          "type": "string",
+          "description": "pod name (looked up if agentId absent)"
+        },
+        "secretId": {
+          "type": "string",
+          "description": "secret ULID id"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      },
+      "required": [
+        "secretId"
+      ]
+    }
+  },
+  {
+    "name": "pc_add_agent_mcp_server",
+    "family": "agent",
+    "label": "Configure an agent's MCP server",
+    "description": "Configure a per-pod MCP server (e.g. gmail, jira, custom). The pod's materialised mcp.json will merge this server into the baseline at spawn time; pod entry wins per-server-name. Pass the standard MCP config shape: { command, args, env } OR { url } (for HTTP transports). Accepts either { agentId } or { agentName }.",
+    "catalogDescription": "Attach a per-pod MCP server config (gmail, jira, etc.).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with agentName)"
+        },
+        "agentName": {
+          "type": "string",
+          "description": "pod name (looked up if agentId absent)"
+        },
+        "serverName": {
+          "type": "string",
+          "description": "MCP server name (e.g. \"gmail\")"
+        },
+        "config": {
+          "type": "object",
+          "description": "MCP server config: { command, args?, env? } or { url }",
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "url": {
+              "type": "string"
+            }
+          }
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      },
+      "required": [
+        "serverName",
+        "config"
+      ]
+    }
+  },
+  {
+    "name": "pc_delete_agent_mcp_server",
+    "family": "agent",
+    "label": "Remove an agent's MCP server",
+    "description": "Detach a per-pod MCP server. Audits as actor='orchestrator'. Accepts either { agentId } or { agentName } plus { mcpServerId }.",
+    "catalogDescription": "Detach a per-pod MCP server config.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with agentName)"
+        },
+        "agentName": {
+          "type": "string",
+          "description": "pod name (looked up if agentId absent)"
+        },
+        "mcpServerId": {
+          "type": "string",
+          "description": "MCP server row ULID id"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      },
+      "required": [
+        "mcpServerId"
+      ]
+    }
+  },
+  {
+    "name": "pc_list_agent_audit",
+    "family": "agent",
+    "label": "Read an agent's change history",
+    "description": "Read an agent's change history. Returns audit rows newest-first. Filter by actor ('orchestrator' / 'user'), field ('prompt' / 'model' / 'effort' / 'tools' / 'description' / 'name' / 'maxTurns' / 'outputDestination' / 'knowledge' / 'secret' / 'mcp-server'), limit (default 50), beforeCreatedAt (epoch ms — for paging). Use when reasoning about 'why does this agent behave this way?' or auditing recent changes. Accepts either { agentId } or { agentName }.",
+    "catalogDescription": "Inspect a pod's audit log (who changed what, when).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agentId": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with agentName)"
+        },
+        "agentName": {
+          "type": "string",
+          "description": "pod name (looked up if agentId absent)"
+        },
+        "actor": {
+          "type": "string",
+          "description": "filter by actor ('orchestrator' / 'user')"
+        },
+        "field": {
+          "type": "string",
+          "description": "filter by audit field key"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "max rows returned (default 50)"
+        },
+        "beforeCreatedAt": {
+          "type": "integer",
+          "description": "page boundary (epoch ms); rows older than this"
+        }
+      }
+    }
+  },
+  {
+    "name": "pc_get_work_item",
+    "family": "work-item",
+    "label": "Read a work item",
+    "description": "Fetch the full work item by id or callsign — title, body, fields, stage, status, parent. Use this when an agent needs to read the work item it is operating on without filesystem digging. `id` accepts ULID or callsign (e.g. `pc-2.1`). Returns { ok: true, workItem } (the workItem includes `callsign` when present, NULL for agent contracts) or { ok: false, error } for unknown / archived ids.",
+    "catalogDescription": "Fetch a card's full content + fields.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "work item id (ULID or callsign like pc-2.1)"
+        },
+        "includeArchived": {
+          "type": "boolean",
+          "description": "when true, also returns soft-deleted work items"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "pc_list_work_items",
+    "family": "work-item",
+    "label": "List work items",
+    "description": "List work items in this project. Use this when the orchestrator / an agent needs to find a card by some property (title fragment, stage, parent) rather than knowing its ULID up front. Optional filters: `stage` (stage id slug), `parentId` (a ULID, or `\"\"` for top-level only), `includeArchived` (boolean, default false). When called with no filters, returns the project's full work-item set (the same shape the kanban renders from). PC_PROJECT_ID env is the implicit scope.",
+    "catalogDescription": "Find cards in this project by stage / parent / archive-state.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "type": "string",
+          "description": "optional: stage slug to filter by"
+        },
+        "parentId": {
+          "type": "string",
+          "description": "optional: parent work item ULID, or empty string '' to only return top-level items"
+        },
+        "includeArchived": {
+          "type": "boolean",
+          "description": "when true, also returns soft-deleted work items"
+        },
+        "limit": {
+          "type": "number",
+          "description": "optional: cap on rows returned"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "optional: pagination cursor (ULID)"
+        }
+      }
+    }
+  },
+  {
+    "name": "pc_list_areas",
+    "family": "work-item",
+    "label": "List areas",
+    "description": "List the project's Areas — first-class buckets a work item can belong to (or none, \"Uncaptured\"). Use this to discover Area ids before filing/assigning a work item to an Area. Returns { areas: [{ id, name, summary, sortOrder, ... }, ...] } ordered by sortOrder. No arguments; PC_PROJECT_ID env is the implicit scope.",
+    "catalogDescription": "List the project's Areas (focus buckets) + their work-item counts.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "pc_save_workflow_draft",
+    "family": "workflow",
+    "label": "Save workflow draft",
+    "description": "Section 19.9 — push an in-progress draft of the v2 workflow currently being authored in the workflow-builder modal. Use this after each meaningful structural change (node added, edge wired, trigger set, position dragged) so the visualizer renders the workflow forming. The draft is NOT written to disk — only `pc_publish_workflow` does that. Server keys the draft by the transient PC_SESSION_ID env var (already set by the host); state clears automatically when the workflow-builder session ends. Drafts can be incomplete (missing nodes / wires) — they only need a top-level `id`. 400 on shape errors.",
+    "catalogDescription": "Push the in-progress draft so the visualizer renders the workflow forming.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "def": {
+          "type": "object",
+          "description": "in-progress v2 workflow object: { id, name, triggers?, nodes: [...], ... }",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "def"
+      ]
+    }
+  },
+  {
+    "name": "pc_read_workflow_draft",
+    "family": "workflow",
+    "label": "Read workflow draft",
+    "description": "Section 19.9 — read the current v2 workflow-builder draft for this session. Use this at the start of edit-mode, or any time you suspect the user has dragged nodes / wired edges in the visualizer since your last `pc_save_workflow_draft` write (sync-model-A — the user can edit the graph between your turns). Returns { ok: true, def: <current draft or null> } if a draft exists; { ok: true, def: null } if none. PC_SESSION_ID env is the implicit scope.",
+    "catalogDescription": "Read the current draft back (the user can drag nodes between your turns).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "pc_get_stages",
+    "family": "project",
+    "label": "Get project stages (v2)",
+    "description": "Section 19.9 — list the project's stages live from the server. Use this BEFORE asking the user which stage should trigger a v2 workflow (`stage-on-entry` trigger). Returns { ok: true, stages: [{ id, name, order, isDone?, isCancelled?, isNew? }, ...] }. Stage `id` is what goes into `triggers[].stage` — never use the name. Use the flags for semantic roles. (Equivalent to `pc_list_stages`; kept under the locked Section 19 name.)",
+    "catalogDescription": "List the project's stages for stage-on-entry triggers.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "pc_publish_workflow",
+    "family": "workflow",
+    "label": "Publish workflow",
+    "description": "Section 19.17 — publish the v2 workflow to the DB-backed `/api/workflows` surface. Validates the graph (cycles, unknown node ids, `when:` grammar, trigger shape, ref integrity), upserts the row (GET → match by slug → PUT or POST), which records a `workflow.definition.changed` live-event so the Workflows tab refreshes. Returns 201 on first-write, 200 on overwrite. 400 on validation errors with per-path `errors:` array — translate to plain English and re-publish after fixing.",
+    "catalogDescription": "Commit the v2 workflow to the project DB (overwrite by slug).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "def": {
+          "type": "object",
+          "description": "v2 workflow object: { id, name, triggers: [...], nodes: [...], description?, worktree?, max_concurrency? }",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "def"
+      ]
+    }
+  },
+  {
+    "name": "pc_write_claude_md",
+    "family": "project",
+    "label": "Write project's CLAUDE.md",
+    "description": "Write the project-level CLAUDE.md from the conversational setup wizard (5.6 / D82). Overwrites the existing file. Use this as the SINGLE tool call at the end of the wizard interview, once the user confirms the preview. `content` is the full markdown body (the server does not interpolate). 400 if content is missing or empty. Broadcasts project-claude-md-changed on success so the modal can close.",
+    "catalogDescription": "Author or replace the project's CLAUDE.md.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "full CLAUDE.md markdown body (non-empty)"
+        }
+      },
+      "required": [
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "pc_list_stages",
+    "family": "project",
+    "label": "List project stages",
+    "description": "List the project's stages live from the server. Use this BEFORE asking the user which stage should trigger a workflow (or which stage a create/update-work-item step should target). Returns { ok: true, stages: [{ id, name, order, isDone?, isCancelled?, isNew? }, ...] }. Stage `id` is what goes into `triggers.on_enter.stage_id` — never use the name. Use `isDone` / `isCancelled` / `isNew` for semantic stage roles instead of guessing from labels. No arguments; PC_PROJECT_ID env is the implicit scope.",
+    "catalogDescription": "List the project's stages by id + label.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "pc_list_agents",
+    "family": "agent",
+    "label": "List available agents",
+    "description": "List available agents for this project. Returns global pods plus project overrides/project-only pods. Use before pc_invoke_agent when deciding which specialist to delegate to.",
+    "catalogDescription": "List every pod the project can dispatch.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "pc_list_workflows",
+    "family": "workflow",
+    "label": "List workflows",
+    "description": "List workflows already authored in this project. Use this BEFORE asking the user which child workflow a nested `workflow:` step should call. Returns { valid: [{ id, fileName, ... }], invalid: [...] }; the `id` field is what goes into a nested-workflow step's `workflow:` field. No arguments; PC_PROJECT_ID env is the implicit scope.",
+    "catalogDescription": "List the project's workflows.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "pc_fire_workflow",
+    "family": "workflow",
+    "label": "Fire a workflow",
+    "description": "Fire a workflow by slug (the `id:` field, e.g. \"triage\") or DB ULID. Resolves the row, dispatches through the v2 executor, and returns the runId + rootWorkItemId. Use this when the user explicitly names a workflow (\"run the triage workflow\"). Trigger defaults to `{ kind: \"manual\" }`. Returns { ok: true, runId, rootWorkItemId } on success; 400 on disabled / invalid rows; 404 on unknown slug. PC_PROJECT_ID env is the implicit project scope.",
+    "catalogDescription": "Trigger a workflow by slug or ULID; returns the new runId + root work item id.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "description": "workflow slug (preferred — the `id:` field in the YAML) or DB ULID"
+        },
+        "trigger": {
+          "type": "object",
+          "description": "optional trigger payload. Defaults to { kind: \"manual\" }. For stage-on-entry, supply { kind: \"stage-on-entry\", stage: \"<stageId>\" } — but typically you fire manually."
+        }
+      },
+      "required": [
+        "workflow"
+      ]
+    }
+  },
+  {
+    "name": "pc_complete_node",
+    "family": "workflow",
+    "label": "Complete review node (orchestrator)",
+    "description": "Submit an orchestrator-review decision for a workflow run paused at a review node. Use when a `kind=orchestrator-review` envelope lands in chat with `{ workflowRunId, nodeId }` and you have judged the artifact. `decision: \"approve\"` resumes the run; `decision: \"reject\"` kicks back upstream (the reject loop re-fires the prior agent with your `notes` as feedback, up to `max_iterations`). Returns { ok: true, status: <new run status> } or 404 if the run / node is unknown / no longer paused. PC_PROJECT_ID env is the implicit project scope.",
+    "catalogDescription": "Submit an approve or reject decision for a workflow run paused at an orchestrator-review node.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workflowRunId": {
+          "type": "string",
+          "description": "the run id from the orchestrator-review envelope"
+        },
+        "nodeId": {
+          "type": "string",
+          "description": "the review node id from the envelope"
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "reject"
+          ],
+          "description": "approve resumes; reject kicks back upstream with notes as feedback"
+        },
+        "notes": {
+          "type": "string",
+          "description": "optional — required in practice for reject so the upstream agent has feedback"
+        }
+      },
+      "required": [
+        "workflowRunId",
+        "nodeId",
+        "decision"
+      ]
+    }
+  },
+  {
+    "name": "pc_node_failed",
+    "family": "none",
+    "label": "Signal node failure",
+    "description": "Signal a hard failure from a workflow agent node. Call this when you cannot produce the contracted output (bad input, missing files, unrecoverable error). The v2 subagent spawner detects this call from the JSONL transcript and closes the node as `agent-self-failed` carrying your reason. After calling, end your turn normally — do NOT call this from ad-hoc (non-workflow) dispatch. Schema: { workflowRunId, nodeId, reason }.",
+    "catalogDescription": "Signal a hard failure from a workflow agent node so the spawner closes it as agent-self-failed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workflowRunId": {
+          "type": "string",
+          "description": "the workflow run id from the dispatch tokens"
+        },
+        "nodeId": {
+          "type": "string",
+          "description": "the node id from the dispatch tokens"
+        },
+        "reason": {
+          "type": "string",
+          "description": "one-line human-readable reason surfaced in the UI"
+        }
+      },
+      "required": [
+        "workflowRunId",
+        "nodeId",
+        "reason"
+      ]
+    }
+  },
+  {
+    "name": "pc_list_field_schemas",
+    "family": "project",
+    "label": "List field schemas",
+    "description": "List the project's custom work-item field schemas. Use this BEFORE authoring a create-work-item / update-work-item step that sets `fields`, so the keys are real (not invented). Returns { ok: true, schemas: [{ key, label, type, options?, required, ... }, ...] }. The `key` is what goes into the step's `fields` object. No arguments; PC_PROJECT_ID env is the implicit scope.",
+    "catalogDescription": "List the project's per-stage card field schemas.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "pc_create_workflow",
+    "family": "workflow",
+    "label": "Create a workflow",
+    "description": "Create a new workflow in this project. Body: { yaml?, def?, scope? }. `scope` defaults to \"project\" (PC_PROJECT_ID is the implicit owner). Either `yaml` (raw YAML string) or `def` (workflow graph object) is required. Returns the created workflow row including `status` and `parseError` so the caller sees invalid-YAML feedback immediately.",
+    "catalogDescription": "Create a new v2 workflow definition (YAML or graph object) in the project.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "yaml": {
+          "type": "string",
+          "description": "raw YAML workflow definition (preferred for plain-text authoring)"
+        },
+        "def": {
+          "type": "object",
+          "description": "workflow graph object (alternative to yaml)",
+          "additionalProperties": true
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "project",
+            "global"
+          ],
+          "description": "default \"project\" — owned by PC_PROJECT_ID. Pass \"global\" only when the workflow should be reusable across every project."
+        }
+      }
+    }
+  },
+  {
+    "name": "pc_update_workflow",
+    "family": "workflow",
+    "label": "Update a workflow",
+    "description": "Update an existing workflow by DB id (ULID). Pass `yaml` or `def` to replace the definition; omit both to patch metadata only (`disabled`, display name). Slug is immutable — rename by duplicate + delete. Returns the updated row including `status` / `parseError` so the caller sees feedback on invalid definitions.",
+    "catalogDescription": "Replace or patch an existing workflow definition by DB ULID.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "workflow DB ULID"
+        },
+        "yaml": {
+          "type": "string",
+          "description": "new YAML definition"
+        },
+        "def": {
+          "type": "object",
+          "description": "new workflow graph object",
+          "additionalProperties": true
+        },
+        "disabled": {
+          "type": "boolean",
+          "description": "when true the workflow is disabled (will not fire)"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "pc_delete_workflow",
+    "family": "workflow",
+    "label": "Delete a workflow",
+    "description": "Soft-delete a workflow by DB id (ULID). Returns 409 when in-flight runs exist unless `cancel: true` is passed (cancels them first). Use `pc_list_workflows` to find the id; prefer `pc_get_workflow` to read-before-delete.",
+    "catalogDescription": "Soft-delete a workflow by DB ULID; cancels in-flight runs when forced.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "workflow DB ULID"
+        },
+        "cancel": {
+          "type": "boolean",
+          "description": "cancel in-flight runs before deleting (appends ?cancel=1 to the request)"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "pc_get_workflow",
+    "family": "workflow",
+    "label": "Read a workflow",
+    "description": "Fetch the full workflow row by DB id (ULID), including the yaml text. Use this to read-before-edit so you don't clobber unknown fields. Returns { ok: true, workflow: { id, slug, yaml, status, parseError, ... } } or 404.",
+    "catalogDescription": "Fetch a single workflow row by DB ULID or slug.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "workflow DB ULID"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "pc_replace_stages",
+    "family": "project",
+    "label": "Replace project stages",
+    "description": "Bulk-replace a project's stages. The server validates uniqueness, flag constraints, and in-use stage safety. When a removed stage still has work items, the server returns 409 STAGE_HAS_ITEMS with an `orphans` array — surface this to the caller instead of swallowing. Pass `force: true` + `fallbackStageId` (a retained stage id) to force-remove and reassign orphaned items. Always call `pc_request_approval` before removing, reordering, or re-flagging stages.",
+    "catalogDescription": "Replace the project's stage definitions in bulk (destructive — use with caution).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "stages": {
+          "type": "array",
+          "description": "full replacement stage list. Each stage needs id + name; order defaults to array index.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "stage slug id (e.g. \"backlog\")"
+              },
+              "name": {
+                "type": "string",
+                "description": "display name"
+              },
+              "order": {
+                "type": "number",
+                "description": "sort order (defaults to array index)"
+              },
+              "isDone": {
+                "type": "boolean",
+                "description": "marks the terminal-success stage (at most one)"
+              },
+              "isCancelled": {
+                "type": "boolean",
+                "description": "marks the terminal-abandon stage (at most one)"
+              },
+              "isNew": {
+                "type": "boolean",
+                "description": "marks the intake/new stage (at most one)"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          }
+        },
+        "force": {
+          "type": "boolean",
+          "description": "force removal of stages that still have items. Requires fallbackStageId."
+        },
+        "fallbackStageId": {
+          "type": "string",
+          "description": "stage id to reassign orphaned items to when force=true."
+        }
+      },
+      "required": [
+        "stages"
+      ]
+    }
+  },
+  {
+    "name": "pc_replace_field_schemas",
+    "family": "project",
+    "label": "Replace field schemas",
+    "description": "Bulk-replace a project's custom work-item field schemas. PUT /api/projects/:projectId/field-schemas. Returns { ok: true, items: [...] }. Call pc_list_field_schemas first to read current state before replacing. Always call pc_request_approval before replacing schemas.",
+    "catalogDescription": "Replace the project's custom work-item field schemas in bulk.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "full replacement field schema list. Each item: { key, label, type, options?, required? }.",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  {
+    "name": "pc_attach_to_work_item",
+    "family": "work-item",
+    "label": "Attach run to work item",
+    "description": "Attach a text/markdown/JSON payload to a work item. The default destination for agent output per Section 3 D13 (the \"report I will read later\" path). Server stamps provenance: source = \"agent\" + the passed agentName + nodeId + workflowRunId. `workItemId` accepts ULID or callsign (e.g. `pc-2.1`). Returns { ok: true, attachment } or { ok: false, error }.",
+    "catalogDescription": "Bind the current dispatch to a specific card.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workItemId": {
+          "type": "string",
+          "description": "destination work item id (ULID or callsign like pc-2.1)"
+        },
+        "name": {
+          "type": "string",
+          "description": "attachment display name"
+        },
+        "content": {
+          "type": "string",
+          "description": "attachment body (inline; no filesystem path variant)"
+        },
+        "kind": {
+          "type": "string",
+          "description": "free-form kind tag — known set: text / markdown / json. Defaults to \"markdown\"."
+        },
+        "contentType": {
+          "type": "string",
+          "description": "optional MIME type"
+        },
+        "agentName": {
+          "type": "string",
+          "description": "name of the agent producing this attachment"
+        },
+        "workflowRunId": {
+          "type": "string",
+          "description": "workflow run id from the dispatch envelope ([workflowRunId: ...])"
+        },
+        "nodeId": {
+          "type": "string",
+          "description": "workflow node id from the dispatch envelope ([nodeId: ...])"
+        }
+      },
+      "required": [
+        "workItemId",
+        "name",
+        "content"
+      ]
+    }
+  },
+  {
+    "name": "pc_invoke_agent",
+    "family": "agent-run",
+    "label": "Dispatch another agent",
+    "description": "Dispatch a named agent (kebab-case, e.g. \"researcher\") in this project. Always async — returns `{ ok, mode: 'async', sessionId, runId, agentName, startedAt, status }` immediately. The terminal `agent-completed` / `agent-failed` channel event lands on your next turn (handler protocol entries #4 + #5). For any non-trivial dispatch, call `pc_create_agent_work_item` first and pass the returned id as `workItemId` — the agent then knows its task, expected output, and acceptance criteria via the work item rather than a sprawling input string (keep `input` to \"Begin.\" or a one-liner pointer). Optional `parentWorkItemId` pins the child to a parent work-item for lineage — defaults to `PC_AGENT_PARENT_WORK_ITEM_ID` when called from inside another agent. The project route URL is derived from `PC_PROJECT_ID`.",
+    "catalogDescription": "Spawn another pod by name with an input prompt.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "pod name (kebab-case)"
+        },
+        "input": {
+          "type": "string",
+          "description": "free-form input — becomes the child's first user message. When you also pass workItemId, keep this trivial (\"Begin.\" or shorter); the agent reads its task from the work item, not from here."
+        },
+        "workItemId": {
+          "type": "string",
+          "description": "work-item ULID this dispatch is assigned to. The agent fetches it via pc_get_work_item as its first action and reads body / acceptance_criteria / attachments from there. Create via pc_create_agent_work_item."
+        },
+        "parentWorkItemId": {
+          "type": "string",
+          "description": "optional parent work-item ULID for lineage (not the assignment — that is `workItemId`); defaults to PC_AGENT_PARENT_WORK_ITEM_ID"
+        }
+      },
+      "required": [
+        "name",
+        "input"
+      ]
+    }
+  },
+  {
+    "name": "pc_continue_agent",
+    "family": "agent-run",
+    "label": "Continue an agent run",
+    "description": "Resume a recent terminal agent run (`completed` or `failed`) with a follow-up input by spawning via `--resume <ccSessionId>` — the prior conversation is preserved so phrase your input as a continuation, not a fresh ask. Cancelled runs cannot be continued; start a fresh dispatch. Single-active-continuation guard per parent (409 on concurrent). JSONL retention guard (410 on session-expired). Optional `workItemId` re-anchors the resumed run to a (possibly different) work-item contract; omit to carry the parent run's assignment forward. Returns the same shape as `pc_invoke_agent`.",
+    "catalogDescription": "Resume a terminal AgentRun with a follow-up input.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "description": "ULID of the prior AgentRun to continue"
+        },
+        "input": {
+          "type": "string",
+          "description": "free-form follow-up — becomes the next user message in the resumed conversation. Phrase as a continuation, not a fresh request."
+        },
+        "workItemId": {
+          "type": "string",
+          "description": "optional work-item ULID. Omitted = inherit the parent run's assignment. Supply when the follow-up swaps in a new contract (rare)."
+        }
+      },
+      "required": [
+        "runId",
+        "input"
+      ]
+    }
+  },
+  {
+    "name": "pc_list_my_runs",
+    "family": "agent-run",
+    "label": "List my agent runs",
+    "description": "List recent agent runs YOU dispatched in this project (scoped to caller's `pc_session_id`). Use when you've lost track of a runId and need to pick one to continue via `pc_continue_agent`. Filters: `agentName`, `status`, `limit` (default 20, max 100). Newest-first. Row shape: `{ runId, agentName, status, dispatchedAt, completedAt, summary, continues }`.",
+    "catalogDescription": "List recent agent runs YOU dispatched (scoped to caller's session).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agentName": {
+          "type": "string",
+          "description": "optional — filter by pod name (kebab-case)"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "spawning",
+            "running",
+            "paused",
+            "completed",
+            "failed",
+            "cancelled"
+          ],
+          "description": "optional — filter by persisted status (full state machine)."
+        },
+        "limit": {
+          "type": "number",
+          "description": "optional — cap on returned rows. Default 20, max 100."
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "pc_inspect_agent_run",
+    "family": "agent-run",
+    "label": "Inspect an agent run",
+    "description": "Peek at a single agent run: current status, OS pid + whether that process is still alive, how long since its last activity (idleMs), and the last thing it did (last JSONL action). Use this to tell a working run from a wedged one before deciding to wait or kill. Returns `{ ok, inspection: { runId, status, pid, processAlive, lastActivityAt, idleMs, lastAction, ... } }`. Read-only.",
+    "catalogDescription": "Peek a run: status, pid liveness, idle age, last action.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "description": "ULID of the agent run to inspect"
+        }
+      },
+      "required": [
+        "runId"
+      ]
+    }
+  },
+  {
+    "name": "pc_kill_agent_run",
+    "family": "agent-run",
+    "label": "Kill an agent run",
+    "description": "Force-end an agent run NOW: kills the real OS process (its persisted pid + child tree) AND finalizes the run row to `cancelled` with full effects (rail + dispatcher notify). Unlike a graceful cancel this works on a PHANTOM — a run wedged or whose in-memory handle was lost. Idempotent: an already-terminal run returns ok without re-killing. Use when `pc_inspect_agent_run` shows a run stuck with no activity. Returns `{ ok, status, alreadyTerminal, processKilled }`.",
+    "catalogDescription": "Force-end a run — kills the OS process + finalizes the row (works on phantoms).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "description": "ULID of the agent run to force-kill"
+        }
+      },
+      "required": [
+        "runId"
+      ]
+    }
+  },
+  {
+    "name": "pc_ask_orchestrator",
+    "family": "agent-run",
+    "label": "Ask the orchestrator",
+    "description": "Pause your run and ask the dispatcher a question. Returns `{ ok, pendingAskId, status: 'waiting' }` immediately; the answer arrives as the next user message when your session resumes via --resume. After calling, do not call any other tools and end your turn naturally. Requires `PC_AGENT_RUN_ID` + `PC_DISPATCHER_SESSION_ID` in env (set by the spawn path).",
+    "catalogDescription": "Pause and ask the project orchestrator a question.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "the question to ask the orchestrator"
+        },
+        "context": {
+          "type": "string",
+          "description": "optional context — recent transcript snippet, files inspected, candidate options"
+        }
+      },
+      "required": [
+        "question"
+      ]
+    }
+  },
+  {
+    "name": "pc_ask_user",
+    "family": "agent-run",
+    "label": "Ask the user",
+    "description": "Pause your run and route a question to the user via the orchestrator-as-proxy. Returns `{ ok, pendingAskId, status: 'waiting' }` immediately; the answer arrives as the next user message when your session resumes. After calling, do not call any other tools and end your turn naturally. Use this when the question genuinely needs the human; use `pc_ask_orchestrator` first if the orchestrator might know from project context. Multi-choice `options` array supported.",
+    "catalogDescription": "Pause and ask the human user a question (via orchestrator).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "the question to surface to the user"
+        },
+        "context": {
+          "type": "string",
+          "description": "optional context — what you tried, why you need the user"
+        },
+        "options": {
+          "type": "array",
+          "description": "optional multi-choice options ([{value, label}, ...]). When supplied, the orchestrator renders them as a numbered list; the user reply will be one of the option values.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "machine value returned as the answer"
+              },
+              "label": {
+                "type": "string",
+                "description": "user-facing label for this choice"
+              }
+            },
+            "required": [
+              "value",
+              "label"
+            ]
+          }
+        }
+      },
+      "required": [
+        "question"
+      ]
+    }
+  },
+  {
+    "name": "pc_request_approval",
+    "family": "agent-run",
+    "label": "Request approval",
+    "description": "Pause your run and request explicit human approval for a decision. Returns `{ ok, pendingAskId, status: 'waiting' }` immediately; the user's decision arrives as the next user message when your session resumes. Use this when proceeding requires explicit go/no-go (destructive operations, irreversible writes). `options` is required and must be non-empty.",
+    "catalogDescription": "Pause and request explicit approval before proceeding.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "description": "the decision the user is being asked to approve — what will happen, in plain English"
+        },
+        "options": {
+          "type": "array",
+          "description": "non-empty list of approval choices ([{value, label}, ...])",
+          "items": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "machine value returned as the answer"
+              },
+              "label": {
+                "type": "string",
+                "description": "user-facing label for this choice"
+              }
+            },
+            "required": [
+              "value",
+              "label"
+            ]
+          }
+        },
+        "context": {
+          "type": "string",
+          "description": "optional context — what produced this decision, alternatives, what the user should weigh"
+        }
+      },
+      "required": [
+        "decision",
+        "options"
+      ]
+    }
+  },
+  {
+    "name": "pc_answer_pending",
+    "family": "agent-run",
+    "label": "Answer a pending ask",
+    "description": "Resume a paused agent with an answer. Atomic open→answered flip. Idempotent: a second call returns `cause: \"already-answered\"`. Pod-revision drift (pod edited between dispatch and resume) surfaces in the response as `podRevisionDrifted: true`. Orchestrator usage only — agents that need to forward an answer should use pc_ask_orchestrator instead.",
+    "catalogDescription": "Reply to an earlier ask-orchestrator / ask-user / approval.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "pendingAskId": {
+          "type": "string",
+          "description": "pending-ask ULID from the agent-asks-* event"
+        },
+        "answer": {
+          "type": "string",
+          "description": "the answer to thread back into the paused agent"
+        },
+        "answeredBy": {
+          "type": "string",
+          "enum": [
+            "orchestrator",
+            "user"
+          ],
+          "description": "\"orchestrator\" when answered from your own context, \"user\" when forwarding the user's reply"
+        }
+      },
+      "required": [
+        "pendingAskId",
+        "answer",
+        "answeredBy"
+      ]
+    }
+  }
+];
+
+/** Bare tool names in registry (= ListTools) order. */
+export const PC_RIG_TOOL_REGISTRY_NAMES: readonly string[] = PC_RIG_TOOL_REGISTRY.map(
+  (d) => d.name,
+);
