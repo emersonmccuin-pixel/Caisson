@@ -89,6 +89,14 @@ function emptyWsDiagnostics(): WsDiagnostics {
 }
 
 export function useProjectWs(project: Project | null): UseProjectWsResult {
+  // Identify everything by the project *id* (a stable string), never the
+  // `project` object. The list refetch upstream (App.tsx) hands back a fresh
+  // `projects` array — and thus a fresh `activeProject` object with the same
+  // id — on every WS frame; keying the socket/events on the object recreated
+  // the socket each refetch, which pushed a new snapshot → another refetch →
+  // an infinite reconnect/render storm (max-update-depth). The id is stable
+  // across refetches, so a same-project refetch is now a no-op here.
+  const projectId = project?.id ?? null;
   const [sessionState, dispatchSession] = useReducer(
     chatSessionReducer,
     null,
@@ -96,17 +104,17 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
   );
   const events = useMemo(
     () =>
-      project && sessionState.projectId === project.id
+      projectId && sessionState.projectId === projectId
         ? materializeChatSessionEvents(sessionState)
         : [],
-    [project, sessionState],
+    [projectId, sessionState],
   );
   const aggregates = useMemo(
     () =>
-      project && sessionState.projectId === project.id
+      projectId && sessionState.projectId === projectId
         ? sessionState.aggregates
         : EMPTY_AGGREGATES,
-    [project, sessionState],
+    [projectId, sessionState],
   );
   const [status, setStatus] = useState<WsStatus>('idle');
   const [diagnostics, setDiagnostics] = useState<WsDiagnostics>(() => emptyWsDiagnostics());
@@ -114,13 +122,16 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
   const seenTsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    dispatchSession({ type: 'reset-project', projectId: project?.id ?? null });
+    dispatchSession({ type: 'reset-project', projectId });
     seenTsRef.current.clear();
     setDiagnostics(emptyWsDiagnostics());
-    if (!project) {
+    if (!projectId) {
       setStatus('idle');
       return;
     }
+    // Narrowed for the nested closures below (TS won't carry the guard's
+    // narrowing of the outer const across a function boundary).
+    const pid: string = projectId;
 
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -136,7 +147,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       // intent=chat → the server spawns/attaches the orchestrator for this
       // focused socket. Activity sockets omit it and never spawn.
-      const url = `${proto}://${window.location.host}/ws?projectId=${encodeURIComponent(project!.id)}&intent=chat`;
+      const url = `${proto}://${window.location.host}/ws?projectId=${encodeURIComponent(pid)}&intent=chat`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
       let disconnected = false;
@@ -217,17 +228,17 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
         // while this socket was down/half-open (server restart, blip) was never
         // delivered. Bump the epoch so resource-list hooks refetch the truth —
         // this is what removes the "manual refresh to see new agents/workflows".
-        if (project) useWsEpoch.getState().bump(project.id);
+        useWsEpoch.getState().bump(pid);
         // Slice 015a — WS subscribe handshake. Send our stored `lastVersion`
         // (the global `seq` cursor) so the relay replays `(lastVersion,
         // snapshot]` for this project; live rows then arrive via the same
         // socket. The epoch bump above is the belt-and-suspenders full reload;
         // the cursor catch-up is the precise replay on top. A below-floor
         // cursor comes back as a `live-reset` frame (handled below).
-        if (project) {
-          const lastVersion = readLiveCursor(liveCursorScopeForProject(project.id));
+        {
+          const lastVersion = readLiveCursor(liveCursorScopeForProject(pid));
           try {
-            ws.send(JSON.stringify({ type: 'subscribe', lastVersion, projectId: project.id }));
+            ws.send(JSON.stringify({ type: 'subscribe', lastVersion, projectId: pid }));
           } catch {
             /* best-effort; the epoch bump already triggered a full reload */
           }
@@ -251,7 +262,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
         } catch {
           return;
         }
-        if (!shouldAcceptProjectWsEnvelope(env, project!.id)) return;
+        if (!shouldAcceptProjectWsEnvelope(env, pid)) return;
         setDiagnostics((prev) => ({
           ...prev,
           lastInboundAt,
@@ -263,10 +274,10 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
         // so the next (re)connect handshake replays only what we haven't seen.
         // Resource-list stores already dedupe by per-entity `version`, so we do
         // not re-route the frame here — we only persist the cursor.
-        if (env.type === 'live-event' && project) {
+        if (env.type === 'live-event') {
           const cursor = (env as { event?: { cursor?: unknown } }).event?.cursor;
           if (typeof cursor === 'string') {
-            advanceLiveCursor(liveCursorScopeForProject(project.id), cursor);
+            advanceLiveCursor(liveCursorScopeForProject(pid), cursor);
           }
           // Slice 018 — feed the single identity-keyed live store directly from
           // the socket, independent of the chat-timeline reducer below. Every
@@ -277,13 +288,13 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
         // Slice 015a — gap signal: our cursor predated the pruned outbox floor,
         // so a complete replay was impossible. Drop the cursor and force a full
         // reload (epoch bump) so resource lists refetch HTTP truth.
-        if (env.type === 'live-reset' && project) {
-          clearLiveCursor(liveCursorScopeForProject(project.id));
+        if (env.type === 'live-reset') {
+          clearLiveCursor(liveCursorScopeForProject(pid));
           // Slice 018 — drop the identity-keyed store too so a stale frame can
           // never re-merge over the freshly reseeded HTTP truth; the epoch bump
           // forces resource lists to refetch.
           useLiveStore.getState().clearAll();
-          useWsEpoch.getState().bump(project.id);
+          useWsEpoch.getState().bump(pid);
           return;
         }
         if (env.type === 'event') {
@@ -304,7 +315,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
           return;
         }
         if (final.type === 'session-replay') {
-          const replay = replayEventsFromEnvelope(final, project!.id);
+          const replay = replayEventsFromEnvelope(final, pid);
           const seenTs = seenTsRef.current;
           seenTs.clear();
           for (const replayEnv of replay) {
@@ -376,7 +387,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
         try { ws.close(); } catch { /* best-effort */ }
       }
     };
-  }, [project]);
+  }, [projectId]);
 
   const send = useCallback((msg: WsOutbound): boolean => {
     const ws = wsRef.current;

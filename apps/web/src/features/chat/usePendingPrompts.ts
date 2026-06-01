@@ -142,15 +142,29 @@ export function usePendingPrompts({
           return candidate?.clientMessageId === pending.id;
         });
         if (!ack) return pending;
-        changed = true;
         if (ack.ok) {
+          const nextQueued = pending.queued || ack.status === 'queued';
+          // Idempotent: if this prompt is already in the acked shape, return it
+          // unchanged so we don't hand back a fresh array every render (that
+          // turned any upstream `events` churn into a max-update-depth loop).
+          if (
+            pending.status === 'server-received' &&
+            pending.queued === nextQueued &&
+            pending.failureReason === undefined
+          ) {
+            return pending;
+          }
+          changed = true;
           return {
             ...pending,
             status: 'server-received' as PendingPromptStatus,
-            queued: pending.queued || ack.status === 'queued',
+            queued: nextQueued,
             failureReason: undefined,
           };
         }
+        // Already-failed prompts returned early above, so reaching here is
+        // always a real transition into failed.
+        changed = true;
         return {
           ...pending,
           status: 'failed' as PendingPromptStatus,
