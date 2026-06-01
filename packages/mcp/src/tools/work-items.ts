@@ -322,7 +322,9 @@ export async function handleWorkItemTool(
       if (bodyText !== undefined) payload.body = (bodyText + originNote).trim();
       else if (originNote) payload.body = originNote.trim();
       try {
-        const res = await ctx.postServer(targetPath, payload);
+        // Slice 011 — route through the typed client (parses WorkItemDto for
+        // internal type-safety); emit the raw body verbatim (byte-compat).
+        const res = await ctx.client.createWorkItem(targetPath, payload);
         if (res.status >= 200 && res.status < 300) {
           return ctx.withRichLinkHint(res.body);
         }
@@ -635,7 +637,7 @@ export async function handleWorkItemTool(
         if (toStage) body.toStage = toStage;
         if (toFlag) body.toFlag = toFlag;
         if (notes) body.notes = notes;
-        const res = await ctx.postServer(ctx.projectPath('work-items/move'), body);
+        const res = await ctx.client.moveWorkItem(ctx.projectPath('work-items/move'), body);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }
@@ -677,7 +679,7 @@ export async function handleWorkItemTool(
         if (titleText !== undefined) payload.title = titleText;
         if (typeof args.area_id === 'string' && args.area_id.trim()) payload.areaId = args.area_id.trim();
         else if (args.area_id === null) payload.areaId = null;
-        const res = await ctx.postServer(ctx.projectPath('work-items/update'), payload);
+        const res = await ctx.client.updateWorkItem(ctx.projectPath('work-items/update'), payload);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }
@@ -698,7 +700,7 @@ export async function handleWorkItemTool(
       }
       try {
         const suffix = `work-items/${encodeURIComponent(id)}${includeArchived ? '?includeArchived=1' : ''}`;
-        const res = await ctx.getServer(ctx.projectPath(suffix));
+        const res = await ctx.client.getWorkItem(ctx.projectPath(suffix));
         if (res.status >= 200 && res.status < 300) {
           return ctx.withRichLinkHint(res.body);
         }
@@ -726,7 +728,7 @@ export async function handleWorkItemTool(
       const query = q.toString();
       const suffix = `work-items${query ? `?${query}` : ''}`;
       try {
-        const res = await ctx.getServer(ctx.projectPath(suffix));
+        const res = await ctx.client.listWorkItems(ctx.projectPath(suffix));
         if (res.status >= 200 && res.status < 300) {
           return ctx.withRichLinkHint(res.body);
         }
@@ -746,7 +748,7 @@ export async function handleWorkItemTool(
 
     case 'pc_list_areas': {
       try {
-        const res = await ctx.getServer(ctx.projectPath('areas'));
+        const res = await ctx.client.listAreas(ctx.projectPath('areas'));
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }
@@ -797,7 +799,7 @@ export async function handleWorkItemTool(
         if (agentName !== undefined) payload.agentName = agentName;
         if (workflowRunId !== undefined) payload.runId = workflowRunId;
         if (nodeId !== undefined) payload.nodeId = nodeId;
-        const res = await ctx.postServer(
+        const res = await ctx.client.attachToWorkItem(
           ctx.projectPath(`work-items/${encodeURIComponent(workItemId)}/attachments`),
           payload,
         );

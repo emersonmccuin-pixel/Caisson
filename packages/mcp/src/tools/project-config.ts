@@ -141,7 +141,10 @@ async function listStages(
 ): Promise<ToolResult> {
   try {
     if (!ctx.projectId) throw new Error('PC_PROJECT_ID required');
-    const res = await ctx.getServer(`/api/projects/${ctx.projectId}`);
+    // Slice 011 — route through the typed client (parses StageDto[] off the
+    // project doc for internal type-safety); the emitted text stays the custom
+    // MCP stage projection below, byte-identical to before.
+    const res = await ctx.client.listStages(`/api/projects/${ctx.projectId}`);
     if (res.status >= 200 && res.status < 300) {
       try {
         const project = JSON.parse(res.body) as ProjectStagesResponse;
@@ -207,7 +210,7 @@ export async function handleProjectConfigTool(
 
     case 'pc_list_field_schemas': {
       try {
-        const res = await ctx.getServer(ctx.projectPath('field-schemas'));
+        const res = await ctx.client.listFieldSchemas(ctx.projectPath('field-schemas'));
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }

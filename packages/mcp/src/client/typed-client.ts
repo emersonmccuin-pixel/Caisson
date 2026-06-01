@@ -16,6 +16,7 @@
 import {
   isAgentRunDto,
   isAreaDto,
+  isAttachmentDto,
   isFieldSchemaDto,
   isPendingAskDto,
   isStageDto,
@@ -26,6 +27,7 @@ import {
   parseOk,
   type AgentRunDto,
   type AreaDto,
+  type AttachmentDto,
   type FieldSchemaDto,
   type ParseResult,
   type PendingAskDto,
@@ -203,6 +205,12 @@ export class TypedLocalhostClient {
   async listAreas(path: string): Promise<TypedResult<AreaDto[]>> {
     const res = await this.t.getServer(path);
     return toTypedList(res, (b) => b.areas, isAreaDto, 'listAreas');
+  }
+
+  /** POST an attachment (frozen wire body). */
+  async attachToWorkItem(path: string, payload: unknown): Promise<TypedResult<AttachmentDto>> {
+    const res = await this.t.postServer(path, payload);
+    return toTyped(res, (b) => b.attachment, isAttachmentDto, 'attachToWorkItem');
   }
 
   // ── project-config family ───────────────────────────────────────────────
