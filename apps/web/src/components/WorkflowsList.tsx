@@ -16,12 +16,14 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { WorkflowV2 } from '@pc/domain';
+import { isWorkflowRunChangedLivePayload } from '@pc/contracts';
 
 import type { Project, ULID } from '@/features/projects/client';
 import { workflowsApi, type V2RunDetail, type V2RunStatus, type V2RunSummary, type WorkflowRow } from '@/features/workflows/client';
 import type { WsEnvelope, WsOutbound } from '@/features/runtime/ws-types';
 import { useProjectWorkflows } from '@/hooks/use-project-workflows';
 import { useProjectWorkflowV2Runs } from '@/hooks/use-project-workflow-v2-runs';
+import { useLiveEvents } from '@/store/live-store';
 import { useWorkflowsListNav } from '@/store/workflows-list-nav';
 import { WorkflowBuilderModal } from './WorkflowBuilderModal';
 import { WorkflowGraphV2 } from './WorkflowGraphV2';
@@ -336,7 +338,6 @@ export function WorkflowsList({ project, events, send }: WorkflowsListProps) {
               runs={runsForSelected}
               tab={tab}
               setTab={setTab}
-              events={events}
               selectedRunId={selectedRunId}
               setSelectedRunId={setSelectedRunId}
               onEdit={() => setEditingRow(selectedRow)}
@@ -516,7 +517,6 @@ function DetailPane({
   runs,
   tab,
   setTab,
-  events,
   selectedRunId,
   setSelectedRunId,
   onEdit,
@@ -532,7 +532,6 @@ function DetailPane({
   runs: V2RunSummary[];
   tab: DetailTab;
   setTab: (t: DetailTab) => void;
-  events: WsEnvelope[];
   selectedRunId: string | null;
   setSelectedRunId: (id: string | null) => void;
   onEdit: () => void;
@@ -669,7 +668,6 @@ function DetailPane({
             project={project}
             row={row}
             runs={runs}
-            events={events}
             selectedRunId={selectedRunId}
             setSelectedRunId={setSelectedRunId}
           />
@@ -738,14 +736,12 @@ function RunsTab({
   project,
   row,
   runs,
-  events,
   selectedRunId,
   setSelectedRunId,
 }: {
   project: Project;
   row: WorkflowRow;
   runs: V2RunSummary[];
-  events: WsEnvelope[];
   selectedRunId: string | null;
   setSelectedRunId: (id: string | null) => void;
 }) {
@@ -786,7 +782,6 @@ function RunsTab({
           project={project}
           row={row}
           runId={selectedRunId}
-          events={events}
           onClose={() => setSelectedRunId(null)}
         />
       )}
@@ -844,29 +839,26 @@ function RunRow({
   );
 }
 
-interface V2RunChangedEnvelope extends WsEnvelope {
-  type: 'workflow-v2-run-changed';
-  projectId: string;
-  runId: string;
-  status: V2RunStatus;
-  dagState: WorkflowV2.WorkflowDagState;
-}
-
 /** 19.20 — inline replacement for the old WorkflowV2RunViewer modal. Loads
- *  the run's dagState + merges live `workflow-v2-run-changed` envelopes on
- *  top so the graph overlay updates as nodes complete / fail. Reuses the
- *  workflow row's already-parsed def — no second def fetch needed. */
+ *  the run's dagState once, then overlays the live `workflow-run` snapshot from
+ *  the identity-keyed live store so the graph overlay + status pill update as
+ *  nodes complete / fail. Reuses the workflow row's already-parsed def — no
+ *  second def fetch needed.
+ *
+ *  Slice 018 straggler fix: this used to scan the chat-timeline `events[]` for a
+ *  `workflow-v2-run-changed` envelope that the server deleted (015b) — and which
+ *  never reached `events[]` anyway, since live-event frames now feed the store
+ *  only. That left the run stuck "running" until a manual refresh. The store's
+ *  run-changed payload carries the full `WorkflowRunDto` (dagState + status). */
 function RunInlineDetail({
   project,
   row,
   runId,
-  events,
   onClose,
 }: {
   project: Project;
   row: WorkflowRow;
   runId: string;
-  events: WsEnvelope[];
   onClose: () => void;
 }) {
   const [run, setRun] = useState<V2RunDetail | null>(null);
@@ -888,31 +880,33 @@ function RunInlineDetail({
     };
   }, [project.id, runId]);
 
-  // Live dag state — start from the loaded run, walk subsequent WS envelopes
-  // for this run, the last one wins.
+  // Latest live run snapshot for THIS run from the identity-keyed store (the
+  // version-deduped run-changed frame carries the full DTO incl. dagState).
+  const liveRunFrames = useLiveEvents('workflow-run', project.id);
+  const liveRun = useMemo(() => {
+    for (const ev of liveRunFrames) {
+      if (ev.entityId !== runId) continue;
+      if (!isWorkflowRunChangedLivePayload(ev.payload)) continue;
+      return ev.payload.run ?? null;
+    }
+    return null;
+  }, [liveRunFrames, runId]);
+
+  // Overlay the live snapshot when it is at least as fresh as the loaded run
+  // (rev-gated so a stale store frame never regresses a newer fetch).
   const liveDag = useMemo<WorkflowV2.WorkflowDagState | null>(() => {
     if (!run) return null;
-    let dag = run.dagState as unknown as WorkflowV2.WorkflowDagState;
-    for (const env of events) {
-      if (env?.type !== 'workflow-v2-run-changed') continue;
-      const e = env as V2RunChangedEnvelope;
-      if (e.projectId !== project.id || e.runId !== runId) continue;
-      if (e.dagState) dag = e.dagState;
+    if (liveRun && liveRun.rev >= run.rev) {
+      return liveRun.dagState as unknown as WorkflowV2.WorkflowDagState;
     }
-    return dag;
-  }, [events, run, project.id, runId]);
+    return run.dagState as unknown as WorkflowV2.WorkflowDagState;
+  }, [run, liveRun]);
 
   const liveStatus = useMemo<V2RunStatus | null>(() => {
     if (!run) return null;
-    let status: V2RunStatus = run.status;
-    for (const env of events) {
-      if (env?.type !== 'workflow-v2-run-changed') continue;
-      const e = env as V2RunChangedEnvelope;
-      if (e.projectId !== project.id || e.runId !== runId) continue;
-      if (e.status) status = e.status;
-    }
-    return status;
-  }, [events, run, project.id, runId]);
+    if (liveRun && liveRun.rev >= run.rev) return liveRun.status as V2RunStatus;
+    return run.status;
+  }, [run, liveRun]);
 
   const def = row.parsedDefinition as unknown as WorkflowV2.Workflow | null;
 

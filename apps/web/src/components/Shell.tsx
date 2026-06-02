@@ -15,6 +15,7 @@ import type { Project } from '@/features/projects/client';
 import type { OrchestratorSurfacePreference } from '@/features/settings/client';
 import type { SessionTransitionResponse } from '@/features/runtime/client';
 import type { AgentRunRecord } from '@/features/agent-runs/client';
+import { isAgentRunChangedLivePayload } from '@pc/contracts';
 import type {
   WsDiagnostics,
   WsEnvelope,
@@ -26,6 +27,7 @@ import { useProjectAgentRuns } from '@/hooks/use-project-agent-runs';
 import { useActiveCenterTab } from '@/store/active-center-tab';
 import { useActiveProject } from '@/store/active-project';
 import { useAgentTranscript } from '@/store/agent-transcript';
+import { useLiveEvents } from '@/store/live-store';
 import { ActivityPanel } from './ActivityPanel';
 import { AgentsList } from './AgentsList';
 import { AgentTranscriptModal } from './AgentTranscriptModal';
@@ -189,20 +191,24 @@ function AgentTranscriptModalMount({
   const close = useAgentTranscript((s) => s.close);
   const { runs: agentRuns } = useProjectAgentRuns(project, events);
 
-  // Same fallback pattern ActivityPanel used pre-28.5: prefer the latest
-  // matching agent-run-changed envelope (carries terminal status even
-  // after useProjectAgentRuns drops the row from its map); fall back to
-  // the live agentRuns list.
+  // Slice 018 straggler fix: resolve the run from the identity-keyed live store
+  // (entity `agent-run`), which RETAINS terminal frames — the running-agents
+  // list drops them (dropOnTerminal). This used to scan the chat-timeline
+  // `events[]` for the deleted `agent-run-changed` envelope, which never matched
+  // anymore, then fall back to the active list — so a just-completed run's
+  // transcript opened empty. The store frame carries the full run snapshot.
+  const agentRunFrames = useLiveEvents('agent-run', project.id);
   const transcriptRun = useMemo<AgentRunRecord | null>(() => {
     if (!openRunId) return null;
-    for (let i = events.length - 1; i >= 0; i--) {
-      const env = events[i];
-      if (!env || env.type !== 'agent-run-changed') continue;
-      const record = (env as { record?: AgentRunRecord }).record;
-      if (record && record.runId === openRunId) return record;
+    for (const ev of agentRunFrames) {
+      if (!isAgentRunChangedLivePayload(ev.payload)) continue;
+      const run = ev.payload.run;
+      if (run && run.runId === openRunId) {
+        return { ...run, wait: false } as AgentRunRecord;
+      }
     }
     return agentRuns.find((r) => r.runId === openRunId) ?? null;
-  }, [openRunId, events, agentRuns]);
+  }, [openRunId, agentRunFrames, agentRuns]);
 
   if (!transcriptRun) return null;
   return <AgentTranscriptModal run={transcriptRun} events={events} onClose={close} />;
