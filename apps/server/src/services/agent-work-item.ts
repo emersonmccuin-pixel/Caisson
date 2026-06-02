@@ -24,9 +24,11 @@ import type {
 } from '@pc/domain';
 import {
   ACCEPTANCE_PREDICATE_KINDS,
+  ContractV2 as ContractV2Ns,
   EXPECTED_OUTPUT_KINDS,
   VERIFICATION_TIERS,
   deriveAcceptanceCriteria,
+  deriveAcceptanceCriteriaV2,
   getPodDefaultExpectedOutput,
 } from '@pc/domain';
 import type { ContractService } from '@pc/app-services';
@@ -95,7 +97,14 @@ export function createAgentWorkItem(
 
   // Resolve expected_output: caller-supplied wins; pod row (DB) second;
   // stock map third; hard-fail when all three are absent.
-  let expectedOutput: ExpectedOutput | null;
+  //
+  // Contract-first (slice 021): the stock pod-default map is now the v2
+  // contract union (`contract.ts`). Caller-supplied + pod-row specs may still
+  // arrive as the legacy v1 union (the v1 validator + AC derivation handle
+  // those). The resolved spec is therefore EITHER union; we branch derivation
+  // on the kind and store the spec opaquely (the WI column + contract are
+  // typed against the slice's authoritative union — superseded fully in 023).
+  let expectedOutput: ExpectedOutput | ContractV2Ns.ExpectedOutput | null;
   if (input.expectedOutput !== undefined) {
     assertExpectedOutputShape(input.expectedOutput);
     expectedOutput = input.expectedOutput;
@@ -116,8 +125,15 @@ export function createAgentWorkItem(
     );
   }
 
-  // Derive AC, then apply raw override if supplied.
-  let acceptanceCriteria = deriveAcceptanceCriteria(expectedOutput);
+  // Derive AC (v2 union → v2 derivation; v1 union → v1 derivation), then apply
+  // the raw override if supplied.
+  let acceptanceCriteria: AcceptancePredicate[] = ContractV2Ns.isExpectedOutputKind(
+    (expectedOutput as { kind?: unknown }).kind,
+  )
+    ? (deriveAcceptanceCriteriaV2(
+        expectedOutput as ContractV2Ns.ExpectedOutput,
+      ) as unknown as AcceptancePredicate[])
+    : deriveAcceptanceCriteria(expectedOutput as ExpectedOutput);
   if (input.rawAcceptanceCriteria !== undefined) {
     assertAcceptanceCriteriaShape(input.rawAcceptanceCriteria);
     acceptanceCriteria = input.rawAcceptanceCriteria;
@@ -143,7 +159,9 @@ export function createAgentWorkItem(
     ...(input.parentWorkItemId !== undefined ? { parentId: input.parentWorkItemId } : {}),
     isAgentTask: true,
     ephemeral,
-    expectedOutput,
+    // Stored opaquely — the resolved spec may be either union (see resolution
+    // above); the WI column type is superseded in 023.
+    expectedOutput: expectedOutput as unknown as ExpectedOutput,
     acceptanceCriteria,
     verificationTier: tier,
     verificationStatus: null,

@@ -476,7 +476,7 @@ export function makeExecutorDeps(
     // path-guard.cjs via PC_WORKFLOW_RUN_ID / PC_WORKFLOW_WORKTREE (set below),
     // NOT by tokens in this string.
     const initialInput =
-      `Your assignment is work item ${childWi.id}. Call pc_get_work_item({ id: "${childWi.id}" }) to read its body and acceptance criteria, then begin. Work only inside your worktree — all file edits and git commands must run here. When finished, update the work item with your report.`;
+      `You have a contract for this node. A work item (${childWi.id}) is linked as your source — call pc_get_work_item({ id: "${childWi.id}" }) to read its body for context, then begin. Your expected output + acceptance criteria are on the contract (shown in your prompt). Work only inside your worktree — all file edits and git commands must run here. When finished, submit your deliverable with pc_submit_deliverable as your final action.`;
 
     // Issue #2 — insert agent_runs row so the Running Agents rail can see this agent.
     const agentRunId = newId() as ULID;

@@ -35,11 +35,12 @@ import type {
 } from '@pc/domain';
 import { descriptionOf, mergeRequiredAgentTools } from '@pc/domain';
 
-/** Work-item context the orchestrator forwards via `pc_invoke_agent.workItemId`.
- *  When supplied, the materialiser appends a "## Your assignment" section to
- *  the rendered agent .md so the agent's first instruction is to fetch the
- *  work item. The user-message input stays clean — no magic tokens in the
- *  conversation (Section 26.4 lock: workItemId travels via the harness). */
+/** Contract context the dispatch forwards. `expectedOutput` is the contract's
+ *  typed spec; `workItemId` is the OPTIONAL linked work item (source material /
+ *  output home). When supplied, the materialiser appends a "## Your contract"
+ *  section to the rendered agent .md surfacing the expected output and pointing
+ *  the agent at the linked work item. The user-message input stays clean — no
+ *  magic tokens in the conversation. */
 export interface PodWorkItemContext {
   workItemId: string;
   expectedOutput: ExpectedOutput;
@@ -68,10 +69,10 @@ export interface MaterializePodOptions {
    *  the orchestrator depends on `webhook` being in mcp.json so CC spawns
    *  its dev-channel-registered stdio child. Defaults to false. */
   filterMcpToReferencedTools?: boolean;
-  /** Optional work-item assignment. When supplied, the rendered agent .md
-   *  carries a "## Your assignment" section telling the agent to fetch
-   *  `workItemId` via `pc_get_work_item` as its first action, plus the
-   *  `expected_output` JSON below. Section 26.4 contract. */
+  /** Optional contract context. When supplied, the rendered agent .md carries
+   *  a "## Your contract" section surfacing the contract's `expected_output`
+   *  and pointing the agent at the linked `workItemId` (source / output home)
+   *  to read via `pc_get_work_item`. */
   workItem?: PodWorkItemContext;
   /** Section 36 — prompt variable substitution. Keys are the bare variable
    *  names (e.g. `'AVAILABLE_AGENTS'`); the materializer replaces every
@@ -151,13 +152,14 @@ function materializePodFiles(
   const baselineMcp = opts.baselineMcpServers ?? {};
   const catalog = opts.mcpToolCatalog ?? {};
 
-  // Section 26 load-bearing safety net — guarantee the work-item contract
-  // tools are present in the spawned agent's frontmatter no matter what.
-  // The repo layer already merges these at create/update time, but a
-  // hand-edited row, a row from before this guard shipped, or a future code
-  // path that bypasses `createAgent` would otherwise yield an agent that
-  // can't fetch / update its assignment. Idempotent — duplicates from the
-  // wildcard expansion below are deduped by `mergeRequiredAgentTools`.
+  // Load-bearing safety net — guarantee the contract-loop tools are present
+  // in the spawned agent's frontmatter no matter what (read a linked work
+  // item, submit the deliverable, ask the user). The repo layer already merges
+  // these at create/update time, but a hand-edited row, a row from before this
+  // guard shipped, or a future code path that bypasses `createAgent` would
+  // otherwise yield an agent that can't fetch its source or submit its output.
+  // Idempotent — duplicates from the wildcard expansion below are deduped by
+  // `mergeRequiredAgentTools`.
   const expandedTools = mergeRequiredAgentTools(
     expandToolWildcards(bundle.agent.tools, catalog),
   );
@@ -297,36 +299,35 @@ export function substituteVariables(
   });
 }
 
-/** "## Your assignment" section appended to the agent body when the dispatch
- *  carries a work-item id. Tells the agent its first tool call must fetch the
- *  work item, plus surfaces the expected_output JSON so the model can plan
- *  the shape of its output. Workflow / contract details (acceptance_criteria,
- *  attachments) live on the work item itself — the agent reads them via
- *  `pc_get_work_item`. Section 26.4. */
+/** "## Your contract" section appended to the agent body when the dispatch
+ *  carries a linked work item. The contract is the assignment; the work item
+ *  is the linked source material / output home. Surfaces the expected_output
+ *  JSON so the model can plan the shape of its deliverable, and points the
+ *  agent at the linked work item to read context. */
 export function renderAssignment(workItem: PodWorkItemContext): string {
   const expected = JSON.stringify(workItem.expectedOutput, null, 2);
   return [
     '',
     '',
-    '## Your assignment',
+    '## Your contract',
     '',
-    `You are assigned to work item \`${workItem.workItemId}\`. Your FIRST tool call must be:`,
+    `This dispatch has a contract — a machine-checked assignment with the expected output below. A work item is linked (\`${workItem.workItemId}\`) as your source material and/or output home. Read it first:`,
     '',
     '```',
     `pc_get_work_item({ id: "${workItem.workItemId}" })`,
     '```',
     '',
-    "Read its `body` (your task), `acceptance_criteria` (what \"done\" means), `attachments`, and `parent`. The orchestrator already wrote the task into the body — the dispatch input is intentionally trivial.",
+    "Use its `body`, `attachments`, and `parent` for context. The expected output + what \"done\" means live on the CONTRACT, shown below — not on the work item.",
     '',
     '### Expected output',
     '',
-    'Shape the orchestrator wants:',
+    'The shape your contract requires:',
     '',
     '```json',
     expected,
     '```',
     '',
-    'When you complete the work, persist the deliverable on the work item (body / fields / attachments) so the acceptance-criteria evaluator can verify it.',
+    'When the work is done, submit your typed deliverable with `pc_submit_deliverable` (kind matching the expected output above) as your final action. That submission — not your end-of-turn — is what gets verified.',
   ].join('\n');
 }
 

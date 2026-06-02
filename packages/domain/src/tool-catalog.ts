@@ -115,13 +115,17 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
 
 const BY_SLUG = new Map(TOOL_CATALOG.map((e) => [e.slug, e]));
 
-/** Tools every agent ALWAYS has. The contract loop (Section 26) needs the
- *  work-item tools on every dispatched agent — `pc_get_work_item` to fetch the
- *  assignment, `pc_update_work_item` to persist body deliverables that satisfy
- *  body-based predicates, `pc_attach_to_work_item` to land long reports.
- *  `pc_ask_user` is also required: any agent that hits ambiguity must be able
- *  to escalate to the human (and the host-resume path depends on it) — a
- *  user-created pod must not be able to omit it.
+/** Tools every dispatched agent ALWAYS has. Contract-first (slice 021): an
+ *  agent works against a CONTRACT, so the required set is the contract loop —
+ *  `pc_get_work_item` to read any linked work item that carries the source
+ *  material, and `pc_submit_deliverable` to submit the typed, verified output
+ *  (the completion condition — replaces the old "write the WI body and end your
+ *  turn" model). The WI-WRITE tools (`pc_update_work_item` /
+ *  `pc_attach_to_work_item`) are NO LONGER forced — landing output on a work
+ *  item is optional, only when the dispatch has an output-home work item, so a
+ *  pod opts into those per its job. `pc_ask_user` stays required: any agent
+ *  that hits ambiguity must be able to escalate to the human (and the
+ *  host-resume path depends on it).
  *
  *  Enforcement is layered:
  *    1. `createAgent` + `updateAgent` repos union-merge these into the row's
@@ -133,8 +137,7 @@ const BY_SLUG = new Map(TOOL_CATALOG.map((e) => [e.slug, e]));
  *  Any one layer is sufficient; together they make removal accidental-only. */
 export const REQUIRED_AGENT_TOOLS: readonly string[] = [
   'mcp__pc-rig__pc_get_work_item',
-  'mcp__pc-rig__pc_update_work_item',
-  'mcp__pc-rig__pc_attach_to_work_item',
+  'mcp__pc-rig__pc_submit_deliverable',
   'mcp__pc-rig__pc_ask_user',
 ] as const;
 

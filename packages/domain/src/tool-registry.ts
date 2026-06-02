@@ -88,9 +88,9 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
   {
     "name": "pc_create_agent_work_item",
     "family": "work-item",
-    "label": "Create agent work item",
-    "description": "Create a dispatch contract for a subagent. Use this — NOT pc_create_work_item — whenever you're about to delegate to a specialist pod via pc_invoke_agent. The work item IS the contract: title + task (body) + pod + expected output shape (drives auto-verification of \"done\"). The new work item is_agent_task=true (hidden from the kanban by default; surfaces inline in chat). Returns the new WorkItem; pass its id to pc_invoke_agent so the worker fetches its assignment on boot. `expected_output` defaults to the pod's standard shape when omitted; override for non-standard tasks. `verification_tier` defaults to 'auto' (structured predicates). Set `ephemeral: true` for throwaway lookups (auto-archives 24h after done).",
-    "catalogDescription": "Dispatch contract for an agent — title + task + pod + expected output shape; AC is derived.",
+    "label": "Create a work-item home for a dispatch",
+    "description": "Create a durable work item to serve as the OUTPUT HOME for an agent dispatch whose deliverable must land somewhere a human can find it (a written doc, a file, a handoff card). This does NOT create the contract — the contract is created by pc_invoke_agent itself. Use this only when the dispatch's expected output needs a work-item home (per the Decision-4 rule: prose stored on the work item / attachment / repo file, or a repo change) AND no existing work item fits. Returns the new WorkItem; pass its id to pc_invoke_agent as `workItemId` so the agent's contract is linked to this home. For answer / payload / contract-stored prose / action / external dispatches, skip this — dispatch contract-only. `expected_output` is the typed v2 spec (answer | prose | payload | repo | external | binary | action); `verification_tier` defaults to 'auto'.",
+    "catalogDescription": "Create a work-item home for a dispatch whose output needs one (Decision-4); link it via pc_invoke_agent.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -108,7 +108,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "expected_output": {
           "type": "object",
-          "description": "structured spec for what the agent's output should look like. kind ∈ {text, files, structured, side-effect, mixed}. Falls back to the pod's default if omitted. AC is derived from this; the agent's prompt also surfaces it so the agent knows what's being checked.",
+          "description": "typed v2 spec for the dispatch's output. kind ∈ {answer, prose, payload, repo, external, binary, action}. Falls back to the pod's default if omitted. The contract's acceptance criteria are derived from this. Note: this work item is only the OUTPUT HOME — the spec is authored onto the contract by pc_invoke_agent.",
           "additionalProperties": true
         },
         "verification_tier": {
@@ -126,7 +126,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "stage_id": {
           "type": "string",
-          "description": "stage to land the work item in. Defaults to the project's first stage when omitted. Agent work items are hidden from the kanban by default regardless of stage."
+          "description": "stage to land the work item in. Defaults to the project's first stage when omitted."
         },
         "worktree": {
           "type": "string",
@@ -138,7 +138,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "raw_acceptance_criteria": {
           "type": "array",
-          "description": "Escape hatch: override the derived AC predicate list. Rare-use; prefer expected_output. Each entry needs a 'kind' from: files_exist, fields_populated, field_matches, bash_exit_zero, attachments_present, body_contains, child_work_items_done.",
+          "description": "Escape hatch: override the derived AC predicate list. Rare-use; prefer expected_output. Each entry needs a 'kind' from: files_exist, fields_populated, field_matches, bash_exit_zero, attachments_present, body_contains, child_work_items_done, schema_valid, git_diff_nonempty, external_handle_present, tool_called, pending_ask_created, report_contains.",
           "items": {
             "type": "object",
             "additionalProperties": true
@@ -155,15 +155,15 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
   {
     "name": "pc_resolve_work_item",
     "family": "work-item",
-    "label": "Resolve agent work item",
-    "description": "Resolve a tier-2/3 agent work item parked in `awaiting-verification` — approve or reject in one tool. `decision: \"approve\"` flips it to `complete` + `verification_status: 'passed'` (optional `notes` persist as `verificationNotes` + an audit-logged history entry); the producer run is already terminal, no further dispatch. `decision: \"reject\"` flips it to `in-progress` + `verification_status: 'failed'` with `feedback` in `verificationNotes`, then spawns a continuation of the producer's run (Section 21 `pc_continue_agent` primitive) so the SAME agent retries with the feedback in scope — `feedback` is REQUIRED + non-empty when rejecting. Read the agent's report (body / attachments / fields via pc_get_work_item) before deciding. `id` accepts ULID or callsign (e.g. `pc-2.1`). Fails 404 if the id is unknown, 400 if it's not an agent contract or feedback is missing on reject, 409 if it isn't currently awaiting verification.",
-    "catalogDescription": "Approve or reject a tier-2/3 agent contract in awaiting-verification (reject wakes the agent to retry).",
+    "label": "Resolve an agent contract",
+    "description": "Resolve a tier-2/3 agent contract parked in `verifying` — approve or reject in one tool. `decision: \"approve\"` accepts the contract (optional `notes` persist as the verification note + an audit-logged history entry); the producer run is already terminal, no further dispatch. When the contract is linked to an output work item, accepting it rolls that work item up to done. `decision: \"reject\"` flips the contract to rejected with `feedback` as the verification note, then spawns a continuation of the producer's run (Section 21 `pc_continue_agent` primitive) so the SAME agent retries with the feedback in scope — `feedback` is REQUIRED + non-empty when rejecting. Read the agent's deliverable + report before deciding. `id` is the contract id, or the linked work item's ULID/callsign. Fails 404 if unknown, 400 if it isn't an agent contract or feedback is missing on reject, 409 if it isn't currently verifying.",
+    "catalogDescription": "Approve or reject a tier-2/3 agent contract in verifying (reject wakes the agent to retry).",
     "inputSchema": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "description": "work item id (ULID or callsign like pc-2.1)"
+          "description": "contract id, or the linked work item's ULID / callsign (e.g. pc-2.1)"
         },
         "decision": {
           "type": "string",
@@ -171,11 +171,11 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
             "approve",
             "reject"
           ],
-          "description": "approve → flips to complete; reject → wakes the producer agent with feedback to retry"
+          "description": "approve → accepts the contract (rolls up a linked work item to done); reject → wakes the producer agent with feedback to retry"
         },
         "notes": {
           "type": "string",
-          "description": "approve only: optional reviewer note — persists on the work item + history"
+          "description": "approve only: optional reviewer note — persists as the verification note + history"
         },
         "feedback": {
           "type": "string",
@@ -766,7 +766,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_get_work_item",
     "family": "work-item",
     "label": "Read a work item",
-    "description": "Fetch the full work item by id or callsign — title, body, fields, stage, status, parent. Use this when an agent needs to read the work item it is operating on without filesystem digging. `id` accepts ULID or callsign (e.g. `pc-2.1`). Returns { ok: true, workItem } (the workItem includes `callsign` when present, NULL for agent contracts) or { ok: false, error } for unknown / archived ids.",
+    "description": "Fetch the full work item by id or callsign — title, body, fields, stage, status, parent. Use this when you need to read a work item's content — e.g. the source material a dispatch points at, or where a deliverable landed. `id` accepts ULID or callsign (e.g. `pc-2.1`). Returns { ok: true, workItem } (the workItem includes `callsign` when present) or { ok: false, error } for unknown / archived ids.",
     "catalogDescription": "Fetch a card's full content + fields.",
     "inputSchema": {
       "type": "object",
@@ -1270,8 +1270,8 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_invoke_agent",
     "family": "agent-run",
     "label": "Dispatch another agent",
-    "description": "Dispatch a named agent (kebab-case, e.g. \"researcher\") in this project. Always async — returns `{ ok, mode: 'async', sessionId, runId, agentName, startedAt, status }` immediately. The terminal `agent-completed` / `agent-failed` channel event lands on your next turn (handler protocol entries #4 + #5). For any non-trivial dispatch, call `pc_create_agent_work_item` first and pass the returned id as `workItemId` — the agent then knows its task, expected output, and acceptance criteria via the work item rather than a sprawling input string (keep `input` to \"Begin.\" or a one-liner pointer). Optional `parentWorkItemId` pins the child to a parent work-item for lineage — defaults to `PC_AGENT_PARENT_WORK_ITEM_ID` when called from inside another agent. The project route URL is derived from `PC_PROJECT_ID`.",
-    "catalogDescription": "Spawn another pod by name with an input prompt.",
+    "description": "Dispatch a named agent (kebab-case, e.g. \"researcher\") in this project. Every dispatch CREATES A CONTRACT — the machine-checkable assignment with a typed expected output. The work item is an OPTIONAL link, not the trigger. Always async — returns `{ ok, mode: 'async', sessionId, runId, agentName, startedAt, status }` immediately; the terminal `agent-completed` / `agent-failed` event lands on your next turn. Author the dispatch's output via `expected_output` (defaults to the pod's default). Decision-4 work-item rule: supply exactly one of — a `workItemId` to attach to (the source material, or an existing output home), nothing (contract-only: answer / payload / contract-stored prose / action / external), or — when the output needs a durable home you don't already have in hand — create one first via `pc_create_agent_work_item` and pass its id. An output kind that requires a home (prose stored on a work item / attachment / repo file, or a repo change) with no `workItemId` is REJECTED loudly (422) — never silent. Optional `parentWorkItemId` pins lineage; defaults to `PC_AGENT_PARENT_WORK_ITEM_ID` inside another agent. Project route URL derives from `PC_PROJECT_ID`.",
+    "catalogDescription": "Dispatch a pod — creates a contract; attach or create a work item only when the output needs one.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1281,11 +1281,11 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "input": {
           "type": "string",
-          "description": "free-form input — becomes the child's first user message. When you also pass workItemId, keep this trivial (\"Begin.\" or shorter); the agent reads its task from the work item, not from here."
+          "description": "the child's first user message — the task. State what you want done. When you also pass workItemId pointing at source material, you can keep this a short pointer (\"Process the linked work item.\") and let the agent read the work item for detail."
         },
         "workItemId": {
           "type": "string",
-          "description": "work-item ULID this dispatch is assigned to. The agent fetches it via pc_get_work_item as its first action and reads body / acceptance_criteria / attachments from there. Create via pc_create_agent_work_item."
+          "description": "OPTIONAL work-item link (ULID or callsign). Two uses: source material the agent reads via pc_get_work_item, and/or the output home where the deliverable lands. Required only when the expected_output kind needs a home (Decision-4). Omit for contract-only dispatches. Create a fresh home via pc_create_agent_work_item when needed."
         },
         "parentWorkItemId": {
           "type": "string",
@@ -1306,8 +1306,8 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_continue_agent",
     "family": "agent-run",
     "label": "Continue an agent run",
-    "description": "Resume a recent terminal agent run (`completed` or `failed`) with a follow-up input by spawning via `--resume <ccSessionId>` — the prior conversation is preserved so phrase your input as a continuation, not a fresh ask. Cancelled runs cannot be continued; start a fresh dispatch. Single-active-continuation guard per parent (409 on concurrent). JSONL retention guard (410 on session-expired). Optional `workItemId` re-anchors the resumed run to a (possibly different) work-item contract; omit to carry the parent run's assignment forward. Returns the same shape as `pc_invoke_agent`.",
-    "catalogDescription": "Resume a terminal AgentRun with a follow-up input.",
+    "description": "Resume a recent terminal agent run (`completed` or `failed`) with a follow-up input by spawning via `--resume <ccSessionId>` — the prior conversation is preserved so phrase your input as a continuation, not a fresh ask. The continuation carries the parent run's contract forward, so the same expected output + acceptance criteria still apply. Cancelled runs cannot be continued; start a fresh dispatch. Single-active-continuation guard per parent (409 on concurrent). JSONL retention guard (410 on session-expired). Optional `workItemId` re-links the resumed run's contract to a (possibly different) work item; omit to carry the parent's link forward. Returns the same shape as `pc_invoke_agent`.",
+    "catalogDescription": "Resume a terminal AgentRun with a follow-up input (carries the contract forward).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1321,7 +1321,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "workItemId": {
           "type": "string",
-          "description": "optional work-item ULID. Omitted = inherit the parent run's assignment. Supply when the follow-up swaps in a new contract (rare)."
+          "description": "optional work-item link. Omitted = carry the parent run's contract + link forward. Supply when the follow-up re-links the contract to a different work item (rare)."
         }
       },
       "required": [

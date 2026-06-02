@@ -110,7 +110,7 @@ A stage-triggered workflow's run-root IS the card that entered the stage. To wal
 
 ### Agent-node options
 
-- \`expected_output\` — output contract; derives the child work item's acceptance criteria. Defaults to the pod's default contract when omitted.
+- \`expected_output\` — the node's typed output contract; derives the acceptance criteria. v2 kinds: \`answer\` | \`prose\` | \`payload\` | \`repo\` | \`external\` | \`binary\` | \`action\`. Defaults to the pod's default contract when omitted.
 - \`verification_tier\` — \`auto\` (default). Workflow-level review is done via review NODES, so don't manually escalate per node.
 
 ### Review-node options
@@ -186,7 +186,7 @@ The runtime resolves these tokens in string fields (\`task\`, \`bash\`, \`script
 
 **What does NOT exist:** \`$trigger.workItemId\`, \`$trigger.stage\`, \`$trigger.projectId\`, \`$inputs.X\`, \`{{ X }}\` placeholders, \`@nodeId.field\` — older / alternate syntaxes from earlier iterations. They will silently resolve to empty strings. Don't use them. To read the card the run is attached to, use \`$root.output\` (and \`$root.output.<field>\` for typed fields) — that is the only correct way.
 
-The runtime also injects the work item id into each agent's spawn-time bootstrap message ("Your assignment is work item …"), so an agent always knows its card without you threading the id through \`task\`.
+The runtime also gives each agent node a contract and injects a spawn-time bootstrap message pointing at the linked work item for context, so an agent always knows its card without you threading the id through \`task\`.
 
 ### Worktree binding
 
