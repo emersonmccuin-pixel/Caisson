@@ -63,13 +63,38 @@ function deriveAnswerV2(
   return preds;
 }
 
+/** The attachment filename the `store: attachment` executor writes AND the
+ *  `attachments_present` predicate asserts. Shared so writer + reader can't
+ *  drift (the writer-vs-reader-mismatch class of bug). `<doc_type>.md`, or
+ *  `deliverable.md` when no doc_type is declared. */
+export function proseAttachmentName(spec: Extract<ExpectedOutputV2, { kind: 'prose' }>): string {
+  return `${spec.doc_type ?? 'deliverable'}.md`;
+}
+
 function deriveProseV2(
   spec: Extract<ExpectedOutputV2, { kind: 'prose' }>,
 ): AcceptancePredicateV2[] {
+  // `repo_file` writes to disk — the section/min-chars text isn't loaded into
+  // the in-memory eval context, so the placement proof is the file existing +
+  // being non-trivial (min_chars → min_size_bytes). Content-level section
+  // checks aren't available for this store.
+  if (spec.store === 'repo_file') {
+    if (!spec.path) return [];
+    const minBytes = typeof spec.min_chars === 'number' && spec.min_chars > 0 ? spec.min_chars : 1;
+    return [{ kind: 'files_exist', paths: [spec.path], min_size_bytes: minBytes }];
+  }
+
   const preds: AcceptancePredicateV2[] = [];
-  // Where the prose lands decides which corpus the section/min-chars checks
-  // read: the work-item body (store: work_item_body) or the contract report.
-  const useBody = spec.store === 'work_item_body';
+  // The store decides which corpus the section/min-chars checks read:
+  //   - work_item_body / attachment → the work-item body + attachment contents
+  //     (`body_contains` searches both); the executor writes the text there.
+  //   - contract → the contract report (`report_contains`); the text stays on
+  //     the contract and verification reads it via the report fallback.
+  const useBody = spec.store === 'work_item_body' || spec.store === 'attachment';
+  // attachment also asserts the document actually landed, by name.
+  if (spec.store === 'attachment') {
+    preds.push({ kind: 'attachments_present', names: [proseAttachmentName(spec)] });
+  }
   const contains = (pattern: string, regex?: boolean): AcceptancePredicateV2 =>
     useBody
       ? { kind: 'body_contains', pattern, ...(regex ? { regex } : {}) }
@@ -79,9 +104,6 @@ function deriveProseV2(
   }
   if (typeof spec.min_chars === 'number' && spec.min_chars > 0) {
     preds.push(contains(minCharsRegex(spec.min_chars), true));
-  }
-  if (spec.store === 'repo_file' && spec.path) {
-    preds.push({ kind: 'files_exist', paths: [spec.path] });
   }
   return preds;
 }

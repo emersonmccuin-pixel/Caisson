@@ -5,7 +5,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  deriveAcceptanceCriteria,
   deriveAcceptanceCriteriaV2,
   evaluateAcceptance,
   KINDS_REQUIRING_EVIDENCE,
@@ -152,13 +151,38 @@ test('payload derives schema_valid; answer derives report_contains', () => {
   );
 });
 
-test('prose store selects body vs report corpus; repo_file adds files_exist', () => {
-  const body = deriveAcceptanceCriteriaV2({ kind: 'prose', sections: ['Goal'], store: 'work_item_body' });
-  assert.deepEqual(body, [{ kind: 'body_contains', pattern: 'Goal' }]);
-  const rep = deriveAcceptanceCriteriaV2({ kind: 'prose', sections: ['Goal'], store: 'attachment' });
-  assert.deepEqual(rep, [{ kind: 'report_contains', pattern: 'Goal' }]);
-  const onDisk = deriveAcceptanceCriteriaV2({ kind: 'prose', store: 'repo_file', path: 'docs/x.md' });
-  assert.deepEqual(onDisk, [{ kind: 'files_exist', paths: ['docs/x.md'] }]);
+test('prose AC source tracks the store (014c)', () => {
+  // work_item_body → the body corpus.
+  assert.deepEqual(
+    deriveAcceptanceCriteriaV2({ kind: 'prose', sections: ['Goal'], store: 'work_item_body' }),
+    [{ kind: 'body_contains', pattern: 'Goal' }],
+  );
+  // attachment → asserts the doc landed (by name) AND searches the body+
+  // attachment corpus (body_contains spans both). Default name: deliverable.md.
+  assert.deepEqual(
+    deriveAcceptanceCriteriaV2({ kind: 'prose', sections: ['Goal'], store: 'attachment' }),
+    [{ kind: 'attachments_present', names: ['deliverable.md'] }, { kind: 'body_contains', pattern: 'Goal' }],
+  );
+  // attachment with a doc_type → <doc_type>.md.
+  assert.deepEqual(
+    deriveAcceptanceCriteriaV2({ kind: 'prose', sections: ['Goal'], store: 'attachment', doc_type: 'spec' }),
+    [{ kind: 'attachments_present', names: ['spec.md'] }, { kind: 'body_contains', pattern: 'Goal' }],
+  );
+  // contract → the contract report corpus.
+  assert.deepEqual(
+    deriveAcceptanceCriteriaV2({ kind: 'prose', sections: ['Goal'], store: 'contract' }),
+    [{ kind: 'report_contains', pattern: 'Goal' }],
+  );
+  // repo_file → the file must exist + be non-trivial (min_chars → min_size_bytes,
+  // default 1). Section text isn't loaded from disk, so no content predicate.
+  assert.deepEqual(
+    deriveAcceptanceCriteriaV2({ kind: 'prose', store: 'repo_file', path: 'docs/x.md' }),
+    [{ kind: 'files_exist', paths: ['docs/x.md'], min_size_bytes: 1 }],
+  );
+  assert.deepEqual(
+    deriveAcceptanceCriteriaV2({ kind: 'prose', store: 'repo_file', path: 'docs/x.md', min_chars: 1200 }),
+    [{ kind: 'files_exist', paths: ['docs/x.md'], min_size_bytes: 1200 }],
+  );
 });
 
 test('repo derives git_diff_nonempty + bash checks; external derives handle', () => {
@@ -196,11 +220,4 @@ test('PROOF CASE: an action contract whose tool was never called FAILS', async (
   );
   assert.equal(result.pass, false);
   assert.equal(result.failures.length, 2); // tool_called + pending_ask_created both fail
-});
-
-// v1 derivation still works untouched (dispatch path until slice 019).
-test('v1 deriveAcceptanceCriteria is unchanged', () => {
-  assert.deepEqual(deriveAcceptanceCriteria({ kind: 'structured', fields: { a: 'string' } }), [
-    { kind: 'fields_populated', keys: ['a'] },
-  ]);
 });

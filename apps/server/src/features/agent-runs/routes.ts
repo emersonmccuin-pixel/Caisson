@@ -34,6 +34,7 @@ import {
   cancelPendingAsk as defaultCancelPendingAsk,
   recordExplicitPause as defaultRecordExplicitPause,
 } from '../../services/pause-resume.ts';
+import { applyDeliverableStore } from '../../services/apply-deliverable-store.ts';
 import { getActiveRunRegistry as defaultGetActiveRunRegistry } from '../../services/agent-active-runs.ts';
 import { hardKillAgentRun, inspectAgentRun } from '../../services/agent-run-control.ts';
 import { recordAgentInvoke as defaultRecordAgentInvoke } from '../../services/agent-audit.ts';
@@ -653,6 +654,22 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         },
         400,
       );
+    }
+
+    // Slice 014c — apply the deliverable to the home its contract declares
+    // (`expectedOutput.store`) BEFORE persisting, so submission alone satisfies
+    // the derived acceptance criteria. A placement failure (WI archived, bad
+    // repo path) surfaces in-band as a retryable error rather than silently
+    // failing later at verify with a misleading body_contains message.
+    const placement = applyDeliverableStore({
+      contract,
+      deliverable: parsed.deliverable,
+      runId,
+      agentName: contract.podName ?? null,
+      projectFolderPath: project.folderPath,
+    });
+    if (!placement.ok) {
+      return c.json({ ok: false, error: placement.error, cause: placement.cause }, 422);
     }
 
     const report = typeof body.report === 'string' ? body.report : null;

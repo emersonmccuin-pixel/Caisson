@@ -48,6 +48,7 @@ export {
 export {
   deriveAcceptanceCriteriaV2,
   KINDS_REQUIRING_EVIDENCE,
+  proseAttachmentName,
 } from './ac-derivation.ts';
 export { expectedOutputRequiresWorkItem } from './work-item-policy.ts';
 export type { PodDefault } from './pod-defaults.ts';

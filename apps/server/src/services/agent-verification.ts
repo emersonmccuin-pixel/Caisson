@@ -226,9 +226,18 @@ export async function runVerificationOnTerminal(
   // Slice 014a — the captured deliverable (set synchronously before this runs)
   // feeds the payload/external predicates.
   const deliverable = contract.deliverable as
-    | { kind?: string; data?: unknown; handle?: string }
+    | { kind?: string; data?: unknown; handle?: string; text?: string }
     | null
     | undefined;
+  // Slice 014c — `report_contains` reads the contract report. For contract-home
+  // outputs (answer, and prose with store: 'contract') the submitted text lives
+  // on the deliverable, and a separate report is usually absent — fall back to
+  // the deliverable text so the content checks read what the agent submitted.
+  const reportText =
+    contract.report ??
+    (deliverable?.kind === 'answer' || deliverable?.kind === 'prose'
+      ? deliverable.text ?? ''
+      : '');
   const evalCtx: EvaluationContext = {
     body: wi?.body ?? '',
     fields: wi?.fields ?? {},
@@ -237,7 +246,7 @@ export async function runVerificationOnTerminal(
     attachments: attachments.map((a) => ({ name: a.name, content: a.content })),
     childWorkItems: children.map((c) => ({ status: c.status })),
     // Slice 014a — evidence sources for the v2 predicates.
-    report: contract.report ?? '',
+    report: reportText,
     toolCalls: (await deps.loadToolCalls?.(input)) ?? [],
     pendingAskCreated: (await deps.loadPendingAskCreated?.(input)) ?? false,
     payload: deliverable?.kind === 'payload' ? deliverable.data : undefined,
