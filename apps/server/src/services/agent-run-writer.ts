@@ -20,7 +20,7 @@ import {
   type AgentRunChangedReason,
 } from '@pc/contracts';
 import type { AgentRunFailureCause, ULID } from '@pc/domain';
-import type { CreatePendingAskInput } from '@pc/db';
+import { bumpAgentRunRev, type CreatePendingAskInput } from '@pc/db';
 
 export type AgentRunBroadcast = (event: unknown) => void;
 
@@ -53,6 +53,19 @@ export function announceAgentRunChange(
   },
   broadcast: AgentRunBroadcast | undefined,
 ): void {
+  fanoutAgentRunChange(gateway.announceRunChange(input), broadcast);
+}
+
+/** T2.2 — publish a non-terminal watchdog signal that carries NO status change
+ *  (`stalled` = quiet past WARN_MS, `reconciled` = un-stall when activity
+ *  resumes). Bumps rev FIRST so the re-read row out-versions the last frame and
+ *  the client live store (version-deduped) accepts it; a no-op if the row is
+ *  gone. */
+export function announceAgentRunSignal(
+  input: { runId: ULID; reason: 'stalled' | 'reconciled' },
+  broadcast: AgentRunBroadcast | undefined,
+): void {
+  if (!bumpAgentRunRev(input.runId)) return;
   fanoutAgentRunChange(gateway.announceRunChange(input), broadcast);
 }
 

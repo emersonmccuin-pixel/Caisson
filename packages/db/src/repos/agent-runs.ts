@@ -115,6 +115,16 @@ export function touchAgentRunActivity(id: ULID, at: number): void {
   getDb().update(agentRuns).set({ lastActivityAt: at }).where(eq(agentRuns.id, id)).run();
 }
 
+/** T2.2 — bump rev with NO state change, returning the post-bump row. The
+ *  watchdog's non-terminal `stalled` signal carries no status change, so it
+ *  would otherwise reuse the last frame's rev and be dropped by the client live
+ *  store's version dedup. A rev bump lets the stalled (and un-stall) frame
+ *  out-version the prior frame and land. */
+export function bumpAgentRunRev(id: ULID): AgentRunRow | null {
+  getDb().update(agentRuns).set({ rev: REV_INC }).where(eq(agentRuns.id, id)).run();
+  return getAgentRunRow(id);
+}
+
 export interface MarkAgentRunTerminalInput {
   id: ULID;
   status: Extract<AgentRunStatus, 'completed' | 'failed' | 'cancelled'>;

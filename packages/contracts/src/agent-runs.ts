@@ -118,6 +118,9 @@ export type AgentRunChangedReason =
   | 'running'
   | 'paused'
   | 'resumed'
+  // T2.2 — non-terminal watchdog warn: the run is quiet past WARN_MS but not yet
+  // killed. Status stays `running`/`spawning`; the frame just flips a UI badge.
+  | 'stalled'
   | 'completed'
   | 'failed'
   | 'cancelled'
@@ -129,6 +132,7 @@ export const AGENT_RUN_CHANGED_REASONS: readonly AgentRunChangedReason[] = [
   'running',
   'paused',
   'resumed',
+  'stalled',
   'completed',
   'failed',
   'cancelled',

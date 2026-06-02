@@ -263,6 +263,7 @@ export type { ComputePodRevisionInput } from './repos/pod-revision.ts';
 
 // Section 25 — agent runs repo.
 export {
+  bumpAgentRunRev,
   findActiveContinuation,
   getAgentRunRow,
   insertAgentRunRow,

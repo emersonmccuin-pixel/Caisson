@@ -33,7 +33,14 @@ export function useProjectAgentRuns(
       const run = event.payload.run;
       if (run.projectId !== projectId) return null;
       // AgentRunDto → legacy AgentRunRecord: re-add the constant `wait:false`.
-      return { ...run, wait: false } as AgentRunRecord;
+      // T2.2 — stamp `stalled` from the watchdog warn frame; any other reason
+      // (incl. the `reconciled` un-stall) clears it. Both carry a bumped rev so
+      // the version-deduped live store accepts the overlay.
+      return {
+        ...run,
+        wait: false,
+        stalled: event.payload.reason === 'stalled',
+      } as AgentRunRecord;
     },
     getId: (r) => r.runId,
     isTerminal: (r) => TERMINAL.has(r.status),

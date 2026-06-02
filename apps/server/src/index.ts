@@ -100,6 +100,7 @@ import { seedStockPods } from './services/stock-pod-seed.ts';
 import { reattachAgentRunsDuringServerBoot } from './services/agent-run-server-boot.ts';
 import { reconcileAgentRunsAgainstHost } from './services/agent-host-reattach.ts';
 import { sweepAgentRunLiveness } from './services/agent-run-liveness-sweep.ts';
+import { sweepStallWarn } from './services/agent-run-stall-warn.ts';
 import { getActiveRunRegistry } from './services/agent-active-runs.ts';
 import { writeRunStatus } from './services/workflow-run-writer.ts';
 
@@ -489,66 +490,65 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
   }
 }
 
-// State-propagation overhaul Step 1 (docs/state-propagation-decision.md):
-// continuous reconcile sweep. Events = latency, reconcile = correctness — a
-// terminal transition the live host event stream dropped still converges here
-// within one tick (full effects: DB flip + orchestrator notify + rail
-// broadcast), instead of waiting for the next server restart. Host-mode only;
-// no-ops when there's no out-of-process host.
-const AGENT_RUN_RECONCILE_SWEEP_MS = 15_000;
-const agentRunReconcileSweep = setInterval(() => {
-  if (!hostMode) return;
+// T2.2 — ONE mode-agnostic agent-run watchdog (folds the prior reconcile +
+// liveness sweeps). State-propagation Step 1 (docs/state-propagation-decision.md):
+// events = latency, reconcile = correctness. Per tick, in order:
+//   1. host-mode: refresh host snapshots through the ONE self-healing
+//      `hostConnection` (picks up a respawned host on a new port, no API
+//      restart) + reconcile non-terminal rows — a terminal transition the live
+//      stream dropped still converges here (full effects: DB flip + orchestrator
+//      notify + rail broadcast).
+//   2. in-process mode: liveness kill — pid-dead → `unexpected-exit`; idle past
+//      KILL_MS → kill + `idle-timeout`. Runs BEFORE stall-warn so a just-killed
+//      row is already terminal and skipped below.
+//   3. BOTH modes: stall-warn — a run quiet past WARN_MS gets a visible,
+//      non-terminal `stalled` badge (the missing intermediate state). Warn-only;
+//      the host-mode terminal stall path is T1.4.
+const AGENT_RUN_WATCHDOG_MS = 15_000;
+const watchdogStalledRuns = new Set<string>();
+const agentRunWatchdogSweep = setInterval(() => {
   void (async () => {
     try {
-      // T1.2 — pull fresh host snapshots through the ONE self-healing
-      // `hostConnection` (re-discovers a respawned host on a new port; no API
-      // restart), then reconcile non-terminal DB rows against them.
-      await hostConnection.refreshRuns();
-      const res = reconcileAgentRunsAgainstHost({
-        hostClient: hostConnection,
-        activeRunRegistry: getActiveRunRegistry(),
+      if (hostMode) {
+        await hostConnection.refreshRuns();
+        const res = reconcileAgentRunsAgainstHost({
+          hostClient: hostConnection,
+          activeRunRegistry: getActiveRunRegistry(),
+          broadcast: broadcastTo,
+          mailboxEnqueue: enqueueMailboxAndFanout,
+        });
+        if (res.terminalApplied > 0 || res.statusUpdated > 0) {
+          console.log(
+            `[agent-runs] reconcile: terminal=${res.terminalApplied}, status=${res.statusUpdated}, checked=${res.checked}`,
+          );
+        }
+      } else {
+        const res = sweepAgentRunLiveness({
+          activeRunRegistry: getActiveRunRegistry(),
+          broadcast: broadcastTo,
+          mailboxEnqueue: enqueueMailboxAndFanout,
+        });
+        if (res.failedDead > 0 || res.failedIdle > 0) {
+          console.log(
+            `[agent-runs] liveness: dead=${res.failedDead}, idle=${res.failedIdle}, killed=${res.killed}, checked=${res.checked}`,
+          );
+        }
+      }
+
+      const warn = sweepStallWarn({
+        stalledRuns: watchdogStalledRuns,
         broadcast: broadcastTo,
-        mailboxEnqueue: enqueueMailboxAndFanout,
       });
-      if (res.terminalApplied > 0 || res.statusUpdated > 0) {
-        console.log(
-          `[agent-runs] reconcile sweep: terminal=${res.terminalApplied}, status=${res.statusUpdated}, checked=${res.checked}`,
-        );
+      if (warn.warned > 0 || warn.cleared > 0) {
+        console.log(`[agent-runs] stall-warn: warned=${warn.warned}, cleared=${warn.cleared}`);
       }
     } catch (err) {
-      console.warn('[agent-runs] reconcile sweep failed:', (err as Error).message);
+      console.warn('[agent-runs] watchdog sweep failed:', (err as Error).message);
     }
   })();
-}, AGENT_RUN_RECONCILE_SWEEP_MS);
+}, AGENT_RUN_WATCHDOG_MS);
 // Don't let the sweep timer keep the process alive on shutdown.
-if (typeof agentRunReconcileSweep.unref === 'function') agentRunReconcileSweep.unref();
-
-// IN-PROCESS liveness sweep — the safety net for the spawn path production
-// actually uses (no out-of-process host). Runs ONLY when host-mode is off, so
-// exactly one reconciler owns non-terminal rows. Catches (a) runs whose process
-// died without firing the exit handler and (b) runs wedged with no JSONL
-// activity past the idle window (e.g. a resume whose input never landed). Both
-// flip to `failed` with full effects (DB + orchestrator agent-failed + rail) so
-// a phantom "running" row self-clears within a tick instead of at next restart.
-const AGENT_RUN_LIVENESS_SWEEP_MS = 30_000;
-const agentRunLivenessSweep = setInterval(() => {
-  if (hostMode) return; // host-mode owns reconciliation (reconcile sweep)
-  try {
-    const res = sweepAgentRunLiveness({
-      activeRunRegistry: getActiveRunRegistry(),
-      broadcast: broadcastTo,
-      mailboxEnqueue: enqueueMailboxAndFanout,
-    });
-    if (res.failedDead > 0 || res.failedIdle > 0) {
-      console.log(
-        `[agent-runs] liveness sweep: dead=${res.failedDead}, idle=${res.failedIdle}, killed=${res.killed}, checked=${res.checked}`,
-      );
-    }
-  } catch (err) {
-    console.warn('[agent-runs] liveness sweep failed:', (err as Error).message);
-  }
-}, AGENT_RUN_LIVENESS_SWEEP_MS);
-if (typeof agentRunLivenessSweep.unref === 'function') agentRunLivenessSweep.unref();
+if (typeof agentRunWatchdogSweep.unref === 'function') agentRunWatchdogSweep.unref();
 
 const app = new Hono();
 
@@ -1103,7 +1103,7 @@ const wss = registerRuntimeHostWebSocketServer<ReturnType<ProjectRuntime['ensure
 });
 
 function gracefulShutdown(): void {
-  clearInterval(agentRunReconcileSweep);
+  clearInterval(agentRunWatchdogSweep);
   clearInterval(mailboxWorkerSweep);
   clearInterval(liveRelayDrainSweep);
   clearInterval(liveOutboxPruneSweep);

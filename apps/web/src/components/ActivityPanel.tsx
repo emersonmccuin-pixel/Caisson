@@ -511,8 +511,16 @@ function RunningAgentCard({
           </div>
         </div>
         <div className="mt-0.5 flex items-baseline justify-between gap-2">
-          <div className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-            {statusLabel}
+          <div className="min-w-0 flex-1 flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
+            <span className="truncate">{statusLabel}</span>
+            {run.stalled && (run.status === 'running' || run.status === 'spawning') && (
+              <span
+                title="No activity for several minutes — still running, not yet timed out."
+                className="shrink-0 border border-amber-500/40 bg-amber-500/10 px-1 py-px text-[9px] uppercase tracking-wider text-amber-600 dark:text-amber-400"
+              >
+                stalled
+              </span>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <button

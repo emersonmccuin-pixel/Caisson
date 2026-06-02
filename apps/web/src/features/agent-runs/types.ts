@@ -81,6 +81,11 @@ export interface AgentRunRecord {
   /** Monotonic write counter. Carried in WS deltas so the frontend can discard
    *  out-of-order / duplicate deliveries. Defaults to 0 on old-server envelopes. */
   rev?: number;
+  /** T2.2 — client-only flag stamped from a live `reason:'stalled'` frame: the
+   *  run is quiet past the warn window but not yet killed. Cleared by any later
+   *  non-stalled frame. Not on the HTTP seed (a cold reload clears it until the
+   *  next live signal). */
+  stalled?: boolean;
 }
 
 /** Liveness snapshot returned by the inspect route. Mirrors the server's

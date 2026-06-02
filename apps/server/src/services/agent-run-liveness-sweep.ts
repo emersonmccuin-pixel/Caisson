@@ -27,13 +27,9 @@ import { jsonlPathFor } from '@pc/runtime';
 
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
+import { computeIdleMs, resolveIdleTimeoutMs } from './agent-run-idle.ts';
 import { applyAgentRunTerminalEffects } from './agent-run-terminal-effects.ts';
 import { isProcessAlive as defaultIsProcessAlive, killProcessTree as defaultKill } from './process-control.ts';
-
-/** Default idle window: no JSONL activity for this long ⇒ wedged. Generous so a
- *  legitimately-busy run (long tool call, deep thinking) is never killed. Tune
- *  via PC_AGENT_IDLE_TIMEOUT_MS. */
-const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60_000;
 
 export interface LivenessSweepDeps {
   activeRunRegistry?: ActiveRunRegistry;
@@ -61,7 +57,7 @@ export interface LivenessSweepResult {
 
 export function sweepAgentRunLiveness(deps: LivenessSweepDeps = {}): LivenessSweepResult {
   const now = (deps.now ?? Date.now)();
-  const idleTimeoutMs = deps.idleTimeoutMs ?? resolveIdleTimeout();
+  const idleTimeoutMs = deps.idleTimeoutMs ?? resolveIdleTimeoutMs();
   const rows = (deps.listNonTerminalRuns ?? defaultListNonTerminalAgentRuns)();
   const hasOpenAsk = deps.hasOpenPendingAskForRun ?? defaultHasOpenPendingAskForRun;
   const resolveJsonlPath = deps.resolveJsonlPath ?? defaultResolveJsonlPath;
@@ -94,14 +90,7 @@ export function sweepAgentRunLiveness(deps: LivenessSweepDeps = {}): LivenessSwe
     // Signal 2: alive (or pid unknown) but no activity for the idle window.
     const jsonlPath = resolveJsonlPath(row);
     const mtime = jsonlPath ? jsonlMtime(jsonlPath) : null;
-    const lastActivity = Math.max(
-      row.lastActivityAt ?? 0,
-      row.readyAt ?? 0,
-      row.spawnedAt ?? 0,
-      row.queuedAt,
-      mtime ?? 0,
-    );
-    if (now - lastActivity > idleTimeoutMs) {
+    if (computeIdleMs(row, { now, jsonlMtime: mtime }) > idleTimeoutMs) {
       if (pid !== null && isAlive(pid)) {
         kill(pid);
         killed += 1;
@@ -145,11 +134,6 @@ function finalize(
       now: deps.now,
     },
   );
-}
-
-function resolveIdleTimeout(): number {
-  const raw = Number(process.env.PC_AGENT_IDLE_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_IDLE_TIMEOUT_MS;
 }
 
 function defaultResolveJsonlPath(row: AgentRunRow): string | null {
