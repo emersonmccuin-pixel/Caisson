@@ -20,13 +20,15 @@ import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useProjectAreas } from '@/hooks/use-project-areas';
 import { useLiveEvents } from '@/store/live-store';
 import { TypedFieldEditor } from './TypedFieldEditor';
+import { WorkLogSection } from './WorkLogSection';
 
-type TabId = 'overview' | 'children' | 'attachments' | 'activity';
+type TabId = 'overview' | 'children' | 'attachments' | 'worklog' | 'activity';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'children', label: 'Children' },
   { id: 'attachments', label: 'Attachments' },
+  { id: 'worklog', label: 'Work Log' },
   { id: 'activity', label: 'Activity' },
 ];
 
@@ -390,6 +392,9 @@ export function WorkItemDetailModal({
               workItemId={baseline.id}
               events={events}
             />
+          )}
+          {tab === 'worklog' && (
+            <WorkLogSection projectId={project.id} workItemId={baseline.id} />
           )}
           {tab === 'activity' && (
             <ActivityTab
