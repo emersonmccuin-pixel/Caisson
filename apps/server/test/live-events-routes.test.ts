@@ -232,6 +232,32 @@ test('replay returns project-scoped mailbox.message.changed + a global user-inbo
   assert.deepEqual(globalBody.events.map((e) => e.id), [globalMsg.id]);
 });
 
+test('transient replay throw → 503 + Retry-After (route readiness)', async () => {
+  const app = new Hono();
+  registerLiveEventRoutes(app, {
+    listLiveEventsAfter: (): never => {
+      throw Object.assign(new Error('busy'), { code: 'SQLITE_BUSY' });
+    },
+  });
+  const res = await app.request('/api/live-events');
+  assert.equal(res.status, 503);
+  assert.equal(res.headers.get('Retry-After'), '1');
+  assert.equal((await json<{ ok: boolean }>(res)).ok, false);
+});
+
+test('terminal replay throw → 500 (no Retry-After)', async () => {
+  const app = new Hono();
+  registerLiveEventRoutes(app, {
+    listLiveEventsAfter: (): never => {
+      throw new Error('unexpected boom');
+    },
+  });
+  const res = await app.request('/api/live-events');
+  assert.equal(res.status, 500);
+  assert.equal(res.headers.get('Retry-After'), null);
+  assert.equal((await json<{ error: string }>(res)).error, 'unexpected boom');
+});
+
 test('replay returns project-scoped pending-interaction.changed', async () => {
   const app = new Hono();
   registerLiveEventRoutes(app);

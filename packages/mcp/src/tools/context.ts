@@ -1,5 +1,6 @@
 import { request as httpRequest } from 'node:http';
 import { TypedLocalhostClient } from '../client/typed-client.ts';
+import { withConnRetry } from './retry.ts';
 
 export interface ServerResponse {
   status: number;
@@ -60,7 +61,7 @@ const RICH_LINK_HINT =
   'hover + click these pills. Bare text and backticks are unclickable — never ' +
   'use them for these refs. Applies in lists too: every reference in every row.';
 
-function httpWithBody(
+function httpWithBodyOnce(
   serverPort: number,
   method: 'POST' | 'PUT' | 'PATCH',
   path: string,
@@ -93,7 +94,7 @@ function httpWithBody(
   });
 }
 
-function httpWithoutBody(
+function httpWithoutBodyOnce(
   serverPort: number,
   method: 'GET' | 'DELETE',
   path: string,
@@ -112,6 +113,25 @@ function httpWithoutBody(
     req.on('error', rej);
     req.end();
   });
+}
+
+// T2.1 — bounded retry over the localhost call so an agent's tool request
+// survives the ~1s API-restart window (ECONNREFUSED / 503) instead of failing.
+function httpWithBody(
+  serverPort: number,
+  method: 'POST' | 'PUT' | 'PATCH',
+  path: string,
+  body: unknown,
+): Promise<ServerResponse> {
+  return withConnRetry(() => httpWithBodyOnce(serverPort, method, path, body));
+}
+
+function httpWithoutBody(
+  serverPort: number,
+  method: 'GET' | 'DELETE',
+  path: string,
+): Promise<ServerResponse> {
+  return withConnRetry(() => httpWithoutBodyOnce(serverPort, method, path));
 }
 
 export function createToolContext(options: ToolContextOptions): ToolContext {

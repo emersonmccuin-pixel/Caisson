@@ -5,8 +5,14 @@ import {
   type ListLiveEventsResponse,
 } from '@pc/contracts';
 import { listLiveEventsAfter, LiveEventCursorError } from '@pc/db';
+import { isTransient } from '../../services/failure-policy.ts';
 
-export function registerLiveEventRoutes(app: Hono): void {
+export interface LiveEventRouteDeps {
+  listLiveEventsAfter?: typeof listLiveEventsAfter;
+}
+
+export function registerLiveEventRoutes(app: Hono, deps: LiveEventRouteDeps = {}): void {
+  const replayLiveEvents = deps.listLiveEventsAfter ?? listLiveEventsAfter;
   app.get('/api/live-events', (c) => {
     const parsed = parseListLiveEventsQuery({
       after: c.req.query('after'),
@@ -20,7 +26,7 @@ export function registerLiveEventRoutes(app: Hono): void {
     }
 
     try {
-      const replay = listLiveEventsAfter({
+      const replay = replayLiveEvents({
         ...parsed.value,
         projectId: parsed.value.projectId as DomainULID | undefined,
       });
@@ -34,6 +40,12 @@ export function registerLiveEventRoutes(app: Hono): void {
     } catch (err) {
       if (err instanceof LiveEventCursorError) {
         return c.json({ ok: false, error: err.message }, 400);
+      }
+      // Transient (DB-busy / blip) → 503 + Retry-After so the client retries
+      // instead of surfacing a cold-load error during the restart window.
+      if (isTransient(err)) {
+        c.header('Retry-After', '1');
+        return c.json({ ok: false, error: 'service temporarily unavailable' }, 503);
       }
       return c.json({ ok: false, error: (err as Error).message }, 500);
     }
