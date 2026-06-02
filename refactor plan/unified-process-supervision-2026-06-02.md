@@ -2,8 +2,9 @@
 
 **Date:** 2026-06-02
 **Status:** target design (build against this)
-**Companions:** `agent-subsystem-analysis-2026-06-02.md`, `one-agent-dispatch-door-2026-06-02.md`,
-`workflow-engine-first-principles-redesign-2026-06-02.md`.
+**Companions:** `consolidation-ledger-2026-06-02.md` (as-built → unified verdicts),
+`architecture-map.html` (interactive visual), `workflow-engine-first-principles-redesign-2026-06-02.md`
+(the workflow-engine rebuild spec).
 **Guiding rule:** one owner per concern, one path per job. A refactor deletes the old path; the
 instant two paths do the same job, collapse them — never keep a fallback.
 
