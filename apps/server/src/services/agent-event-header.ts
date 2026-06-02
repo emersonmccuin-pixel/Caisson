@@ -16,20 +16,24 @@ import type {
   VerificationTier,
 } from '@pc/domain';
 
-/** Section 26.5 — verification block carried on terminal envelopes when the
- *  dispatched agent was operating against a contract work item. */
+/** Section 26.5 / slice 020 — verification block carried on terminal envelopes.
+ *  Keyed on the CONTRACT id; carries the linked work item id only when one
+ *  exists (a contract-only dispatch leaves `workItemId` null). */
 export interface VerificationBlock {
-  workItemId: string;
+  contractId: string;
+  /** The contract's linked work item, when one exists. */
+  workItemId: string | null;
   status: VerificationStatus;
   tier: VerificationTier;
-  /** Human-readable predicate-failure summary; null when the WI flipped to a
-   *  passing or pending state. Truncated to 400 chars to keep the envelope
-   *  human-readable. */
+  /** Human-readable predicate-failure summary; null when the contract flipped
+   *  to a passing or pending state. Truncated to 400 chars to keep the
+   *  envelope human-readable. */
   notes: string | null;
 }
 
 function appendVerificationTags(lines: string[], v: VerificationBlock): void {
-  lines.push(`[workItemId: ${v.workItemId}]`);
+  lines.push(`[contractId: ${v.contractId}]`);
+  if (v.workItemId) lines.push(`[workItemId: ${v.workItemId}]`);
   lines.push(`[verification: ${v.status}]`);
   lines.push(`[verificationTier: ${v.tier}]`);
   if (v.notes) {
@@ -208,13 +212,14 @@ export function buildAgentCompletedBody(args: {
 }
 
 function describeVerificationForPrompt(agentName: string, v: VerificationBlock): string {
+  const wiSuffix = v.workItemId ? ` (rolled up to work item ${v.workItemId})` : '';
   switch (v.status) {
     case 'passed':
-      return `The ${agentName} agent finished and the contract work item passed tier-1 verification (work item ${v.workItemId} → complete). Start a new turn surfacing the result to the user.`;
+      return `The ${agentName} agent finished and its contract ${v.contractId} was accepted (tier-1 verification passed)${wiSuffix}. Start a new turn surfacing the result to the user.`;
     case 'failed':
-      return `The ${agentName} agent finished BUT tier-1 verification failed on work item ${v.workItemId}. Surface the failure to the user; review the predicate failures (verificationNotes tag) and decide whether to retry / fix / drop.`;
+      return `The ${agentName} agent finished BUT tier-1 verification failed on contract ${v.contractId}. Surface the failure to the user; review the predicate failures (verificationNotes tag) and decide whether to retry / fix / drop.`;
     case 'pending':
-      return `The ${agentName} agent finished and work item ${v.workItemId} is awaiting ${v.tier} verification. Read the work item body, decide whether the contract was met, then call pc_resolve_work_item with decision "approve" or "reject".`;
+      return `The ${agentName} agent finished and contract ${v.contractId} is awaiting ${v.tier} verification. Read the contract's deliverable, decide whether it was met, then call pc_resolve_work_item with decision "approve" or "reject".`;
   }
 }
 
@@ -284,7 +289,7 @@ export function buildAgentFailedBody(args: {
   lines.push('');
   if (args.verification) {
     lines.push(
-      `The ${args.agentName} agent failed AND its contract work item ${args.verification.workItemId} was flipped to failed. Surface this to the user with a one-line summary + a suggested next step (retry / drop / hand-write).`,
+      `The ${args.agentName} agent failed AND its contract ${args.verification.contractId} was rejected. Surface this to the user with a one-line summary + a suggested next step (retry / drop / hand-write).`,
     );
   } else {
     lines.push(

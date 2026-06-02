@@ -357,7 +357,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
         ...(body.actor === 'orchestrator' || body.actor === 'user' ? { actor: body.actor } : {}),
         ...(project ? { project } : {}),
       });
-      if (workItem.projectId !== id) {
+      if (workItem && workItem.projectId !== id) {
         return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
       }
       return c.json({ ok: true, workItem });
@@ -406,12 +406,13 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
           ...(host ? { hostClient: host } : {}),
         },
       );
-      if (result.workItem.projectId !== projectId) {
+      if (result.workItem && result.workItem.projectId !== projectId) {
         return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
       }
       return c.json({
         ok: true,
         workItem: result.workItem,
+        contract: result.contract,
         continuation: result.continuation,
       });
     } catch (err) {

@@ -6,12 +6,10 @@ import {
   type AgentRunRow,
   type Project,
   type ULID,
-  type WorkItem,
 } from '@pc/domain';
 import {
   getAgentRunRow as defaultGetAgentRunRow,
   getProjectById as defaultGetProjectById,
-  getWorkItem as defaultGetWorkItem,
   hasPendingAskForRun,
   type MarkAgentRunTerminalInput,
 } from '@pc/db';
@@ -72,9 +70,6 @@ export interface AgentRunTerminalEffectsDeps {
   mailboxEnqueue?: MailboxEnqueuePort | null;
   broadcast?: (projectId: ULID, msg: unknown) => void;
   getAgentRun?: (id: ULID) => AgentRunRow | null;
-  /** Resolve a work item (default: real repo). Used to surface the contract
-   *  deliverable as the completion result when the agent left no free-text. */
-  getWorkItem?: (id: ULID) => WorkItem | null;
   markTerminal?: (input: MarkAgentRunTerminalInput) => void;
   verifyOnTerminal?: typeof runVerificationOnTerminal;
   verificationDeps?: VerificationDeps;
@@ -167,57 +162,48 @@ export function applyAgentRunTerminalEffects(
   return { applied: 1 };
 }
 
-/** Slice 014b — resolve the captured deliverable + return the result text the
- *  terminal envelope surfaces. SUBMISSION is now the source of truth: if the
- *  agent called `pc_submit_deliverable` (slice 014b), the contract already
- *  carries its typed deliverable + report — we do NOT overwrite it. Only when
- *  the agent submitted NOTHING do we fall back to the legacy capture (free-text
- *  `result`, else `wi.body`) and write a synthesized `answer` deliverable —
- *  preserving the dual-read shim for un-migrated agents. */
+/** Slice 020 — resolve the captured deliverable + return the result text the
+ *  terminal envelope surfaces. SUBMISSION is the source of truth: if the agent
+ *  called `pc_submit_deliverable` (slice 014b), the contract already carries its
+ *  typed deliverable + report — we do NOT overwrite it. When the agent submitted
+ *  NOTHING we synthesize an `answer` deliverable from the free-text `result`
+ *  (the `wi.body` fallback is retired — the deliverable has a contract home). */
 function captureDeliverable(
   input: AgentRunTerminalEffectsInput,
   row: AgentRunRow,
   deps: AgentRunTerminalEffectsDeps,
 ): string {
-  let result = input.result ?? '';
+  const result = input.result ?? '';
   if (input.status !== 'completed') return result;
 
   const service = deps.contractService ?? new ContractService();
   const contractId = input.contractId ?? row.contractId ?? null;
+  if (!contractId) return result;
 
   // Submission-gated path: a deliverable submitted via pc_submit_deliverable is
   // authoritative — keep it. Surface its text in the envelope when the agent
   // left no free-text result.
-  if (contractId) {
-    let existing: Contract | null = null;
-    try {
-      existing = service.get(contractId);
-    } catch {
-      existing = null;
+  let existing: Contract | null = null;
+  try {
+    existing = service.get(contractId);
+  } catch {
+    existing = null;
+  }
+  if (existing?.deliverable) {
+    if (result.trim() === '') {
+      const submittedText =
+        existing.deliverable.kind === 'answer' || existing.deliverable.kind === 'prose'
+          ? existing.deliverable.text ?? ''
+          : existing.report ?? '';
+      if (submittedText.trim()) return submittedText;
     }
-    if (existing?.deliverable) {
-      if (result.trim() === '') {
-        const submittedText =
-          existing.deliverable.kind === 'answer' || existing.deliverable.kind === 'prose'
-            ? existing.deliverable.text ?? ''
-            : existing.report ?? '';
-        if (submittedText.trim()) result = submittedText;
-      }
-      return result;
-    }
+    return result;
   }
 
-  // Legacy fallback (no submission): the agent's free-text `result` is the
-  // `answer` deliverable; if empty, fall back to `wi.body`.
-  const workItemId = input.workItemId !== undefined ? input.workItemId : row.parentWorkItemId;
-  let deliverableText = result.trim();
-  if (deliverableText === '' && workItemId) {
-    const wi = (deps.getWorkItem ?? defaultGetWorkItem)(workItemId);
-    deliverableText = wi?.body?.trim() ?? '';
-  }
-  if (deliverableText && result.trim() === '') result = deliverableText;
-
-  if (contractId && deliverableText) {
+  // Legacy fallback (no submission): the agent's free-text `result` IS the
+  // `answer` deliverable. No WI-body borrow.
+  const deliverableText = result.trim();
+  if (deliverableText) {
     const deliverable: Deliverable = { kind: 'answer', text: deliverableText };
     try {
       service.setDeliverable({ id: contractId, deliverable, report: result || null });
@@ -290,13 +276,17 @@ async function finishTerminalEffects(args: {
 }): Promise<void> {
   const { input, row, failureCause, failureReason, resolvedResult, deps } = args;
   const project = safeGetProject(input.projectId);
+  const contractId = input.contractId ?? row.contractId ?? null;
   const workItemId = input.workItemId !== undefined ? input.workItemId : row.parentWorkItemId;
 
   const verifier = deps.verifyOnTerminal ?? runVerificationOnTerminal;
   let outcome: VerificationOutcome | null = null;
-  if (workItemId && project) {
+  // Slice 020 — verification keys on the CONTRACT, not the WI. A contract-only
+  // dispatch (no linked WI) still verifies; the WI advance is a roll-up.
+  if (contractId && project) {
     outcome = await verifier(
       {
+        contractId,
         workItemId,
         terminalStatus: input.status,
         failureReason,
@@ -319,6 +309,7 @@ async function finishTerminalEffects(args: {
 
   const verification: VerificationBlock | null = outcome
     ? {
+        contractId: outcome.contractId,
         workItemId: outcome.workItemId,
         status: outcome.verificationStatus,
         tier: outcome.verificationTier,

@@ -202,13 +202,13 @@ test('submission-gated capture: a submitted deliverable is NOT overwritten by wi
   assert.deepEqual(updated!.deliverable, { kind: 'answer', text: 'the real submitted answer' });
 });
 
-test('legacy fallback still writes wi.body when nothing was submitted', () => {
+test('slice 020 — no submission + empty result writes NO deliverable (wi.body fallback retired)', () => {
   const p = mkProject('sd-legacy');
   const wi = createWorkItem({
     projectId: p.id as ULID,
     stageId: 'backlog',
     title: 'c',
-    body: 'body becomes the deliverable when no submission',
+    body: 'body is NOT borrowed as the deliverable anymore',
     isAgentTask: true,
     acceptanceCriteria: [],
     verificationTier: 'auto',
@@ -252,10 +252,7 @@ test('legacy fallback still writes wi.body when nothing was submitted', () => {
   );
 
   const updated = getContract(contract.id as ULID);
-  assert.deepEqual(updated!.deliverable, {
-    kind: 'answer',
-    text: 'body becomes the deliverable when no submission',
-  });
+  assert.equal(updated!.deliverable, null);
 });
 
 test('hasPendingAskForRun is any-status (open AND answered), unlike hasOpenPendingAskForRun', () => {

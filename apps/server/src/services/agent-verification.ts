@@ -1,24 +1,29 @@
-// Section 26.5 — tier-1 acceptance-criteria verification on AgentRun terminal.
+// Section 26.5 / slice 020 — contract-authoritative acceptance-criteria
+// verification on AgentRun terminal.
 //
-// Called from `agent-run-factory.ts` after every dispatched agent's terminal
-// transition. Looks up the contract work item (`pc_create_agent_work_item`'s
-// output), runs the predicate evaluator, atomically flips the work item to
-// `complete` / `failed` / `awaiting-verification`, and returns a structured
-// summary the caller folds into the `agent-completed` / `agent-failed`
-// channel envelope.
+// Called from `agent-run-terminal-effects.ts` after every dispatched agent's
+// terminal transition. The run carries a `contractId` (slice 019 — dispatch
+// always mints a contract). This pass reads tier + acceptance-criteria FROM THE
+// CONTRACT, runs the predicate evaluator, and flips the CONTRACT to
+// accepted / rejected / verifying via `ContractService.setVerification`.
+//
+// The work item moving to "done" is a ROLL-UP side effect: it fires exactly
+// once, on contract-accept, and ONLY when the contract has a linked work item
+// (`contract.workItemId`). A contract with no work item verifies with no WI
+// side effects.
 //
 // Tier semantics (locked at the agent output contract § "Verification flow"):
-//   - auto: predicates run; pass = complete, fail = failed.
-//   - orchestrator-review / human-review: WI flips to `awaiting-verification`
-//     with `verification_status = 'pending'`; the approve/reject tools (26.6)
+//   - auto: predicates run; pass = accepted, fail = rejected.
+//   - orchestrator-review / human-review: contract flips to `verifying`
+//     (`verification_status = 'pending'`); the approve/reject tools (26.6)
 //     drive the next transition.
 //
 // Terminal-status semantics:
 //   - completed → tier-1 predicate eval (or tier-2/3 hold).
-//   - failed → WI fails immediately, no predicate eval; the agent died before
-//     reporting done.
-//   - cancelled → no automatic WI update; the orchestrator decided to abandon
-//     this dispatch and owns the next step (re-dispatch, edit AC, archive).
+//   - failed → contract rejected immediately, no predicate eval; the agent
+//     died before reporting done.
+//   - cancelled → no automatic contract update; the orchestrator decided to
+//     abandon this dispatch and owns the next step.
 //
 // Predicate execution is sandboxed: `fileSize` rejects relative paths that
 // escape the worktree; `runBash` runs with a 30s hard timeout via SIGKILL.
@@ -32,9 +37,9 @@ import {
   getWorkItem,
   listAttachmentsForWorkItem,
   listChildWorkItems,
-  listContractsForWorkItem,
-  type ContractRow,
 } from '@pc/db';
+import type { Contract } from '@pc/contracts';
+import { ContractService } from '@pc/app-services';
 import type {
   EvaluationContext,
   PredicateExecutors,
@@ -42,7 +47,6 @@ import type {
   ULID,
   VerificationStatus,
   VerificationTier,
-  WorkItemStatus,
 } from '@pc/domain';
 import { ContractV2, KINDS_REQUIRING_EVIDENCE, evaluateAcceptance } from '@pc/domain';
 
@@ -53,12 +57,15 @@ import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
 const DEFAULT_BASH_TIMEOUT_MS = 30_000;
 
 export interface RunVerificationInput {
-  /** The contract work item id passed to `pc_invoke_agent`. Null = the
-   *  dispatch was not a contract dispatch; verification is a no-op. */
-  workItemId: ULID | null;
+  /** The first-class contract this run produced (slice 019 — always present on
+   *  a dispatched run). Null = no contract; verification is a no-op. */
+  contractId: ULID | null;
+  /** Optional work-item link carried on the contract. When the contract is
+   *  accepted AND this is set, the WI-advance roll-up fires. */
+  workItemId?: ULID | null;
   terminalStatus: 'completed' | 'failed' | 'cancelled';
   /** Human-readable failure summary when `terminalStatus === 'failed'`. Used
-   *  as the work item's status reason + verification notes. */
+   *  as the contract's verification notes. */
   failureReason: string | null;
   /** Project root absolute path. Used as `cwd` for predicates declaring
    *  `cwd: 'project'`. */
@@ -72,19 +79,21 @@ export interface RunVerificationInput {
   runId?: ULID;
   ccSessionId?: string;
   /** Section 27.7 — full project record. When provided + verification PASS
-   *  resolves + the project has an `is_done` stage, the WI auto-advances
-   *  there after the status flip. `null` skips auto-advance (test paths
-   *  that don't care about stage motion). */
+   *  resolves + the project has an `is_done` stage AND a linked WI exists, the
+   *  WI auto-advances there after the roll-up status flip. `null` skips
+   *  auto-advance (test paths that don't care about stage motion). */
   project?: Project | null;
 }
 
 export interface VerificationOutcome {
-  workItemId: ULID;
-  workItemStatus: WorkItemStatus;
+  /** The verified contract. */
+  contractId: ULID;
+  /** The contract's linked work item, when one exists (the roll-up target). */
+  workItemId: ULID | null;
   verificationStatus: VerificationStatus;
   verificationTier: VerificationTier;
   /** Human-readable summary suitable for the channel-event tag. `null` when
-   *  the WI flipped to a non-failure state with no diagnostic to surface. */
+   *  the contract flipped to a non-failure state with no diagnostic to surface. */
   notes: string | null;
   /** Number of predicates that were evaluated. Zero for tier-2/3 holds + for
    *  the failed-agent path (predicates skipped). */
@@ -102,50 +111,49 @@ export interface VerificationDeps {
   /** Slice 014a — true when the run created a durable pending-ask (powers
    *  `pending_ask_created`). Injected; production reads the DB. */
   loadPendingAskCreated?: (input: RunVerificationInput) => Promise<boolean>;
+  /** Slice 020 — the contract write door. Defaults to a fresh ContractService;
+   *  injectable for tests. */
+  contractService?: ContractService;
   now?: () => number;
 }
 
 /** Run the verification pass for one terminal AgentRun. Returns null when
- *  no verification ran (no contract WI, missing WI, cancelled, or a
- *  non-agent-task WI was supplied). The terminal-envelope builder treats
- *  `null` as "no verification block on the envelope." */
+ *  no verification ran (no contract, missing contract, or cancelled). The
+ *  terminal-envelope builder treats `null` as "no verification block." */
 export async function runVerificationOnTerminal(
   input: RunVerificationInput,
   deps: VerificationDeps = {},
 ): Promise<VerificationOutcome | null> {
-  if (!input.workItemId) return null;
+  if (!input.contractId) return null;
 
-  const wi = getWorkItem(input.workItemId);
-  if (!wi) return null;
-  // Defensive guard — only flip work items that opted into the contract
-  // surface. Lineage work items (`is_agent_task: false`) stay untouched even
-  // if a dispatch's `parent_work_item_id` happened to point at them.
-  if (!wi.isAgentTask) return null;
+  const service = deps.contractService ?? new ContractService();
+  let contract: Contract | null;
+  try {
+    contract = service.get(input.contractId);
+  } catch {
+    contract = null;
+  }
+  if (!contract) return null;
 
-  // Slice 013 — read the verification spec THROUGH the contract shim: prefer the
-  // first-class contract's tier/AC, fall back to the WI's legacy columns for any
-  // un-backfilled row. The contract's bytes are copied verbatim from the WI
-  // (backfill + createAgentWorkItem), so this is byte-identical. We STILL flip
-  // the WI exactly as before — only the data source moved.
-  const contract = resolveContractFor(input.workItemId);
-  const tier: VerificationTier =
-    contract?.verificationTier ?? wi.verificationTier ?? 'auto';
+  // The contract carries the authoritative link; the caller may also pass one
+  // (e.g. tests). Prefer the contract's own link.
+  const workItemId = (contract.workItemId ?? input.workItemId ?? null) as ULID | null;
+  const tier: VerificationTier = contract.verificationTier ?? 'auto';
 
   // Agent died before reporting done. No predicate eval — the contract
-  // can't be satisfied if the agent never finished the body / attachments
-  // / fields the criteria check against.
+  // can't be satisfied if the agent never finished the deliverable the
+  // criteria check against.
   if (input.terminalStatus === 'failed') {
     const notes = input.failureReason ?? 'agent run failed';
-    applyAgentVerification(input.workItemId, {
-      workItemStatus: 'failed',
-      statusReason: notes,
+    service.setVerification({
+      id: input.contractId,
       verificationStatus: 'failed',
       verificationNotes: notes,
-      historyNote: `verification skipped: ${notes}`,
+      verificationTier: tier,
     });
     return {
-      workItemId: input.workItemId,
-      workItemStatus: 'failed',
+      contractId: input.contractId,
+      workItemId,
       verificationStatus: 'failed',
       verificationTier: tier,
       notes,
@@ -154,24 +162,21 @@ export async function runVerificationOnTerminal(
   }
 
   // Cancelled by the orchestrator or user. The dispatch was abandoned on
-  // purpose; don't auto-flip the WI — the caller has already chosen to
-  // walk away. They own the next move (re-dispatch / edit AC / archive).
+  // purpose; don't auto-flip the contract — the caller owns the next move.
   if (input.terminalStatus === 'cancelled') return null;
 
-  // Tier-2 / tier-3 hold. Approve/reject tools land in 26.6 and drive the
-  // next transition. For v1 we just park the WI in `awaiting-verification`
-  // with `verification_status: 'pending'`.
+  // Tier-2 / tier-3 hold. Approve/reject tools (26.6) drive the next
+  // transition. Park the contract in `verifying` with `pending`.
   if (tier === 'orchestrator-review' || tier === 'human-review') {
-    applyAgentVerification(input.workItemId, {
-      workItemStatus: 'awaiting-verification',
-      statusReason: `agent reported done — pending ${tier} verification`,
+    service.setVerification({
+      id: input.contractId,
       verificationStatus: 'pending',
       verificationNotes: null,
-      historyNote: `awaiting ${tier} verification`,
+      verificationTier: tier,
     });
     return {
-      workItemId: input.workItemId,
-      workItemStatus: 'awaiting-verification',
+      contractId: input.contractId,
+      workItemId,
       verificationStatus: 'pending',
       verificationTier: tier,
       notes: null,
@@ -179,32 +184,28 @@ export async function runVerificationOnTerminal(
     };
   }
 
-  // Tier-1 auto. Empty AC = "trust the agent's end-of-turn signal" per the
-  // derivation library — flip directly to complete with no diagnostic.
-  // Slice 013 — AC sourced through the contract shim (same bytes; WI fallback).
-  const criteria = contract?.acceptanceCriteria ?? wi.acceptanceCriteria ?? [];
+  // Tier-1 auto. AC sourced from the contract ONLY (dual-read shim retired).
+  const criteria = contract.acceptanceCriteria ?? [];
 
   // Slice 014a — fail-closed. An evidence-requiring output kind (action /
   // external / repo) that derived to ZERO predicates must NOT auto-pass: an
   // auto-verifier with nothing to check on a side-effect contract escalates to
-  // review instead of passing open. (Inert until dispatch authors v2 specs —
-  // a v1 `expectedOutput.kind` never matches `KINDS_REQUIRING_EVIDENCE`.)
-  const specKind = (contract?.expectedOutput as { kind?: unknown } | null | undefined)?.kind;
+  // review instead of passing open.
+  const specKind = (contract.expectedOutput as { kind?: unknown } | null | undefined)?.kind;
   const requiresEvidence =
     ContractV2.isExpectedOutputKind(specKind) &&
     (KINDS_REQUIRING_EVIDENCE as readonly string[]).includes(specKind);
   if (criteria.length === 0 && requiresEvidence) {
     const notes = `"${specKind}" output requires evidence but no acceptance criteria were derived — escalated to review`;
-    applyAgentVerification(input.workItemId, {
-      workItemStatus: 'awaiting-verification',
-      statusReason: `agent reported done — ${notes}`,
+    service.setVerification({
+      id: input.contractId,
       verificationStatus: 'pending',
       verificationNotes: null,
-      historyNote: `verification held (fail-closed): ${specKind} output needs evidence`,
+      verificationTier: tier,
     });
     return {
-      workItemId: input.workItemId,
-      workItemStatus: 'awaiting-verification',
+      contractId: input.contractId,
+      workItemId,
       verificationStatus: 'pending',
       verificationTier: tier,
       notes,
@@ -213,44 +214,29 @@ export async function runVerificationOnTerminal(
   }
 
   // Tier-1 auto. Empty AC = "trust the agent's end-of-turn signal" per the
-  // derivation library — flip directly to complete with no diagnostic.
+  // derivation library — accept directly with no diagnostic.
   if (criteria.length === 0) {
-    applyAgentVerification(input.workItemId, {
-      workItemStatus: 'complete',
-      statusReason: null,
-      verificationStatus: 'passed',
-      verificationNotes: null,
-      historyNote: 'verification passed (no predicates)',
-    });
-    if (input.project) autoAdvanceToDoneStage(input.workItemId, input.project);
-    return {
-      workItemId: input.workItemId,
-      workItemStatus: 'complete',
-      verificationStatus: 'passed',
-      verificationTier: 'auto',
-      notes: null,
-      predicatesEvaluated: 0,
-    };
+    return acceptContract({ input, contractId: input.contractId, workItemId, tier, service, notes: null, predicatesEvaluated: 0, historyNote: 'verification passed (no predicates)' });
   }
 
-  const attachments = listAttachmentsForWorkItem(input.workItemId);
-  const children = listChildWorkItems(input.workItemId);
+  const attachments = workItemId ? listAttachmentsForWorkItem(workItemId) : [];
+  const children = workItemId ? listChildWorkItems(workItemId) : [];
+  const wi = workItemId ? getWorkItem(workItemId) : null;
   // Slice 014a — the captured deliverable (set synchronously before this runs)
   // feeds the payload/external predicates.
-  const deliverable = contract?.deliverable as
+  const deliverable = contract.deliverable as
     | { kind?: string; data?: unknown; handle?: string }
     | null
     | undefined;
   const evalCtx: EvaluationContext = {
-    body: wi.body,
-    fields: wi.fields,
+    body: wi?.body ?? '',
+    fields: wi?.fields ?? {},
     // Section 26 carry-over #2 — surface `content` so `body_contains` can
-    // search both body + attachments. Agents commonly persist non-trivial
-    // deliverables as attachments.
+    // search both body + attachments.
     attachments: attachments.map((a) => ({ name: a.name, content: a.content })),
     childWorkItems: children.map((c) => ({ status: c.status })),
     // Slice 014a — evidence sources for the v2 predicates.
-    report: contract?.report ?? '',
+    report: contract.report ?? '',
     toolCalls: (await deps.loadToolCalls?.(input)) ?? [],
     pendingAskCreated: (await deps.loadPendingAskCreated?.(input)) ?? false,
     payload: deliverable?.kind === 'payload' ? deliverable.data : undefined,
@@ -262,42 +248,77 @@ export async function runVerificationOnTerminal(
 
   if (pass) {
     const predicateWord = criteria.length === 1 ? 'predicate' : 'predicates';
-    applyAgentVerification(input.workItemId, {
+    return acceptContract({
+      input,
+      contractId: input.contractId,
+      workItemId,
+      tier,
+      service,
+      notes: null,
+      predicatesEvaluated: criteria.length,
+      historyNote: `verification passed (tier-1, ${criteria.length} ${predicateWord})`,
+    });
+  }
+
+  // Tier-1 fail. Persist the per-predicate failure list as JSON; the
+  // human-readable summary lives in the channel-event tag.
+  const summary = failures.map((f) => `${f.kind}: ${f.reason}`).join('; ');
+  service.setVerification({
+    id: input.contractId,
+    verificationStatus: 'failed',
+    verificationNotes: JSON.stringify(failures),
+    verificationTier: tier,
+  });
+  return {
+    contractId: input.contractId,
+    workItemId,
+    verificationStatus: 'failed',
+    verificationTier: tier,
+    notes: summary,
+    predicatesEvaluated: criteria.length,
+  };
+}
+
+/** Accept the contract + fire the WI-advance roll-up. The roll-up flips the
+ *  linked work item to `complete` + auto-advances it to the done stage — but
+ *  ONLY when the contract has a linked WI. Fires exactly once (this is the sole
+ *  accept path). */
+function acceptContract(args: {
+  input: RunVerificationInput;
+  contractId: ULID;
+  workItemId: ULID | null;
+  tier: VerificationTier;
+  service: ContractService;
+  notes: string | null;
+  predicatesEvaluated: number;
+  historyNote: string;
+}): VerificationOutcome {
+  const { input, contractId, workItemId, tier, service, notes, predicatesEvaluated, historyNote } =
+    args;
+  service.setVerification({
+    id: contractId,
+    verificationStatus: 'passed',
+    verificationNotes: null,
+    verificationTier: tier,
+  });
+  // Roll-up: the WI advance fires only for output-linked contracts.
+  if (workItemId) {
+    applyAgentVerification(workItemId, {
       workItemStatus: 'complete',
       statusReason: null,
       verificationStatus: 'passed',
       verificationNotes: null,
-      historyNote: `verification passed (tier-1, ${criteria.length} ${predicateWord})`,
+      historyNote,
     });
-    if (input.project) autoAdvanceToDoneStage(input.workItemId, input.project);
-    return {
-      workItemId: input.workItemId,
-      workItemStatus: 'complete',
-      verificationStatus: 'passed',
-      verificationTier: 'auto',
-      notes: null,
-      predicatesEvaluated: criteria.length,
-    };
+    if (input.project) autoAdvanceToDoneStage(workItemId, input.project);
   }
-
-  // Tier-1 fail. Persist the per-predicate failure list as JSON for the
-  // future Activity Panel renderer; the human-readable summary lives in
-  // the history note + the channel-event tag.
-  const summary = failures.map((f) => `${f.kind}: ${f.reason}`).join('; ');
-  applyAgentVerification(input.workItemId, {
-    workItemStatus: 'failed',
-    statusReason: 'tier-1 acceptance criteria failed',
-    verificationStatus: 'failed',
-    verificationNotes: JSON.stringify(failures),
-    historyNote: `verification failed: ${summary}`,
-  });
   return {
-    workItemId: input.workItemId,
-    workItemStatus: 'failed',
-    verificationStatus: 'failed',
-    verificationTier: 'auto',
-    notes: summary,
-    predicatesEvaluated: criteria.length,
+    contractId,
+    workItemId,
+    verificationStatus: 'passed',
+    verificationTier: tier,
+    notes,
+    predicatesEvaluated,
   };
 }
 
@@ -387,22 +408,6 @@ export function createWorktreeExecutors(input: {
       });
     },
   };
-}
-
-/** Slice 013 — resolve the first-class contract backing a contract WI (the
- *  read-through shim source for tier/AC). Prefers the dispatched contract (one
- *  with a run); else the most recent. Returns null for un-backfilled WIs, where
- *  the caller falls back to the WI's legacy columns. Best-effort. */
-function resolveContractFor(workItemId: ULID): ContractRow | null {
-  try {
-    const contracts = listContractsForWorkItem(workItemId);
-    if (contracts.length === 0) return null;
-    const dispatched = contracts.filter((c) => c.agentRunId !== null);
-    const pool = dispatched.length > 0 ? dispatched : contracts;
-    return pool[pool.length - 1] ?? null;
-  } catch {
-    return null;
-  }
 }
 
 /** True iff `abs` resolves under `root` (exclusive of `root` itself). Reject

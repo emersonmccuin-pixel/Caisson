@@ -36,7 +36,7 @@ import {
 import { DagExecutor, type DagExecutorDeps, type DagNodeContext, type NodeOutcome } from './dag-executor.ts';
 import { announceRunCreated, writeDagAndStatus } from './workflow-run-writer.ts';
 import { announceAgentRunChange } from './agent-run-writer.ts';
-import { WorkflowRunMutationGateway } from '@pc/app-services';
+import { ContractService, WorkflowRunMutationGateway } from '@pc/app-services';
 import {
   type WorkflowReviewFlavor,
   type WorkflowReviewState,
@@ -429,6 +429,13 @@ export function makeExecutorDeps(
       }
     );
 
+    // Slice 020 — createAgentWorkItem (slice 013) minted a linked contract; it
+    // is the verification spine. Resolve it so the run carries the contractId
+    // and verification keys on the contract.
+    const childContract =
+      new ContractService().listByWorkItem(childWi.id as ULID).slice(-1)[0] ?? null;
+    const childContractId = (childContract?.id ?? null) as ULID | null;
+
     const worktreeDir = run.worktreePath ?? opts.workspaceDir;
     const pcSessionId = `wf-${run.id.slice(-8)}-${node.id}-${randomUUID().slice(0, 8)}`;
     const sessionDataDir = opts.sessionDirFor(pcSessionId);
@@ -486,9 +493,12 @@ export function makeExecutorDeps(
       parentWorkItemId: childWi.id as ULID,
       parentInvokeDepth: 0,
       continues: null,
+      ...(childContractId ? { contractId: childContractId } : {}),
       queuedAt,
     });
     setAssignedAgentRunId(childWi.id as ULID, agentRunId);
+    // Point the contract at its producing run (slice 019/020 spine).
+    if (childContractId) new ContractService().setRun(childContractId, agentRunId);
 
     // Slice 015b — durable agent.run.changed announce for the workflow
     // subagent's run. Writes the in-txn `live_outbox` row (the live-relay
@@ -545,6 +555,7 @@ export function makeExecutorDeps(
     }
 
     const outcome = await verify({
+      contractId: childContractId,
       workItemId: childWi.id as ULID,
       terminalStatus: failureReason ? 'failed' : 'completed',
       failureReason,
@@ -555,8 +566,7 @@ export function makeExecutorDeps(
 
     const failed =
       failureReason !== null ||
-      outcome?.verificationStatus === 'failed' ||
-      outcome?.workItemStatus === 'failed';
+      outcome?.verificationStatus === 'failed';
 
     // Issue #2 — mark the agent_runs row terminal.
     const completedAt = Date.now();

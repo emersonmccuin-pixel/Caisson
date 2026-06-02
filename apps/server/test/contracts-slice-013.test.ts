@@ -84,24 +84,20 @@ test('createAgentWorkItem creates a contract linked to the WI', () => {
   assert.equal(contracts[0]!.verificationTier, 'auto');
 });
 
-// ── verification reads AC from the contract, still flips the WI ───────────────
+// ── verification reads AC from the contract; WI advance is a roll-up ──────────
 
-test('verification sources AC from the contract shim and still flips the WI', async () => {
+test('verification sources AC from the contract and rolls up the linked WI', async () => {
   const p = mkProject('verify-shim');
-  // WI's legacy AC would FAIL (body lacks "NEEDLE"); the CONTRACT's AC is empty
-  // → passes. If verification read the WI it would fail; reading the contract
-  // it passes. Either way it MUST flip the WI (byte-identical mechanism).
   const wi = createWorkItem({
     projectId: p.id as ULID,
     stageId: 'backlog',
     title: 'c',
     body: 'no needle here',
     isAgentTask: true,
-    acceptanceCriteria: [{ kind: 'body_contains', pattern: 'NEEDLE' }],
     verificationTier: 'auto',
   });
-  // Contract for this WI with EMPTY AC (sourced instead of the WI's failing AC).
-  new ContractService().create({
+  // Contract for this WI with EMPTY AC → passes → roll up the WI to complete.
+  const contract = new ContractService().create({
     projectId: p.id as ULID,
     workItemId: wi.id,
     podName: 'x',
@@ -110,41 +106,28 @@ test('verification sources AC from the contract shim and still flips the WI', as
   });
 
   const outcome = await runVerificationOnTerminal({
-    workItemId: wi.id,
+    contractId: contract.id as ULID,
     terminalStatus: 'completed',
     failureReason: null,
     projectFolderPath: tmpDir,
     worktreeDir: tmpDir,
   });
   assert.ok(outcome);
-  // Empty contract AC → pass → WI flipped to complete (the contract was the
-  // source; the WI's own failing AC was NOT used).
   assert.equal(outcome!.verificationStatus, 'passed');
+  // Contract accepted; the linked WI rolled up to complete.
+  assert.equal(getContract(contract.id as ULID)!.status, 'accepted');
   assert.equal(getWorkItem(wi.id)!.status, 'complete');
 });
 
-test('verification falls back to the WI legacy AC when no contract exists', async () => {
-  const p = mkProject('verify-fallback');
-  const wi = createWorkItem({
-    projectId: p.id as ULID,
-    stageId: 'backlog',
-    title: 'c',
-    body: 'no needle here',
-    isAgentTask: true,
-    acceptanceCriteria: [{ kind: 'body_contains', pattern: 'NEEDLE' }],
-    verificationTier: 'auto',
-  });
-  // No contract for this WI → shim falls back to the WI's failing AC.
+test('verification is a no-op when no contract id is supplied', async () => {
   const outcome = await runVerificationOnTerminal({
-    workItemId: wi.id,
+    contractId: null,
     terminalStatus: 'completed',
     failureReason: null,
     projectFolderPath: tmpDir,
     worktreeDir: tmpDir,
   });
-  assert.ok(outcome);
-  assert.equal(outcome!.verificationStatus, 'failed');
-  assert.equal(getWorkItem(wi.id)!.status, 'failed');
+  assert.equal(outcome, null);
 });
 
 // ── terminal effects write the deliverable onto the contract ─────────────────
@@ -191,10 +174,12 @@ test('terminal effects write the answer deliverable onto the contract', () => {
   assert.ok(updated);
   assert.deepEqual(updated!.deliverable, { kind: 'answer', text: 'the final report' });
   assert.equal(updated!.report, 'the final report');
-  assert.equal(updated!.status, 'submitted');
+  // Slice 020 — the contract's terminal status (submitted → accepted via the
+  // async verification tail) is asserted deterministically in
+  // verification-slice-020.test.ts; this test pins the synchronous capture.
 });
 
-test('terminal effects: empty result falls back to wi.body as the deliverable text (no live wi.body surface)', () => {
+test('terminal effects: empty result with no submission writes NO deliverable (wi.body fallback retired)', () => {
   const p = mkProject('terminal-wibody');
   const wi = createWorkItem({
     projectId: p.id as ULID,
@@ -234,7 +219,7 @@ test('terminal effects: empty result falls back to wi.body as the deliverable te
       parentWorkItemId: wi.id,
       worktreeDir: tmpDir,
       status: 'completed',
-      result: '', // empty → fall back to wi.body
+      result: '', // empty + no submission → no deliverable synthesized
       completedAt: Date.now(),
       startedAt: Date.now(),
       workItemId: wi.id,
@@ -243,10 +228,8 @@ test('terminal effects: empty result falls back to wi.body as the deliverable te
     {},
   );
   const updated = getContract(contract.id as ULID);
-  assert.deepEqual(updated!.deliverable, {
-    kind: 'answer',
-    text: 'deliverable written into the body',
-  });
+  // No wi.body borrow: the deliverable stays null.
+  assert.equal(updated!.deliverable, null);
 });
 
 // ── routes ───────────────────────────────────────────────────────────────────

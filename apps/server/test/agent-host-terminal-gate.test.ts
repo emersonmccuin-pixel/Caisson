@@ -13,6 +13,7 @@ process.env.PC_DATA_DIR = tmpDir;
 
 const { closeDb, createProject, getAgentRunRow, insertAgentRunRow, newId, runMigrations } =
   await import('@pc/db');
+const { ContractService } = await import('@pc/app-services');
 const { applyHostTerminalSnapshot, reconcileAgentRunsAgainstHost } = await import(
   '../src/services/agent-host-reattach.ts'
 );
@@ -187,18 +188,27 @@ test('liveness-sweep finalize: a swept failure routes to the mailbox', async () 
   assert.equal(mb.calls.length, 1, 'swept failure enqueues a mailbox turn');
 });
 
-// SLICE-009 content-capture — work-item-as-contract dispatches: the agent
-// reports its deliverable INTO the work item and completes via tool calls, so
-// the free-text result is empty. The completion envelope must surface the work
-// item's deliverable (body) instead of "(no output)" so the orchestrator has
-// something to relay.
-test('completed contract dispatch with empty result surfaces the work-item deliverable, not (no output)', async () => {
-  const wiId = newId();
+// Slice 020 — the agent reports its deliverable via pc_submit_deliverable (the
+// free-text result is empty). The completion envelope surfaces the SUBMITTED
+// deliverable text (sourced from the contract, not borrowed from wi.body)
+// instead of "(no output)" so the orchestrator has something to relay.
+test('completed contract dispatch with empty result surfaces the submitted deliverable, not (no output)', async () => {
   const project = createProject({
     slug: `htg-deliverable-${Date.now()}`,
     name: 'deliverable',
     stages,
     folderPath: join(tmpDir, `htg-deliverable-${Date.now()}`),
+  });
+  const contract = new ContractService().create({
+    projectId: project.id,
+    workItemId: null,
+    podName: 'haiku',
+  });
+  // Agent submitted its deliverable onto the contract.
+  new ContractService().setDeliverable({
+    id: contract.id as ULID,
+    deliverable: { kind: 'answer', text: 'DONE' },
+    report: null,
   });
   const runId = newId();
   insertAgentRunRow({
@@ -209,7 +219,7 @@ test('completed contract dispatch with empty result surfaces the work-item deliv
     ccSessionId: 'cc-1',
     status: 'running',
     input: 'Begin.',
-    parentWorkItemId: wiId,
+    contractId: contract.id as ULID,
     queuedAt: Date.now(),
   });
   const mb = fakeMailbox();
@@ -221,18 +231,17 @@ test('completed contract dispatch with empty result surfaces the work-item deliv
       podName: 'haiku',
       projectId: project.id,
       dispatcherSessionId: 'disp-1',
-      parentWorkItemId: wiId,
+      parentWorkItemId: null,
       worktreeDir: join(tmpDir, 'wt'),
       status: 'completed',
-      result: '', // agent reported into the work item; no trailing assistant text
-      workItemId: wiId,
+      result: '', // agent submitted via pc_submit_deliverable; no trailing text
+      contractId: contract.id as ULID,
     },
     {
       mailboxEnqueue: mb.port,
-      // Deliverable lives in the work item body; verification stubbed passed.
-      getWorkItem: () => ({ body: 'DONE' }) as never,
       verifyOnTerminal: (async () => ({
-        workItemId: wiId,
+        contractId: contract.id as ULID,
+        workItemId: null,
         verificationStatus: 'passed',
         verificationTier: 'auto',
         notes: null,
@@ -244,6 +253,6 @@ test('completed contract dispatch with empty result surfaces the work-item deliv
 
   assert.equal(mb.calls.length, 1, 'completion enqueues a mailbox turn');
   const body = (mb.calls[0]!.message as { body: string }).body;
-  assert.ok(body.includes('DONE'), 'surfaces the work item deliverable');
+  assert.ok(body.includes('DONE'), 'surfaces the submitted deliverable');
   assert.ok(!body.includes('(no output)'), 'must not read (no output) when a deliverable exists');
 });

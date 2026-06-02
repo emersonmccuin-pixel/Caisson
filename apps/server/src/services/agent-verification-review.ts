@@ -1,27 +1,32 @@
-// Section 26.6 — approve / reject service helpers (the /approve + /reject
-// routes the merged `pc_resolve_work_item` MCP tool delegates to).
+// Section 26.6 / slice 020 — approve / reject service helpers (the
+// /approve + /reject routes the merged `pc_resolve_work_item` MCP tool
+// delegates to).
 //
-// Both verbs target tier-2/3 verification holds parked by Section 26.5 in
-// `awaiting-verification` + `verification_status: 'pending'`. They are
-// orchestrator-only operations at v1 (tier-3 UI surface lands with Section 7;
-// it'll call the same routes through the same path with different `actor`).
+// Both verbs target tier-2/3 verification holds parked by slice 020 on the
+// CONTRACT (`status: 'verifying'`, `verification_status: 'pending'`). They act
+// on the contract; the work item (when one is linked) rolls up as a side
+// effect on approve. They are orchestrator-only operations at v1 (tier-3 UI
+// surface lands with Section 7; it'll call the same routes with a different
+// `actor`).
 //
 // Approve:
-//   - Flips WI: `status: 'complete'`, `verificationStatus: 'passed'`.
-//   - Optional `notes` lands in `verificationNotes` + the history entry.
+//   - Flips the CONTRACT: `verificationStatus: 'passed'` → `status: 'accepted'`.
+//   - Roll-up: when the contract has a linked work item, the WI flips to
+//     `complete` + auto-advances to the done stage.
 //   - No further agent dispatch; the producer run is already terminal.
 //
 // Reject:
-//   - Flips WI: `status: 'in-progress'`, `verificationStatus: 'failed'`,
-//     `verificationNotes: feedback`.
-//   - Spawns a continuation of the producer run (Section 21's primitive) with
-//     the feedback wrapped as the resumed user message. The resumed agent
-//     reads the WI's updated body / verification_notes and tries again.
+//   - Flips the CONTRACT: `verificationStatus: 'failed'` → `status: 'rejected'`.
+//   - Resolves the producer run from `contract.agentRunId` and spawns a
+//     continuation (Section 21's primitive) with the feedback wrapped as the
+//     resumed user message.
 //
-// Guards: WI exists, `isAgentTask=true`, `verificationStatus='pending'`.
-// Reject also requires non-empty feedback + a non-null `assignedAgentRunId`
-// (Section 26.6 dispatch path writes that field).
+// The route still addresses the hold by work-item id; the service resolves the
+// verifying contract linked to that WI. (Slice 021 repoints the tools to be
+// contract-native.)
 
+import type { Contract } from '@pc/contracts';
+import { ContractService } from '@pc/app-services';
 import { applyAgentVerification, getWorkItem } from '@pc/db';
 import type { Project, ULID, WorkItem } from '@pc/domain';
 
@@ -54,39 +59,53 @@ export class VerificationReviewError extends Error {
 
 export interface ApproveAgentWorkItemInput {
   workItemId: ULID;
-  /** Optional reviewer note. Surfaces in `verificationNotes` + history. */
+  /** Optional reviewer note. Surfaces in the contract `verificationNotes`. */
   notes?: string | null;
   /** Who approved — drives the history note's audit attribution. v1 stays
    *  orchestrator-only; Section 7 will pass `'user'` for inbox approvals. */
   actor?: 'orchestrator' | 'user';
   /** Section 27.7 — project record. When provided + project has an `is_done`
-   *  stage, the approved WI auto-advances there after the flip. */
+   *  stage, the rolled-up WI auto-advances there after the flip. */
   project?: Project | null;
 }
 
-/** Approve a tier-2/3 verification hold. Returns the updated WorkItem (already
- *  advanced to the is_done stage if 27.7's auto-advance fired). */
-export function approveAgentWorkItem(input: ApproveAgentWorkItemInput): WorkItem {
-  const wi = loadVerificationCandidate(input.workItemId);
-  const actor = input.actor ?? 'orchestrator';
+export interface ApproveAgentWorkItemDeps {
+  contractService?: ContractService;
+}
+
+/** Approve a tier-2/3 verification hold on the contract. Rolls up the linked
+ *  work item (if any) to complete + the done stage. Returns the updated
+ *  WorkItem when one is linked, else null (a contract-only hold). */
+export function approveAgentWorkItem(
+  input: ApproveAgentWorkItemInput,
+  deps: ApproveAgentWorkItemDeps = {},
+): WorkItem | null {
+  const service = deps.contractService ?? new ContractService();
+  const contract = loadVerifyingContract(input.workItemId, service);
   const note = input.notes?.trim() ?? '';
-  const historyNote = note
-    ? `approved by ${actor}: ${note}`
-    : `approved by ${actor}`;
-  const updated = applyAgentVerification(wi.id, {
+  service.setVerification({
+    id: contract.id as ULID,
+    verificationStatus: 'passed',
+    verificationNotes: note || null,
+  });
+
+  // Roll-up: advance the linked work item, if one exists.
+  if (!contract.workItemId) return null;
+  const wiId = contract.workItemId as ULID;
+  const actor = input.actor ?? 'orchestrator';
+  const updated = applyAgentVerification(wiId, {
     workItemStatus: 'complete',
     statusReason: null,
     verificationStatus: 'passed',
     verificationNotes: note || null,
-    historyNote,
+    historyNote: note ? `approved by ${actor}: ${note}` : `approved by ${actor}`,
   });
   if (!updated) {
-    throw new VerificationReviewError('wi-not-found', `work item ${wi.id} disappeared mid-write`);
+    throw new VerificationReviewError('wi-not-found', `work item ${wiId} disappeared mid-write`);
   }
   if (input.project) {
-    const advanced = autoAdvanceToDoneStage(wi.id, input.project);
+    const advanced = autoAdvanceToDoneStage(wiId, input.project);
     if (advanced) {
-      // Slice 015b — announce through the durable door; relay delivers the frame.
       announceWorkItemRow(advanced, advanced.projectId, 'auto-advanced');
       return advanced;
     }
@@ -109,11 +128,13 @@ export interface RejectAgentWorkItemInput {
 }
 
 export interface RejectAgentWorkItemResult {
-  workItem: WorkItem;
+  /** The updated WorkItem when one is linked to the contract, else null. */
+  workItem: WorkItem | null;
+  /** The rejected contract. */
+  contract: Contract;
   /** The continuation dispatch outcome. `ok: false` when the parent run is
    *  no longer continuable (session-expired / not-continuable / etc.) — the
-   *  WI flip still happened; the agent just didn't get woken back up.
-   *  Caller decides whether to surface the failure or recover. */
+   *  contract flip still happened; the agent just didn't get woken back up. */
   continuation: DispatchAgentResult;
 }
 
@@ -127,10 +148,12 @@ export interface RejectAgentWorkItemDeps {
    *  factory. Injecting lets unit tests stub the continuation result without
    *  the full spawn pipeline. */
   dispatch?: typeof dispatchContinueAgent;
+  contractService?: ContractService;
 }
 
-/** Reject a tier-2/3 verification hold + wake the producer run with the
- *  feedback. Returns the updated WI + the continuation dispatch result. */
+/** Reject a tier-2/3 verification hold on the contract + wake the producer run
+ *  (resolved from `contract.agentRunId`) with the feedback. Returns the updated
+ *  WI (if linked) + the rejected contract + the continuation dispatch result. */
 export async function rejectAgentWorkItem(
   input: RejectAgentWorkItemInput,
   deps: RejectAgentWorkItemDeps,
@@ -139,44 +162,52 @@ export async function rejectAgentWorkItem(
   if (!feedback) {
     throw new VerificationReviewError('feedback-required', 'feedback required for reject');
   }
-  const wi = loadVerificationCandidate(input.workItemId);
-  if (!wi.assignedAgentRunId) {
+  const service = deps.contractService ?? new ContractService();
+  const contract = loadVerifyingContract(input.workItemId, service);
+  if (!contract.agentRunId) {
     throw new VerificationReviewError(
       'no-assigned-run',
-      `work item ${wi.id} has no assigned_agent_run_id — was it dispatched via pc_invoke_agent({ workItemId })?`,
+      `contract ${contract.id} has no agentRunId — was it dispatched via pc_invoke_agent?`,
     );
   }
   const actor = input.actor ?? 'orchestrator';
-  // Truncate the feedback in the history note so a long rejection body
-  // doesn't bloat the row. Full feedback persists in verification_notes.
-  const truncated = feedback.length > 240 ? `${feedback.slice(0, 240)}…` : feedback;
-  const updated = applyAgentVerification(wi.id, {
-    workItemStatus: 'in-progress',
-    statusReason: 'rejected on verification — feedback wired to continuation',
+
+  // Flip the contract to rejected.
+  service.setVerification({
+    id: contract.id as ULID,
     verificationStatus: 'failed',
     verificationNotes: feedback,
-    historyNote: `rejected by ${actor}: ${truncated}`,
   });
-  if (!updated) {
-    throw new VerificationReviewError('wi-not-found', `work item ${wi.id} disappeared mid-write`);
+
+  // Roll the WI back to in-progress, if one is linked.
+  let updated: WorkItem | null = null;
+  if (contract.workItemId) {
+    const wiId = contract.workItemId as ULID;
+    const truncated = feedback.length > 240 ? `${feedback.slice(0, 240)}…` : feedback;
+    updated = applyAgentVerification(wiId, {
+      workItemStatus: 'in-progress',
+      statusReason: 'rejected on verification — feedback wired to continuation',
+      verificationStatus: 'failed',
+      verificationNotes: feedback,
+      historyNote: `rejected by ${actor}: ${truncated}`,
+    });
+    if (updated) announceWorkItemRow(updated, updated.projectId, 'rejected');
   }
-  // Slice 015b — announce the WI flip through the durable door; relay delivers.
-  announceWorkItemRow(updated, updated.projectId, 'rejected');
 
   // Phrase the resumed-agent's next user message so the agent treats this as
   // a critique-and-retry, not a fresh ask. The agent already has its prior
   // conversation in scope via `--resume`.
-  const continuationInput = `Reviewer rejected your previous report on work item ${wi.id} with this feedback:\n\n${feedback}\n\nRe-read the work item (pc_get_work_item) for the latest body + verification notes, address the feedback, and produce a revised report. Update body / attachments as needed before reporting done.`;
+  const continuationInput = `Reviewer rejected your previous deliverable on contract ${contract.id} with this feedback:\n\n${feedback}\n\nAddress the feedback, then re-submit your deliverable via pc_submit_deliverable before reporting done.`;
 
   const dispatch = deps.dispatch ?? dispatchContinueAgent;
   const continuation = await dispatch(
     {
       projectId: input.project.id,
       worktreeDir: input.project.folderPath,
-      parentAgentRunId: wi.assignedAgentRunId,
+      parentAgentRunId: contract.agentRunId as ULID,
       input: continuationInput,
       dispatcherSessionId: input.dispatcherSessionId,
-      workItemId: wi.id,
+      ...(contract.workItemId ? { workItemId: contract.workItemId as ULID } : {}),
       slug: input.project.slug,
     },
     {
@@ -186,27 +217,26 @@ export async function rejectAgentWorkItem(
     },
   );
 
-  return { workItem: updated, continuation };
+  return { workItem: updated, contract, continuation };
 }
 
-/** Shared guard for approve + reject. Throws `VerificationReviewError` on
- *  any precondition miss. */
-function loadVerificationCandidate(id: ULID): WorkItem {
-  const wi = getWorkItem(id);
+/** Shared guard for approve + reject. Resolves the verifying contract linked to
+ *  the work item id the route addressed. Throws `VerificationReviewError` on any
+ *  precondition miss. */
+function loadVerifyingContract(workItemId: ULID, service: ContractService): Contract {
+  const wi = getWorkItem(workItemId);
   if (!wi) {
-    throw new VerificationReviewError('wi-not-found', `work item ${id} not found`);
+    throw new VerificationReviewError('wi-not-found', `work item ${workItemId} not found`);
   }
-  if (!wi.isAgentTask) {
-    throw new VerificationReviewError(
-      'not-agent-task',
-      `work item ${id} is not an agent contract (isAgentTask=false)`,
-    );
-  }
-  if (wi.verificationStatus !== 'pending') {
+  const contracts = service.listByWorkItem(workItemId);
+  // Prefer a contract parked in `verifying`; newest wins.
+  const verifying = contracts.filter((c) => c.status === 'verifying');
+  const contract = verifying.length > 0 ? verifying[verifying.length - 1]! : null;
+  if (!contract) {
     throw new VerificationReviewError(
       'not-awaiting-verification',
-      `work item ${id} is not awaiting verification (status=${wi.status}, verification_status=${wi.verificationStatus ?? 'null'})`,
+      `work item ${workItemId} has no contract awaiting verification`,
     );
   }
-  return wi;
+  return contract;
 }
