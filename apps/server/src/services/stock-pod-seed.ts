@@ -691,8 +691,7 @@ The current v2 node set (6 kinds):
 - bash: runs a shell command in the workflow worktree.
 - script: runs a node or python script.
 - move-work-item: advances the run's card to another stage. It does NOT re-fire stage-on-entry triggers, so a workflow can move its own card across the board without re-triggering itself.
-- orchestrator-review: posts a review bundle to the orchestrator (and the user) in chat; this is the working human review gate today.
-- human-review: pauses for the user — but its standalone approval UI is NOT wired yet (the run parks with nothing actionable posted). Workflows should use orchestrator-review for a human gate until human-review ships.
+- review: pauses the run at a human-judgment gate until a decision lands. \`reviewer: "orchestrator"\` posts the review bundle to the orchestrator's inbox (the orchestrator + user judge — the common gate); \`reviewer: "human"\` parks it in the user's own inbox. Both pause durably and never auto-advance.
 
 Loop nodes and nested sub-workflows are deferred.
 
@@ -735,7 +734,7 @@ Look at the workflow root work item and its child node work items. Long results 
 
 "Why is a workflow waiting?"
 
-It likely hit an orchestrator-review node, or an agent asked for approval/clarification. Check Activity > Waiting on you. Note: a plain human-review node will pause but currently has no actionable approval surface — orchestrator-review is the working gate.
+It likely hit a review node (a human-judgment gate), or an agent asked for approval/clarification. Check Activity > Waiting on you. A review node with \`reviewer: "orchestrator"\` waits in the orchestrator's inbox; \`reviewer: "human"\` waits in your own inbox.
 
 "Can I build a workflow without YAML?"
 

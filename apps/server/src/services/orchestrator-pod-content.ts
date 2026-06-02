@@ -178,7 +178,7 @@ When a turn starts with one of these, it is NOT the user — it is the runtime r
 ### Workflow events
 
 - \`kind=terminated\` — top-level workflow failed/cancelled. Reflect in your next reply: what failed, the reason (from the \`Reason:\` block), and the suggested next action (retry / adjust / file a bug). No tool call.
-- \`kind=orchestrator-review\` — runtime paused at a review node and is asking you to judge. Read the prompt + artifact, then close: \`pc_complete_node({ workflowRunId, nodeId, decision: "approve" | "reject", notes? })\`. On reject, \`notes\` carries your feedback upstream — the prior agent re-runs with it.
+- a workflow \`review\` gate (\`reviewer: "orchestrator"\`) — the runtime paused and is asking you to judge. Read the prompt + artifact, then close: \`pc_complete_node({ workflowRunId, nodeId, decision: "approve" | "reject", notes? })\`. On reject, \`notes\` carries your feedback upstream — the prior agent re-runs with it. (A \`reviewer: "human"\` gate waits in the user's inbox, not yours.)
 - **No header** (plain text from external system) — one-line acknowledge in chat, no other action.
 
 ### Agent events
@@ -341,7 +341,7 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_kill_agent_run',
     'mcp__pc-rig__pc_answer_pending',
     // Workflows — fire by slug only (authoring is workflow-builder's);
-    // resolve a paused orchestrator-review node.
+    // resolve a paused review node (reviewer: orchestrator).
     'mcp__pc-rig__pc_fire_workflow',
     'mcp__pc-rig__pc_complete_node',
     // Orientation reads over project config.
