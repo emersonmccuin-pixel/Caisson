@@ -6,44 +6,28 @@
 // test/dag-run-service.test.ts); the live claude.exe smoke is 19.14.
 
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
 import { execFile } from 'node:child_process';
-import { resolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { AgentRunFailureCause, ExpectedOutput, Project, ULID, WorkflowV2 } from '@pc/domain';
+import type { ExpectedOutput, Project, ULID, WorkflowV2 } from '@pc/domain';
 import { substituteRefs, type RefResolver, type ReviewDecision, type RunStatus } from '@pc/workflows';
 import {
-  getAgentRunRow,
   getWorkItem,
-  insertAgentRunRow,
-  markAgentRunTerminal,
   moveWorkItemStage,
-  newId,
   resolveAgentForDispatch,
-  updateAgentRunStatus,
   workflowRunsV2Repo,
 } from '@pc/db';
-import {
-  spawnSubagent,
-  type AgentHostCommandResponse,
-  type AgentHostEvent,
-  type AgentHostWorkflowSubagentSnapshot,
-  type SubagentSpawnHandle,
-  type SubagentSpawnRequest,
-  type SubagentSpawnResult,
-} from '@pc/runtime';
 import { DagExecutor, type DagExecutorDeps, type DagNodeContext, type NodeOutcome } from './dag-executor.ts';
 import { announceRunCreated, writeDagAndStatus } from './workflow-run-writer.ts';
-import { announceAgentRunChange } from './agent-run-writer.ts';
 import { ContractService, WorkflowRunMutationGateway } from '@pc/app-services';
 import {
   type WorkflowReviewFlavor,
   type WorkflowReviewState,
 } from '@pc/contracts';
 import { createAgentWorkItem } from './agent-work-item.ts';
-import { runVerificationOnTerminal } from './agent-verification.ts';
-import { preparePodSpawn } from './pod-spawn.ts';
-import { registerWorkflowSubagentHandshake } from './workflow-subagent-handshake.ts';
+// Door-unification — workflow agent nodes dispatch through the SAME door the
+// orchestrator uses (active-runs registration, canonical spawn, unified terminal
+// + verification). The forked spawnSubagent path is gone.
+import { dispatchFreshAgent } from './agent-run-factory.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import type { WorkItemService } from './work-item.ts';
 import { announceWorkItemRow } from './work-item-writer.ts';
@@ -51,8 +35,6 @@ import type { WorktreeService } from './worktree.ts';
 
 const execFileAsync = promisify(execFile);
 
-export type Spawner = (req: SubagentSpawnRequest) => SubagentSpawnHandle;
-export type Verifier = typeof runVerificationOnTerminal;
 export type CommandExec = (
   kind: 'bash' | 'node' | 'python',
   code: string,
@@ -127,199 +109,10 @@ export interface DagRunServiceOptions {
   broadcast: (event: unknown) => void;
   hostClient?: AgentHostReattachClient | null;
   // ── injectable seams (live defaults) ──
-  spawner?: Spawner;
-  verify?: Verifier;
   exec?: CommandExec;
   /** Mailbox review delivery seam — the review prompt is enqueued as a mailbox
    *  message. Injected from index.ts. */
   deliverReview?: WorkflowReviewDelivery;
-}
-
-const liveSpawner: Spawner = (req) =>
-  spawnSubagent(req, { registerHandshakeListener: registerWorkflowSubagentHandshake });
-
-function hostBackedWorkflowSpawner(hostClient: AgentHostReattachClient): Spawner {
-  return (req) => {
-    let snapshot: AgentHostWorkflowSubagentSnapshot | null = null;
-    let settled = false;
-    let unsubscribe: (() => void) | void;
-    let resolveDone!: (result: SubagentSpawnResult) => void;
-    const done = new Promise<SubagentSpawnResult>((resolveDoneInner) => {
-      resolveDone = resolveDoneInner;
-    });
-
-    const cleanup = (): void => {
-      if (unsubscribe) {
-        unsubscribe();
-        unsubscribe = undefined;
-      }
-    };
-
-    const settle = (result: SubagentSpawnResult): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolveDone(result);
-    };
-
-    const fail = (message: string): void => {
-      settle(hostWorkflowFailure(req, snapshot, 'spawn-error', message));
-    };
-
-    const applySnapshot = (next: AgentHostWorkflowSubagentSnapshot): void => {
-      if (!workflowSnapshotMatchesRequest(req, next)) return;
-      snapshot = next;
-      if (next.terminalResult) {
-        settle(next.terminalResult);
-        return;
-      }
-      if (isTerminalWorkflowState(next.state)) {
-        settle(
-          hostWorkflowFailure(
-            req,
-            next,
-            next.state === 'cancelled' ? 'killed' : 'spawn-error',
-            'workflow subagent host terminal event omitted result',
-          ),
-        );
-      }
-    };
-
-    unsubscribe = hostClient.onEvent?.((event: AgentHostEvent) => {
-      if (
-        (event.type === 'workflow-subagent-state' ||
-          event.type === 'workflow-subagent-terminal') &&
-        event.workflowSubagent.pcSessionId === req.pcSessionId
-      ) {
-        applySnapshot(event.workflowSubagent);
-      }
-    });
-
-    Promise.resolve(
-      hostClient.sendCommand({
-        type: 'start-workflow-subagent',
-        request: req,
-      }),
-    )
-      .then((response) => {
-        if (settled) return;
-        applyStartWorkflowSubagentResponse(req, response, applySnapshot, fail);
-      })
-      .catch((err) => {
-        if (!settled) fail(`agent host start-workflow-subagent failed: ${errorMessage(err)}`);
-      });
-
-    return {
-      done,
-      kill: (reason?: string) => {
-        if (settled) return;
-        Promise.resolve(
-          hostClient.sendCommand({
-            type: 'cancel-workflow-subagent',
-            pcSessionId: req.pcSessionId,
-            reason,
-          }),
-        )
-          .then((response) => {
-            if (!response) {
-              settle(hostWorkflowFailure(req, snapshot, 'killed', reason ?? 'cancelled'));
-              return;
-            }
-            if (!response.ok) {
-              settle(
-                hostWorkflowFailure(
-                  req,
-                  snapshot,
-                  'killed',
-                  `agent host cancel-workflow-subagent failed: ${response.error}`,
-                ),
-              );
-              return;
-            }
-            if (response.command === 'cancel-workflow-subagent') {
-              applySnapshot(response.workflowSubagent);
-            }
-          })
-          .catch((err) => {
-            settle(
-              hostWorkflowFailure(
-                req,
-                snapshot,
-                'killed',
-                `agent host cancel-workflow-subagent failed: ${errorMessage(err)}`,
-              ),
-            );
-          });
-      },
-      transcriptPath: () => snapshot?.transcriptPath ?? resolve(req.sessionDataDir, 'transcript.log'),
-      jsonlPath: () => snapshot?.jsonlPath ?? null,
-    };
-  };
-}
-
-function applyStartWorkflowSubagentResponse(
-  req: SubagentSpawnRequest,
-  response: AgentHostCommandResponse | void,
-  applySnapshot: (snapshot: AgentHostWorkflowSubagentSnapshot) => void,
-  fail: (message: string) => void,
-): void {
-  if (!response) {
-    fail('agent host start-workflow-subagent returned no response');
-    return;
-  }
-  if (!response.ok) {
-    fail(`agent host start-workflow-subagent failed: ${response.error}`);
-    return;
-  }
-  if (response.command !== 'start-workflow-subagent') {
-    fail(`agent host returned ${response.command} for start-workflow-subagent`);
-    return;
-  }
-  if (!workflowSnapshotMatchesRequest(req, response.workflowSubagent)) {
-    fail('agent host returned mismatched workflow subagent snapshot');
-    return;
-  }
-  applySnapshot(response.workflowSubagent);
-}
-
-function workflowSnapshotMatchesRequest(
-  req: SubagentSpawnRequest,
-  snapshot: AgentHostWorkflowSubagentSnapshot,
-): boolean {
-  return (
-    snapshot.pcSessionId === req.pcSessionId &&
-    snapshot.agentName === req.agentName &&
-    snapshot.worktreeDir === req.worktreeDir
-  );
-}
-
-function isTerminalWorkflowState(
-  state: AgentHostWorkflowSubagentSnapshot['state'],
-): boolean {
-  return state === 'completed' || state === 'failed' || state === 'cancelled';
-}
-
-function hostWorkflowFailure(
-  req: SubagentSpawnRequest,
-  snapshot: AgentHostWorkflowSubagentSnapshot | null,
-  cause: Extract<SubagentSpawnResult, { kind: 'failure' }>['cause'],
-  message: string,
-): SubagentSpawnResult {
-  return {
-    kind: 'failure',
-    cause,
-    message,
-    transcriptPath: snapshot?.transcriptPath ?? resolve(req.sessionDataDir, 'transcript.log'),
-    jsonlPath: snapshot?.jsonlPath ?? null,
-    partialAssistantText:
-      snapshot?.terminalResult?.kind === 'failure'
-        ? snapshot.terminalResult.partialAssistantText
-        : '',
-  };
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 const liveExec: CommandExec = async (kind, code, { cwd, timeout }) => {
@@ -365,8 +158,6 @@ export function makeExecutorDeps(
   workflow: WorkflowV2.Workflow,
   opts: DagRunServiceOptions
 ): DagExecutorDeps {
-  const spawner = opts.spawner ?? (opts.hostClient ? hostBackedWorkflowSpawner(opts.hostClient) : liveSpawner);
-  const verify = opts.verify ?? runVerificationOnTerminal;
   const exec = opts.exec ?? liveExec;
 
   const resolveRef =
@@ -405,7 +196,24 @@ export function makeExecutorDeps(
   ): Promise<NodeOutcome> => {
     const task = render(node.task, ctx);
 
-    // Issue #3 — consult pod row's expected_output before the stock map.
+    // Project-scope enforcement: workflow nodes must use project-scoped pods.
+    // Global pods must first be cloned into the project (POST
+    // /api/agents/pods/:id/clone-to-project). The door (dispatchFreshAgent)
+    // would silently fall back to a global pod, so gate it here.
+    const podRow = resolveAgentForDispatch(node.agent, opts.projectId);
+    if (!podRow) {
+      return { state: 'failed', error: `pod "${node.agent}" not found in registry` };
+    }
+    if (podRow.scope === 'global') {
+      return {
+        state: 'failed',
+        error: `pod "${node.agent}" is global-scope — clone it into project ${opts.projectId} before using it in a workflow node`,
+      };
+    }
+
+    // Contract birth — the one thing the workflow still OWNS: mint the child
+    // work item + its linked contract (the verification spine). Everything after
+    // (spawn, lifecycle, completion, verify, bookkeeping) is the door's job now.
     const childWi = createAgentWorkItem(
       {
         title: `${workflow.name} · ${node.id}`,
@@ -421,6 +229,10 @@ export function makeExecutorDeps(
       {
         workItemService: opts.workItemService,
         getProject: opts.getProject,
+        // Mint the linked contract here so the door resolves + reuses it (no
+        // double contract). The door requires an expectedOutput for a WI-linked
+        // dispatch; we read it back off this contract below.
+        contractService: new ContractService(),
         getPodRowExpectedOutput: (podName) => {
           const row = resolveAgentForDispatch(podName, opts.projectId);
           return row?.expectedOutput as ExpectedOutput | null | undefined;
@@ -428,169 +240,74 @@ export function makeExecutorDeps(
       }
     );
 
-    // Slice 020 — createAgentWorkItem (slice 013) minted a linked contract; it
-    // is the verification spine. Resolve it so the run carries the contractId
-    // and verification keys on the contract.
     const childContract =
       new ContractService().listByWorkItem(childWi.id as ULID).slice(-1)[0] ?? null;
-    const childContractId = (childContract?.id ?? null) as ULID | null;
+    if (!childContract) {
+      return {
+        state: 'failed',
+        workItemId: childWi.id as ULID,
+        error: `contract was not minted for node "${node.id}"`,
+      };
+    }
 
     const worktreeDir = run.worktreePath ?? opts.workspaceDir;
     const pcSessionId = `wf-${run.id.slice(-8)}-${node.id}-${randomUUID().slice(0, 8)}`;
-    const sessionDataDir = opts.sessionDirFor(pcSessionId);
-    mkdirSync(sessionDataDir, { recursive: true });
 
-    const podPrep = preparePodSpawn({
-      agentName: node.agent,
-      projectId: opts.projectId,
-      worktreeDir,
-      scratchDir: sessionDataDir,
-      filterMcpToReferencedTools: true,
-      dataDir: opts.dataDir,
-      templatesDir: opts.templatesDir,
-      trunkPath: opts.trunkPath,
-      serverPort: opts.serverPort,
-      channelPort: opts.channelPort,
-    });
-    if (!podPrep) {
-      return {
-        state: 'failed',
-        error: `pod "${node.agent}" not found in registry`,
-      };
-    }
-    // Project-scope enforcement: workflow nodes must use project-scoped pods.
-    // Global pods are not resolvable in workflow dispatch — they must first be
-    // cloned into the project via POST /api/agents/pods/:id/clone-to-project.
-    if (podPrep.podScope === 'global') {
-      podPrep.cleanup();
-      return {
-        state: 'failed',
-        error: `pod "${node.agent}" is global-scope — clone it into project ${opts.projectId} before using it in a workflow node`,
-      };
-    }
-
-    // Issue #1(c) — keep initialInput SHORT and single-line. A long/multi-line
-    // prompt breaks the spawn echo-ack handshake (send-protocol.ts) → echo-timeout
-    // (regression observed on canary-2). Worktree isolation is enforced by
-    // path-guard.cjs via PC_WORKFLOW_RUN_ID / PC_WORKFLOW_WORKTREE (set below),
-    // NOT by tokens in this string.
+    // Keep initialInput SHORT + single-line (long/multi-line breaks the spawn
+    // echo-ack handshake). Worktree isolation is enforced by path-guard.cjs via
+    // the PC_WORKFLOW_* env vars (passed as extraEnv below), NOT by this string.
     const initialInput =
       `You have a contract for this node. A work item (${childWi.id}) is linked as your source — call pc_get_work_item({ id: "${childWi.id}" }) to read its body for context, then begin. Your expected output + acceptance criteria are on the contract (shown in your prompt). Work only inside your worktree — all file edits and git commands must run here. When finished, submit your deliverable with pc_submit_deliverable as your final action.`;
 
-    // Issue #2 — insert agent_runs row so the Running Agents rail can see this agent.
-    const agentRunId = newId() as ULID;
-    const wfCcSessionId = randomUUID();
-    const queuedAt = Date.now();
-    insertAgentRunRow({
-      id: agentRunId,
-      projectId: opts.projectId,
-      podName: node.agent,
-      dispatcherSessionId: pcSessionId,
-      ccSessionId: wfCcSessionId,
-      status: 'queued',
-      input: `[workflow: ${run.id}] [node: ${node.id}]\n${task}`,
-      parentWorkItemId: childWi.id as ULID,
-      parentInvokeDepth: 0,
-      continues: null,
-      ...(childContractId ? { contractId: childContractId } : {}),
-      queuedAt,
-    });
-    // Point the contract at its producing run (slice 019/020 spine).
-    if (childContractId) new ContractService().setRun(childContractId, agentRunId);
-
-    // Slice 015b — durable agent.run.changed announce for the workflow
-    // subagent's run. Writes the in-txn `live_outbox` row (the live-relay
-    // delivers the canonical frame) + re-reads the post-write row for the
-    // correct rev. Replaces the old direct `agent-run-changed` hand-broadcast
-    // (which the web no longer reads and wrote no outbox row).
-    const broadcastRun = (
-      status: 'queued' | 'running' | 'completed' | 'failed',
-    ): void => {
-      announceAgentRunChange(
-        { runId: agentRunId, reason: status, worktreeDir, startedAt: queuedAt },
-        opts.broadcast,
-      );
-    };
-    broadcastRun('queued');
-
-    // Issue #1(a) — set PC_WORKFLOW_RUN_ID + PC_WORKFLOW_WORKTREE so
-    // path-guard.cjs enforce() activates for this top-level spawn (no
-    // agent_type payload in PreToolUse for direct --agent spawns). Also
-    // pass PC_AGENT_NAME for the READ_ANYWHERE_PODS exemption check.
-    const handle = spawner({
-      agentName: podPrep.agentCliName,
-      worktreeDir,
-      initialInput,
-      sessionDataDir,
-      pcSessionId,
-      ...(node.timeout !== undefined ? { idleTimeoutMs: node.timeout } : {}),
-      mcpConfigPath: podPrep.mcpConfigPath,
-      settingsPath: podPrep.settingsPath,
-      settingSources: podPrep.settingSources,
-      pluginDirs: [podPrep.pluginDir],
-      extraEnv: {
-        ...podPrep.extraEnv,
-        PC_WORKFLOW_RUN_ID: run.id,
-        PC_WORKFLOW_WORKTREE: worktreeDir,
-        PC_AGENT_NAME: node.agent,
+    // Dispatch through the ONE door. It materialises the pod, inserts +
+    // REGISTERS the run in active-runs (→ reconciler matches it → no host-lost),
+    // spawns canonically, detects completion via the unified terminal path, and
+    // runs verification on the contract. `done` resolves at the verified
+    // terminal. PC_WORKFLOW_* keep path-guard worktree confinement; node.timeout
+    // maps to the idle-timeout override.
+    const result = await dispatchFreshAgent(
+      {
+        projectId: opts.projectId,
+        worktreeDir,
+        agentName: node.agent,
+        input: initialInput,
+        dispatcherSessionId: pcSessionId,
+        parentWorkItemId: run.workItemId,
+        workItemId: childWi.id as ULID,
+        expectedOutput: childContract.expectedOutput,
+        invokeDepth: 0,
+        slug: opts.getProject().slug,
+        extraEnv: {
+          PC_WORKFLOW_RUN_ID: run.id,
+          PC_WORKFLOW_WORKTREE: worktreeDir,
+        },
+        ...(node.timeout !== undefined ? { idleMs: node.timeout } : {}),
       },
-    });
-
-    // Transition to 'running' immediately (spawner fires off the process).
-    updateAgentRunStatus({ id: agentRunId, status: 'running', spawnedAt: Date.now(), readyAt: Date.now() });
-    broadcastRun('running');
-
-    let failureReason: string | null = null;
-    let spawnCause: string | null = null;
-    try {
-      const result = await handle.done;
-      if (result.kind === 'failure') {
-        failureReason = `${result.cause}: ${result.message}`;
-        spawnCause = result.cause;
+      {
+        broadcast: opts.broadcast,
+        ...(opts.hostClient ? { hostClient: opts.hostClient } : {}),
       }
-    } finally {
-      podPrep.cleanup();
+    );
+
+    // Pre-spawn failure (unknown pod, scratch mkdir, host unavailable, …). No
+    // run ever started; surface it as a failed node.
+    if (!result.ok) {
+      return { state: 'failed', workItemId: childWi.id as ULID, error: result.error };
     }
 
-    const outcome = await verify({
-      contractId: childContractId,
-      workItemId: childWi.id as ULID,
-      terminalStatus: failureReason ? 'failed' : 'completed',
-      failureReason,
-      projectFolderPath: opts.workspaceDir,
-      worktreeDir,
-      project: opts.getProject(),
-    });
-
+    // Await the verified terminal. A node fails when the run didn't complete OR
+    // verification failed (drives reject/loop edges). `pending` (tier-2/3 hold)
+    // is NOT a failure — it leaves the node completed.
+    const outcome = await result.done;
     const failed =
-      failureReason !== null ||
-      outcome?.verificationStatus === 'failed';
-
-    // Issue #2 — mark the agent_runs row terminal.
-    const completedAt = Date.now();
-    const terminalStatus = failed ? 'failed' : 'completed';
-    const mappedCause: AgentRunFailureCause | null = failed
-      ? (spawnCause === 'idle-timeout' ? 'idle-timeout'
-        : spawnCause === 'wall-clock-timeout' ? 'wall-clock-timeout'
-        : spawnCause === 'killed' ? 'cancelled'
-        : 'spawn-error')
-      : null;
-    markAgentRunTerminal({
-      id: agentRunId,
-      status: terminalStatus,
-      result: failed ? null : '',
-      failureCause: mappedCause,
-      failureReason: failureReason,
-      completedAt,
-    });
-    // Terminal row already persisted by markAgentRunTerminal above; announce
-    // re-reads it for the canonical frame.
-    broadcastRun(terminalStatus);
+      outcome.status !== 'completed' || outcome.verification?.status === 'failed';
+    const error =
+      outcome.failureReason ?? outcome.verification?.notes ?? `node "${node.id}" failed`;
 
     return {
       state: failed ? 'failed' : 'completed',
       workItemId: childWi.id as ULID,
-      ...(failed && failureReason ? { error: failureReason } : {}),
+      ...(failed ? { error } : {}),
     };
   };
 

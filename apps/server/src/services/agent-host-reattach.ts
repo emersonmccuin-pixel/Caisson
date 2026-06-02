@@ -34,6 +34,7 @@ import {
 import {
   applyAgentRunTerminalEffects,
   replayMissingTerminalEnvelopes,
+  type AgentRunTerminalEffectsDeps,
 } from './agent-run-terminal-effects.ts';
 import { announceAgentRunChange as defaultAnnounceAgentRunChange } from './agent-run-writer.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
@@ -76,6 +77,10 @@ export interface AgentHostReattachDeps {
   verifyOnTerminal?: typeof runVerificationOnTerminal;
   verificationDeps?: VerificationDeps;
   terminalCleanup?: () => void;
+  /** Door-unification — forwarded to terminal-effects so a host-driven terminal
+   *  resolves the dispatch's `done` promise (the workflow engine awaits it).
+   *  Boot/reconcile paths omit it (no awaiting caller). */
+  onSettled?: AgentRunTerminalEffectsDeps['onSettled'];
   onTerminalError?: (error: Error) => void;
   onHostCommandError?: (error: Error) => void;
   /** T1.4 (D1) — this tick the connection authoritatively could not reach a
@@ -451,6 +456,7 @@ export function applyHostTerminalSnapshot(
       verifyOnTerminal: deps.verifyOnTerminal,
       verificationDeps: deps.verificationDeps,
       now: deps.now,
+      onSettled: deps.onSettled,
       onError: deps.onTerminalError,
     },
   ).applied;
