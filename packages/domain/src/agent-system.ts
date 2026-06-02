@@ -46,7 +46,12 @@ export type AgentRunFailureCause =
   | 'host-unavailable'
   | 'host-lost'
   | 'host-crashed'
-  | 'host-protocol-error';
+  | 'host-protocol-error'
+  /** Workflow-engine redesign — the dispatched worker reached a terminal
+   *  WITHOUT submitting a deliverable against its contract. Delivery is the
+   *  sole done-signal; ending a turn / exiting with nothing delivered is a
+   *  failure with a reason, not a silent "completed-but-empty". */
+  | 'no-deliverable';
 
 export const AGENT_RUN_FAILURE_CAUSES: readonly AgentRunFailureCause[] = [
   'spawn-stuck',
@@ -65,6 +70,7 @@ export const AGENT_RUN_FAILURE_CAUSES: readonly AgentRunFailureCause[] = [
   'host-lost',
   'host-crashed',
   'host-protocol-error',
+  'no-deliverable',
 ];
 
 /** One persisted agent_runs row. Mirrors the in-memory AgentRunRecord plus
@@ -110,6 +116,11 @@ export interface AgentRunRow {
   /** Epoch-ms of the last observed JSONL activity. Drives the idle-timeout
    *  branch of the liveness sweep. NULL until the first event lands. */
   lastActivityAt: number | null;
+  /** Workflow-engine redesign — epoch-ms when the worker submitted its
+   *  deliverable (`pc_submit_deliverable`). The positive done-receipt: a run
+   *  with a contract but no `deliveredAt` that reaches a terminal is a
+   *  `no-deliverable` failure. NULL until/unless a deliverable is submitted. */
+  deliveredAt: number | null;
   completedAt: number | null;
   /** Monotonic write counter. Incremented by every status transition so WS
    *  deltas can carry a version the frontend uses to discard stale delivery. */

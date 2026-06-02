@@ -63,7 +63,7 @@ export interface PreparePodSpawnInput {
 
 export interface PodSpawnPrep {
   /** Absolute path to the materialised pod `mcp.json`. Caller passes this as
-   *  PtySession's `mcpConfigPath` and SubagentSpawnRequest's `mcpConfigPath`. */
+   *  PtySession's / the dispatch door's `mcpConfigPath`. */
   mcpConfigPath: string;
   /** Agent name to pass to `--agent`. Plugin agents are namespaced. */
   agentCliName: string;

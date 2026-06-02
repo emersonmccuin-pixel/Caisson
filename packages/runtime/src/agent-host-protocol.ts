@@ -1,5 +1,4 @@
 import type { AgentRunStatus, ULID } from '@pc/domain';
-import type { SubagentSpawnRequest, SubagentSpawnResult } from './subagent-spawner.ts';
 
 export interface AgentHostIdentity {
   hostId: string;
@@ -9,11 +8,6 @@ export interface AgentHostIdentity {
 }
 
 export type AgentHostRunState = AgentRunStatus;
-export type AgentHostWorkflowSubagentState =
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled';
 
 export interface AgentHostTerminalResult {
   status: Extract<AgentRunStatus, 'completed' | 'failed' | 'cancelled'>;
@@ -79,33 +73,15 @@ export type AgentHostResumeRunRequest = AgentHostStartRunRequest & {
   continues: ULID;
 };
 
-export type AgentHostWorkflowSubagentRequest = SubagentSpawnRequest;
-
-export interface AgentHostWorkflowSubagentSnapshot {
-  pcSessionId: string;
-  ccSessionId: string | null;
-  agentName: string;
-  worktreeDir: string;
-  state: AgentHostWorkflowSubagentState;
-  transcriptPath: string;
-  jsonlPath: string | null;
-  startedAt: number;
-  updatedAt: number;
-  terminalAt: number | null;
-  terminalResult?: SubagentSpawnResult;
-}
-
 export type AgentHostCommand =
   | { type: 'hello'; apiPid: number; protocolVersion: 1 }
   | { type: 'list-runs' }
   | { type: 'start-run'; request: AgentHostStartRunRequest }
   | { type: 'resume-run'; request: AgentHostResumeRunRequest }
-  | { type: 'start-workflow-subagent'; request: AgentHostWorkflowSubagentRequest }
   | { type: 'send'; runId: ULID; text: string }
   | { type: 'mark-paused'; runId: ULID; askId: string }
   | { type: 'answer-pending'; runId: ULID; text: string }
   | { type: 'cancel'; runId: ULID; reason?: string }
-  | { type: 'cancel-workflow-subagent'; pcSessionId: string; reason?: string }
   | { type: 'notify-mcp-handshake'; ccSessionId: string }
   | { type: 'shutdown'; mode: 'host-exit' | 'cancel-runs' };
 
@@ -147,12 +123,6 @@ export type AgentHostCommandResponse =
     }
   | {
       ok: true;
-      command: 'start-workflow-subagent' | 'cancel-workflow-subagent';
-      workflowSubagent: AgentHostWorkflowSubagentSnapshot;
-      lastSeq: number;
-    }
-  | {
-      ok: true;
       command: 'notify-mcp-handshake' | 'shutdown';
       lastSeq: number;
     }
@@ -170,14 +140,4 @@ export type AgentHostEvent =
   | { seq: number; type: 'run-jsonl'; runId: ULID; event: unknown; cursor?: number }
   | { seq: number; type: 'run-chunk'; runId: ULID; text: string }
   | { seq: number; type: 'run-terminal'; run: AgentHostRunSnapshot }
-  | { seq: number; type: 'run-error'; runId: ULID; error: string }
-  | {
-      seq: number;
-      type: 'workflow-subagent-state';
-      workflowSubagent: AgentHostWorkflowSubagentSnapshot;
-    }
-  | {
-      seq: number;
-      type: 'workflow-subagent-terminal';
-      workflowSubagent: AgentHostWorkflowSubagentSnapshot;
-    };
+  | { seq: number; type: 'run-error'; runId: ULID; error: string };

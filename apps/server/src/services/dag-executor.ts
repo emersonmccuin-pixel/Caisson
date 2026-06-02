@@ -1,7 +1,7 @@
 // Section 19.4d — v2 DAG executor orchestration. Drives the pure 19.4c brain
 // (@pc/workflows `dag/`) against injected live deps (spawn / work-item / review
 // / persistence). Deps-injected so the control flow is unit-testable with
-// fakes; the live wiring (createAgentWorkItem + spawnSubagent + worktree +
+// fakes; the live wiring (createAgentWorkItem + agent dispatch + worktree +
 // broadcast + deliverReview) is supplied by apps/server at construction.
 //
 // Model: await-per-layer (matches PC's existing tick — `await Promise.all(ready)`).
@@ -55,13 +55,13 @@ export interface DagExecutorDeps {
   resolveRef(state: State): RefResolver;
   /** Create the child work item + spawn the pod; resolve when terminal. */
   dispatchAgent(node: WorkflowV2.AgentNode, ctx: DagNodeContext): Promise<NodeOutcome>;
-  /** Run a bash/script node in the worktree; resolve when done. */
-  runCommand(node: WorkflowV2.BashNode | WorkflowV2.ScriptNode, ctx: DagNodeContext): Promise<NodeOutcome>;
-  /** Move the run-root card to `node.to_stage` without firing stage-on-entry workflows. */
-  moveWorkItem(node: WorkflowV2.MoveWorkItemNode, ctx: DagNodeContext): Promise<NodeOutcome>;
+  /** Card-move TRANSITION EFFECT (locked decision 1) — move the run-root card to
+   *  `stage` without firing that stage's on-entry workflows. Applied after a step
+   *  settles `completed` (its `move`) or on a reject kick-back (`reject.move`). */
+  moveCard(stage: string): Promise<{ ok: boolean; error?: string }>;
   /** Post the review gate (orchestrator channel event / Human Review inbox). */
   requestReview(
-    node: WorkflowV2.HumanReviewNode | WorkflowV2.OrchestratorReviewNode,
+    node: WorkflowV2.ReviewNode,
     ctx: DagNodeContext,
     bundle: { nodeId: string; output: string }[]
   ): Promise<void>;
@@ -73,13 +73,18 @@ export interface DagExecutorDeps {
   isCancelled(): boolean;
   /** Route a ceiling-exceeded review to Human Review (Section 7). */
   holdForHuman(nodeId: string, reason: string): void;
+  /** Workflow-engine redesign — fired once when the run finalizes as `failed`,
+   *  carrying the derived failure reason. Delivers a notice to the human inbox +
+   *  the project orchestrator (offline → persists, drains next pass). Optional so
+   *  tests + the review/cancel paths don't have to wire it. */
+  notifyRunFailed?(reason: string): void;
 }
 
 const DEFAULT_MAX_CONCURRENCY = 4;
 const TICK_SAFETY = 1000;
 
-function isReview(n: Node): n is WorkflowV2.HumanReviewNode | WorkflowV2.OrchestratorReviewNode {
-  return n.kind === 'human-review' || n.kind === 'orchestrator-review';
+function isReview(n: Node): n is WorkflowV2.ReviewNode {
+  return n.kind === 'review';
 }
 
 export class DagExecutor {
@@ -125,7 +130,7 @@ export class DagExecutor {
 
   /** Default Review Bundle = the review node's immediate upstreams' outputs. */
   private resolveBundle(
-    node: WorkflowV2.HumanReviewNode | WorkflowV2.OrchestratorReviewNode,
+    node: WorkflowV2.ReviewNode,
     resolve: RefResolver
   ): { nodeId: string; output: string }[] {
     const sources =
@@ -172,9 +177,7 @@ export class DagExecutor {
 
       // Only review nodes ready → pause the run at the gate(s).
       for (const id of reviewReady) {
-        const node = this.byId.get(id) as
-          | WorkflowV2.HumanReviewNode
-          | WorkflowV2.OrchestratorReviewNode;
+        const node = this.byId.get(id) as WorkflowV2.ReviewNode;
         this.state = markRunning(this.state, id);
         this.state = markAwaitingReview(this.state, id);
         const bundle = this.resolveBundle(node, resolve);
@@ -203,15 +206,12 @@ export class DagExecutor {
           const node = this.byId.get(id)!;
           const carry = this.carryFor(id, resolve);
           try {
-            const outcome =
-              node.kind === 'agent'
-                ? await this.deps.dispatchAgent(node, this.ctx(resolve, carry))
-                : node.kind === 'move-work-item'
-                ? await this.deps.moveWorkItem(node, this.ctx(resolve, carry))
-                : await this.deps.runCommand(
-                    node as WorkflowV2.BashNode | WorkflowV2.ScriptNode,
-                    this.ctx(resolve, carry)
-                  );
+            // runLayer only ever sees non-review ready nodes (review nodes pause
+            // via requestReview), and the only non-review kind is `agent`.
+            if (node.kind !== 'agent') {
+              return { id, outcome: { state: 'failed' as const, error: `unexpected node kind "${node.kind}" in run layer` } };
+            }
+            const outcome = await this.deps.dispatchAgent(node, this.ctx(resolve, carry));
             return { id, outcome };
           } catch (err) {
             return {
@@ -228,6 +228,18 @@ export class DagExecutor {
           nodeId: id,
           ...(outcome.error ? { data: { error: outcome.error } } : {}),
         });
+        // Card-move TRANSITION EFFECT (locked decision 1) — a step that declares
+        // `move` advances the run-root card on completion. Best-effort: a move
+        // failure is logged but does not fail the (already-completed) step.
+        const moved = this.byId.get(id)?.move;
+        if (outcome.state === 'completed' && moved) {
+          const res = await this.deps.moveCard(moved);
+          this.deps.event({
+            type: 'card_moved',
+            nodeId: id,
+            data: res.ok ? { stage: moved } : { stage: moved, error: res.error ?? 'move failed' },
+          });
+        }
       }
     }
   }
@@ -276,6 +288,19 @@ export class DagExecutor {
       // finalizes to `failed`.
       this.deps.event({ type: 'iteration_ceiling_hit', nodeId: reviewNodeId });
       this.deps.holdForHuman(reviewNodeId, 'reject iteration ceiling reached');
+    } else if (outcome.kickedBack) {
+      // Card-move transition effect on kick-back (locked decision 1) — e.g. a QA
+      // gate reject moves the card back to the build stage before the loop re-runs.
+      const reviewNode = this.byId.get(reviewNodeId);
+      const moved = reviewNode && isReview(reviewNode) ? reviewNode.reject?.move : undefined;
+      if (moved) {
+        const res = await this.deps.moveCard(moved);
+        this.deps.event({
+          type: 'card_moved',
+          nodeId: reviewNodeId,
+          data: res.ok ? { stage: moved } : { stage: moved, error: res.error ?? 'move failed' },
+        });
+      }
     }
     return this.advance();
   }
@@ -285,6 +310,10 @@ export class DagExecutor {
     if (status === 'completed') this.deps.event({ type: 'workflow_completed' });
     else if (status === 'failed') this.deps.event({ type: 'workflow_failed' });
     this.persistRun(status);
+    // Workflow-engine redesign — a failed run notifies the human inbox + the
+    // project orchestrator (durable; survives an offline orchestrator). Fired
+    // after persist so the run row is already terminal when the notice lands.
+    if (status === 'failed') this.deps.notifyRunFailed?.(this.deriveFailureReason());
     return status;
   }
 

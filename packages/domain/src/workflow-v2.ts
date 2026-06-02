@@ -23,20 +23,26 @@ import type { VerificationTier } from './contract.ts';
 // Node kinds
 // ---------------------------------------------------------------------------
 
-/** v1 node set. Five kinds + move-work-item. `loop` + `cancel` dropped (locks 3 + 13). */
+/** Node kinds. Workflow-engine redesign: just TWO workers — `agent` (runs
+ *  autonomously, an agent runs any commands it needs and reports) and `review`
+ *  (a human-judgment gate; `reviewer` = human | orchestrator). The old
+ *  bash/script/move-work-item kinds + the two split review kinds are deleted —
+ *  card-move is a node `move` effect, not a node. */
 export const WORKFLOW_NODE_KINDS = [
   'agent',
-  'bash',
-  'script',
-  'human-review',
-  'orchestrator-review',
-  'move-work-item',
+  'review',
 ] as const;
 export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
 
-/** Review kinds carry a `reject` back-edge + `bundle_from`. */
-export const REVIEW_NODE_KINDS = ['human-review', 'orchestrator-review'] as const;
+/** The single review kind. (Was two; unified.) Carries `reviewer`, a `reject`
+ *  back-edge, and `bundle_from`. */
+export const REVIEW_NODE_KINDS = ['review'] as const;
 export type ReviewNodeKind = (typeof REVIEW_NODE_KINDS)[number];
+
+/** Who a review step waits on. `human` → the user's inbox; `orchestrator` → the
+ *  project orchestrator's inbox. Both pause the run durably until a decision. */
+export const REVIEWERS = ['human', 'orchestrator'] as const;
+export type Reviewer = (typeof REVIEWERS)[number];
 
 // ---------------------------------------------------------------------------
 // Triggers — four in schema from day one (lock 10). UI exposes manual +
@@ -116,6 +122,9 @@ export interface RejectEdge {
   /** Values wired into the back_to node's next run. e.g.
    *  `{ feedback: '$self.output.notes' }`. `$self` = this review node. */
   carry?: Record<string, string>;
+  /** Card move applied on kick-back (locked decision 1) — e.g. move the card
+   *  back to the build stage when a QA gate rejects. Omit = card stays put. */
+  move?: string;
 }
 
 /** Fields common to every node. */
@@ -135,6 +144,16 @@ export interface WorkflowNodeBase {
    *  ceiling (no JSONL activity). Default idle 5 min / wall-clock 2 h for agent
    *  nodes; applied by the executor, not stored when unset. */
   timeout?: number;
+  /** Workflow-engine redesign (locked decision 1) — card move as a TRANSITION
+   *  EFFECT, not a node. After this step settles `completed`, the run-root card
+   *  moves to this stage id (without firing that stage's on-entry workflows, so a
+   *  workflow can advance its own card loop-safely). Omit = card stays put.
+   *  Replaces the separate `move-work-item` node. */
+  move?: string;
+  /** Opt-in to a `move` whose destination stage owns another workflow's
+   *  stage-on-entry trigger (which the move will silently skip). Suppresses the
+   *  save-time collision error for an intentional skip. */
+  allow_stage_workflow_skip?: boolean;
   /** Visualizer-layer position override. Persisted so user drags survive a
    *  reload and the agent-author can read positions between turns
    *  (sync-model-A, Section 19 lock 8). When absent, the visualizer falls back
@@ -163,27 +182,15 @@ export interface AgentNode extends WorkflowNodeBase {
   verification_tier?: VerificationTier;
 }
 
-/** Runs a shell command in the run's worktree, path-guarded. SIGKILL on
- *  timeout. No AI, no child-WI dispatch (output = `{stdout, stderr, exitCode}`). */
-export interface BashNode extends WorkflowNodeBase {
-  kind: 'bash';
-  /** Shell body. Supports `$nodeId.output[.field]` (bash-escaped). */
-  bash: string;
-}
-
-/** Runs a TS (node) or Python script in the run's worktree. SIGKILL on timeout.
- *  PC convention is node/python (NOT Archon's bun/uv — port-map open Q #1). */
-export interface ScriptNode extends WorkflowNodeBase {
-  kind: 'script';
-  script: string;
-  runtime: 'node' | 'python';
-}
-
-/** Pauses the run; queues in the Human Review inbox (Section 7). On approve,
- *  follows `next`; on reject, kicks back via `reject`. */
-export interface HumanReviewNode extends WorkflowNodeBase {
-  kind: 'human-review';
-  /** What the user should review. Supports substitution. */
+/** Unified review step (workflow-engine redesign). Pauses the run durably until
+ *  a decision lands in an inbox — the user's (`reviewer: 'human'`) or the project
+ *  orchestrator's (`reviewer: 'orchestrator'`). On approve, follows `next`; on
+ *  reject, kicks back via `reject`. Same contract for both flavors. */
+export interface ReviewNode extends WorkflowNodeBase {
+  kind: 'review';
+  /** Which inbox the run waits in. */
+  reviewer: Reviewer;
+  /** What to review. Supports substitution. */
   prompt?: string;
   /** Aggregate these nodes' outputs into one review artifact (Review Bundle,
    *  19.5). Default = the node's immediate upstreams (inverse of `next`). */
@@ -191,38 +198,11 @@ export interface HumanReviewNode extends WorkflowNodeBase {
   reject?: RejectEdge;
 }
 
-/** Pauses the run; wakes the orchestrator via channel event. On approve,
- *  follows `next`; on reject, kicks back via `reject`. */
-export interface OrchestratorReviewNode extends WorkflowNodeBase {
-  kind: 'orchestrator-review';
-  prompt?: string;
-  bundle_from?: string[];
-  reject?: RejectEdge;
-}
-
-/** Moves the run-root work item to a different stage. Does NOT fire
- *  stage-on-entry workflows on the destination (avoids trigger loops).
- *  On success the node's `output` is the new stage id. */
-export interface MoveWorkItemNode extends WorkflowNodeBase {
-  kind: 'move-work-item';
-  /** Destination stage id (required, non-empty). */
-  to_stage: string;
-  /** Explicit opt-in to move into a stage that has its own stage-on-entry
-   *  workflow (which the move will silently skip). */
-  allow_stage_workflow_skip?: boolean;
-}
-
-export type WorkflowNode =
-  | AgentNode
-  | BashNode
-  | ScriptNode
-  | HumanReviewNode
-  | OrchestratorReviewNode
-  | MoveWorkItemNode;
+export type WorkflowNode = AgentNode | ReviewNode;
 
 // Type guards
-export function isReviewNode(n: WorkflowNode): n is HumanReviewNode | OrchestratorReviewNode {
-  return n.kind === 'human-review' || n.kind === 'orchestrator-review';
+export function isReviewNode(n: WorkflowNode): n is ReviewNode {
+  return n.kind === 'review';
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +302,8 @@ export const WORKFLOW_EVENT_TYPES = [
   'review_approved',
   'review_rejected',
   'iteration_ceiling_hit',
+  /** Card-move transition effect fired (locked decision 1). */
+  'card_moved',
 ] as const;
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 

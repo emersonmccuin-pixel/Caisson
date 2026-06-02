@@ -1,13 +1,11 @@
 // Section 19.4e — LIVE wiring for the v2 DAG executor. Implements DagExecutorDeps
-// against the real machinery (work-item-as-contract creation, spawnSubagent,
-// verification, worktree exec, channel posts, the v2 sidecar repo) and provides
+// against the real machinery (work-item-as-contract creation, the agent-dispatch
+// door, verification, worktree exec, channel posts, the v2 sidecar repo) and provides
 // the fire entry point. Spawner / verification / exec / channel are injectable
 // so the integration is testable against a real DB with a FAKE claude.exe (see
 // test/dag-run-service.test.ts); the live claude.exe smoke is 19.14.
 
 import { randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { ExpectedOutput, Project, ULID, WorkflowV2 } from '@pc/domain';
 import { substituteRefs, type RefResolver, type ReviewDecision, type RunStatus } from '@pc/workflows';
 import {
@@ -26,30 +24,12 @@ import {
 import { createAgentWorkItem } from './agent-work-item.ts';
 // Door-unification — workflow agent nodes dispatch through the SAME door the
 // orchestrator uses (active-runs registration, canonical spawn, unified terminal
-// + verification). The forked spawnSubagent path is gone.
+// + verification). The forked subagent-spawn path is gone.
 import { dispatchFreshAgent } from './agent-run-factory.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import type { WorkItemService } from './work-item.ts';
 import { announceWorkItemRow } from './work-item-writer.ts';
 import type { WorktreeService } from './worktree.ts';
-
-const execFileAsync = promisify(execFile);
-
-export type CommandExec = (
-  kind: 'bash' | 'node' | 'python',
-  code: string,
-  opts: { cwd: string; timeout?: number }
-) => Promise<{ ok: boolean; error?: string; stdout?: string }>;
-
-/** Per-node stdout cap stored in the DAG state. Plenty for typical
- *  `echo`/`git status`/`jq` outputs; trims giant logs that would otherwise
- *  bloat the workflow_runs_v2.dagState JSON column. */
-const STDOUT_CAP_BYTES = 16 * 1024;
-
-function truncateStdout(s: string): string {
-  if (s.length <= STDOUT_CAP_BYTES) return s;
-  return s.slice(0, STDOUT_CAP_BYTES) + `\n…[truncated, ${String(s.length - STDOUT_CAP_BYTES)} more bytes]`;
-}
 
 /** Workflow-review delivery seam. The DAG executor calls this to enqueue a
  *  durable `workflow-review` mailbox message (active-orchestrator +
@@ -63,6 +43,19 @@ export type WorkflowReviewDelivery = (input: {
   flavor: WorkflowReviewFlavor;
   body: string;
 }) => boolean;
+
+/** Workflow-engine redesign — failed-run notification seam. Enqueues a durable
+ *  `workflow-run-failed` mailbox message to BOTH the human user-inbox AND the
+ *  project orchestrator (active-orchestrator). When no orchestrator is live the
+ *  delivery persists and drains on its next liveness pass. Injected from
+ *  index.ts where the mailboxService lives. */
+export type WorkflowRunFailedDelivery = (input: {
+  projectId: ULID;
+  runId: ULID;
+  workflowName: string;
+  workItemId: ULID | null;
+  reason: string;
+}) => void;
 
 // Slice 015b — durable workflow.review.changed facts via the run gateway. The
 // gateway writes the in-txn `live_outbox` row; the 015a relay drains + delivers
@@ -109,31 +102,13 @@ export interface DagRunServiceOptions {
   broadcast: (event: unknown) => void;
   hostClient?: AgentHostReattachClient | null;
   // ── injectable seams (live defaults) ──
-  exec?: CommandExec;
   /** Mailbox review delivery seam — the review prompt is enqueued as a mailbox
    *  message. Injected from index.ts. */
   deliverReview?: WorkflowReviewDelivery;
+  /** Mailbox failed-run delivery seam — a failed run notifies the human inbox +
+   *  the project orchestrator. Injected from index.ts. */
+  deliverRunFailed?: WorkflowRunFailedDelivery;
 }
-
-const liveExec: CommandExec = async (kind, code, { cwd, timeout }) => {
-  const [cmd, args]: [string, string[]] =
-    kind === 'bash' ? ['bash', ['-c', code]] : kind === 'node' ? ['node', ['-e', code]] : ['python', ['-c', code]];
-  try {
-    const { stdout } = await execFileAsync(cmd, args, {
-      cwd,
-      timeout,
-      killSignal: 'SIGKILL', // hard-kill on timeout (PC improvement over Archon's soft abort)
-      maxBuffer: 10 * 1024 * 1024,
-      windowsHide: true,
-      encoding: 'utf8',
-    });
-    return { ok: true, stdout: truncateStdout(String(stdout).replace(/\r?\n$/, '')) };
-  } catch (err) {
-    const e = err as Error & { killed?: boolean };
-    const reason = e.killed && timeout !== undefined ? `timeout (${String(timeout)}ms exceeded)` : e.message;
-    return { ok: false, error: reason };
-  }
-};
 
 /** awaiting-review maps to the persisted `paused` status. */
 function toRunStatus(s: RunStatus): WorkflowV2.WorkflowRunStatus {
@@ -158,8 +133,6 @@ export function makeExecutorDeps(
   workflow: WorkflowV2.Workflow,
   opts: DagRunServiceOptions
 ): DagExecutorDeps {
-  const exec = opts.exec ?? liveExec;
-
   const resolveRef =
     (state: WorkflowV2.WorkflowDagState): RefResolver =>
     (nodeId, field) => {
@@ -311,59 +284,40 @@ export function makeExecutorDeps(
     };
   };
 
-  const runCommand = async (
-    node: WorkflowV2.BashNode | WorkflowV2.ScriptNode,
-    ctx: DagNodeContext
-  ): Promise<NodeOutcome> => {
-    const cwd = run.worktreePath ?? opts.workspaceDir;
-    const kind: 'bash' | 'node' | 'python' = node.kind === 'bash' ? 'bash' : node.runtime;
-    const code = node.kind === 'bash' ? render(node.bash, ctx, true) : render(node.script, ctx);
-    const r = await exec(kind, code, { cwd, ...(node.timeout !== undefined ? { timeout: node.timeout } : {}) });
-    if (!r.ok) return { state: 'failed', ...(r.error ? { error: r.error } : {}) };
-    return { state: 'completed', ...(r.stdout !== undefined ? { output: r.stdout } : {}) };
-  };
-
-  const moveWorkItem = async (
-    node: WorkflowV2.MoveWorkItemNode,
-    _ctx: DagNodeContext
-  ): Promise<NodeOutcome> => {
-    if (!run.workItemId) {
-      return { state: 'failed', error: 'move-work-item: run has no root work item' };
+  // Card-move TRANSITION EFFECT (locked decision 1) — move the run-root card to
+  // `stage` WITHOUT firing that stage's on-entry workflows (loop-safe). Replaces
+  // the old move-work-item node. Best-effort: returns ok/error so the executor
+  // can log a failed move without failing the (already-completed) step.
+  const moveCard = async (stage: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!run.workItemId) return { ok: false, error: 'run has no root work item' };
+    const stages = opts.getProject().stages ?? [];
+    if (!stages.some((s) => s.id === stage)) {
+      return { ok: false, error: `stage "${stage}" not found in project` };
     }
-    const project = opts.getProject();
-    const stages = project.stages ?? [];
-    const targetStage = stages.find((s) => s.id === node.to_stage);
-    if (!targetStage) {
-      return {
-        state: 'failed',
-        error: `move-work-item node "${node.id}": stage "${node.to_stage}" not found in project`,
-      };
+    if (!getWorkItem(run.workItemId)) {
+      return { ok: false, error: `run root work item ${run.workItemId} not found` };
     }
-    const wi = getWorkItem(run.workItemId);
-    if (!wi) {
-      return { state: 'failed', error: `move-work-item: run root work item ${run.workItemId} not found` };
-    }
-    const moved = moveWorkItemStage(run.workItemId, node.to_stage);
+    const moved = moveWorkItemStage(run.workItemId, stage);
     if (moved) {
       // Slice 015b — announce through the durable door (outbox row); the relay
       // delivers the canonical work-item.changed frame. No hand-fanout.
       announceWorkItemRow(moved, opts.projectId, 'moved');
     }
-    return { state: 'completed', output: node.to_stage };
+    return { ok: true };
   };
 
   const requestReview = async (
-    node: WorkflowV2.HumanReviewNode | WorkflowV2.OrchestratorReviewNode,
+    node: WorkflowV2.ReviewNode,
     _ctx: DagNodeContext,
     bundle: { nodeId: string; output: string }[]
   ): Promise<void> => {
-    const flavor = node.kind === 'orchestrator-review' ? 'orchestrator' : 'human';
+    const flavor = node.reviewer;
     const summary = bundle.map((b) => `### ${b.nodeId}\n${b.output}`).join('\n\n');
     const body =
       `[pc:workflow-review run=${run.id} node=${node.id} flavor=${flavor}]\n` +
       `${node.prompt ?? 'Please review the work below.'}\n\n${summary}\n\n` +
       `Approve: pc_complete_node-equivalent (v2 review endpoint) · Reject sends it back.`;
-    if (node.kind === 'orchestrator-review') {
+    if (node.reviewer === 'orchestrator') {
       // 017 Phase C — the review prompt is enqueued as a durable mailbox message
       // (active-orchestrator + orchestrator-turn) via the wired seam. No Channel.
       opts.deliverReview?.({
@@ -409,8 +363,7 @@ export function makeExecutorDeps(
   return {
     resolveRef,
     dispatchAgent,
-    runCommand,
-    moveWorkItem,
+    moveCard,
     requestReview,
     persist,
     event: (ev) => {
@@ -422,6 +375,14 @@ export function makeExecutorDeps(
       });
     },
     isCancelled: () => workflowRunsV2Repo.getRun(run.id)?.status === 'cancelled',
+    notifyRunFailed: (reason) =>
+      opts.deliverRunFailed?.({
+        projectId: opts.projectId,
+        runId: run.id,
+        workflowName: workflow.name,
+        workItemId: run.workItemId ?? null,
+        reason,
+      }),
     holdForHuman: (_nodeId, _reason) => {
       // Slice 015c — the legacy `workflow-v2-human-hold` envelope is deleted: it
       // had no web consumer, and the durable fact (the run advancing to `failed`
@@ -545,7 +506,7 @@ export async function applyV2ReviewDecision(
   // workflow.run.changed via the writer during resume.
   const reviewNode = workflow.nodes.find((n) => n.id === reviewNodeId);
   const flavor: WorkflowReviewFlavor =
-    reviewNode?.kind === 'orchestrator-review' ? 'orchestrator' : 'human';
+    reviewNode && reviewNode.kind === 'review' ? reviewNode.reviewer : 'human';
   emitReviewFact(opts, {
     runId: run.id,
     nodeId: reviewNodeId,

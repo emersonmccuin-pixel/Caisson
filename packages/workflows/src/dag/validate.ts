@@ -8,19 +8,19 @@
 // every field read is defensive — never assume the discriminated union holds.
 
 import type { WorkflowV2 } from '@pc/domain';
-import { findForwardCycle } from './topo.ts';
+import { computeUpstreams, findForwardCycle } from './topo.ts';
 import { evaluateCondition } from './when.ts';
-import type { RefResolver } from './refs.ts';
+import { extractRefs, type RefResolver } from './refs.ts';
 
 export interface ValidationResult {
   ok: boolean;
   errors: string[];
 }
 
-const NODE_KINDS = new Set(['agent', 'bash', 'script', 'human-review', 'orchestrator-review', 'move-work-item']);
+const NODE_KINDS = new Set(['agent', 'review']);
 const TRIGGER_KINDS = new Set(['manual', 'stage-on-entry', 'schedule', 'event']);
-const SCRIPT_RUNTIMES = new Set(['node', 'python']);
-const REVIEW_KINDS = new Set(['human-review', 'orchestrator-review']);
+const REVIEW_KINDS = new Set(['review']);
+const REVIEWERS = new Set(['human', 'orchestrator']);
 
 /** Grammar-only probe for `when:`. A resolver returning '0' lets every
  *  well-formed atom parse (string-eq AND numeric), so `parsed: false` means the
@@ -78,15 +78,8 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
       errors.push(`agent node "${id}": missing "agent" (pod name)`);
     if (kind === 'agent' && (typeof n.task !== 'string' || n.task === ''))
       errors.push(`agent node "${id}": missing "task"`);
-    if (kind === 'bash' && (typeof n.bash !== 'string' || n.bash === ''))
-      errors.push(`bash node "${id}": missing "bash" command`);
-    if (kind === 'script') {
-      if (typeof n.script !== 'string' || n.script === '') errors.push(`script node "${id}": missing "script" body`);
-      if (!SCRIPT_RUNTIMES.has(n.runtime as string))
-        errors.push(`script node "${id}": runtime must be "node" or "python"`);
-    }
-    if (kind === 'move-work-item' && (typeof n.to_stage !== 'string' || n.to_stage === ''))
-      errors.push(`move-work-item node "${id}": missing "to_stage"`);
+    if (kind === 'review' && !REVIEWERS.has(n.reviewer as string))
+      errors.push(`review node "${id}": reviewer must be "human" or "orchestrator"`);
   }
 
   // ── ref integrity ──
@@ -109,6 +102,68 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
   // ── forward-edge acyclicity (reject back-edges are excluded by forwardEdges) ──
   const cycle = findForwardCycle(nodes as unknown as WorkflowV2.WorkflowNode[]);
   if (cycle) errors.push(`cycle in forward edges: ${cycle.join(' → ')}`);
+
+  // ── ref ordering ("Saved ⇒ runnable", §4.1) ──
+  // Every `$X.output[.field]` a step reads must point at a STRICTLY-EARLIER step
+  // (a forward-edge ancestor) or the run-root card (`$root`). A step can't read
+  // its own output or a downstream/sibling step's output that hasn't run yet —
+  // the chain can't be wired to read a value before it exists. Skipped when the
+  // graph has a cycle (the upstream relation is meaningless until that's fixed).
+  if (!cycle) {
+    const upstreams = computeUpstreams(nodes as unknown as WorkflowV2.WorkflowNode[]);
+    const ancestorCache = new Map<string, Set<string>>();
+    const ancestorsOf = (nodeId: string): Set<string> => {
+      const cached = ancestorCache.get(nodeId);
+      if (cached) return cached;
+      const acc = new Set<string>();
+      const stack = [...(upstreams.get(nodeId) ?? [])];
+      while (stack.length) {
+        const u = stack.pop()!;
+        if (acc.has(u)) continue;
+        acc.add(u);
+        for (const p of upstreams.get(u) ?? []) stack.push(p);
+      }
+      ancestorCache.set(nodeId, acc);
+      return acc;
+    };
+    for (const n of nodes) {
+      const id = typeof n.id === 'string' ? n.id : '';
+      if (!id) continue;
+      // The substitutable text bodies a step renders refs from.
+      const bodies = [n.task, n.prompt].filter(
+        (v): v is string => typeof v === 'string',
+      );
+      if (bodies.length === 0) continue;
+      const ancestors = ancestorsOf(id);
+      const seen = new Set<string>();
+      for (const body of bodies) {
+        for (const ref of extractRefs(body)) {
+          const fieldSuffix = ref.field ? `.${ref.field}` : '';
+          const key = `${ref.nodeId}${fieldSuffix}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          if (ref.nodeId === 'root') continue; // the run-root card is always available
+          if (ref.nodeId === 'self') {
+            errors.push(`node "${id}": $self.output is only valid in a reject edge's carry, not in a body`);
+            continue;
+          }
+          if (ref.nodeId === id) {
+            errors.push(`node "${id}": reads its own output ($${id}.output${fieldSuffix})`);
+            continue;
+          }
+          if (!known(ref.nodeId)) {
+            errors.push(`node "${id}": reads $${ref.nodeId}.output${fieldSuffix} — no such node`);
+            continue;
+          }
+          if (!ancestors.has(ref.nodeId)) {
+            errors.push(
+              `node "${id}": reads $${ref.nodeId}.output${fieldSuffix} but "${ref.nodeId}" is not an upstream step — a ref must point at a strictly-earlier step`,
+            );
+          }
+        }
+      }
+    }
+  }
 
   // ── when: grammar ──
   for (const n of nodes) {
@@ -136,18 +191,28 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
   }
 
   // ── cross-workflow stage-on-entry collision ──
+  // A card-move EFFECT (a step's `move`, or a review `reject.move`) does NOT fire
+  // the destination stage's on-entry workflows — so moving a card into a stage
+  // that owns one silently skips it. Flag unless `allow_stage_workflow_skip`.
   if (opts?.stageOnEntryWorkflows && opts.stageOnEntryWorkflows.length > 0) {
+    const collidesWith = (stage: unknown): { name: string } | undefined =>
+      typeof stage === 'string' && stage
+        ? opts.stageOnEntryWorkflows!.find((w) => w.stage === stage)
+        : undefined;
     for (const n of nodes) {
-      if ((n.kind as string) !== 'move-work-item') continue;
-      const toStage = n.to_stage as unknown;
-      if (typeof toStage !== 'string' || !toStage) continue;
+      const id = typeof n.id === 'string' ? n.id : '?';
       if ((n as Record<string, unknown>).allow_stage_workflow_skip === true) continue;
-      const collision = opts.stageOnEntryWorkflows.find((w) => w.stage === toStage);
-      if (collision) {
-        const id = typeof n.id === 'string' ? n.id : '?';
-        errors.push(
-          `move-work-item node "${id}": destination stage is the on-entry trigger of workflow "${collision.name}" — that workflow will be silently skipped. Inline its steps, pick another stage, or set allow_stage_workflow_skip: true to do this intentionally.`,
-        );
+      const reject = n.reject as { move?: unknown } | undefined;
+      for (const [where, stage] of [
+        ['move', n.move],
+        ['reject.move', reject?.move],
+      ] as const) {
+        const collision = collidesWith(stage);
+        if (collision) {
+          errors.push(
+            `node "${id}": ${where} → "${String(stage)}" is the on-entry trigger of workflow "${collision.name}" — that workflow will be silently skipped. Inline its steps, pick another stage, or set allow_stage_workflow_skip: true to do this intentionally.`,
+          );
+        }
       }
     }
   }

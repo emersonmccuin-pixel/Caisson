@@ -5,7 +5,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { getActiveRunRegistry as defaultGetActiveRunRegistry } from '../../services/agent-active-runs.ts';
-import { notifyWorkflowSubagentHandshake as defaultNotifyWorkflowSubagentHandshake } from '../../services/workflow-subagent-handshake.ts';
 
 export interface McpBridgeRuntime {
   notifyOrchestratorMcpHandshake(agentSessionId: string): boolean;
@@ -29,7 +28,6 @@ export interface McpBridgeRouteDeps {
   now?: () => number;
   readFileText?: (path: string) => string | null;
   getActiveRunRegistry?: () => McpBridgeActiveRunRegistry;
-  notifyWorkflowSubagentHandshake?: (ccSessionId: string) => boolean;
   getHostClient?: () => McpBridgeHostClient | null;
 }
 
@@ -43,8 +41,6 @@ export function registerMcpBridgeRoutes(app: Hono, deps: McpBridgeRouteDeps): vo
     now: deps.now ?? Date.now,
     readFileText: deps.readFileText ?? defaultReadFileText,
     getActiveRunRegistry: deps.getActiveRunRegistry ?? defaultGetActiveRunRegistry,
-    notifyWorkflowSubagentHandshake:
-      deps.notifyWorkflowSubagentHandshake ?? defaultNotifyWorkflowSubagentHandshake,
     getHostClient: deps.getHostClient ?? (() => null),
   };
 
@@ -80,8 +76,8 @@ export function registerMcpBridgeRoutes(app: Hono, deps: McpBridgeRouteDeps): vo
   /** Section 22 / Phase D -- internal endpoint posted by pc-rig (the per-spawn
    *  MCP child) when CC's MCP client finishes the JSON-RPC handshake (the
    *  `initialized` notification). Routes the signal to whichever surface owns
-   *  the session: the v2 active-runs registry (dispatched agents) or the
-   *  workflow-subagent-handshake map (workflow-runtime subagents). */
+   *  the session: the v2 active-runs registry (in-process dispatched agents),
+   *  the out-of-process agent host, or the project orchestrator. */
   app.post('/api/internal/mcp-handshake', async (c) => {
     const body = await c.req.json<{ projectId?: string; agentSessionId?: string }>();
     if (!body.projectId || !body.agentSessionId) {
@@ -92,9 +88,6 @@ export function registerMcpBridgeRoutes(app: Hono, deps: McpBridgeRouteDeps): vo
       v2Entry.run.notifyMcpHandshake();
       return c.json({ ok: true, found: true, transport: 'agent' });
     }
-    if (services.notifyWorkflowSubagentHandshake(body.agentSessionId)) {
-      return c.json({ ok: true, found: true, transport: 'workflow' });
-    }
     const hostClient = services.getHostClient();
     if (hostClient) {
       try {
@@ -103,7 +96,7 @@ export function registerMcpBridgeRoutes(app: Hono, deps: McpBridgeRouteDeps): vo
           ccSessionId: body.agentSessionId,
         });
         if (response?.ok && response.command === 'notify-mcp-handshake') {
-          return c.json({ ok: true, found: true, transport: 'workflow-host' });
+          return c.json({ ok: true, found: true, transport: 'host' });
         }
       } catch {
         // Best-effort: local/orchestrator routes below may still own this session.

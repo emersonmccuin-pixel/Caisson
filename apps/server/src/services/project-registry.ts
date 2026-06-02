@@ -7,7 +7,7 @@ import { getProjectById, listProjects } from '@pc/db';
 
 import { ProjectRuntime, type BroadcastFn } from './project-runtime.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
-import type { WorkflowReviewDelivery } from './dag-run-service.ts';
+import type { WorkflowReviewDelivery, WorkflowRunFailedDelivery } from './dag-run-service.ts';
 
 export interface ProjectRegistryDeps {
   dataDir: string;
@@ -24,6 +24,9 @@ export interface ProjectRegistryDeps {
   /** Slice 008 — injected workflow-review delivery seam, forwarded to every
    *  ProjectRuntime. Default (absent) keeps the unchanged Channel path. */
   deliverWorkflowReview?: WorkflowReviewDelivery;
+  /** Workflow-engine redesign — failed-run notification seam, forwarded to every
+   *  ProjectRuntime. Absent ⟹ no notice (back-compat). */
+  deliverWorkflowRunFailed?: WorkflowRunFailedDelivery;
 }
 
 export class ProjectRegistry {
@@ -102,6 +105,9 @@ export class ProjectRegistry {
       ...(this.deps.getHostClient ? { getHostClient: this.deps.getHostClient } : {}),
       ...(this.deps.deliverWorkflowReview
         ? { deliverWorkflowReview: this.deps.deliverWorkflowReview }
+        : {}),
+      ...(this.deps.deliverWorkflowRunFailed
+        ? { deliverWorkflowRunFailed: this.deps.deliverWorkflowRunFailed }
         : {}),
     });
   }

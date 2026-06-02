@@ -307,6 +307,9 @@ const projectRegistry = new ProjectRegistry({
   // (post-boot), so it safely references the mailbox bindings declared later in
   // this module. Enqueues the review prompt as a durable mailbox message.
   deliverWorkflowReview: deliverWorkflowReview,
+  // Failed-run notification seam (workflow-engine redesign). Notifies the human
+  // inbox + the project orchestrator when a run fails.
+  deliverWorkflowRunFailed: deliverWorkflowRunFailed,
 });
 projectRegistry.loadAll();
 
@@ -673,6 +676,61 @@ function deliverWorkflowReview(input: {
     now: Date.now(),
   });
   return true;
+}
+
+// Workflow-engine redesign — failed-run notification. Hoisted (referenced by the
+// ProjectRegistry built at boot; the body runs at run-finalize time). Enqueues
+// ONE durable `workflow-run-failed` message with TWO recipients: the human
+// user-inbox (ui-inbox) AND the project orchestrator (active-orchestrator,
+// orchestrator-turn). If no orchestrator is live the orchestrator delivery
+// persists and drains on its next liveness pass — the run failure is never lost.
+function deliverWorkflowRunFailed(input: {
+  projectId: ULID;
+  runId: ULID;
+  workflowName: string;
+  workItemId: ULID | null;
+  reason: string;
+}): void {
+  const body =
+    `Workflow "${input.workflowName}" failed.\n\n` +
+    `Reason: ${input.reason}\n` +
+    `Run: ${input.runId}` +
+    (input.workItemId ? `\nCard: ${input.workItemId}` : '');
+  enqueueMailboxAndFanout({
+    message: {
+      id: newId(),
+      projectId: input.projectId,
+      kind: 'workflow-run-failed',
+      subject: `Workflow failed: ${input.workflowName}`,
+      body,
+      payload: {
+        runId: input.runId,
+        workflowName: input.workflowName,
+        workItemId: input.workItemId,
+        reason: input.reason,
+      },
+      sourceKind: 'workflow-run',
+      sourceId: input.runId,
+      idempotencyKey: `workflow-run-failed:${input.runId}`,
+    },
+    recipients: [
+      {
+        id: newId(),
+        addressKind: 'user-inbox',
+        addressJson: { kind: 'user-inbox', userId: 'local-user', projectId: input.projectId },
+        channel: 'ui-inbox',
+        deliveryId: newId(),
+      },
+      {
+        id: newId(),
+        addressKind: 'active-orchestrator',
+        addressJson: { kind: 'active-orchestrator', projectId: input.projectId },
+        channel: 'orchestrator-turn',
+        deliveryId: newId(),
+      },
+    ],
+    now: Date.now(),
+  });
 }
 
 // Flow C — external-webhook cutover sink. Hoisted so the ChannelServer built at

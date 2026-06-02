@@ -42,6 +42,7 @@ import {
   applyV2ReviewDecision,
   type DagRunServiceOptions,
   type WorkflowReviewDelivery,
+  type WorkflowRunFailedDelivery,
 } from './dag-run-service.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import { WorkItemService } from './work-item.ts';
@@ -94,6 +95,9 @@ export interface ProjectRuntimeOptions {
    *  the mailboxService lives — ProjectRuntime gains ONE function, no mailbox
    *  ref and no runtime-host change. Absent ⟹ unchanged Channel path. */
   deliverWorkflowReview?: WorkflowReviewDelivery;
+  /** Workflow-engine redesign — failed-run notification seam (human inbox +
+   *  project orchestrator). Composed in index.ts; absent ⟹ no notice. */
+  deliverWorkflowRunFailed?: WorkflowRunFailedDelivery;
 }
 
 export class ProjectRuntime {
@@ -286,6 +290,9 @@ export class ProjectRuntime {
       broadcast: this.opts.broadcast,
       hostClient: this.opts.getHostClient?.() ?? null,
       ...(this.opts.deliverWorkflowReview ? { deliverReview: this.opts.deliverWorkflowReview } : {}),
+      ...(this.opts.deliverWorkflowRunFailed
+        ? { deliverRunFailed: this.opts.deliverWorkflowRunFailed }
+        : {}),
     };
   }
 

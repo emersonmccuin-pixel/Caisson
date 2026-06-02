@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { resolve } from 'node:path';
 
 import {
   AgentRun,
@@ -14,15 +13,8 @@ import {
   type AgentHostRunSnapshot,
   type AgentHostStartRunRequest,
   type AgentHostTerminalResult,
-  type AgentHostWorkflowSubagentRequest,
-  type AgentHostWorkflowSubagentSnapshot,
   type AgentRunInput,
-  type LowLevelSpawnInput,
   type SpawnFactory,
-  type SpawnLike,
-  spawnSubagent,
-  type SubagentSpawnHandle,
-  type SubagentSpawnResult,
 } from '@pc/runtime';
 
 export const AGENT_HOST_PROTOCOL_VERSION = 1 as const;
@@ -36,7 +28,6 @@ export interface AgentHostServiceOptions {
   maxConcurrent?: number;
   eventBufferLimit?: number;
   spawnFactory?: SpawnFactory;
-  workflowSpawnFactory?: (input: LowLevelSpawnInput) => SpawnLike;
   now?: () => number;
 }
 
@@ -54,29 +45,14 @@ interface HostRunEntry {
   updatedAt: number;
 }
 
-interface WorkflowSubagentEntry {
-  request: AgentHostWorkflowSubagentRequest;
-  handle: SubagentSpawnHandle | null;
-  ccSessionId: string | null;
-  notifyMcpHandshake: (() => void) | null;
-  state: AgentHostWorkflowSubagentSnapshot['state'];
-  startedAt: number;
-  updatedAt: number;
-  terminalAt: number | null;
-  terminalResult?: SubagentSpawnResult;
-}
-
 export class AgentHostService extends EventEmitter {
   private readonly identity: AgentHostIdentity;
   private readonly registry: AgentRunRegistry;
   private readonly spawnFactory?: SpawnFactory;
-  private readonly workflowSpawnFactory?: (input: LowLevelSpawnInput) => SpawnLike;
   private readonly now: () => number;
   private readonly eventBufferLimit: number;
   private readonly runs = new Map<string, HostRunEntry>();
   private readonly ccSessionIndex = new Map<string, string>();
-  private readonly workflowSubagents = new Map<string, WorkflowSubagentEntry>();
-  private readonly workflowCcSessionIndex = new Map<string, string>();
   private readonly events: AgentHostEvent[] = [];
   private seq = 0;
   private hostReadyEmitted = false;
@@ -95,7 +71,6 @@ export class AgentHostService extends EventEmitter {
       maxConcurrent: options.maxConcurrent,
     });
     this.spawnFactory = options.spawnFactory;
-    this.workflowSpawnFactory = options.workflowSpawnFactory;
     this.eventBufferLimit =
       options.eventBufferLimit ?? DEFAULT_EVENT_BUFFER_LIMIT;
   }
@@ -151,8 +126,6 @@ export class AgentHostService extends EventEmitter {
         return this.startRun('start-run', command.request);
       case 'resume-run':
         return this.startRun('resume-run', command.request);
-      case 'start-workflow-subagent':
-        return this.startWorkflowSubagent(command.request);
       case 'send':
         return this.send(command.runId, command.text);
       case 'mark-paused':
@@ -161,8 +134,6 @@ export class AgentHostService extends EventEmitter {
         return this.answerPending(command.runId, command.text);
       case 'cancel':
         return this.cancel(command.runId);
-      case 'cancel-workflow-subagent':
-        return this.cancelWorkflowSubagent(command.pcSessionId, command.reason);
       case 'notify-mcp-handshake':
         return this.notifyMcpHandshake(command.ccSessionId);
       case 'shutdown':
@@ -215,92 +186,6 @@ export class AgentHostService extends EventEmitter {
       ok: true,
       command,
       run: this.snapshot(entry),
-      lastSeq: this.seq,
-    };
-  }
-
-  private startWorkflowSubagent(
-    request: AgentHostWorkflowSubagentRequest,
-  ): AgentHostCommandResponse {
-    if (this.shuttingDown) {
-      return this.error(
-        'start-workflow-subagent',
-        'host-shutting-down',
-        'host is shutting down',
-      );
-    }
-    if (this.workflowSubagents.has(request.pcSessionId)) {
-      return this.error(
-        'start-workflow-subagent',
-        'run-exists',
-        `workflow subagent ${request.pcSessionId} already exists`,
-      );
-    }
-
-    const entry: WorkflowSubagentEntry = {
-      request,
-      handle: null,
-      ccSessionId: null,
-      notifyMcpHandshake: null,
-      state: 'running',
-      startedAt: this.now(),
-      updatedAt: this.now(),
-      terminalAt: null,
-    };
-    this.workflowSubagents.set(request.pcSessionId, entry);
-
-    const handle = spawnSubagent(request, {
-      ...(this.workflowSpawnFactory
-        ? { createLowLevelSpawn: this.workflowSpawnFactory }
-        : {}),
-      registerHandshakeListener: (ccSessionId, notify) => {
-        entry.ccSessionId = ccSessionId;
-        entry.notifyMcpHandshake = notify;
-        entry.updatedAt = this.now();
-        this.workflowCcSessionIndex.set(ccSessionId, request.pcSessionId);
-        this.emitWorkflowSubagentState(entry);
-        return () => {
-          if (this.workflowCcSessionIndex.get(ccSessionId) === request.pcSessionId) {
-            this.workflowCcSessionIndex.delete(ccSessionId);
-          }
-          if (entry.notifyMcpHandshake === notify) {
-            entry.notifyMcpHandshake = null;
-          }
-        };
-      },
-    });
-    entry.handle = handle;
-    entry.updatedAt = this.now();
-    this.emitWorkflowSubagentState(entry);
-    void handle.done.then((result) => this.finishWorkflowSubagent(entry, result));
-
-    return {
-      ok: true,
-      command: 'start-workflow-subagent',
-      workflowSubagent: this.workflowSnapshot(entry),
-      lastSeq: this.seq,
-    };
-  }
-
-  private cancelWorkflowSubagent(
-    pcSessionId: string,
-    reason?: string,
-  ): AgentHostCommandResponse {
-    const entry = this.workflowSubagents.get(pcSessionId);
-    if (!entry) {
-      return this.error(
-        'cancel-workflow-subagent',
-        'not-found',
-        `workflow subagent ${pcSessionId} not found`,
-      );
-    }
-
-    entry.handle?.kill(reason ?? 'cancelled by host command');
-    entry.updatedAt = this.now();
-    return {
-      ok: true,
-      command: 'cancel-workflow-subagent',
-      workflowSubagent: this.workflowSnapshot(entry),
       lastSeq: this.seq,
     };
   }
@@ -417,22 +302,6 @@ export class AgentHostService extends EventEmitter {
       };
     }
 
-    const workflowPcSessionId = this.workflowCcSessionIndex.get(ccSessionId);
-    const workflowEntry = workflowPcSessionId
-      ? this.workflowSubagents.get(workflowPcSessionId)
-      : undefined;
-    if (workflowEntry?.notifyMcpHandshake) {
-      const notify = workflowEntry.notifyMcpHandshake;
-      workflowEntry.notifyMcpHandshake = null;
-      this.workflowCcSessionIndex.delete(ccSessionId);
-      notify();
-      return {
-        ok: true,
-        command: 'notify-mcp-handshake',
-        lastSeq: this.seq,
-      };
-    }
-
     return this.error(
       'notify-mcp-handshake',
       'not-found',
@@ -445,9 +314,6 @@ export class AgentHostService extends EventEmitter {
     if (mode === 'cancel-runs') {
       for (const entry of this.runs.values()) {
         if (!entry.run.isTerminal()) entry.run.cancel();
-      }
-      for (const entry of this.workflowSubagents.values()) {
-        entry.handle?.kill('host is shutting down');
       }
     }
     return {
@@ -501,13 +367,6 @@ export class AgentHostService extends EventEmitter {
     });
   }
 
-  private emitWorkflowSubagentState(entry: WorkflowSubagentEntry): void {
-    this.appendEvent({
-      type: 'workflow-subagent-state',
-      workflowSubagent: this.workflowSnapshot(entry),
-    });
-  }
-
   private listRunSnapshots(): AgentHostRunSnapshot[] {
     return Array.from(this.runs.values(), (entry) => this.snapshot(entry));
   }
@@ -531,44 +390,6 @@ export class AgentHostService extends EventEmitter {
       terminalAt: record.terminalAt ?? null,
       terminalResult: entry.terminalResult,
     };
-  }
-
-  private workflowSnapshot(
-    entry: WorkflowSubagentEntry,
-  ): AgentHostWorkflowSubagentSnapshot {
-    return {
-      pcSessionId: entry.request.pcSessionId,
-      ccSessionId: entry.ccSessionId,
-      agentName: entry.request.agentName,
-      worktreeDir: entry.request.worktreeDir,
-      state: entry.state,
-      transcriptPath:
-        entry.handle?.transcriptPath() ??
-        resolve(entry.request.sessionDataDir, 'transcript.log'),
-      jsonlPath: entry.handle?.jsonlPath() ?? null,
-      startedAt: entry.startedAt,
-      updatedAt: entry.updatedAt,
-      terminalAt: entry.terminalAt,
-      terminalResult: entry.terminalResult,
-    };
-  }
-
-  private finishWorkflowSubagent(
-    entry: WorkflowSubagentEntry,
-    result: SubagentSpawnResult,
-  ): void {
-    entry.terminalResult = result;
-    entry.state = workflowStateForResult(result);
-    entry.updatedAt = this.now();
-    entry.terminalAt = entry.updatedAt;
-    if (entry.ccSessionId) {
-      this.workflowCcSessionIndex.delete(entry.ccSessionId);
-    }
-    entry.notifyMcpHandshake = null;
-    this.appendEvent({
-      type: 'workflow-subagent-terminal',
-      workflowSubagent: this.workflowSnapshot(entry),
-    });
   }
 
   private toAgentRunInput(request: HostRunRequest): AgentRunInput {
@@ -641,11 +462,4 @@ function toTerminalResult(terminal: {
     failureCause: terminal.cause ?? null,
     failureReason: terminal.status === 'failed' ? (terminal.cause ?? null) : null,
   };
-}
-
-function workflowStateForResult(
-  result: SubagentSpawnResult,
-): AgentHostWorkflowSubagentSnapshot['state'] {
-  if (result.kind === 'success') return 'completed';
-  return result.cause === 'killed' ? 'cancelled' : 'failed';
 }

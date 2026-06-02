@@ -1,14 +1,12 @@
 // T1.2 — the ONE HostConnection is the sole conduit + multiplexed event stream
-// for ALL live host consumers (sweep, boot reattach, factory, spawner). These
-// tests guard the slice's load-bearing invariants:
+// for ALL live host consumers (sweep, boot reattach, factory). These tests guard
+// the slice's load-bearing invariants:
 //   1. sweep self-heals via refreshRuns after a host port change (no warn-loop).
 //   2. a run-state mid-sendCommand lands on the handle WITHOUT the old
 //      latestRunStateSnapshot patch (the delete-proof — single ordered stream).
 //   3. ONE run-terminal on the shared emitter is applied exactly once across
 //      the boot-reattach listener + a factory listener (idempotent net).
-//   4. workflow-subagent events still route to the spawner (pcSessionId filter)
-//      while run events route to the factory (runId filter) — no cross-talk.
-//   5. no listener leak: a factory subscription unsubscribes on terminal, so the
+//   4. no listener leak: a factory subscription unsubscribes on terminal, so the
 //      connection's listener set returns to baseline across N runs.
 
 import { test } from 'node:test';
@@ -18,7 +16,6 @@ import type {
   AgentHostEndpoint,
   AgentHostEvent,
   AgentHostRunSnapshot,
-  AgentHostWorkflowSubagentSnapshot,
 } from '@pc/runtime';
 import type { AgentRunRow, ULID } from '@pc/domain';
 
@@ -303,53 +300,7 @@ test('one run-terminal on the shared emitter applies exactly once (reattach + fa
   conn.close();
 });
 
-// --- 4. workflow-subagent events route to the spawner, run events to factory --
-
-test('workflow-subagent events route to the spawner; run events to the factory (no cross-talk)', async () => {
-  const runId = 'run-x';
-  const pcSessionId = 'pc-sess-1';
-  const rec = recorder({ liveBase: () => 'http://127.0.0.1:9401', hostId: () => 'h1', runs: () => [] });
-  const conn = createHostConnection({
-    discoverEndpoint: () => endpoint(9401, 'h1'),
-    fetch: rec.fetch,
-    isPidAlive: () => true,
-    readLockRaw: () => null,
-    heartbeatMs: 1_000_000,
-  });
-  await conn.refreshRuns();
-
-  let factoryHits = 0;
-  let spawnerHits = 0;
-
-  // Factory listener: filters by runId (run-state/run-terminal only).
-  conn.onEvent((event) => {
-    if (event.type !== 'run-state' && event.type !== 'run-terminal') return;
-    if (event.run.runId === runId) factoryHits += 1;
-  });
-  // Spawner listener: filters by pcSessionId (workflow-subagent-* only).
-  conn.onEvent((event) => {
-    if (event.type !== 'workflow-subagent-state' && event.type !== 'workflow-subagent-terminal') return;
-    if (event.workflowSubagent.pcSessionId === pcSessionId) spawnerHits += 1;
-  });
-
-  const subagent: AgentHostWorkflowSubagentSnapshot = {
-    pcSessionId,
-    workflowRunId: 'wf-1',
-    nodeId: 'node-1',
-    state: 'completed',
-    terminalResult: null,
-  } as AgentHostWorkflowSubagentSnapshot;
-
-  rec.pushEvent({ seq: 1, type: 'run-terminal', run: hostRun(runId, 'completed') });
-  rec.pushEvent({ seq: 2, type: 'workflow-subagent-terminal', workflowSubagent: subagent } as AgentHostEvent);
-  await new Promise((r) => setTimeout(r, 10));
-
-  assert.equal(factoryHits, 1, 'factory listener saw only the run event');
-  assert.equal(spawnerHits, 1, 'spawner listener saw only the subagent event');
-  conn.close();
-});
-
-// --- 5. no listener leak across N runs ----------------------------------------
+// --- 4. no listener leak across N runs ----------------------------------------
 
 test('factory listener unsubscribes on terminal — no listener leak across N runs', async () => {
   const rec = recorder({ liveBase: () => 'http://127.0.0.1:9501', hostId: () => 'h1', runs: () => [] });

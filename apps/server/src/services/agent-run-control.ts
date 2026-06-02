@@ -50,20 +50,12 @@ export type HardKillResult =
       alreadyTerminal: boolean;
       /** A real local OS-process tree kill happened (in-process runs). */
       processKilled: boolean;
-      /** T1.3 — the host accepted a `cancel` / `cancel-workflow-subagent`. For a
-       *  host-backed run (pid null) this — not `processKilled` — is the signal
-       *  that compute was actually stopped. */
+      /** T1.3 — the host accepted a `cancel`. For a host-backed run (pid null)
+       *  this — not `processKilled` — is the signal that compute was actually
+       *  stopped. */
       hostCancelled: boolean;
     }
   | { ok: false; error: string };
-
-/** A workflow-spawned subagent's `agent_runs` row carries its `pcSessionId` as
- *  the dispatcherSessionId (`dag-run-service.ts` — `wf-<run>-<node>-<rand>`). It
- *  is NEVER in the active-run registry and the host tracks it by `pcSessionId`,
- *  so the right host stop is `cancel-workflow-subagent`, not `cancel runId`. */
-function isWorkflowSubagentRow(row: AgentRunRow): boolean {
-  return row.dispatcherSessionId.startsWith('wf-');
-}
 
 const TERMINAL: AgentRunStatus[] = ['completed', 'failed', 'cancelled'];
 
@@ -100,16 +92,12 @@ export async function hardKillAgentRun(
 
   // 1b. T1.3 — AWAIT the host stop. This is what actually terminates host-backed
   //     compute (those runs persist no server-side pid, so step 2 is a no-op for
-  //     them). Workflow subagents are tracked by pcSessionId → cancel-workflow-
-  //     subagent; all other host runs → cancel runId. Errors are swallowed: the
-  //     local kill + idempotent finalize remain the net.
+  //     them). All host runs → cancel runId. Errors are swallowed: the local kill
+  //     + idempotent finalize remain the net.
   let hostCancelled = false;
   if (deps.host) {
     try {
-      const command = isWorkflowSubagentRow(row)
-        ? ({ type: 'cancel-workflow-subagent', pcSessionId: row.dispatcherSessionId } as const)
-        : ({ type: 'cancel', runId } as const);
-      const response = await Promise.resolve(deps.host.sendCommand(command));
+      const response = await Promise.resolve(deps.host.sendCommand({ type: 'cancel', runId }));
       hostCancelled = !response || response.ok === true;
     } catch {
       /* swallow — local kill + finalize below converge the row regardless */

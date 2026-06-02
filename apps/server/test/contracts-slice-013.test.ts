@@ -24,6 +24,7 @@ const {
   createWorkItem,
   getWorkItem,
   getContract,
+  getAgentRunRow,
   insertAgentRunRow,
   listContractsForWorkItem,
   newId,
@@ -130,7 +131,11 @@ test('verification is a no-op when no contract id is supplied', async () => {
 
 // ── terminal effects write the deliverable onto the contract ─────────────────
 
-test('terminal effects write the answer deliverable onto the contract', () => {
+test('completion gate: a completed contract run with NO submitted deliverable fails (no-deliverable)', () => {
+  // Workflow-engine redesign — delivery is the SOLE done-signal. A contract-
+  // first run that reaches `completed` without a submitted deliverable is NOT
+  // synthesized from free-text (the completion-by-inference path is dead); it is
+  // downgraded to a typed `no-deliverable` failure and the contract stays empty.
   const p = mkProject('terminal-deliverable');
   const contract = new ContractService().create({
     projectId: p.id as ULID,
@@ -168,13 +173,62 @@ test('terminal effects write the answer deliverable onto the contract', () => {
     {},
   );
   assert.equal(res.applied, 1);
+  const row = getAgentRunRow(runId);
+  assert.equal(row!.status, 'failed', 'a completed-without-deliverable contract run is downgraded');
+  assert.equal(row!.failureCause, 'no-deliverable');
   const updated = getContract(contract.id as ULID);
   assert.ok(updated);
+  assert.equal(updated!.deliverable, null, 'no deliverable is synthesized from free-text');
+});
+
+test('completion gate: a SUBMITTED deliverable lets a contract run complete', () => {
+  // The positive case — the agent submitted via pc_submit_deliverable, so the
+  // contract carries the typed output and completion stands.
+  const p = mkProject('terminal-deliverable-ok');
+  const contract = new ContractService().create({
+    projectId: p.id as ULID,
+    workItemId: null,
+    podName: 'writer',
+  });
+  new ContractService().setDeliverable({
+    id: contract.id as ULID,
+    deliverable: { kind: 'answer', text: 'the final report' },
+    report: 'the final report',
+  });
+  const runId = newId();
+  insertAgentRunRow({
+    id: runId,
+    projectId: p.id as ULID,
+    podName: 'writer',
+    dispatcherSessionId: 's',
+    ccSessionId: 'cc',
+    status: 'running',
+    input: 'go',
+    contractId: contract.id as ULID,
+    queuedAt: Date.now(),
+  });
+
+  const res = applyAgentRunTerminalEffects(
+    {
+      runId,
+      ccSessionId: 'cc',
+      podName: 'writer',
+      projectId: p.id as ULID,
+      dispatcherSessionId: 's',
+      parentWorkItemId: null,
+      worktreeDir: tmpDir,
+      status: 'completed',
+      result: '',
+      completedAt: Date.now(),
+      startedAt: Date.now(),
+      contractId: contract.id as ULID,
+    },
+    {},
+  );
+  assert.equal(res.applied, 1);
+  assert.equal(getAgentRunRow(runId)!.status, 'completed');
+  const updated = getContract(contract.id as ULID);
   assert.deepEqual(updated!.deliverable, { kind: 'answer', text: 'the final report' });
-  assert.equal(updated!.report, 'the final report');
-  // Slice 020 — the contract's terminal status (submitted → accepted via the
-  // async verification tail) is asserted deterministically in
-  // verification-slice-020.test.ts; this test pins the synchronous capture.
 });
 
 test('terminal effects: empty result with no submission writes NO deliverable (wi.body fallback retired)', () => {

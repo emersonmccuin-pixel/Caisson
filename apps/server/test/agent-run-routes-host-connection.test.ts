@@ -169,7 +169,9 @@ test('T1.3 /cancel on a host-backed run NOT in the registry sends host cancel + 
   assert.equal(getAgentRunRow(runId)?.status, 'running', 'cancel leaves the row for the host terminal event');
 });
 
-test('T1.3 /cancel on a workflow subagent (wf- dispatcher) sends cancel-workflow-subagent', async () => {
+test('T1.3 /cancel on a workflow-dispatched run (wf- dispatcher) sends a plain cancel by runId (door unified)', async () => {
+  // Post door-unification, a workflow agent run is a normal host run keyed by
+  // runId — the `wf-` dispatcher no longer routes to `cancel-workflow-subagent`.
   const project = createProject({
     slug: `arr-wf-${Date.now()}`,
     name: 'ARR WF',
@@ -201,7 +203,7 @@ test('T1.3 /cancel on a workflow subagent (wf- dispatcher) sends cancel-workflow
     method: 'POST',
   });
   assert.equal(res.status, 200);
-  assert.deepEqual(commands, [{ type: 'cancel-workflow-subagent', pcSessionId }]);
+  assert.deepEqual(commands, [{ type: 'cancel', runId }]);
 });
 
 test('T1.3 /cancel on a genuinely unknown run → 404', async () => {
