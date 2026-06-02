@@ -336,6 +336,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       input?: string;
       parentWorkItemId?: ULID;
       workItemId?: ULID;
+      expectedOutput?: unknown;
       parentInvokeDepth?: number;
       dispatcherSessionId?: string;
     }>();
@@ -374,6 +375,9 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         dispatcherSessionId,
         parentWorkItemId,
         workItemId,
+        ...(body.expectedOutput !== undefined
+          ? { expectedOutput: body.expectedOutput as Parameters<typeof services.dispatchFreshAgent>[0]['expectedOutput'] }
+          : {}),
         invokeDepth: depthCheck.childDepth,
         slug: project.slug,
       },
@@ -385,7 +389,9 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     );
 
     if (!result.ok) {
-      return c.json({ ok: false, error: result.error, cause: result.cause });
+      // Decision 4 — a required-but-absent work-item home is a client error.
+      const status = result.cause === 'work-item-required' ? 422 : 200;
+      return c.json({ ok: false, error: result.error, cause: result.cause }, status);
     }
 
     services.recordAgentInvoke({

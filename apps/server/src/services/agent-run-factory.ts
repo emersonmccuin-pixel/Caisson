@@ -48,6 +48,7 @@ import {
   updateAgentRunStatus,
 } from '@pc/db';
 import { ContractService } from '@pc/app-services';
+import { ContractV2, expectedOutputRequiresWorkItem } from '@pc/domain';
 import type {
   AgentInboxEventKind,
   ExpectedOutput,
@@ -231,6 +232,11 @@ export type DispatchAgentFailure =
     }
   | {
       ok: false;
+      cause: 'work-item-required';
+      error: string;
+    }
+  | {
+      ok: false;
       cause: ContinueAgentResult extends { ok: false; cause: infer C } ? C : never;
       error: string;
     };
@@ -258,6 +264,25 @@ export async function dispatchFreshAgent(
       ok: false,
       cause: 'unknown-agent',
       error: `no agent named "${input.agentName}" found in pod registry`,
+    };
+  }
+
+  // Slice 019 (Decision 4) — reject loudly when the dispatch's own output spec
+  // needs a work-item home and none is attached. The orchestrator must attach
+  // an existing work item or create one first. Only fires for contract-first
+  // dispatches that author an `expectedOutput` inline; legacy WI-sourced
+  // dispatches (no inline spec) skip this and source from the WI as before.
+  const inlineSpec = input.expectedOutput;
+  if (
+    inlineSpec &&
+    ContractV2.isExpectedOutputKind((inlineSpec as { kind?: unknown }).kind) &&
+    expectedOutputRequiresWorkItem(inlineSpec as ContractV2.ExpectedOutput) &&
+    !input.workItemId
+  ) {
+    return {
+      ok: false,
+      cause: 'work-item-required',
+      error: `expected_output kind "${(inlineSpec as { kind: string }).kind}" must land in a work item — attach one via workItemId or create one before dispatching`,
     };
   }
 

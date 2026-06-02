@@ -1290,6 +1290,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "parentWorkItemId": {
           "type": "string",
           "description": "optional parent work-item ULID for lineage (not the assignment — that is `workItemId`); defaults to PC_AGENT_PARENT_WORK_ITEM_ID"
+        },
+        "expected_output": {
+          "type": "object",
+          "description": "optional contract-first output spec authored directly onto the dispatch's contract. `{ kind }` is one of answer | prose | payload | repo | external | binary | action. Kinds that must land in a work item (prose unless store='contract', and repo) REQUIRE a workItemId — dispatching without one returns 422."
         }
       },
       "required": [

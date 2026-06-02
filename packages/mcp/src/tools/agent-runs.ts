@@ -47,6 +47,13 @@ export async function handleAgentRunTool(
         typeof args.workItemId === 'string' && args.workItemId.trim()
           ? args.workItemId.trim()
           : undefined;
+      // Slice 019 (contract-first) — the dispatch may carry its own expected
+      // output spec; the server authors it onto the contract. snake_case in,
+      // camelCase out (route convention).
+      const expectedOutput =
+        args.expected_output && typeof args.expected_output === 'object'
+          ? args.expected_output
+          : undefined;
       const rawDepth = Number(ctx.agentInvokeDepth ?? 0);
       const parentInvokeDepth =
         Number.isFinite(rawDepth) && rawDepth > 0 ? Math.floor(rawDepth) : 0;
@@ -57,6 +64,7 @@ export async function handleAgentRunTool(
       };
       if (parentWorkItemId) payload.parentWorkItemId = parentWorkItemId;
       if (workItemId) payload.workItemId = workItemId;
+      if (expectedOutput) payload.expectedOutput = expectedOutput;
       try {
         // Slice 011 — typed client parses AgentRunDto; raw body emitted verbatim.
         const res = await ctx.client.invokeAgent(
