@@ -38,27 +38,40 @@ const KIND_ORDER: MailboxMessageKind[] = [
   'system-notice',
 ];
 
+// Kinds that are never surfaced in the inbox — filtered out unconditionally, no
+// UI control. Only Agent Questions and Workflow Review remain visible.
+const HIDDEN_KINDS: ReadonlySet<MailboxMessageKind> = new Set([
+  'agent-approval',
+  'runtime-hook-ask',
+  'agent-terminal',
+  'external-webhook',
+  'system-notice',
+]);
+
 export function MailboxInbox({ scope, onVisibleCount }: MailboxInboxProps) {
   const { items, loading, refetch } = useMailboxInbox(scope);
 
-  useEffect(() => {
-    onVisibleCount?.(items.length);
-  }, [items.length, onVisibleCount]);
+  // Drop the never-shown kinds before anything counts, groups, or renders.
+  const visibleItems = items.filter((item) => !HIDDEN_KINDS.has(item.message.kind));
 
-  if (loading && items.length === 0) {
+  useEffect(() => {
+    onVisibleCount?.(visibleItems.length);
+  }, [visibleItems.length, onVisibleCount]);
+
+  if (loading && visibleItems.length === 0) {
     return (
       <div className="py-1 text-[11px] italic text-muted-foreground/70">Loading inbox…</div>
     );
   }
-  if (items.length === 0) {
+  if (visibleItems.length === 0) {
     return (
       <div className="py-1 text-[11px] italic text-muted-foreground/70">No messages.</div>
     );
   }
 
-  // Group by kind.
+  // Group the visible items by kind.
   const grouped = new Map<MailboxMessageKind, MailboxInboxItem[]>();
-  for (const item of items) {
+  for (const item of visibleItems) {
     const k = item.message.kind;
     if (!grouped.has(k)) grouped.set(k, []);
     grouped.get(k)!.push(item);
