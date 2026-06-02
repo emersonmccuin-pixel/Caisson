@@ -17,6 +17,7 @@ export type LiveEventEntity =
   | 'session-title'
   | 'pod'
   | 'area'
+  | 'contract'
   | 'host-health';
 
 /** Canonical live-event type names. Replay accepts these for `type=` filtering. */
@@ -37,6 +38,7 @@ export type LiveEventTypeName =
   | 'session.title.changed'
   | 'pod.changed'
   | 'area.changed'
+  | 'contract.changed'
   | 'host-health.changed';
 
 const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
@@ -56,6 +58,7 @@ const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'session.title.changed',
   'pod.changed',
   'area.changed',
+  'contract.changed',
   'host-health.changed',
 ];
 
@@ -248,6 +251,7 @@ function isLiveEventEntity(value: unknown): value is LiveEventEntity {
     value === 'session-title' ||
     value === 'pod' ||
     value === 'area' ||
+    value === 'contract' ||
     value === 'host-health'
   );
 }

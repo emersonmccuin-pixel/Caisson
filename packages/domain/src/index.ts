@@ -26,6 +26,25 @@ export {
   VERIFICATION_TIERS,
   isVerificationTier,
 } from './work-item-contract.ts';
+// Slice 013 — first-class contract v2 union. Namespaced to coexist with the v1
+// `work-item-contract.ts` surface above (which stays authoritative for the
+// legacy work_items contract columns this slice). Access as ContractV2.ExpectedOutput,
+// ContractV2.Deliverable, ContractV2.DELIVERABLE_KINDS, etc. The genuinely-new
+// `Deliverable` / `ContractStatus` shapes are also re-exported flat below for
+// the contract DTO + repos that only need those.
+export * as ContractV2 from './contract.ts';
+export type {
+  Deliverable,
+  DeliverableKind,
+  ContractStatus,
+  JsonSchema,
+} from './contract.ts';
+export {
+  CONTRACT_STATUSES,
+  DELIVERABLE_KINDS,
+  isContractStatus,
+  isDeliverableKind,
+} from './contract.ts';
 export { deriveAcceptanceCriteria } from './ac-derivation.ts';
 export {
   POD_DEFAULT_EXPECTED_OUTPUT,

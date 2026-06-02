@@ -91,6 +91,9 @@ export interface AgentRunRow {
   continues: ULID | null;
   parentInvokeDepth: number;
   parentWorkItemId: ULID | null;
+  /** Slice 013 — FK to the first-class `agent_contracts` row this run produces.
+   *  NULL for legacy/non-contract dispatches + un-backfilled rows. */
+  contractId: ULID | null;
   /** Verbatim initial input. NULL on resumes that carry no new input. */
   input: string | null;
   /** Final assistant text. NULL until terminal-completed. */

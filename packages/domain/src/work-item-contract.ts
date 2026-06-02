@@ -1,5 +1,12 @@
 // Work-item-as-contract types. Section 26 v1 — every agent dispatch creates
 // a work item; the work item IS the contract. See the agent output contract.
+//
+// Slice 013 — this v1 union STAYS authoritative for the legacy `work_items`
+// contract columns (dual-read shim) until slice 014 supersedes it. The v2
+// first-class union lives in `contract.ts` (exported as `ContractV2`). Do NOT
+// collapse this into a re-export this slice — verification must stay byte-
+// identical and `deriveAcceptanceCriteria` / `agent-work-item.ts` consume these
+// exact v1 shapes (`text`/`files`/`structured`/`side-effect`/`mixed`).
 
 /** Who verifies "done". `auto` runs structured predicates; `orchestrator-review`
  *  wakes the orchestrator via channel event; `human-review` queues in the
