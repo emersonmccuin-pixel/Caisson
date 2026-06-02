@@ -1,18 +1,23 @@
-// Section 26 — tier-1 acceptance-criteria evaluator. Walks an
+// Section 26 / slice 014a — acceptance-criteria evaluator. Walks an
 // `AcceptanceCriteria` predicate list and reports pass/fail per predicate.
 //
-// The pure predicates (fields_populated, field_matches, body_contains,
-// attachments_present, child_work_items_done) are evaluated against the
-// in-memory `EvaluationContext`. The two side-effecting predicates
-// (files_exist, bash_exit_zero) consult the caller-supplied
-// `PredicateExecutors` — this keeps `@pc/domain` free of `node:fs` /
-// `child_process` so the library remains zero-dep + browser-loadable.
+// 014a widens this to the v2 predicate union (`contract.ts`, a superset of the
+// v1 set) and feeds it the run's tool-call stream + the contract report, so
+// `action`/`external`/`payload`/`repo` contracts become verifiable instead of
+// silently passing. v1 predicates evaluate byte-identically.
+//
+// The pure predicates evaluate against the in-memory `EvaluationContext`. The
+// side-effecting predicates (files_exist, bash_exit_zero, git_diff_nonempty)
+// consult the caller-supplied `PredicateExecutors` — this keeps `@pc/domain`
+// free of `node:fs` / `child_process` so the library stays zero-dep +
+// browser-loadable.
 
 import type {
   AcceptanceCriteria,
   AcceptancePredicate,
   AcceptancePredicateKind,
-} from './work-item-contract.ts';
+  JsonSchema,
+} from './contract.ts';
 import type { WorkItemStatus } from './work-item.ts';
 
 export interface EvaluationContext {
@@ -23,6 +28,22 @@ export interface EvaluationContext {
    *  attachment content is simply absent from `body_contains` searches. */
   attachments: ReadonlyArray<{ name: string; content?: string }>;
   childWorkItems: ReadonlyArray<{ status: WorkItemStatus }>;
+  // ── v2 additions (014a). Optional with documented defaults so existing
+  //    construction sites stay valid until callers are updated. ──
+  /** The contract's free-text report to the orchestrator. `report_contains`
+   *  searches this (NOT the work-item body). Default ''. */
+  report?: string;
+  /** Tool-call names from the producing run's transcript. Powers `tool_called`.
+   *  Default []. */
+  toolCalls?: ReadonlyArray<{ name: string }>;
+  /** True when the run created a durable pending-ask (pc_ask_user). Powers
+   *  `pending_ask_created`. Default false. */
+  pendingAskCreated?: boolean;
+  /** The captured payload deliverable's data. Validated by `schema_valid`. */
+  payload?: unknown;
+  /** The captured external deliverable's handle. Checked by
+   *  `external_handle_present`. */
+  externalHandle?: string | null;
 }
 
 export interface PredicateExecutors {
@@ -32,6 +53,10 @@ export interface PredicateExecutors {
   /** Runs the bash command in either the worktree or the project root and
    *  resolves the process exit code. */
   runBash: (command: string, cwd: 'worktree' | 'project') => Promise<number>;
+  /** True when the git tree has uncommitted changes (tracked or untracked).
+   *  Powers `git_diff_nonempty`. Optional — absent ⇒ the predicate fails with
+   *  a clear "no git executor" reason. */
+  hasGitDiff?: (cwd: 'worktree' | 'project') => Promise<boolean>;
 }
 
 export interface PredicateFailure {
@@ -79,10 +104,23 @@ export async function evaluatePredicate(
       return await evalFilesExist(pred, executors);
     case 'bash_exit_zero':
       return await evalBashExitZero(pred, executors);
+    // ── v2 predicates (014a) ──
+    case 'report_contains':
+      return evalReportContains(pred, ctx);
+    case 'tool_called':
+      return evalToolCalled(pred, ctx);
+    case 'pending_ask_created':
+      return evalPendingAskCreated(ctx);
+    case 'schema_valid':
+      return evalSchemaValid(pred, ctx);
+    case 'external_handle_present':
+      return evalExternalHandlePresent(ctx);
+    case 'git_diff_nonempty':
+      return await evalGitDiffNonempty(pred, executors);
   }
 }
 
-// ── Pure predicates ────────────────────────────────────────────────────────
+// ── Pure predicates (v1) ────────────────────────────────────────────────────
 
 function evalFieldsPopulated(
   pred: Extract<AcceptancePredicate, { kind: 'fields_populated' }>,
@@ -140,21 +178,7 @@ function evalBodyContains(
   // search corpus is just wider. Attachments with no `content` (UI previews
   // that didn't load the payload) are skipped.
   const corpus = collectSearchCorpus(ctx);
-  if (pred.regex) {
-    let re: RegExp;
-    try {
-      re = new RegExp(pred.pattern);
-    } catch (err) {
-      return { pass: false, reason: `invalid regex: ${(err as Error).message}` };
-    }
-    if (re.test(corpus)) return { pass: true };
-    return { pass: false, reason: `body or attachments do not match /${pred.pattern}/` };
-  }
-  if (corpus.includes(pred.pattern)) return { pass: true };
-  return {
-    pass: false,
-    reason: `body or attachments do not contain "${pred.pattern}"`,
-  };
+  return matchCorpus(corpus, pred.pattern, pred.regex, 'body or attachments');
 }
 
 /** Concatenates the work-item body + every attachment's content into a single
@@ -169,6 +193,27 @@ function collectSearchCorpus(ctx: EvaluationContext): string {
     }
   }
   return parts.join('');
+}
+
+/** Shared substring/regex match used by `body_contains` + `report_contains`. */
+function matchCorpus(
+  corpus: string,
+  pattern: string,
+  regex: boolean | undefined,
+  label: string,
+): { pass: boolean; reason?: string } {
+  if (regex) {
+    let re: RegExp;
+    try {
+      re = new RegExp(pattern);
+    } catch (err) {
+      return { pass: false, reason: `invalid regex: ${(err as Error).message}` };
+    }
+    if (re.test(corpus)) return { pass: true };
+    return { pass: false, reason: `${label} do not match /${pattern}/` };
+  }
+  if (corpus.includes(pattern)) return { pass: true };
+  return { pass: false, reason: `${label} do not contain "${pattern}"` };
 }
 
 function evalAttachmentsPresent(
@@ -204,6 +249,51 @@ function evalChildrenDone(
   };
 }
 
+// ── v2 pure predicates (014a) ──────────────────────────────────────────────
+
+function evalReportContains(
+  pred: Extract<AcceptancePredicate, { kind: 'report_contains' }>,
+  ctx: EvaluationContext,
+): { pass: boolean; reason?: string } {
+  return matchCorpus(ctx.report ?? '', pred.pattern, pred.regex, 'report');
+}
+
+function evalToolCalled(
+  pred: Extract<AcceptancePredicate, { kind: 'tool_called' }>,
+  ctx: EvaluationContext,
+): { pass: boolean; reason?: string } {
+  const min = pred.min_count ?? 1;
+  const count = (ctx.toolCalls ?? []).filter((t) => t.name === pred.name).length;
+  if (count >= min) return { pass: true };
+  return {
+    pass: false,
+    reason: `tool ${pred.name} called ${count}x (need ${min})`,
+  };
+}
+
+function evalPendingAskCreated(ctx: EvaluationContext): { pass: boolean; reason?: string } {
+  if (ctx.pendingAskCreated === true) return { pass: true };
+  return { pass: false, reason: 'no pending ask (pc_ask_user) was created' };
+}
+
+function evalExternalHandlePresent(ctx: EvaluationContext): { pass: boolean; reason?: string } {
+  const h = ctx.externalHandle;
+  if (typeof h === 'string' && h.length > 0) return { pass: true };
+  return { pass: false, reason: 'no external handle present on the deliverable' };
+}
+
+function evalSchemaValid(
+  pred: Extract<AcceptancePredicate, { kind: 'schema_valid' }>,
+  ctx: EvaluationContext,
+): { pass: boolean; reason?: string } {
+  if (!('payload' in ctx) || ctx.payload === undefined) {
+    return { pass: false, reason: 'no payload deliverable to validate' };
+  }
+  const errors = validateJsonSchema(ctx.payload, pred.schema, '$');
+  if (errors.length === 0) return { pass: true };
+  return { pass: false, reason: `payload schema invalid: ${errors.slice(0, 3).join('; ')}` };
+}
+
 // ── Side-effecting predicates ──────────────────────────────────────────────
 
 async function evalFilesExist(
@@ -235,4 +325,92 @@ async function evalBashExitZero(
     pass: false,
     reason: `bash command exited ${exitCode}: ${pred.command}`,
   };
+}
+
+async function evalGitDiffNonempty(
+  pred: Extract<AcceptancePredicate, { kind: 'git_diff_nonempty' }>,
+  executors: PredicateExecutors,
+): Promise<{ pass: boolean; reason?: string }> {
+  if (!executors.hasGitDiff) {
+    return { pass: false, reason: 'no git executor available to check the diff' };
+  }
+  const has = await executors.hasGitDiff(pred.cwd ?? 'worktree');
+  if (has) return { pass: true };
+  return { pass: false, reason: 'git tree has no changes' };
+}
+
+// ── Minimal JsonSchema validator (zero-dep) ─────────────────────────────────
+// Covers the `JsonSchema` subset declared in contract.ts: type, properties,
+// items, required, enum. Returns a list of human-readable error paths; empty
+// means valid.
+
+function validateJsonSchema(value: unknown, schema: JsonSchema, path: string): string[] {
+  const errs: string[] = [];
+  if (!schema || typeof schema !== 'object') return errs;
+
+  if (Array.isArray(schema.enum)) {
+    const ok = schema.enum.some((e) => deepEqual(e, value));
+    if (!ok) errs.push(`${path} not in enum`);
+  }
+
+  if (schema.type) {
+    if (!typeMatches(value, schema.type)) {
+      errs.push(`${path} expected ${schema.type}`);
+      return errs; // wrong base type — nested checks are meaningless
+    }
+  }
+
+  if (schema.properties || schema.required || schema.type === 'object') {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      errs.push(`${path} expected object`);
+      return errs;
+    }
+    const obj = value as Record<string, unknown>;
+    for (const req of schema.required ?? []) {
+      if (!(req in obj)) errs.push(`${path}.${req} required`);
+    }
+    for (const [k, sub] of Object.entries(schema.properties ?? {})) {
+      if (k in obj) errs.push(...validateJsonSchema(obj[k], sub, `${path}.${k}`));
+    }
+  }
+
+  if (schema.items || schema.type === 'array') {
+    if (!Array.isArray(value)) {
+      errs.push(`${path} expected array`);
+      return errs;
+    }
+    if (schema.items) {
+      value.forEach((v, i) => errs.push(...validateJsonSchema(v, schema.items as JsonSchema, `${path}[${i}]`)));
+    }
+  }
+
+  return errs;
+}
+
+function typeMatches(value: unknown, type: NonNullable<JsonSchema['type']>): boolean {
+  switch (type) {
+    case 'object':
+      return typeof value === 'object' && value !== null && !Array.isArray(value);
+    case 'array':
+      return Array.isArray(value);
+    case 'string':
+      return typeof value === 'string';
+    case 'number':
+      return typeof value === 'number';
+    case 'boolean':
+      return typeof value === 'boolean';
+    case 'null':
+      return value === null;
+    default:
+      return true;
+  }
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }

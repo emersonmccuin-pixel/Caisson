@@ -9,7 +9,8 @@
     "./tool-registry": "./src/tool-registry.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"test/*.test.ts\""
   },
   "dependencies": {
     "yaml": "^2.6.1"

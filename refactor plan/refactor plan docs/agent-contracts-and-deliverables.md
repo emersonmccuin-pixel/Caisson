@@ -52,6 +52,37 @@ The ~20 semantic deliverable types (plan, PRD, research, ADR, code change, verdi
 
 `action` is the seventh, added after the verification defect (below) proved the original six couldn't express "this tool must be called." Worktree-vs-in-place is an isolation axis (`worktreePath`), not a type. Composite ("write the doc AND open the PR") is **two contracts on one work item**, not one mixed contract — atomic verification, and the work-log view is what composes them.
 
+## Decision 4 — work-item association at dispatch
+
+Locked 2026-06-01. **Dispatch creates a contract, never a work item.** A work item is a durable human-facing reference/handoff (PRD-like; also consumed by LLMs). It is associated to a contract only when the output needs that home.
+
+Two independent links, either may be absent:
+- **input** — the contract's source material ("process this work item / break this PRD into chunks"). The real info lives in the WI.
+- **output** — where the deliverable lands (an existing WI, or a new one).
+
+They can be the same WI, different WIs, or none. Input + child-WI outputs = decomposition.
+
+**What's deterministic: the *requirement*, not the match.** Whether an output kind *needs* a WI home is fixed by the spec, not the agent's interpretation:
+
+| Output | Persists | WI required |
+|---|---|---|
+| `answer` / `payload` for the orchestrator | contract | no |
+| `prose` with `store: contract` | contract | no |
+| `prose` with `store: work_item_body` / `attachment` | WI | **yes** |
+| `prose` with `store: repo_file` (doc on disk) | filesystem | **yes** |
+| `binary` / attachment-for-handoff | WI | **yes** |
+| `repo` (code change) | git | _open — see forks_ |
+| `external` (handle) | external system | _open — see forks_ |
+
+**What's NOT auto-inferred: which WI.** No fuzzy-matching engine — the orchestrator decides, because it holds the conversation + the project's items. Ordered rule it follows:
+1. Dispatch is clearly about a WI already in play (user pointed at it, or it's a sub-task of the active workstream) → attach to that one.
+2. Output needs a durable home (table above) → create a WI for it.
+3. Otherwise → contract only.
+
+Tell for 1 vs 2: **if the orchestrator has to go searching for a match, create instead.** Attach-to-existing only when the item is already in hand.
+
+Dispatch input therefore carries exactly one of: a `workItemId` to attach to · a create-instruction (title/parent) · nothing. **Guard:** an output kind that requires a home with none supplied/creatable ⇒ **reject the dispatch loudly**. Never silent, never deferred to the agent.
+
 ## The schema (v2)
 
 Lands in `packages/domain/src/contract.ts` (supersedes `work-item-contract.ts`).
@@ -186,6 +217,9 @@ Live run `01KSZZKQ6JY68A60SMX1VE01BD` (pod `haiku`): a contract whose whole poin
 **Slice 014 owns the defect.** First check whether the point-fix subset already exists in the code; promote it if so, otherwise build it. Either way 014 makes `action` a first-class deliverable kind, adds `tool_called`/`pending_ask_created` to the predicate union, and makes submission-gated completion the *completion condition* — so a contract can't even reach `completed` without the evidence.
 
 ## Open forks
+- **`repo` WI requirement** (Decision 4) — does a code change always need a WI home, or is contract-only allowed for throwaway edits? Leaning yes-required (persists outside the contract, like a doc on disk).
+- **`external` WI requirement** (Decision 4) — contract-only (the handle is the record) or also a WI? Leaning contract-only.
+- **attachment ownership** — can a contract own an attachment directly (orchestrator-only artifact, no WI), or do attachments only ever hang off WIs? Decides whether no-WI research can still produce a file.
 - **payload schema vs. closed-world variable catalog** — decomposition/extraction payloads will reference catalog-typed fields. Keep `JsonSchema` independent now; bridge to the catalog later.
 - **prose default store** — defaulted to `work_item_body` when a WI is linked, else `attachment` (per the DB-attachments rule). Revisit if reading docs off the WI feels wrong.
 - **Queue position** — appended as 013/014 after 012 (pathway intact). Reprioritize ahead of Areas only if the verification bleed isn't contained by the live point-fix.
