@@ -1,6 +1,7 @@
 import type { Hono } from 'hono';
 import type { Project, Stage, ULID, WorkItem, WorkItemType } from '@pc/domain';
 import { isWorkItemType } from '@pc/domain';
+import { ContractService } from '@pc/app-services';
 import {
   countWorkItemsInStage,
   getProjectById,
@@ -317,6 +318,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       const workItem = createAgentWorkItem(input, {
         workItemService: runtime.workItemService(),
         getProject: () => runtime.project,
+        contractService: new ContractService(),
         getPodRowExpectedOutput: (podName) => {
           const row = resolveAgentForDispatch(podName, runtime.project.id);
           return row?.expectedOutput ?? null;

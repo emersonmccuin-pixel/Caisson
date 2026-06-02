@@ -32,6 +32,8 @@ import {
   getWorkItem,
   listAttachmentsForWorkItem,
   listChildWorkItems,
+  listContractsForWorkItem,
+  type ContractRow,
 } from '@pc/db';
 import type {
   EvaluationContext,
@@ -108,7 +110,14 @@ export async function runVerificationOnTerminal(
   // if a dispatch's `parent_work_item_id` happened to point at them.
   if (!wi.isAgentTask) return null;
 
-  const tier: VerificationTier = wi.verificationTier ?? 'auto';
+  // Slice 013 — read the verification spec THROUGH the contract shim: prefer the
+  // first-class contract's tier/AC, fall back to the WI's legacy columns for any
+  // un-backfilled row. The contract's bytes are copied verbatim from the WI
+  // (backfill + createAgentWorkItem), so this is byte-identical. We STILL flip
+  // the WI exactly as before — only the data source moved.
+  const contract = resolveContractFor(input.workItemId);
+  const tier: VerificationTier =
+    contract?.verificationTier ?? wi.verificationTier ?? 'auto';
 
   // Agent died before reporting done. No predicate eval — the contract
   // can't be satisfied if the agent never finished the body / attachments
@@ -160,7 +169,8 @@ export async function runVerificationOnTerminal(
 
   // Tier-1 auto. Empty AC = "trust the agent's end-of-turn signal" per the
   // derivation library — flip directly to complete with no diagnostic.
-  const criteria = wi.acceptanceCriteria ?? [];
+  // Slice 013 — AC sourced through the contract shim (same bytes; WI fallback).
+  const criteria = contract?.acceptanceCriteria ?? wi.acceptanceCriteria ?? [];
   if (criteria.length === 0) {
     applyAgentVerification(input.workItemId, {
       workItemStatus: 'complete',
@@ -293,6 +303,22 @@ export function createWorktreeExecutors(input: {
       });
     },
   };
+}
+
+/** Slice 013 — resolve the first-class contract backing a contract WI (the
+ *  read-through shim source for tier/AC). Prefers the dispatched contract (one
+ *  with a run); else the most recent. Returns null for un-backfilled WIs, where
+ *  the caller falls back to the WI's legacy columns. Best-effort. */
+function resolveContractFor(workItemId: ULID): ContractRow | null {
+  try {
+    const contracts = listContractsForWorkItem(workItemId);
+    if (contracts.length === 0) return null;
+    const dispatched = contracts.filter((c) => c.agentRunId !== null);
+    const pool = dispatched.length > 0 ? dispatched : contracts;
+    return pool[pool.length - 1] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** True iff `abs` resolves under `root` (exclusive of `root` itself). Reject

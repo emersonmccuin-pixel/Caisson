@@ -14,6 +14,8 @@ import {
   getWorkItem as defaultGetWorkItem,
   type MarkAgentRunTerminalInput,
 } from '@pc/db';
+import { ContractService } from '@pc/app-services';
+import type { Deliverable } from '@pc/contracts';
 
 import {
   buildAgentCompletedBody,
@@ -48,12 +50,21 @@ export interface AgentRunTerminalEffectsInput {
   completedAt?: number | null;
   startedAt?: number | null;
   workItemId?: ULID | null;
+  /** Slice 013 — the first-class contract this run produced. The captured
+   *  deliverable lands here (not borrowed from `wi.body`). NULL = non-contract
+   *  dispatch. */
+  contractId?: ULID | null;
   slug?: string | null;
   cleanup?: () => void;
 }
 
 export interface AgentRunTerminalEffectsDeps {
   activeRunRegistry?: ActiveRunRegistry;
+  /** Slice 013 — first-class contract write door. When supplied + the dispatch
+   *  carried a `contractId`, the captured deliverable is written onto the
+   *  contract on completion. Omitting it skips the contract write (legacy-only
+   *  unit tests). */
+  contractService?: ContractService;
   /** Mailbox enqueue port. The terminal envelope is delivered through it; when
    *  omitted (e.g. a bare unit test) the envelope is skipped. */
   mailboxEnqueue?: MailboxEnqueuePort | null;
@@ -124,6 +135,14 @@ export function applyAgentRunTerminalEffects(
 
   deps.activeRunRegistry?.unregister(input.runId);
 
+  // Slice 013 — capture the deliverable onto the contract SYNCHRONOUSLY (a
+  // durable fact, like the terminal row write above). Returns the resolved
+  // result text the envelope surfaces (result, else the wi.body fallback —
+  // same bytes the old live wi.body surface produced, now sourced from the
+  // captured deliverable). Done here (not the async tail) so the contract row
+  // lands deterministically.
+  const resolvedResult = captureDeliverable(input, row, deps);
+
   try {
     input.cleanup?.();
   } catch {
@@ -136,6 +155,7 @@ export function applyAgentRunTerminalEffects(
     completedAt,
     failureCause,
     failureReason,
+    resolvedResult,
     deps,
   }).catch((err) => {
     const error = err instanceof Error ? err : new Error(String(err));
@@ -145,15 +165,54 @@ export function applyAgentRunTerminalEffects(
   return { applied: 1 };
 }
 
+/** Slice 013 — write the typed deliverable onto the contract + return the
+ *  result text to surface in the terminal envelope. The deliverable's home is
+ *  the contract, NOT a live `wi.body` read. Capture rule: the agent's free-text
+ *  `result` is the `answer` deliverable; if empty (the agent reported by
+ *  writing into the work item), fall back to `wi.body` for the captured text
+ *  (same bytes the old fallback surfaced). 014 makes submission the source. */
+function captureDeliverable(
+  input: AgentRunTerminalEffectsInput,
+  row: AgentRunRow,
+  deps: AgentRunTerminalEffectsDeps,
+): string {
+  let result = input.result ?? '';
+  if (input.status !== 'completed') return result;
+
+  const workItemId = input.workItemId !== undefined ? input.workItemId : row.parentWorkItemId;
+  let deliverableText = result.trim();
+  if (deliverableText === '' && workItemId) {
+    const wi = (deps.getWorkItem ?? defaultGetWorkItem)(workItemId);
+    deliverableText = wi?.body?.trim() ?? '';
+  }
+  if (deliverableText && result.trim() === '') result = deliverableText;
+
+  const contractId = input.contractId ?? row.contractId ?? null;
+  if (contractId && deliverableText) {
+    const service = deps.contractService ?? new ContractService();
+    const deliverable: Deliverable = { kind: 'answer', text: deliverableText };
+    try {
+      service.setDeliverable({ id: contractId, deliverable, report: result || null });
+    } catch (err) {
+      deps.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+  return result;
+}
+
 async function finishTerminalEffects(args: {
   input: AgentRunTerminalEffectsInput;
   row: AgentRunRow;
   completedAt: number;
   failureCause: AgentRunFailureCause | null;
   failureReason: string | null;
+  /** Slice 013 — the deliverable text resolved synchronously by
+   *  `captureDeliverable` (result, else the wi.body fallback). The envelope
+   *  surfaces this. */
+  resolvedResult: string;
   deps: AgentRunTerminalEffectsDeps;
 }): Promise<void> {
-  const { input, row, failureCause, failureReason, deps } = args;
+  const { input, row, failureCause, failureReason, resolvedResult, deps } = args;
   const project = safeGetProject(input.projectId);
   const workItemId = input.workItemId !== undefined ? input.workItemId : row.parentWorkItemId;
 
@@ -182,18 +241,9 @@ async function finishTerminalEffects(args: {
       }
     : null;
 
-  // Contract dispatches (work-item-as-contract): the agent reports its
-  // deliverable INTO the work item and typically completes via tool calls, so
-  // the free-text `result` (last assistant text) is empty. The completion event
-  // would then read "Result: (no output)" and the orchestrator has nothing to
-  // surface. Fall back to the work item's deliverable (body) so the envelope
-  // carries the actual output. Only for completed contract runs with no text.
-  let result = input.result ?? '';
-  if (input.status === 'completed' && result.trim() === '' && workItemId) {
-    const wi = (deps.getWorkItem ?? defaultGetWorkItem)(workItemId);
-    const deliverable = wi?.body?.trim();
-    if (deliverable) result = deliverable;
-  }
+  // Slice 013 — the deliverable was captured onto the contract synchronously
+  // (see `captureDeliverable`). The envelope surfaces the resolved result.
+  const result = resolvedResult;
 
   // Slice 005 — the rail broadcast (durable agent.run.changed) is emitted
   // SYNCHRONOUSLY by applyAgentRunTerminalEffects through the gateway; this
