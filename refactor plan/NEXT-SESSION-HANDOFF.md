@@ -1,6 +1,28 @@
 # Next Session Handoff — refactor/auto-pathway
 
-# ▶▶ START HERE — current execution plan (updated 2026-06-01, latest)
+# ▶▶ START HERE — current execution plan (updated 2026-06-02)
+
+## ✅ CONTRACT-FIRST SWITCHOVER COMPLETE (014b · 020 · 021 · 022 · 023) — built + FULLY GATED 2026-06-02. NOT yet live-verified. NOT yet pushed.
+Built via orchestrated subagents (014b→020 sequential, then 021‖022 parallel, then 023 solo); **all gates RE-RUN BY CLAUDE on the integrated tree** (not trusted from subagents — the IDE diagnostics feed was the usual stale mid-build snapshot throughout). Commits on `refactor/auto-pathway`:
+- **`2b86eedd` 014b** — `pc_submit_deliverable` tool + submission-gated completion (agent hands in a typed deliverable; we no longer scrape its transcript/WI body). Wired the v2 verification engine's prod evidence loaders (tool-call stream + pending-ask) so "must call X" checks are real, not pass-by-default. New DB `hasPendingAskForRun`. MCP golden regenerated; drift tests pass.
+- **`84bd9691` 020** — verification + terminal effects are contract-authoritative. Reads tier/AC from the contract, flips the contract; the WI→done advance is now a roll-up firing exactly once, only when a WI is linked. Dual-read shim + `wi.body` deliverable fallback retired.
+- **`7ef79aed` 021** — orchestrator/agent prompts + tools rewritten to the contract model (tool-registry/catalog/pod-defaults v2, Decision-4 attach/create + loud reject, materializer/dag/orchestrator-pod/stock-pod content). Includes the T4-A stale-header fix. MCP golden regenerated (5 tool descriptions + 2 labels).
+- **`63724d1b` 022** — dropped the "hidden agent-task" UI machinery (showAgentContracts slice, filters, toggle, `isAgentTask` field). Added a WI-optional project contract list: `GET /api/projects/:id/contracts` + `ContractService.listByProject` + repo + `useProjectContracts` hook. ⚠️ **the hook/endpoint exist but NO view renders them yet** — a contract-only-dispatch surface is a fast follow.
+- **`c3b3a8ed` 023 (LAST, destructive)** — migration **`0039`** drops the 9 dead `work_items` columns + the agent-task index; deleted the v1 `work-item-contract.ts` union, `ephemeral-work-item-sweep.ts`, and dead repo fns; retired the v1 `createAgentWorkItem` path onto the v2 union; scrubbed the removed fields out of test fixtures. **The migration applies on the NEXT server boot — back up the dogfood DB (`C:\Users\emers\Caisson-Dogfood-Data`) before restarting.**
+
+**Gates (Claude-rerun, integrated tree):** `pnpm typecheck` 0 errors (13 pkgs); tests all green — server 169 · web 136 · app-services 81 · contracts 77 · mcp 70 · db 41 · domain 17 · runtime 24; `git diff --check` clean. (typecheck is src-only; pre-existing test-fixture ULID-branding debt remains out of the gate, unchanged by this work.)
+
+**TWO THINGS OWED:**
+1. **PUSH** — branch is now ~49 commits ahead of `origin/dev`, still never pushed. User decision.
+2. **LIVE-VERIFY on the dogfood stack** (needs a gated restart → applies migration 0039; back up data first). Aggregated from the slice reports:
+   - **014b:** dispatch an agent that ends with `pc_submit_deliverable`; confirm the contract carries the typed deliverable (status `submitted`) + the completion envelope surfaces it. An action-kind contract whose required tool is skipped now FAILS/escalates (needs 021's contract authoring to exercise). Confirm tool-name prefix match (`mcp__pc-rig__` stripped).
+   - **020:** a contract-only run (no WI) flips the contract with zero WI side effects; a WI-linked run flips the contract AND advances the WI to done exactly once; reject via `pc_resolve_work_item` flips the contract + wakes the producer run (resolved from `contract.agentRunId`).
+   - **021:** a full orchestrator session dispatches contract-first, attaches/creates a WI only when the output kind needs one (Decision-4), gets a loud 422 when a repo-kind dispatch omits `workItemId`, and the agent boot text references the contract.
+   - **022:** board shows no agent tasks / no toggle; a WI's work-log still renders its contracts; a contract-only dispatch is returned by `GET /api/projects/:id/contracts`.
+
+**Then the refactor list is EMPTY.** Remaining small/independent backlog (all pre-existing, non-blocking): the 022 contract-only render surface; echo-poisoning guard on body/report_contains; cold-reload `stalled` badge polish; dead `_events` param on resource-list hooks; new-session composer "starting up" feedback; the two earlier owed live-checks (workflow-subagent cancel; pc-rig MCP retry across an API restart).
+
+# ▶▶ (prior) START HERE — current execution plan (updated 2026-06-01, latest)
 
 ## ✅ T1.4 + T2.3 DONE + LIVE-VERIFIED 2026-06-01 (2 bugs caught + fixed during verify). slice-013 MERGED. dev consolidated locally (NOT pushed). DO NEXT = decide push origin/dev + (optional) live-verify slice-013, then 014.
 **Commits on `refactor/auto-pathway` (= local `dev`, tip `f36f3996`):** `f5ece1e5` T1.4+T2.3 build → `f44b9cfa` merge slice-013 → `63265ed5` post-merge test-isolation fix → `7a15adab` T1.4 trigger fix → `f36f3996` T2.3 seed fix. **Local `dev` fast-forwarded to `f36f3996`; 35 commits ahead of `origin/dev`, NOT pushed (awaiting user OK).**

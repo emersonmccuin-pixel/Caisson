@@ -2,7 +2,7 @@
 
 > Drafted 2026-06-02. Sequences the inversion described in `refactor plan docs/agent-contracts-and-deliverables.md` (Decision 1 + Decision 4).
 > Backed by the per-site trace `refactor plan docs/contract-first-switchover-trace.md` — that doc holds the file:line kill/invert/keep detail; this doc holds the slice order + per-slice scope.
-> Status: planned. Do not build until asked. Each slice gets its own full cartridge doc the session before it's built.
+> Status: BUILT + fully gated 2026-06-02 (014b `2b86eedd` · 019 prior · 020 `84bd9691` · 021 `7ef79aed` · 022 `63724d1b` · 023 `c3b3a8ed`). Owed: live-verify on the dogfood stack (migration 0039 applies on next boot — back up data first) + push `origin/dev`. See `NEXT-SESSION-HANDOFF.md` top block.
 
 ## What this delivers
 
