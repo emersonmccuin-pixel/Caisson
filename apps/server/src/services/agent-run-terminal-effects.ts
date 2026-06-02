@@ -35,6 +35,22 @@ import {
 
 type TerminalStatus = 'completed' | 'failed' | 'cancelled';
 
+/** Door-unification (one-agent-dispatch-door) — the post-verification terminal
+ *  facts surfaced to a caller that needs to AWAIT the run (the workflow engine).
+ *  The orchestrator dispatches fire-and-forget and ignores this; the workflow
+ *  maps it to a DAG NodeOutcome (`failed` when status≠completed OR verification
+ *  failed). Fired exactly once per run after verification has flipped the
+ *  contract. */
+export interface TerminalSettlement {
+  status: TerminalStatus;
+  failureCause: AgentRunFailureCause | null;
+  failureReason: string | null;
+  result: string;
+  /** The contract's verification result, when the run had a contract + the
+   *  verifier ran. NULL for non-contract dispatches or a cancelled run. */
+  verification: VerificationBlock | null;
+}
+
 export interface AgentRunTerminalEffectsInput {
   runId: ULID;
   ccSessionId: string;
@@ -77,6 +93,12 @@ export interface AgentRunTerminalEffectsDeps {
   verificationDeps?: VerificationDeps;
   now?: () => number;
   onError?: (error: Error) => void;
+  /** Door-unification — fired EXACTLY ONCE after verification, carrying the
+   *  post-verify terminal facts. Wired by `dispatchFreshAgent` to resolve the
+   *  `done` promise the workflow engine awaits. Omitted by the orchestrator
+   *  (fire-and-forget). Also fires on the already-terminal early-return so an
+   *  awaiting caller never hangs. */
+  onSettled?: (settlement: TerminalSettlement) => void;
 }
 
 export interface AgentRunTerminalEffectsResult {
@@ -88,7 +110,21 @@ export function applyAgentRunTerminalEffects(
   deps: AgentRunTerminalEffectsDeps = {},
 ): AgentRunTerminalEffectsResult {
   const row = (deps.getAgentRun ?? defaultGetAgentRunRow)(input.runId);
-  if (!row || isDbTerminal(row.status)) return { applied: 0 };
+  if (!row || isDbTerminal(row.status)) {
+    // Already terminal (reconcile re-entrancy). Effects don't re-apply, but an
+    // awaiting caller (workflow `done`) must still settle — emit from the
+    // durable row so the promise never hangs. No re-verify (side-effecting).
+    if (row && deps.onSettled) {
+      deps.onSettled({
+        status: row.status as TerminalStatus,
+        failureCause: row.failureCause ?? null,
+        failureReason: row.failureReason ?? null,
+        result: row.result ?? '',
+        verification: null,
+      });
+    }
+    return { applied: 0 };
+  }
 
   const completedAt = input.completedAt ?? (deps.now ?? Date.now)();
   const failureCause = terminalFailureCause(input);
@@ -285,28 +321,34 @@ async function finishTerminalEffects(args: {
   let outcome: VerificationOutcome | null = null;
   // Slice 020 — verification keys on the CONTRACT, not the WI. A contract-only
   // dispatch (no linked WI) still verifies; the WI advance is a roll-up.
+  // Door-unification — guard the verifier so a verify crash doesn't skip the
+  // `onSettled`/envelope tail below (the awaiting workflow `done` must settle).
   if (contractId && project) {
-    outcome = await verifier(
-      {
-        contractId,
-        workItemId,
-        terminalStatus: input.status,
-        failureReason,
-        projectFolderPath: project.folderPath,
-        worktreeDir: input.worktreeDir,
-        // Slice 014a — carry the run + session so the tool-call loader can read
-        // the producing run's transcript (powers `tool_called`).
-        runId: input.runId,
-        ccSessionId: input.ccSessionId,
-        project,
-      },
-      // Slice 014b — wire the PRODUCTION evidence loaders when no test deps are
-      // injected: `loadToolCalls` reads the producing run's CC transcript;
-      // `loadPendingAskCreated` reads the DB. `executorsFor` stays on the
-      // verifier's `createWorktreeExecutors` default. These power `tool_called`
-      // / `pending_ask_created` for `action`-kind contracts.
-      deps.verificationDeps ?? buildProductionVerificationDeps(project.folderPath),
-    );
+    try {
+      outcome = await verifier(
+        {
+          contractId,
+          workItemId,
+          terminalStatus: input.status,
+          failureReason,
+          projectFolderPath: project.folderPath,
+          worktreeDir: input.worktreeDir,
+          // Slice 014a — carry the run + session so the tool-call loader can read
+          // the producing run's transcript (powers `tool_called`).
+          runId: input.runId,
+          ccSessionId: input.ccSessionId,
+          project,
+        },
+        // Slice 014b — wire the PRODUCTION evidence loaders when no test deps are
+        // injected: `loadToolCalls` reads the producing run's CC transcript;
+        // `loadPendingAskCreated` reads the DB. `executorsFor` stays on the
+        // verifier's `createWorktreeExecutors` default. These power `tool_called`
+        // / `pending_ask_created` for `action`-kind contracts.
+        deps.verificationDeps ?? buildProductionVerificationDeps(project.folderPath),
+      );
+    } catch (err) {
+      deps.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
   }
 
   const verification: VerificationBlock | null = outcome
@@ -322,6 +364,17 @@ async function finishTerminalEffects(args: {
   // Slice 013 — the deliverable was captured onto the contract synchronously
   // (see `captureDeliverable`). The envelope surfaces the resolved result.
   const result = resolvedResult;
+
+  // Door-unification — settle the awaiting caller (workflow `done`) with the
+  // post-verification terminal facts. Fired before the envelope emit so a
+  // mailbox failure can't starve the workflow of its node outcome.
+  deps.onSettled?.({
+    status: input.status,
+    failureCause,
+    failureReason,
+    result,
+    verification,
+  });
 
   // Slice 005 — the rail broadcast (durable agent.run.changed) is emitted
   // SYNCHRONOUSLY by applyAgentRunTerminalEffects through the gateway; this

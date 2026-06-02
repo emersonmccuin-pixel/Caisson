@@ -50,6 +50,7 @@ import { ContractService } from '@pc/app-services';
 import { ContractV2, expectedOutputRequiresWorkItem } from '@pc/domain';
 import type {
   AgentInboxEventKind,
+  AgentRunFailureCause,
   ExpectedOutput,
   ULID,
 } from '@pc/domain';
@@ -68,6 +69,7 @@ import type { AgentRunRecord } from '@pc/runtime';
 
 import {
   buildAgentQueuedStartedBody,
+  type VerificationBlock,
 } from './agent-event-header.ts';
 import { preparePodSpawn, type PodSpawnPrep } from './pod-spawn.ts';
 
@@ -88,7 +90,10 @@ import {
   runVerificationOnTerminal,
   type VerificationDeps,
 } from './agent-verification.ts';
-import { applyAgentRunTerminalEffects } from './agent-run-terminal-effects.ts';
+import {
+  applyAgentRunTerminalEffects,
+  type TerminalSettlement,
+} from './agent-run-terminal-effects.ts';
 import { announceAgentRunChange } from './agent-run-writer.ts';
 
 /** Process-wide cap-and-queue registry shared by every dispatch. Lives in
@@ -132,6 +137,15 @@ export interface DispatchFreshAgentInput {
   /** Project slug — embedded in delivery envelopes so the orchestrator can
    *  pin a channel POST back to its source project. */
   slug: string;
+  /** Door-unification — extra spawn-env vars merged on top of the pod's env,
+   *  BELOW the PC_AGENT_* core (which always wins). The workflow engine passes
+   *  `PC_WORKFLOW_RUN_ID` + `PC_WORKFLOW_WORKTREE` here so path-guard.cjs
+   *  enforces worktree confinement for workflow-node agents. The orchestrator
+   *  omits it. */
+  extraEnv?: Record<string, string>;
+  /** Door-unification — per-dispatch idle-timeout override (ms). The workflow
+   *  engine forwards a node's `timeout`. Omitted = the AgentRun default (5min).*/
+  idleMs?: number;
 }
 
 export interface DispatchContinueAgentInput {
@@ -192,6 +206,21 @@ export interface DispatchAgentDeps {
   now?: () => number;
 }
 
+/** Door-unification — the post-verification terminal facts surfaced through the
+ *  `done` promise. The orchestrator ignores `done`; the workflow engine awaits
+ *  it and maps it to a DAG NodeOutcome. */
+export interface TerminalOutcome {
+  agentRunId: ULID;
+  status: 'completed' | 'failed' | 'cancelled';
+  failureCause: AgentRunFailureCause | null;
+  failureReason: string | null;
+  result: string;
+  /** Contract verification result, when the run had a contract + the verifier
+   *  ran. NULL for non-contract dispatches or a cancelled run. The workflow
+   *  treats `status: 'failed'` as a failed node. */
+  verification: VerificationBlock | null;
+}
+
 export interface DispatchAgentSuccess {
   ok: true;
   agentRunId: ULID;
@@ -201,6 +230,10 @@ export interface DispatchAgentSuccess {
    *  `spawning` depending on cap. */
   initialState: 'queued' | 'spawning';
   startedAt: number;
+  /** Resolves when the run reaches terminal AND verification has flipped the
+   *  contract. Fire-and-forget callers (orchestrator) ignore it; the workflow
+   *  engine awaits it. Resolves exactly once. */
+  done: Promise<TerminalOutcome>;
 }
 
 export type DispatchAgentFailure =
@@ -247,6 +280,14 @@ export async function dispatchFreshAgent(
   deps: DispatchAgentDeps,
 ): Promise<DispatchAgentResult> {
   const now = (deps.now ?? Date.now)();
+
+  // Door-unification — the `done` promise the workflow engine awaits. Resolved
+  // exactly once from the terminal-effects `onSettled` hook (in-process or
+  // host path). Created up-front so it's wired into `startDispatchedRun`.
+  let resolveDone!: (outcome: TerminalOutcome) => void;
+  const done = new Promise<TerminalOutcome>((res) => {
+    resolveDone = res;
+  });
 
   // Fail fast on unknown agent — pre-row-insert so the orchestrator can
   // distinguish "you asked for a nonexistent pod" from "the pod ran and
@@ -433,6 +474,7 @@ export async function dispatchFreshAgent(
     continuesParent: null,
     workItemId: workItem?.workItemId ?? null,
     contractId,
+    resolveDone,
     deps,
   });
   if (!started.ok) return started;
@@ -444,6 +486,7 @@ export async function dispatchFreshAgent(
     podName: input.agentName,
     initialState: started.initialState,
     startedAt: now,
+    done,
   };
 }
 
@@ -457,6 +500,14 @@ export async function dispatchContinueAgent(
   deps: DispatchAgentDeps,
 ): Promise<DispatchAgentResult> {
   const now = (deps.now ?? Date.now)();
+
+  // Door-unification — the `done` promise (resolved from terminal-effects'
+  // `onSettled`). Symmetric with the fresh path so both dispatch shapes return
+  // an awaitable terminal.
+  let resolveDone!: (outcome: TerminalOutcome) => void;
+  const done = new Promise<TerminalOutcome>((res) => {
+    resolveDone = res;
+  });
 
   const plan = continueAgent(
     {
@@ -594,6 +645,7 @@ export async function dispatchContinueAgent(
     continuesParent: input.parentAgentRunId,
     workItemId: continueWorkItemId,
     contractId,
+    resolveDone,
     deps,
   });
   if (!started.ok) return started;
@@ -605,6 +657,7 @@ export async function dispatchContinueAgent(
     podName: plan.plan.podName,
     initialState: started.initialState,
     startedAt: now,
+    done,
   };
 }
 
@@ -630,6 +683,9 @@ interface ConstructAndStartArgs {
    *  dispatch). NULL for non-contract dispatches. Threaded to terminal-effects
    *  so the deliverable lands on the contract. */
   contractId: ULID | null;
+  /** Door-unification — resolves the dispatch's `done` promise from the
+   *  terminal-effects `onSettled` hook. Omitted = no awaiting caller. */
+  resolveDone?: (outcome: TerminalOutcome) => void;
   deps: DispatchAgentDeps;
 }
 
@@ -660,6 +716,11 @@ async function startHostBackedRun(
   hostClient: AgentHostReattachClient,
 ): Promise<StartDispatchedRunResult> {
   const activeReg = args.deps.activeRunRegistry ?? getActiveRunRegistry();
+  // Door-unification — resolve the dispatch's `done` promise from the host-side
+  // terminal snapshot (mirror of the in-process `onSettled` wiring).
+  const settleDone = args.resolveDone
+    ? (s: TerminalSettlement) => args.resolveDone?.({ agentRunId: args.agentRunId, ...s })
+    : undefined;
   const commandType = args.mode === 'fresh' ? 'start-run' : 'resume-run';
   const command =
     args.mode === 'fresh'
@@ -692,6 +753,7 @@ async function startHostBackedRun(
         verifyOnTerminal: args.deps.verifyOnTerminal,
         verificationDeps: args.deps.verificationDeps,
         terminalCleanup: () => args.podPrep.cleanup(),
+        onSettled: settleDone,
         onTerminalError: (err) => {
           console.error(
             `[agent-run-factory] host terminal handler failed for run ${args.agentRunId}:`,
@@ -773,6 +835,7 @@ async function startHostBackedRun(
       verifyOnTerminal: args.deps.verifyOnTerminal,
       verificationDeps: args.deps.verificationDeps,
       terminalCleanup: () => args.podPrep.cleanup(),
+      onSettled: settleDone,
       onTerminalError: (err) => {
         console.error(
           `[agent-run-factory] host terminal handler failed for run ${args.agentRunId}:`,
@@ -819,6 +882,9 @@ function buildHostStartRunRequest(args: ConstructAndStartArgs): AgentHostStartRu
     // host must NOT recompute this from its own env, or the two can diverge and
     // the host tails a folder the agent never writes to → false idle-timeout.
     jsonlPath: jsonlPathFor(args.input.worktreeDir, args.ccSessionId),
+    // Door-unification — per-dispatch idle-timeout override (workflow node
+    // `timeout`). Omitted = host AgentRun default.
+    ...(args.input.idleMs !== undefined ? { timeouts: { idleMs: args.input.idleMs } } : {}),
   };
 }
 
@@ -834,6 +900,9 @@ function buildAgentEnv(args: ConstructAndStartArgs): Record<string, string> {
   const baseEnv: Record<string, string> = {
     ...(process.env as Record<string, string>),
     ...args.podPrep.extraEnv,
+    // Door-unification — caller-supplied spawn env (workflow PC_WORKFLOW_*),
+    // merged BELOW the PC_AGENT_* core so the core always wins.
+    ...(args.input.extraEnv ?? {}),
     PC_AGENT_NAME: args.podName,
     PC_AGENT_SESSION_ID: args.ccSessionId,
     PC_AGENT_RUN_ID: args.agentRunId,
@@ -999,6 +1068,9 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
     // Forensic transcript per spawn — sits next to the materialised pod files
     // in the per-run scratch dir.
     transcriptPath: transcriptPathFor(args),
+    // Door-unification — per-dispatch idle-timeout override (workflow node
+    // `timeout`). Omitted = AgentRun default.
+    ...(args.input.idleMs !== undefined ? { idleMs: args.input.idleMs } : {}),
     registry: reg,
   });
 
@@ -1165,6 +1237,11 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
           },
           verifyOnTerminal: args.deps.verifyOnTerminal,
           verificationDeps: args.deps.verificationDeps,
+          // Door-unification — resolve the dispatch's `done` promise with the
+          // post-verification facts so an awaiting workflow node settles.
+          onSettled: args.resolveDone
+            ? (s) => args.resolveDone?.({ agentRunId: args.agentRunId, ...s })
+            : undefined,
           onError: (err) => {
             console.error(
               `[agent-run-factory] terminal handler failed for run ${args.agentRunId}:`,
