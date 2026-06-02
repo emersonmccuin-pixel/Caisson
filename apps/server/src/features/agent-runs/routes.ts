@@ -76,6 +76,10 @@ const VALID_AGENT_RUN_STATUSES: AgentRunStatus[] = [
   'cancelled',
 ];
 
+function isTerminalRunStatus(status: AgentRunStatus): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled';
+}
+
 function continuationFailureStatus(cause: string): number {
   const statusFor: Record<string, number> = {
     'run-not-found': 404,
@@ -198,28 +202,69 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     });
   });
 
-  /** Cancel an in-flight agent run. Looks up the AgentRun via the active-runs
-   *  registry; `run.cancel()` flips the state machine to `cancelled` + kills
-   *  the underlying LowLevelSpawn + triggers terminal handlers. */
-  app.post('/api/projects/:projectId/agent-runs/:runId/cancel', (c) => {
+  /** Cancel an in-flight agent run.
+   *  - In-process registered run: `run.cancel()` drives its own spawn teardown
+   *    (synchronous; the handle owns the state machine). Unchanged.
+   *  - Host-backed run (registered or not): AWAIT a host `cancel` so the request
+   *    proves the host received the stop (T1.2 fixed the old "ok but kept
+   *    running"). Distinct from /kill: we do NOT force-finalize the row — the
+   *    host's own `run-terminal` event finalizes it, so a clean cancel reports
+   *    the real terminal status and an in-grace turn-end still honors as
+   *    completion. Workflow subagents (pcSessionId-tracked) ride
+   *    cancel-workflow-subagent. 404 only when the run is genuinely unknown — not
+   *    merely absent from the in-process registry. */
+  app.post('/api/projects/:projectId/agent-runs/:runId/cancel', async (c) => {
     const projectId = c.req.param('projectId') as ULID;
     const project = getProjectById(projectId);
     if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
     const runId = c.req.param('runId') as ULID;
     const entry = services.getActiveRunRegistry().get(runId);
-    if (!entry) return c.json({ ok: false, error: `unknown run: ${runId}` }, 404);
-    if (entry.projectId !== projectId) {
+
+    // Registry path: in-process runs keep the synchronous handle teardown.
+    if (entry) {
+      if (entry.projectId !== projectId) {
+        return c.json({ ok: false, error: `run ${runId} not in project ${projectId}` }, 400);
+      }
+      entry.run.cancel();
+    }
+
+    // T1.3 — host-aware path. Resolve the run's DB row; a host-backed run carries
+    // NO server-side pid (the host owns the child). For such a run — registered
+    // or not — AWAIT a host cancel so the request proves the stop landed and a
+    // non-registry phantom / reattached host run / workflow subagent all
+    // converge. An in-process run (pid non-null) with a registry entry keeps the
+    // existing synchronous handle teardown only — no host command.
+    const row = getAgentRunRow(runId);
+    if (!entry && !row) {
+      return c.json({ ok: false, error: `unknown run: ${runId}` }, 404);
+    }
+    if (row && row.projectId !== projectId) {
       return c.json({ ok: false, error: `run ${runId} not in project ${projectId}` }, 400);
     }
-    entry.run.cancel();
-    return c.json({ ok: true, status: 'cancelled' });
+
+    let hostCancelled = false;
+    const host = resolveHost();
+    const hostBacked = row !== null && row.pid === null;
+    if (host && row && hostBacked && !isTerminalRunStatus(row.status)) {
+      const command = row.dispatcherSessionId.startsWith('wf-')
+        ? ({ type: 'cancel-workflow-subagent', pcSessionId: row.dispatcherSessionId } as const)
+        : ({ type: 'cancel', runId } as const);
+      try {
+        const response = await Promise.resolve(host.sendCommand(command));
+        hostCancelled = !response || response.ok === true;
+      } catch {
+        /* swallow — the host's own terminal event / reconcile sweep is the net */
+      }
+    }
+
+    return c.json({ ok: true, status: 'cancelled', hostCancelled });
   });
 
   /** Hard-kill: force-end a run even when it's a PHANTOM (registry handle lost
    *  / process already dead) — the gap /cancel can't cover. Force-kills the
    *  persisted pid's process tree + finalizes the row to `cancelled` with full
    *  effects. Idempotent: already-terminal returns ok. */
-  app.post('/api/projects/:projectId/agent-runs/:runId/kill', (c) => {
+  app.post('/api/projects/:projectId/agent-runs/:runId/kill', async (c) => {
     const projectId = c.req.param('projectId') as ULID;
     const project = getProjectById(projectId);
     if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
@@ -229,10 +274,15 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     if (row.projectId !== projectId) {
       return c.json({ ok: false, error: `run ${runId} not in project ${projectId}` }, 400);
     }
-    const result = hardKillAgentRun(runId, {
+    // T1.3 — resolve the live host per request + await the host stop inside
+    // hardKillAgentRun so a host-backed run's child actually dies (its row.pid is
+    // null) instead of orphaning compute, THEN force-finalize the row.
+    const host = resolveHost();
+    const result = await hardKillAgentRun(runId, {
       activeRunRegistry: defaultGetActiveRunRegistry(),
       mailboxEnqueue,
       broadcast: deps.broadcastTo,
+      ...(host ? { host } : {}),
     });
     return c.json(result, result.ok ? 200 : 404);
   });

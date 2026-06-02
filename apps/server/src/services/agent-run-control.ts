@@ -18,6 +18,7 @@ import { AgentRunJsonlTailer, jsonlPathFor, type AgentRunJsonlEvent } from '@pc/
 
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
+import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import { applyAgentRunTerminalEffects } from './agent-run-terminal-effects.ts';
 import {
   isProcessAlive as defaultIsAlive,
@@ -29,6 +30,10 @@ export interface AgentRunControlDeps {
   /** Mailbox enqueue port — a force-killed run delivers its terminal envelope
    *  to the orchestrator through it. */
   mailboxEnqueue?: MailboxEnqueuePort | null;
+  /** T1.3 — the live HostConnection. When present, kill issues the awaited host
+   *  cancel that actually terminates the host child (host-backed runs persist no
+   *  server-side pid, so the local pid-kill is a no-op for them). */
+  host?: AgentHostReattachClient | null;
   broadcast?: (projectId: ULID, msg: unknown) => void;
   now?: () => number;
   getAgentRun?: (id: ULID) => AgentRunRow | null;
@@ -39,20 +44,47 @@ export interface AgentRunControlDeps {
 }
 
 export type HardKillResult =
-  | { ok: true; status: AgentRunStatus; alreadyTerminal: boolean; processKilled: boolean }
+  | {
+      ok: true;
+      status: AgentRunStatus;
+      alreadyTerminal: boolean;
+      /** A real local OS-process tree kill happened (in-process runs). */
+      processKilled: boolean;
+      /** T1.3 — the host accepted a `cancel` / `cancel-workflow-subagent`. For a
+       *  host-backed run (pid null) this — not `processKilled` — is the signal
+       *  that compute was actually stopped. */
+      hostCancelled: boolean;
+    }
   | { ok: false; error: string };
+
+/** A workflow-spawned subagent's `agent_runs` row carries its `pcSessionId` as
+ *  the dispatcherSessionId (`dag-run-service.ts` — `wf-<run>-<node>-<rand>`). It
+ *  is NEVER in the active-run registry and the host tracks it by `pcSessionId`,
+ *  so the right host stop is `cancel-workflow-subagent`, not `cancel runId`. */
+function isWorkflowSubagentRow(row: AgentRunRow): boolean {
+  return row.dispatcherSessionId.startsWith('wf-');
+}
 
 const TERMINAL: AgentRunStatus[] = ['completed', 'failed', 'cancelled'];
 
 /** Force-end a run: kill the real OS process (if any) AND finalize the row to
  *  `cancelled`. Idempotent — a second call on an already-terminal run is a
  *  no-op success. Works on phantoms (no registry entry / dead process). */
-export function hardKillAgentRun(runId: ULID, deps: AgentRunControlDeps = {}): HardKillResult {
+export async function hardKillAgentRun(
+  runId: ULID,
+  deps: AgentRunControlDeps = {},
+): Promise<HardKillResult> {
   const getRow = deps.getAgentRun ?? defaultGetAgentRunRow;
   const row = getRow(runId);
   if (!row) return { ok: false, error: `unknown run: ${runId}` };
   if (TERMINAL.includes(row.status)) {
-    return { ok: true, status: row.status, alreadyTerminal: true, processKilled: false };
+    return {
+      ok: true,
+      status: row.status,
+      alreadyTerminal: true,
+      processKilled: false,
+      hostCancelled: false,
+    };
   }
 
   // 1. Graceful: if the live handle is still registered, let it tear down its
@@ -66,8 +98,27 @@ export function hardKillAgentRun(runId: ULID, deps: AgentRunControlDeps = {}): H
     }
   }
 
+  // 1b. T1.3 — AWAIT the host stop. This is what actually terminates host-backed
+  //     compute (those runs persist no server-side pid, so step 2 is a no-op for
+  //     them). Workflow subagents are tracked by pcSessionId → cancel-workflow-
+  //     subagent; all other host runs → cancel runId. Errors are swallowed: the
+  //     local kill + idempotent finalize remain the net.
+  let hostCancelled = false;
+  if (deps.host) {
+    try {
+      const command = isWorkflowSubagentRow(row)
+        ? ({ type: 'cancel-workflow-subagent', pcSessionId: row.dispatcherSessionId } as const)
+        : ({ type: 'cancel', runId } as const);
+      const response = await Promise.resolve(deps.host.sendCommand(command));
+      hostCancelled = !response || response.ok === true;
+    } catch {
+      /* swallow — local kill + finalize below converge the row regardless */
+    }
+  }
+
   // 2. Force: kill the persisted pid's process tree regardless. This is what
-  //    makes kill real for a wedged/handle-lost run.
+  //    makes kill real for a wedged/handle-lost in-process run. Host runs have a
+  //    null pid (host owns the child) so this is a harmless no-op for them.
   const kill = deps.killProcess ?? defaultKill;
   let processKilled = false;
   if (row.pid !== null) {
@@ -101,7 +152,7 @@ export function hardKillAgentRun(runId: ULID, deps: AgentRunControlDeps = {}): H
     },
   );
 
-  return { ok: true, status: 'cancelled', alreadyTerminal: false, processKilled };
+  return { ok: true, status: 'cancelled', alreadyTerminal: false, processKilled, hostCancelled };
 }
 
 export interface AgentRunInspection {
