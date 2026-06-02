@@ -134,6 +134,8 @@ export class AgentHostService extends EventEmitter {
         return this.answerPending(command.runId, command.text);
       case 'cancel':
         return this.cancel(command.runId);
+      case 'complete-run':
+        return this.completeRun(command.runId, command.result);
       case 'notify-mcp-handshake':
         return this.notifyMcpHandshake(command.ccSessionId);
       case 'shutdown':
@@ -285,6 +287,27 @@ export class AgentHostService extends EventEmitter {
     return {
       ok: true,
       command: 'cancel',
+      run: this.snapshot(entry),
+      lastSeq: this.seq,
+    };
+  }
+
+  /** Workflow-engine redesign — delivery is the SOLE done-signal. The server's
+   *  deliverable route relays `complete-run` here so the host's own AgentRun
+   *  transitions running→completed (no-op if not running). The `terminal` wiring
+   *  then emits `run-terminal`, which the server finalizes + resolves the
+   *  dispatch `done` on. This is the ONLY completion path — no in-process. */
+  private completeRun(runId: string, result?: string): AgentHostCommandResponse {
+    const entry = this.runs.get(runId);
+    if (!entry) {
+      return this.error('complete-run', 'not-found', `run ${runId} not found`);
+    }
+
+    entry.run.complete(result);
+    entry.updatedAt = this.now();
+    return {
+      ok: true,
+      command: 'complete-run',
       run: this.snapshot(entry),
       lastSeq: this.seq,
     };

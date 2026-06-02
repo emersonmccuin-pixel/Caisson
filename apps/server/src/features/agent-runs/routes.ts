@@ -681,20 +681,25 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     }
 
     // Workflow-engine redesign — delivery is the SOLE done-signal. Stamp the
-    // positive receipt, then drive the live run running→completed directly (the
-    // active path: independent of JSONL turn-end inference, so a diverged tailer
-    // can no longer hang the run). Host-backed / already-gone runs no-op here and
-    // complete via their own terminal path + the completion gate.
+    // positive receipt, then relay the done-signal to the HOST so its own
+    // AgentRun drives running→completed (independent of JSONL turn-end inference,
+    // so a diverged tailer can no longer hang the run). Agents run on the ONE
+    // host-backed path — there is no in-process fallback. The host's run-terminal
+    // then finalizes the row + resolves the dispatch `done`; the completion gate +
+    // terminal path are the durable backstop if the relay is dropped.
     markAgentRunDelivered(runId, services.now());
     const deliverableText =
       report ??
       (parsed.deliverable.kind === 'answer' || parsed.deliverable.kind === 'prose'
         ? parsed.deliverable.text ?? ''
         : '');
-    try {
-      services.getActiveRunRegistry().get(runId)?.run.complete?.(deliverableText);
-    } catch {
-      /* best-effort — the completion gate + terminal path are the durable backstop */
+    const host = resolveHost();
+    if (host) {
+      try {
+        await Promise.resolve(host.sendCommand({ type: 'complete-run', runId, result: deliverableText }));
+      } catch {
+        /* best-effort — the completion gate + terminal path are the durable backstop */
+      }
     }
 
     return c.json({ ok: true, contractId, status: updated.status });

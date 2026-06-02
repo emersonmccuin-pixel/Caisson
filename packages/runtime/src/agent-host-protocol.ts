@@ -82,6 +82,10 @@ export type AgentHostCommand =
   | { type: 'mark-paused'; runId: ULID; askId: string }
   | { type: 'answer-pending'; runId: ULID; text: string }
   | { type: 'cancel'; runId: ULID; reason?: string }
+  // Workflow-engine redesign — delivery is the SOLE done-signal. The server's
+  // deliverable route relays it here so the host's own AgentRun completes
+  // (running→completed) on the ONE host-backed path — no in-process fallback.
+  | { type: 'complete-run'; runId: ULID; result?: string }
   | { type: 'notify-mcp-handshake'; ccSessionId: string }
   | { type: 'shutdown'; mode: 'host-exit' | 'cancel-runs' };
 
@@ -117,7 +121,8 @@ export type AgentHostCommandResponse =
         | 'send'
         | 'mark-paused'
         | 'answer-pending'
-        | 'cancel';
+        | 'cancel'
+        | 'complete-run';
       run: AgentHostRunSnapshot;
       lastSeq: number;
     }

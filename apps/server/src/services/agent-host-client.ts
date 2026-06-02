@@ -621,6 +621,7 @@ function isAgentHostCommandResponse(
     case 'mark-paused':
     case 'answer-pending':
     case 'cancel':
+    case 'complete-run':
       return isAgentHostRunSnapshot(value.run);
     case 'notify-mcp-handshake':
     case 'shutdown':
