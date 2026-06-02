@@ -24,10 +24,8 @@ import type {
 } from '@pc/domain';
 import {
   ACCEPTANCE_PREDICATE_KINDS,
-  ContractV2 as ContractV2Ns,
   EXPECTED_OUTPUT_KINDS,
   VERIFICATION_TIERS,
-  deriveAcceptanceCriteria,
   deriveAcceptanceCriteriaV2,
   getPodDefaultExpectedOutput,
 } from '@pc/domain';
@@ -44,7 +42,6 @@ export interface CreateAgentWorkItemInput {
   parentWorkItemId?: ULID | null;
   stageId?: string;
   worktree?: string | null;
-  ephemeral?: boolean;
   /** Override the derived AC entirely. Audit-logged inside the work-item
    *  history at create time so downstream tooling can spot raw-AC patterns. */
   rawAcceptanceCriteria?: AcceptancePredicate[];
@@ -53,12 +50,10 @@ export interface CreateAgentWorkItemInput {
 export interface CreateAgentWorkItemDeps {
   workItemService: WorkItemService;
   getProject: () => Project;
-  /** Slice 013 — when supplied, a first-class `agent_contracts` row is created
-   *  alongside the WI (deterministic id == the WI id, matching the backfill
-   *  convention) so the dispatch path + work-log resolve the SAME contract. The
-   *  legacy WI contract columns stay authoritative for verification this slice;
-   *  the contract mirrors them + owns the deliverable. Omitting this keeps the
-   *  legacy-only behavior (tests that don't care about the contract row). */
+  /** When supplied, a first-class `agent_contracts` row is created alongside
+   *  the WI and linked to it (work-log + the verification spine). The contract
+   *  is the authority for verification; the WI is the optional output home.
+   *  Omitting this creates the WI only (tests that don't care about a contract). */
   contractService?: ContractService;
   /** Optional: look up the pod row's expected_output by name (project-scope
    *  first). When set, consulted between caller-supplied expectedOutput and
@@ -74,8 +69,10 @@ export class AgentWorkItemInputError extends Error {
   }
 }
 
-/** Apply the work-item-as-contract creation rules and persist. Returns the
- *  newly-created `WorkItem` with all contract fields populated. */
+/** Create a work item carrying the agent's task as its body, and (when a
+ *  contractService is supplied) mint the first-class contract linked to it.
+ *  The contract is the verification spine; the WI is the optional output home.
+ *  Returns the newly-created `WorkItem`. */
 export function createAgentWorkItem(
   input: CreateAgentWorkItemInput,
   deps: CreateAgentWorkItemDeps,
@@ -95,16 +92,9 @@ export function createAgentWorkItem(
     );
   }
 
-  // Resolve expected_output: caller-supplied wins; pod row (DB) second;
-  // stock map third; hard-fail when all three are absent.
-  //
-  // Contract-first (slice 021): the stock pod-default map is now the v2
-  // contract union (`contract.ts`). Caller-supplied + pod-row specs may still
-  // arrive as the legacy v1 union (the v1 validator + AC derivation handle
-  // those). The resolved spec is therefore EITHER union; we branch derivation
-  // on the kind and store the spec opaquely (the WI column + contract are
-  // typed against the slice's authoritative union — superseded fully in 023).
-  let expectedOutput: ExpectedOutput | ContractV2Ns.ExpectedOutput | null;
+  // Resolve expected_output (v2 contract union): caller-supplied wins; pod row
+  // (DB) second; stock map third; hard-fail when all three are absent.
+  let expectedOutput: ExpectedOutput | null;
   if (input.expectedOutput !== undefined) {
     assertExpectedOutputShape(input.expectedOutput);
     expectedOutput = input.expectedOutput;
@@ -125,15 +115,8 @@ export function createAgentWorkItem(
     );
   }
 
-  // Derive AC (v2 union → v2 derivation; v1 union → v1 derivation), then apply
-  // the raw override if supplied.
-  let acceptanceCriteria: AcceptancePredicate[] = ContractV2Ns.isExpectedOutputKind(
-    (expectedOutput as { kind?: unknown }).kind,
-  )
-    ? (deriveAcceptanceCriteriaV2(
-        expectedOutput as ContractV2Ns.ExpectedOutput,
-      ) as unknown as AcceptancePredicate[])
-    : deriveAcceptanceCriteria(expectedOutput as ExpectedOutput);
+  // Derive AC from the v2 spec, then apply the raw override if supplied.
+  let acceptanceCriteria: AcceptancePredicate[] = deriveAcceptanceCriteriaV2(expectedOutput);
   if (input.rawAcceptanceCriteria !== undefined) {
     assertAcceptanceCriteriaShape(input.rawAcceptanceCriteria);
     acceptanceCriteria = input.rawAcceptanceCriteria;
@@ -150,43 +133,23 @@ export function createAgentWorkItem(
     );
   }
 
-  const ephemeral = input.ephemeral === true;
-
   const workItem = deps.workItemService.create({
     title,
     stageId,
     body: task,
     ...(input.parentWorkItemId !== undefined ? { parentId: input.parentWorkItemId } : {}),
-    isAgentTask: true,
-    ephemeral,
-    // Stored opaquely — the resolved spec may be either union (see resolution
-    // above); the WI column type is superseded in 023.
-    expectedOutput: expectedOutput as unknown as ExpectedOutput,
-    acceptanceCriteria,
-    verificationTier: tier,
-    verificationStatus: null,
-    verificationNotes: null,
-    assignedAgentRunId: null,
-    worktreePath: input.worktree?.trim() || null,
   });
 
-  // Slice 013 — mint the first-class contract linked to the WI. The dispatch
-  // path (agent-run-factory) resolves it back by work-item id. The WI's contract
-  // columns stay authoritative for verification this slice; the contract mirrors
-  // them + becomes the deliverable's home. The v1 ExpectedOutput /
-  // AcceptanceCriteria JSON is stored opaquely on the v2-typed columns (same
-  // bytes the WI carries) — 014 supersedes the v1 union.
+  // Mint the first-class contract linked to the WI. The dispatch path
+  // (agent-run-factory) resolves it back by work-item id; it owns verification
+  // + the deliverable.
   if (deps.contractService) {
     deps.contractService.create({
       projectId: workItem.projectId as DomainULID,
       workItemId: workItem.id as DomainULID,
       podName: pod,
-      expectedOutput: expectedOutput as unknown as Parameters<
-        ContractService['create']
-      >[0]['expectedOutput'],
-      acceptanceCriteria: acceptanceCriteria as unknown as Parameters<
-        ContractService['create']
-      >[0]['acceptanceCriteria'],
+      expectedOutput,
+      acceptanceCriteria,
       verificationTier: tier,
       worktreePath: input.worktree?.trim() || null,
     });
@@ -195,31 +158,22 @@ export function createAgentWorkItem(
   return workItem;
 }
 
-/** Allowed keys per `ExpectedOutput.kind`. `kind` itself is always allowed.
- *  Section 26 carry-over #1 lock — closes the orchestrator's smuggling
- *  channel where non-schema fields like `description` / `shape` slipped past
- *  validation and AC derivation silently returned an empty predicate list. */
+/** Allowed keys per v2 `ExpectedOutput.kind`. `kind` itself is always allowed.
+ *  Strict unknown-field reject closes the orchestrator's smuggling channel
+ *  (non-schema fields slipping past validation + dodging AC derivation). */
 const ALLOWED_EXPECTED_OUTPUT_KEYS: Record<string, ReadonlySet<string>> = {
-  text: new Set(['kind', 'sections', 'min_chars']),
-  files: new Set(['kind', 'paths', 'min_size_bytes']),
-  structured: new Set(['kind', 'fields']),
-  'side-effect': new Set(['kind', 'describe', 'verify_via_bash']),
-  mixed: new Set(['kind', 'text', 'files', 'structured', 'side_effect']),
+  answer: new Set(['kind', 'must_address', 'min_chars']),
+  prose: new Set(['kind', 'doc_type', 'sections', 'min_chars', 'store', 'path']),
+  payload: new Set(['kind', 'schema', 'semantic']),
+  repo: new Set(['kind', 'isolation', 'paths_touched', 'checks', 'require_diff']),
+  external: new Set(['kind', 'system', 'action', 'confirm', 'idempotency_key', 'verify_handle']),
+  binary: new Set(['kind', 'artifact_type', 'mime', 'min_size_bytes']),
+  action: new Set(['kind', 'tool', 'min_count', 'before_end_turn']),
 };
 
-/** Allowed nested keys for `mixed.<sub>` constituents. Mirrors the standalone
- *  kind shapes minus the `kind` discriminator. */
-const ALLOWED_MIXED_NESTED_KEYS: Record<string, ReadonlySet<string>> = {
-  text: new Set(['sections', 'min_chars']),
-  files: new Set(['paths', 'min_size_bytes']),
-  structured: new Set(['fields']),
-  side_effect: new Set(['describe', 'verify_via_bash']),
-};
-
-/** Throws AgentWorkItemInputError if the shape doesn't look like an
+/** Throws AgentWorkItemInputError if the shape doesn't look like a v2
  *  ExpectedOutput. Includes a strict unknown-field reject so callers can't
- *  smuggle task content via non-schema fields and silently dodge AC derivation
- *  (Section 26 carry-over #1). */
+ *  smuggle task content via non-schema fields and silently dodge AC derivation. */
 function assertExpectedOutputShape(value: unknown): asserts value is ExpectedOutput {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new AgentWorkItemInputError('expected_output must be an object');
@@ -231,7 +185,7 @@ function assertExpectedOutputShape(value: unknown): asserts value is ExpectedOut
     );
   }
   const v = value as Record<string, unknown>;
-  const allowed = ALLOWED_EXPECTED_OUTPUT_KEYS[kind];
+  const allowed = ALLOWED_EXPECTED_OUTPUT_KEYS[kind]!;
   const unknownKeys = Object.keys(v).filter((k) => !allowed.has(k));
   if (unknownKeys.length > 0) {
     throw new AgentWorkItemInputError(
@@ -241,59 +195,41 @@ function assertExpectedOutputShape(value: unknown): asserts value is ExpectedOut
     );
   }
   switch (kind) {
-    case 'files':
-      if (!Array.isArray(v.paths)) {
-        throw new AgentWorkItemInputError('expected_output (files): paths must be an array');
+    case 'payload':
+      if (!v.schema || typeof v.schema !== 'object' || Array.isArray(v.schema)) {
+        throw new AgentWorkItemInputError('expected_output (payload): schema must be an object');
       }
       break;
-    case 'structured':
-      if (!v.fields || typeof v.fields !== 'object' || Array.isArray(v.fields)) {
+    case 'repo':
+      if (v.isolation !== 'worktree' && v.isolation !== 'in_place') {
         throw new AgentWorkItemInputError(
-          'expected_output (structured): fields must be a non-empty object',
+          'expected_output (repo): isolation must be "worktree" or "in_place"',
         );
       }
       break;
-    case 'side-effect':
-      if (typeof v.describe !== 'string' || v.describe.trim() === '') {
+    case 'external':
+      if (typeof v.system !== 'string' || v.system.trim() === '') {
+        throw new AgentWorkItemInputError('expected_output (external): system must be a non-empty string');
+      }
+      if (typeof v.action !== 'string' || v.action.trim() === '') {
+        throw new AgentWorkItemInputError('expected_output (external): action must be a non-empty string');
+      }
+      if (typeof v.idempotency_key !== 'string' || v.idempotency_key.trim() === '') {
         throw new AgentWorkItemInputError(
-          'expected_output (side-effect): describe must be a non-empty string',
+          'expected_output (external): idempotency_key must be a non-empty string',
         );
       }
       break;
-    case 'mixed':
-      // At least one constituent must be present.
-      if (!v.text && !v.files && !v.structured && !v.side_effect) {
-        throw new AgentWorkItemInputError(
-          'expected_output (mixed): must include at least one of text/files/structured/side_effect',
-        );
-      }
-      // Validate each nested constituent rejects unknown fields too.
-      for (const sub of ['text', 'files', 'structured', 'side_effect'] as const) {
-        const nested = v[sub];
-        if (nested === undefined) continue;
-        if (!nested || typeof nested !== 'object' || Array.isArray(nested)) {
-          throw new AgentWorkItemInputError(
-            `expected_output (mixed.${sub}): must be an object`,
-          );
-        }
-        const allowedNested = ALLOWED_MIXED_NESTED_KEYS[sub];
-        const unknownNested = Object.keys(nested as Record<string, unknown>).filter(
-          (k) => !allowedNested.has(k),
-        );
-        if (unknownNested.length > 0) {
-          throw new AgentWorkItemInputError(
-            `expected_output (mixed.${sub}): unknown field${
-              unknownNested.length === 1 ? '' : 's'
-            } ${unknownNested.map((k) => `"${k}"`).join(', ')}. Allowed: ${[
-              ...allowedNested,
-            ].join(', ')}.`,
-          );
-        }
+    case 'action':
+      if (typeof v.tool !== 'string' || v.tool.trim() === '') {
+        throw new AgentWorkItemInputError('expected_output (action): tool must be a non-empty string');
       }
       break;
-    case 'text':
-      // No required nested fields; sections + min_chars are optional. The
-      // unknown-key reject above already closes the smuggling channel.
+    case 'answer':
+    case 'prose':
+    case 'binary':
+      // No required nested fields; the unknown-key reject above closes the
+      // smuggling channel.
       break;
   }
 }

@@ -68,7 +68,7 @@ test('createAgentWorkItem creates a contract linked to the WI', () => {
       title: 'Do the thing',
       task: 'go do it',
       pod: 'researcher',
-      expectedOutput: { kind: 'text', min_chars: 5 },
+      expectedOutput: { kind: 'answer', min_chars: 5 },
       verificationTier: 'auto',
     },
     {
@@ -93,8 +93,6 @@ test('verification sources AC from the contract and rolls up the linked WI', asy
     stageId: 'backlog',
     title: 'c',
     body: 'no needle here',
-    isAgentTask: true,
-    verificationTier: 'auto',
   });
   // Contract for this WI with EMPTY AC → passes → roll up the WI to complete.
   const contract = new ContractService().create({
@@ -186,9 +184,6 @@ test('terminal effects: empty result with no submission writes NO deliverable (w
     stageId: 'backlog',
     title: 'c',
     body: 'deliverable written into the body',
-    isAgentTask: true,
-    acceptanceCriteria: [],
-    verificationTier: 'auto',
   });
   const contract = new ContractService().create({
     projectId: p.id as ULID,

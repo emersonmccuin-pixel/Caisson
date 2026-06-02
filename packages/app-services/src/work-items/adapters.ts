@@ -49,16 +49,7 @@ export function toWorkItemDto(wi: WorkItem): WorkItemDto {
     createdAt: wi.createdAt,
     updatedAt: wi.updatedAt,
     deletedAt: wi.deletedAt,
-    isAgentTask: wi.isAgentTask,
     isWorkflowRoot: wi.isWorkflowRoot ?? false,
-    ephemeral: wi.ephemeral,
-    acceptanceCriteria: wi.acceptanceCriteria,
-    expectedOutput: wi.expectedOutput,
-    verificationTier: wi.verificationTier,
-    verificationStatus: wi.verificationStatus,
-    verificationNotes: wi.verificationNotes,
-    assignedAgentRunId: wi.assignedAgentRunId,
-    worktreePath: wi.worktreePath,
     areaId: wi.areaId ?? null,
   };
 }

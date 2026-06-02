@@ -33,7 +33,7 @@ import { statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 
 import {
-  applyAgentVerification,
+  applyRunOutcome,
   getWorkItem,
   listAttachmentsForWorkItem,
   listChildWorkItems,
@@ -301,15 +301,11 @@ function acceptContract(args: {
     verificationNotes: null,
     verificationTier: tier,
   });
-  // Roll-up: the WI advance fires only for output-linked contracts.
+  // Roll-up: the WI advance fires only for output-linked contracts. The
+  // contract owns verification status/notes now; the WI roll-up only flips
+  // status + appends a history note.
   if (workItemId) {
-    applyAgentVerification(workItemId, {
-      workItemStatus: 'complete',
-      statusReason: null,
-      verificationStatus: 'passed',
-      verificationNotes: null,
-      historyNote,
-    });
+    applyRunOutcome(workItemId, 'complete', null, historyNote);
     if (input.project) autoAdvanceToDoneStage(workItemId, input.project);
   }
   return {

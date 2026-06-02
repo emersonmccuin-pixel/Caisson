@@ -149,9 +149,6 @@ test('submission-gated capture: a submitted deliverable is NOT overwritten by wi
     stageId: 'backlog',
     title: 'c',
     body: 'STALE body that must NOT become the deliverable',
-    isAgentTask: true,
-    acceptanceCriteria: [],
-    verificationTier: 'auto',
   });
   const contract = new ContractService().create({
     projectId: p.id as ULID,
@@ -209,9 +206,6 @@ test('slice 020 — no submission + empty result writes NO deliverable (wi.body 
     stageId: 'backlog',
     title: 'c',
     body: 'body is NOT borrowed as the deliverable anymore',
-    isAgentTask: true,
-    acceptanceCriteria: [],
-    verificationTier: 'auto',
   });
   const contract = new ContractService().create({
     projectId: p.id as ULID,

@@ -32,16 +32,7 @@ const wi: WorkItem = {
   updatedAt: 2,
   deletedAt: null,
   history: [],
-  isAgentTask: false,
   // isWorkflowRoot intentionally omitted -> adapter defaults to false
-  ephemeral: false,
-  acceptanceCriteria: null,
-  expectedOutput: null,
-  verificationTier: null,
-  verificationStatus: null,
-  verificationNotes: null,
-  assignedAgentRunId: null,
-  worktreePath: null,
   callsign: 'pc-1',
 };
 

@@ -13,7 +13,7 @@
 // source of truth; the .md file is rendered fresh per spawn.
 
 import type { AgentEffort, AgentModel, AgentOutputDestination } from './agent.ts';
-import type { ExpectedOutput } from './work-item-contract.ts';
+import type { ExpectedOutput } from './contract.ts';
 import type { ULID } from './ulid.ts';
 
 export type PodScope = 'global' | 'project';

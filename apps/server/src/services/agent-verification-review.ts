@@ -27,7 +27,7 @@
 
 import type { Contract } from '@pc/contracts';
 import { ContractService } from '@pc/app-services';
-import { applyAgentVerification, getWorkItem } from '@pc/db';
+import { applyRunOutcome, getWorkItem } from '@pc/db';
 import type { Project, ULID, WorkItem } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
@@ -93,13 +93,14 @@ export function approveAgentWorkItem(
   if (!contract.workItemId) return null;
   const wiId = contract.workItemId as ULID;
   const actor = input.actor ?? 'orchestrator';
-  const updated = applyAgentVerification(wiId, {
-    workItemStatus: 'complete',
-    statusReason: null,
-    verificationStatus: 'passed',
-    verificationNotes: note || null,
-    historyNote: note ? `approved by ${actor}: ${note}` : `approved by ${actor}`,
-  });
+  // The contract owns verification status/notes; the WI roll-up only flips
+  // status + appends a history note.
+  const updated = applyRunOutcome(
+    wiId,
+    'complete',
+    null,
+    note ? `approved by ${actor}: ${note}` : `approved by ${actor}`,
+  );
   if (!updated) {
     throw new VerificationReviewError('wi-not-found', `work item ${wiId} disappeared mid-write`);
   }
@@ -184,13 +185,12 @@ export async function rejectAgentWorkItem(
   if (contract.workItemId) {
     const wiId = contract.workItemId as ULID;
     const truncated = feedback.length > 240 ? `${feedback.slice(0, 240)}…` : feedback;
-    updated = applyAgentVerification(wiId, {
-      workItemStatus: 'in-progress',
-      statusReason: 'rejected on verification — feedback wired to continuation',
-      verificationStatus: 'failed',
-      verificationNotes: feedback,
-      historyNote: `rejected by ${actor}: ${truncated}`,
-    });
+    updated = applyRunOutcome(
+      wiId,
+      'in-progress',
+      'rejected on verification — feedback wired to continuation',
+      `rejected by ${actor}: ${truncated}`,
+    );
     if (updated) announceWorkItemRow(updated, updated.projectId, 'rejected');
   }
 

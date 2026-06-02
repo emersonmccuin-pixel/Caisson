@@ -2,12 +2,6 @@
 // Persisted as a row in the sqlite `work_items` table.
 
 import type { ULID } from './ulid.ts';
-import type {
-  AcceptanceCriteria,
-  ExpectedOutput,
-  VerificationStatus,
-  VerificationTier,
-} from './work-item-contract.ts';
 
 export type WorkItemStatus =
   | 'pending'
@@ -53,37 +47,13 @@ export interface WorkItem {
    *  rows written by the agent-comms HTTP routes (Section 16b.7). Rendered in
    *  the work-item detail modal's Activity tab. */
   history: WorkItemHistoryEntry[];
-  // ── Section 26 — work-item-as-contract ──
-  /** True for work items dispatched as agent contracts. Hidden from the
-   *  default kanban + table view; surfaced via "See Agent Contracts" toggle. */
-  isAgentTask: boolean;
   /** Section 19 — true when this row is a v2 workflow run's root. Each
    *  workflow node spawns a child WI under it; DAG state lives in
    *  `workflow_runs_v2` keyed by this id. Optional: pre-Section-19 rows + most
    *  WorkItem constructors omit it (treated as false). */
   isWorkflowRoot?: boolean;
-  /** Throwaway dispatch flag — auto-archived 24h after reaching `complete`.
-   *  Orchestrator opts in for quick-lookup dispatches. */
-  ephemeral: boolean;
-  /** Derived predicate set the runtime checks on agent-done (tier 1). */
-  acceptanceCriteria: AcceptanceCriteria | null;
-  /** Orchestrator's input spec to `pc_create_agent_work_item`. Persisted so
-   *  AC can be re-derived if the rules change. */
-  expectedOutput: ExpectedOutput | null;
-  /** Who verifies "done". Null for non-agent work items. */
-  verificationTier: VerificationTier | null;
-  /** Runtime state of the verification pass. Null until the agent reports done. */
-  verificationStatus: VerificationStatus | null;
-  /** Reviewer feedback (tier 2/3) or failed-predicate description (tier 1). */
-  verificationNotes: string | null;
-  /** Pointer to the AgentRun currently working this contract. */
-  assignedAgentRunId: ULID | null;
-  /** Worktree path for code-writer / file-producing agents. */
-  worktreePath: string | null;
   /** Section 35 — display-alias short code (e.g. `pc-2`, `pc-2.1`). ULID
-   *  stays canonical. NULL on agent contracts (`isAgentTask = true`) by
-   *  design — they don't burn user-visible numbers. Write-once: stable
-   *  across re-parenting. */
+   *  stays canonical. Write-once: stable across re-parenting. */
   callsign: string | null;
   /** Slice 010 — Area bucket FK, or null for Uncaptured. */
   areaId: ULID | null;

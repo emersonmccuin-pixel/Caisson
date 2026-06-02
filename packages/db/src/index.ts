@@ -49,7 +49,6 @@ export type {
 
 export {
   appendWorkItemHistory,
-  applyAgentVerification,
   applyRunOutcome,
   countWorkItemsInStage,
   createWorkItem,
@@ -58,13 +57,11 @@ export {
   getWorkItemIncludingArchived,
   listArchivedWorkItems,
   listChildWorkItems,
-  listEphemeralCompletedOlderThan,
   listWorkItems,
   moveWorkItemStage,
   patchWorkItem,
   reassignStage,
   restoreWorkItem,
-  setAssignedAgentRunId,
   softDeleteWorkItem,
   updateWorkItemFields,
   updateWorkItemStatus,

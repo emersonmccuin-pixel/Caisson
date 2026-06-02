@@ -10,6 +10,10 @@ export type {
   WorkItemType,
 } from './work-item.ts';
 export { WORK_ITEM_TYPES, isWorkItemType } from './work-item.ts';
+// Slice 023 — the v1 `work-item-contract.ts` union is deleted. The contract
+// (`contract.ts`, the v2 7-mechanism union) is the single authority. These flat
+// re-exports keep the historical import surface (`ExpectedOutput`,
+// `AcceptanceCriteria`, …) pointing at the v2 shapes.
 export type {
   AcceptanceCriteria,
   AcceptancePredicate,
@@ -18,20 +22,16 @@ export type {
   ExpectedOutputKind,
   VerificationStatus,
   VerificationTier,
-} from './work-item-contract.ts';
+} from './contract.ts';
 export {
   ACCEPTANCE_PREDICATE_KINDS,
   EXPECTED_OUTPUT_KINDS,
   VERIFICATION_STATUSES,
   VERIFICATION_TIERS,
   isVerificationTier,
-} from './work-item-contract.ts';
-// Slice 013 — first-class contract v2 union. Namespaced to coexist with the v1
-// `work-item-contract.ts` surface above (which stays authoritative for the
-// legacy work_items contract columns this slice). Access as ContractV2.ExpectedOutput,
-// ContractV2.Deliverable, ContractV2.DELIVERABLE_KINDS, etc. The genuinely-new
-// `Deliverable` / `ContractStatus` shapes are also re-exported flat below for
-// the contract DTO + repos that only need those.
+} from './contract.ts';
+// First-class contract v2 union. Also available namespaced as ContractV2.* for
+// callers that disambiguate (e.g. ContractV2.Deliverable, ContractV2.DELIVERABLE_KINDS).
 export * as ContractV2 from './contract.ts';
 export type {
   Deliverable,
@@ -46,7 +46,6 @@ export {
   isDeliverableKind,
 } from './contract.ts';
 export {
-  deriveAcceptanceCriteria,
   deriveAcceptanceCriteriaV2,
   KINDS_REQUIRING_EVIDENCE,
 } from './ac-derivation.ts';

@@ -52,7 +52,6 @@ import { announceSessionTitle } from './services/session-title-writer.ts';
 import { createHostConnection, toHostHealthSnapshot } from './services/host-connection.ts';
 import { announceHostHealth } from './services/host-health-writer.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
-import { sweepEphemeralWorkItems } from './services/ephemeral-work-item-sweep.ts';
 import { backfillStageFlags } from './services/stage-flags-backfill.ts';
 import { ChannelServer, type ChannelEvent } from './services/channel-server.ts';
 import { ProjectCreate } from './services/project-create.ts';
@@ -364,22 +363,6 @@ channelServer.start();
   }
 }
 
-// Section 26.8 — ephemeral work-item sweep at boot. Soft-deletes ephemeral
-// agent contracts (`pc_create_agent_work_item` with `ephemeral: true`) that
-// have been `complete` and idle for 24h+. No interval timer — long-running
-// servers catch the next batch on restart.
-{
-  try {
-    const result = sweepEphemeralWorkItems();
-    if (result.archived > 0) {
-      console.log(
-        `[pc] ephemeral-work-item-sweep: scanned ${result.scanned}, archived ${result.archived}`,
-      );
-    }
-  } catch (err) {
-    console.warn(`[pc] ephemeral-work-item-sweep failed: ${(err as Error).message}`);
-  }
-}
 
 // ── Slice 009 — mailbox value bindings RELOCATED above the boot handlers ──
 // The boot-reattach / reconcile-sweep / liveness-sweep handlers below apply

@@ -31,16 +31,7 @@ const wi: WorkItem = {
   updatedAt: 2,
   deletedAt: null,
   history: [],
-  isAgentTask: false,
   isWorkflowRoot: false,
-  ephemeral: false,
-  acceptanceCriteria: null,
-  expectedOutput: null,
-  verificationTier: null,
-  verificationStatus: null,
-  verificationNotes: null,
-  assignedAgentRunId: null,
-  worktreePath: null,
   callsign: 'pc-1',
 };
 

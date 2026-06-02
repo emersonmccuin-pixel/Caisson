@@ -47,11 +47,7 @@ function wiDto(id: string, version: number, updatedAt: number) {
     createdAt: 1,
     updatedAt,
     deletedAt: null,
-    isAgentTask: false,
     isWorkflowRoot: false,
-    ephemeral: false,
-    assignedAgentRunId: null,
-    worktreePath: null,
     areaId: null,
   };
 }

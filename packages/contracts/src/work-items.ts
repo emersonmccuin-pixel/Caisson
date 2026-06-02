@@ -45,17 +45,8 @@ export interface WorkItemDto {
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
-  // ── agent/workflow flags + contract fields ──
-  isAgentTask: boolean;
+  /** Section 19 — true when this row is a v2 workflow run's root. */
   isWorkflowRoot: boolean;
-  ephemeral: boolean;
-  acceptanceCriteria: unknown | null;
-  expectedOutput: unknown | null;
-  verificationTier: string | null;
-  verificationStatus: string | null;
-  verificationNotes: string | null;
-  assignedAgentRunId: ULID | null;
-  worktreePath: string | null;
   /** Slice 010 — Area bucket FK, or null for Uncaptured. */
   areaId: ULID | null;
 }
@@ -189,11 +180,7 @@ export function isWorkItemDto(value: unknown): value is WorkItemDto {
     typeof value.createdAt === 'number' &&
     typeof value.updatedAt === 'number' &&
     (value.deletedAt === null || typeof value.deletedAt === 'number') &&
-    typeof value.isAgentTask === 'boolean' &&
     typeof value.isWorkflowRoot === 'boolean' &&
-    typeof value.ephemeral === 'boolean' &&
-    (value.assignedAgentRunId === null || typeof value.assignedAgentRunId === 'string') &&
-    (value.worktreePath === null || typeof value.worktreePath === 'string') &&
     (value.areaId === null || typeof value.areaId === 'string')
   );
 }

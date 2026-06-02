@@ -42,7 +42,6 @@ import {
   markAgentRunTerminal,
   newId,
   setAgentRunContractId,
-  setAssignedAgentRunId,
   touchAgentRunActivity,
   updateAgentRunPid,
   updateAgentRunStatus,
@@ -301,11 +300,12 @@ export async function dispatchFreshAgent(
     };
   }
 
-  // Section 26.4 — resolve the work-item-as-contract assignment if supplied.
-  // The materialiser writes a "## Your assignment" section into the rendered
-  // .md when this is non-null; the orchestrator created the work item before
-  // dispatching so we just look it up here. Hard-fail on unknown/archived ids
-  // — the orchestrator can't dispatch against a phantom contract.
+  // Resolve the optional linked work item. The materialiser writes a
+  // "## Your contract" section into the rendered .md when this is non-null,
+  // surfacing the contract's expected output + pointing at the linked WI. The
+  // expected output is the contract spec (`input.expectedOutput`), NOT a WI
+  // column (those were dropped in slice 023). Hard-fail on an unknown/archived
+  // linked id — the orchestrator can't attach against a phantom WI.
   let workItem: { workItemId: ULID; expectedOutput: ExpectedOutput } | null = null;
   if (input.workItemId) {
     const wi = getWorkItem(input.workItemId);
@@ -316,14 +316,17 @@ export async function dispatchFreshAgent(
         error: `workItemId "${input.workItemId}" not found or archived`,
       };
     }
-    if (!wi.expectedOutput) {
+    if (!input.expectedOutput) {
       return {
         ok: false,
         cause: 'pod-materialisation-failed',
-        error: `workItem "${input.workItemId}" has no expected_output — was it created via pc_create_agent_work_item?`,
+        error: `dispatch attached to workItem "${input.workItemId}" has no expected_output`,
       };
     }
-    workItem = { workItemId: input.workItemId, expectedOutput: wi.expectedOutput };
+    workItem = {
+      workItemId: input.workItemId,
+      expectedOutput: input.expectedOutput as ExpectedOutput,
+    };
   }
 
   let podPrep: PodSpawnPrep | null = null;
@@ -408,17 +411,11 @@ export async function dispatchFreshAgent(
     /* best-effort */
   }
 
-  // Section 26.6 — point the contract WI at the run that's about to produce
-  // its report. Reject (`pc_resolve_work_item` decision="reject") reads this to
-  // know which run to wake with feedback. Best-effort: skip if the WI vanished.
-  if (workItem?.workItemId) {
-    setAssignedAgentRunId(workItem.workItemId, agentRunId);
-  }
-
-  // Slice 013 — resolve (or create) the first-class contract for this dispatch
-  // + link the run to it. Read-through shim: prefer an existing agent_contracts
-  // row for the WI (backfilled or created at pc_create_agent_work_item time),
-  // else create one from the WI's legacy contract columns (un-backfilled path).
+  // Resolve (or create) the first-class contract for this dispatch + link the
+  // run to it. Prefer an existing agent_contracts row for the linked WI, else
+  // create one from the dispatch's explicit spec. The run↔contract link
+  // (agent_runs.contract_id) is the spine; the reject path resolves the
+  // producer run from contract.agentRunId.
   const contractId = resolveContractForDispatch({
     projectId: input.projectId,
     workItemId: workItem?.workItemId ?? null,
@@ -512,12 +509,20 @@ export async function dispatchContinueAgent(
     (input.workItemId as ULID | undefined) ?? plan.plan.parentWorkItemId ?? null;
   let continueWorkItem: { workItemId: ULID; expectedOutput: ExpectedOutput } | null = null;
   if (continueWorkItemId) {
+    // Source the expected output from the linked contract (slice 023 dropped the
+    // WI contract columns). Soft-fail when no contract/WI is found — a
+    // continuation shouldn't break; the resumed agent still has prior context.
     const wi = getWorkItem(continueWorkItemId);
-    if (wi?.expectedOutput) {
-      continueWorkItem = { workItemId: continueWorkItemId, expectedOutput: wi.expectedOutput };
+    if (wi) {
+      const contractSvc = deps.contractService ?? new ContractService();
+      const linked = contractSvc.listByWorkItem(continueWorkItemId).slice(-1)[0] ?? null;
+      if (linked?.expectedOutput) {
+        continueWorkItem = {
+          workItemId: continueWorkItemId,
+          expectedOutput: linked.expectedOutput as ExpectedOutput,
+        };
+      }
     }
-    // Soft-fail on archived/unknown — continuations shouldn't break just because
-    // the original WI was archived. The resumed agent still has prior context.
   }
 
   let podPrep: PodSpawnPrep | null = null;
@@ -561,16 +566,9 @@ export async function dispatchContinueAgent(
     };
   }
 
-  // Section 26.6 — re-point the contract WI at the continuation run so a
-  // subsequent reject wakes the latest producer, not the parent. Skips
-  // silently if the WI was archived/unknown above.
-  if (continueWorkItemId) {
-    setAssignedAgentRunId(continueWorkItemId, plan.plan.agentRunId);
-  }
-
-  // Slice 013 — re-link the contract to the continuation run (same resolution as
-  // the fresh path). The contract carries retries on its `attempt` field; this
-  // slice just keeps the run↔contract link pointed at the latest producer.
+  // Re-link the contract to the continuation run (same resolution as the fresh
+  // path). The contract carries retries on its `attempt` field; this keeps the
+  // run↔contract link pointed at the latest producer.
   const contractId = resolveContractForDispatch({
     projectId: input.projectId,
     workItemId: continueWorkItemId,
@@ -1238,7 +1236,6 @@ export function resolveContractForDispatch(
   deps: ResolveContractForDispatchDeps = {},
 ): ULID | null {
   const service = args.contractService ?? new ContractService();
-  const getWi = deps.getWorkItem ?? getWorkItem;
   const listForWi = deps.listContractsForWorkItem ?? listContractsForWorkItem;
   const setRunContract = deps.setAgentRunContractId ?? setAgentRunContractId;
   try {
@@ -1254,20 +1251,16 @@ export function resolveContractForDispatch(
     }
     if (!contractId) {
       // Contract-first: create a contract whether or not a WI is attached.
-      // Explicit spec wins; else fall back to the linked WI's legacy columns.
-      const wi = args.workItemId ? getWi(args.workItemId) : null;
+      // The explicit spec is the only source (the legacy WI contract columns
+      // were dropped in slice 023).
       const created = service.create({
         projectId: args.projectId,
         workItemId: args.workItemId,
         podName: args.podName,
-        expectedOutput: (args.expectedOutput ?? wi?.expectedOutput ?? null) as Parameters<
-          ContractService['create']
-        >[0]['expectedOutput'],
-        acceptanceCriteria: (args.acceptanceCriteria ?? wi?.acceptanceCriteria ?? null) as Parameters<
-          ContractService['create']
-        >[0]['acceptanceCriteria'],
-        verificationTier: args.verificationTier ?? wi?.verificationTier ?? null,
-        worktreePath: args.worktreePath ?? wi?.worktreePath ?? null,
+        expectedOutput: args.expectedOutput ?? null,
+        acceptanceCriteria: args.acceptanceCriteria ?? null,
+        verificationTier: args.verificationTier ?? null,
+        worktreePath: args.worktreePath ?? null,
       });
       contractId = created.id as ULID;
     }

@@ -44,16 +44,7 @@ const workItem: WorkItemDto = {
   createdAt: 1,
   updatedAt: 2,
   deletedAt: null,
-  isAgentTask: false,
   isWorkflowRoot: false,
-  ephemeral: false,
-  acceptanceCriteria: null,
-  expectedOutput: null,
-  verificationTier: null,
-  verificationStatus: null,
-  verificationNotes: null,
-  assignedAgentRunId: null,
-  worktreePath: null,
   areaId: null,
 };
 

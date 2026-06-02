@@ -131,16 +131,7 @@ test('work-item DTO carries areaId (string or null)', () => {
     createdAt: 1,
     updatedAt: 2,
     deletedAt: null,
-    isAgentTask: false,
     isWorkflowRoot: false,
-    ephemeral: false,
-    acceptanceCriteria: null,
-    expectedOutput: null,
-    verificationTier: null,
-    verificationStatus: null,
-    verificationNotes: null,
-    assignedAgentRunId: null,
-    worktreePath: null,
     areaId: 'a1',
   };
   assert.equal(isWorkItemDto(wi), true);

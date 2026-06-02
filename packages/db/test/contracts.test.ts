@@ -4,10 +4,9 @@
 
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-contracts-'));
 process.env.PC_DATA_DIR = tmpDir;
@@ -20,7 +19,6 @@ const {
   getContract,
   getRawDb,
   insertAgentRunRow,
-  listContractsForRun,
   listContractsForWorkItem,
   newId,
   runMigrations,
@@ -29,12 +27,6 @@ const {
   setContractRun,
   setContractVerification,
 } = await import('../src/index.ts');
-
-const here = dirname(fileURLToPath(import.meta.url));
-const backfillSql = readFileSync(
-  join(here, '..', 'drizzle', '0038_agent_contracts.sql'),
-  'utf8',
-);
 
 before(() => runMigrations());
 after(() => {
@@ -45,17 +37,6 @@ after(() => {
 const stages = [{ id: 'todo', name: 'Todo', order: 0 }];
 function seedProject(slug: string) {
   return createProject({ slug, name: slug, stages, folderPath: '' });
-}
-
-/** Re-run ONLY the backfill statements (the INSERT … SELECT + the UPDATE) from
- *  the migration file. The CREATE TABLE / ALTER already ran in `before`. */
-function runBackfillStatements(): void {
-  const raw = getRawDb();
-  for (const stmt of backfillSql.split('--> statement-breakpoint')) {
-    // Strip leading whole-line `-- …` comments so we can detect the verb.
-    const code = stmt.replace(/^\s*--[^\n]*\n/gm, '').trim();
-    if (/^(INSERT|UPDATE)\b/i.test(code)) raw.exec(code);
-  }
 }
 
 test('0038 creates agent_contracts table with every schema.ts column', () => {
@@ -81,87 +62,10 @@ test('assertSchemaIntact does not throw after a fresh migrate', () => {
   assert.doesNotThrow(() => assertSchemaIntact());
 });
 
-test('backfill produces one contract per is_agent_task WI with correct field copy + link', () => {
-  const p = seedProject('backfill');
-  const raw = getRawDb();
-  const wiId = newId();
-  const runId = newId();
-  const now = Date.now();
-  const eo = JSON.stringify({ kind: 'answer', min_chars: 5 });
-  const ac = JSON.stringify([{ kind: 'report_contains', pattern: 'ok' }]);
-
-  // Legacy is_agent_task WI with contract columns + a run linked both ways.
-  raw.prepare(
-    `INSERT INTO work_items
-      (id, project_id, parent_id, title, body, stage_id, status, type, fields, history,
-       position, version, is_agent_task, is_workflow_root, ephemeral,
-       acceptance_criteria, expected_output, verification_tier, verification_status,
-       verification_notes, assigned_agent_run_id, worktree_path, callsign, area_id,
-       created_at, updated_at, deleted_at)
-     VALUES
-      (?, ?, NULL, 'Contract WI', 'task body', 'todo', 'in-progress', 'task', '{}', '[]',
-       0, 1, 1, 0, 0, ?, ?, 'auto', NULL, NULL, ?, '/wt/x', NULL, NULL, ?, ?, NULL)`,
-  ).run(wiId, p.id, ac, eo, runId, now, now);
-
-  insertAgentRunRow({
-    id: runId,
-    projectId: p.id,
-    podName: 'researcher',
-    dispatcherSessionId: 'sess-1',
-    ccSessionId: 'cc-1',
-    status: 'completed',
-    input: 'go',
-    parentWorkItemId: wiId,
-    queuedAt: now,
-  });
-
-  // A non-agent WI must NOT get a contract.
-  const plainWi = newId();
-  raw.prepare(
-    `INSERT INTO work_items
-      (id, project_id, parent_id, title, body, stage_id, status, type, fields, history,
-       position, version, is_agent_task, is_workflow_root, ephemeral, created_at, updated_at)
-     VALUES (?, ?, NULL, 'Plain', '', 'todo', 'todo', 'task', '{}', '[]', 0, 1, 0, 0, 0, ?, ?)`,
-  ).run(plainWi, p.id, now, now);
-
-  runBackfillStatements();
-
-  const contracts = listContractsForWorkItem(wiId);
-  assert.equal(contracts.length, 1, 'exactly one contract for the agent-task WI');
-  const c = contracts[0]!;
-  assert.equal(c.id, wiId, 'deterministic id == work item id');
-  assert.equal(c.projectId, p.id);
-  assert.equal(c.workItemId, wiId);
-  assert.equal(c.agentRunId, runId);
-  assert.deepEqual(c.expectedOutput, { kind: 'answer', min_chars: 5 });
-  assert.deepEqual(c.acceptanceCriteria, [{ kind: 'report_contains', pattern: 'ok' }]);
-  assert.equal(c.verificationTier, 'auto');
-  assert.equal(c.worktreePath, '/wt/x');
-  assert.equal(c.status, 'dispatched');
-
-  // The plain WI got nothing.
-  assert.equal(listContractsForWorkItem(plainWi).length, 0);
-
-  // The run's contract_id was backfilled.
-  const runRow = raw
-    .prepare('SELECT contract_id FROM agent_runs WHERE id = ?')
-    .get(runId) as { contract_id: string | null };
-  assert.equal(runRow.contract_id, wiId);
-
-  // And list-by-run resolves it.
-  const byRun = listContractsForRun(runId);
-  assert.equal(byRun.length, 1);
-  assert.equal(byRun[0]!.id, wiId);
-});
-
-test('backfill is idempotent on re-run (no duplicate rows, link stays)', () => {
-  const raw = getRawDb();
-  const before = (raw.prepare('SELECT COUNT(*) AS n FROM agent_contracts').get() as { n: number }).n;
-  runBackfillStatements();
-  runBackfillStatements();
-  const afterCount = (raw.prepare('SELECT COUNT(*) AS n FROM agent_contracts').get() as { n: number }).n;
-  assert.equal(afterCount, before, 're-running the backfill must not add rows');
-});
+// Slice 023 — the historical 0038 backfill (one contract per legacy
+// is_agent_task WI) ran once before migration 0039 dropped those work_items
+// columns. The columns no longer exist on a fresh DB, so the backfill can't be
+// re-exercised; its tests were removed with the columns.
 
 test('contracts repo: create / setRun / setDeliverable / setVerification + version bumps', () => {
   const p = seedProject('crud');
@@ -219,8 +123,8 @@ test('many contracts : one work item (1:many), ordered oldest-first', () => {
   raw.prepare(
     `INSERT INTO work_items
       (id, project_id, parent_id, title, body, stage_id, status, type, fields, history,
-       position, version, is_agent_task, is_workflow_root, ephemeral, created_at, updated_at)
-     VALUES (?, ?, NULL, 'WI', '', 'todo', 'todo', 'task', '{}', '[]', 0, 1, 1, 0, 0, ?, ?)`,
+       position, version, is_workflow_root, created_at, updated_at)
+     VALUES (?, ?, NULL, 'WI', '', 'todo', 'todo', 'task', '{}', '[]', 0, 1, 0, ?, ?)`,
   ).run(wiId, p.id, now, now);
 
   const a = createContract({ projectId: p.id, workItemId: wiId, podName: 'a' });

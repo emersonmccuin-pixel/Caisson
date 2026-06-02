@@ -79,8 +79,6 @@ test('output-linked contract acceptance advances its WI to the done stage', asyn
     projectId: p.id as ULID,
     stageId: 'backlog',
     title: 'linked work',
-    isAgentTask: true,
-    verificationTier: 'auto',
   });
   const contract = new ContractService().create({
     projectId: p.id as ULID,
@@ -116,8 +114,6 @@ test('the WI roll-up fires exactly once on accept', async () => {
     projectId: p.id as ULID,
     stageId: 'backlog',
     title: 'once work',
-    isAgentTask: true,
-    verificationTier: 'auto',
   });
   const contract = new ContractService().create({
     projectId: p.id as ULID,

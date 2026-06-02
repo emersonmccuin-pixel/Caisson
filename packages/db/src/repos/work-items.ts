@@ -1,10 +1,6 @@
-import { and, asc, eq, isNull, isNotNull, lt, max } from 'drizzle-orm';
+import { and, asc, eq, isNull, isNotNull, max } from 'drizzle-orm';
 import type {
-  AcceptanceCriteria,
-  ExpectedOutput,
   ULID,
-  VerificationStatus,
-  VerificationTier,
   WorkItem,
   WorkItemHistoryEntry,
   WorkItemStatus,
@@ -48,17 +44,7 @@ interface WorkItemRow {
   history: WorkItemHistoryEntry[];
   position: number;
   version: number;
-  // ── Section 26 — work-item-as-contract ──
-  isAgentTask: boolean;
   isWorkflowRoot: boolean;
-  ephemeral: boolean;
-  acceptanceCriteria: AcceptanceCriteria | null;
-  expectedOutput: ExpectedOutput | null;
-  verificationTier: VerificationTier | null;
-  verificationStatus: VerificationStatus | null;
-  verificationNotes: string | null;
-  assignedAgentRunId: ULID | null;
-  worktreePath: string | null;
   callsign: string | null;
   areaId: ULID | null;
   createdAt: number;
@@ -84,16 +70,7 @@ function toDomain(row: WorkItemRow): WorkItem {
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
     history: row.history,
-    isAgentTask: row.isAgentTask,
     isWorkflowRoot: row.isWorkflowRoot,
-    ephemeral: row.ephemeral,
-    acceptanceCriteria: row.acceptanceCriteria,
-    expectedOutput: row.expectedOutput,
-    verificationTier: row.verificationTier,
-    verificationStatus: row.verificationStatus,
-    verificationNotes: row.verificationNotes,
-    assignedAgentRunId: row.assignedAgentRunId,
-    worktreePath: row.worktreePath,
     callsign: row.callsign,
     areaId: row.areaId ?? null,
   };
@@ -109,19 +86,8 @@ export interface CreateWorkItemInput {
   type?: WorkItemType;
   fields?: Record<string, unknown>;
   initialHistory?: WorkItemHistoryEntry[];
-  // ── Section 26 — work-item-as-contract (optional; pc_create_agent_work_item
-  //   populates these. Direct callers leave them undefined for plain work items.) ──
-  isAgentTask?: boolean;
   /** Section 19 — mark this row a v2 workflow run root. Default false. */
   isWorkflowRoot?: boolean;
-  ephemeral?: boolean;
-  acceptanceCriteria?: AcceptanceCriteria | null;
-  expectedOutput?: ExpectedOutput | null;
-  verificationTier?: VerificationTier | null;
-  verificationStatus?: VerificationStatus | null;
-  verificationNotes?: string | null;
-  assignedAgentRunId?: ULID | null;
-  worktreePath?: string | null;
   /** Slice 010 — Area bucket FK, or null for Uncaptured. */
   areaId?: ULID | null;
 }
@@ -189,27 +155,24 @@ export function createWorkItem(input: CreateWorkItemInput): WorkItem {
   const id = newId();
   const parentId = input.parentId ?? null;
   const position = input.position ?? nextPosition(input.projectId, input.stageId, parentId);
-  const isAgentTask = input.isAgentTask ?? false;
 
   // Section 35 — claim a callsign in the same transaction as the insert so
   // concurrent creates can't race on the projects.callsign_seq bump or on
-  // the per-parent suffix scan. Agent contracts stay NULL by design.
+  // the per-parent suffix scan.
   const db = getDb();
   return db.transaction((tx) => {
     let callsign: string | null = null;
-    if (!isAgentTask) {
-      // A parent might be an agent contract (no callsign of its own) or a
-      // dangling/soft-deleted row. In both cases the new row is treated as
-      // an effective root and gets a top-level number — same fallback the
-      // migration backfill applies.
+    {
+      // A parent might be dangling/soft-deleted (no callsign). In that case the
+      // new row is treated as an effective root and gets a top-level number.
       let parentCallsign: string | null = null;
       if (parentId != null) {
         const parentRow = tx
-          .select({ callsign: workItems.callsign, isAgentTask: workItems.isAgentTask })
+          .select({ callsign: workItems.callsign })
           .from(workItems)
           .where(eq(workItems.id, parentId))
-          .get() as { callsign: string | null; isAgentTask: boolean } | undefined;
-        if (parentRow && !parentRow.isAgentTask && parentRow.callsign != null) {
+          .get() as { callsign: string | null } | undefined;
+        if (parentRow && parentRow.callsign != null) {
           parentCallsign = parentRow.callsign;
         }
       }
@@ -229,19 +192,13 @@ export function createWorkItem(input: CreateWorkItemInput): WorkItem {
         }
       } else {
         // Per-parent next suffix = MAX(existing suffix) + 1 across all
-        // non-agent siblings (live and archived) — never reuse a child
-        // number even after a sibling is archived.
+        // siblings (live and archived) — never reuse a child number even
+        // after a sibling is archived.
         const prefix = `${parentCallsign}.`;
         const siblings = tx
           .select({ callsign: workItems.callsign })
           .from(workItems)
-          .where(
-            and(
-              eq(workItems.parentId, parentId!),
-              eq(workItems.isAgentTask, false),
-              isNotNull(workItems.callsign),
-            ),
-          )
+          .where(and(eq(workItems.parentId, parentId!), isNotNull(workItems.callsign)))
           .all() as { callsign: string }[];
         let maxSuffix = 0;
         for (const s of siblings) {
@@ -270,16 +227,7 @@ export function createWorkItem(input: CreateWorkItemInput): WorkItem {
       history: input.initialHistory ?? [],
       position,
       version: 1,
-      isAgentTask,
       isWorkflowRoot: input.isWorkflowRoot ?? false,
-      ephemeral: input.ephemeral ?? false,
-      acceptanceCriteria: input.acceptanceCriteria ?? null,
-      expectedOutput: input.expectedOutput ?? null,
-      verificationTier: input.verificationTier ?? null,
-      verificationStatus: input.verificationStatus ?? null,
-      verificationNotes: input.verificationNotes ?? null,
-      assignedAgentRunId: input.assignedAgentRunId ?? null,
-      worktreePath: input.worktreePath ?? null,
       callsign,
       areaId: input.areaId ?? null,
       createdAt: now,
@@ -599,29 +547,6 @@ export function appendWorkItemHistory(
   return toDomain(updated);
 }
 
-/** Section 26.8 — cross-project sweep candidate query. Returns non-archived
- *  ephemeral agent contracts whose status is `complete` and whose
- *  `updatedAt` is strictly less than the cutoff. Used by the boot-time
- *  ephemeral-work-item sweep to auto-archive throwaway dispatches 24h
- *  after they finish. Soft-deleted rows excluded by design — once
- *  archived the sweep stays out of their way. */
-export function listEphemeralCompletedOlderThan(cutoffMs: number): WorkItem[] {
-  const rows = getDb()
-    .select()
-    .from(workItems)
-    .where(
-      and(
-        eq(workItems.ephemeral, true),
-        eq(workItems.status, 'complete'),
-        isNull(workItems.deletedAt),
-        lt(workItems.updatedAt, cutoffMs),
-      ),
-    )
-    .orderBy(asc(workItems.updatedAt))
-    .all() as WorkItemRow[];
-  return rows.map(toDomain);
-}
-
 /** Section 26.5 — list non-archived children of a parent work item. Used by
  *  the tier-1 verification path to populate `child_work_items_done`. Stays
  *  archive-aware (soft-deleted children don't count) to match the other
@@ -634,63 +559,6 @@ export function listChildWorkItems(parentId: ULID): WorkItem[] {
     .orderBy(asc(workItems.position), asc(workItems.createdAt))
     .all() as WorkItemRow[];
   return rows.map(toDomain);
-}
-
-/** Section 26.5 — atomic tier-1 verification write. Sets status +
- *  statusReason + verification_status + verification_notes and appends a
- *  history note in one update so the UI never observes an intermediate
- *  state. Bumps version + updatedAt. Returns null if the id isn't found or
- *  is soft-deleted. */
-export function applyAgentVerification(
-  id: ULID,
-  input: {
-    workItemStatus: WorkItemStatus;
-    statusReason: string | null;
-    verificationStatus: VerificationStatus;
-    verificationNotes: string | null;
-    historyNote: string;
-  },
-): WorkItem | null {
-  const row = getRowById(id);
-  if (!row) return null;
-  const entry: WorkItemHistoryEntry = {
-    ts: new Date().toISOString(),
-    kind: 'update',
-    note: input.historyNote,
-  };
-  const updated: WorkItemRow = {
-    ...row,
-    status: input.workItemStatus,
-    statusReason: input.statusReason,
-    verificationStatus: input.verificationStatus,
-    verificationNotes: input.verificationNotes,
-    history: [...row.history, entry],
-    version: row.version + 1,
-    updatedAt: Date.now(),
-  };
-  getDb().update(workItems).set(updated).where(eq(workItems.id, id)).run();
-  return toDomain(updated);
-}
-
-/** Section 26.6 — point-write of `assignedAgentRunId`. Called from the
- *  agent-run dispatch path right after the AgentRun row is inserted so the
- *  contract WI always points at the latest producer run. Continuations
- *  overwrite; reject (`pc_resolve_work_item` decision="reject") reads this
- *  field to know which run to wake. No version bump — this is dispatch-time
- *  bookkeeping, not a user-visible mutation. */
-export function setAssignedAgentRunId(
-  id: ULID,
-  agentRunId: ULID | null,
-): WorkItem | null {
-  const row = getRowById(id);
-  if (!row) return null;
-  const updated: WorkItemRow = {
-    ...row,
-    assignedAgentRunId: agentRunId,
-    updatedAt: Date.now(),
-  };
-  getDb().update(workItems).set(updated).where(eq(workItems.id, id)).run();
-  return toDomain(updated);
 }
 
 /**

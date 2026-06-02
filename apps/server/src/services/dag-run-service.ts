@@ -20,7 +20,6 @@ import {
   moveWorkItemStage,
   newId,
   resolveAgentForDispatch,
-  setAssignedAgentRunId,
   updateAgentRunStatus,
   workflowRunsV2Repo,
 } from '@pc/db';
@@ -496,7 +495,6 @@ export function makeExecutorDeps(
       ...(childContractId ? { contractId: childContractId } : {}),
       queuedAt,
     });
-    setAssignedAgentRunId(childWi.id as ULID, agentRunId);
     // Point the contract at its producing run (slice 019/020 spine).
     if (childContractId) new ContractService().setRun(childContractId, agentRunId);
 

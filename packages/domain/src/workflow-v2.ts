@@ -16,8 +16,8 @@
 //    resolves to "read child WI body/fields" — there is no in-memory output map
 //    as source of truth (see port map: "stateless over work items").
 
-import type { ExpectedOutput } from './work-item-contract.ts';
-import type { VerificationTier } from './work-item-contract.ts';
+import type { ExpectedOutput } from './contract.ts';
+import type { VerificationTier } from './contract.ts';
 
 // ---------------------------------------------------------------------------
 // Node kinds
