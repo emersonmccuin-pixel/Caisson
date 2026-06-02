@@ -239,9 +239,11 @@ export function usePendingPrompts({
   }, [events, currentSessionId]);
 
   useEffect(() => {
+    if (pendingPrompts.length === 0) return;
     const id = setInterval(() => {
       const now = Date.now();
       setPendingPrompts((prev) => {
+        if (prev.length === 0) return prev;
         let changed = false;
         const next = prev.map((pending) => {
           if (pending.status === 'failed') return pending;
@@ -272,7 +274,7 @@ export function usePendingPrompts({
       });
     }, 500);
     return () => clearInterval(id);
-  }, []);
+  }, [pendingPrompts.length]);
 
   useEffect(() => {
     setPendingPrompts([]);

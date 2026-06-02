@@ -51,6 +51,8 @@ import {
   readLiveCursor,
 } from '@/features/live/hooks';
 
+const INBOUND_DIAGNOSTICS_MIN_INTERVAL_MS = 250;
+
 interface UseProjectWsResult {
   events: WsEnvelope[];
   aggregates: ChatSessionAggregates;
@@ -89,6 +91,18 @@ function emptyWsDiagnostics(): WsDiagnostics {
     lastPongAt: null,
     lastHeartbeatTimeoutAt: null,
   };
+}
+
+export function shouldPublishInboundDiagnostics(
+  lastPublishedAt: number,
+  nextInboundAt: number,
+  inboundType: string,
+): boolean {
+  return (
+    inboundType === 'server-pong' ||
+    lastPublishedAt === 0 ||
+    nextInboundAt - lastPublishedAt >= INBOUND_DIAGNOSTICS_MIN_INTERVAL_MS
+  );
 }
 
 export function useProjectWs(project: Project | null): UseProjectWsResult {
@@ -143,6 +157,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
     // Lifted to effect scope so the wake handler (visibilitychange / online)
     // can judge socket freshness across reconnects, not just within one socket.
     let lastInboundAt = Date.now();
+    let lastDiagnosticsPublishedAt = 0;
 
     function connect(): void {
       if (cancelled) return;
@@ -266,12 +281,18 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
           return;
         }
         if (!shouldAcceptProjectWsEnvelope(env, pid)) return;
-        setDiagnostics((prev) => ({
-          ...prev,
-          lastInboundAt,
-          lastInboundType: env.type,
-          lastPongAt: env.type === 'server-pong' ? lastInboundAt : prev.lastPongAt,
-        }));
+        // Diagnostics are display/debug metadata only. Keep the local
+        // lastInboundAt variable exact for heartbeat correctness, but don't
+        // force a whole-app React update for every raw/jsonl burst frame.
+        if (shouldPublishInboundDiagnostics(lastDiagnosticsPublishedAt, lastInboundAt, env.type)) {
+          lastDiagnosticsPublishedAt = lastInboundAt;
+          setDiagnostics((prev) => ({
+            ...prev,
+            lastInboundAt,
+            lastInboundType: env.type,
+            lastPongAt: env.type === 'server-pong' ? lastInboundAt : prev.lastPongAt,
+          }));
+        }
         if (env.type === 'server-pong') return;
         // Slice 015a — advance the global `seq` cursor on every live-event frame
         // so the next (re)connect handshake replays only what we haven't seen.

@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 
 import { deriveActivity } from './runtimeState';
+
+const LAST_ENVELOPE_UPDATE_MIN_MS = 250;
 
 export function useThinkingIndicatorState({
   events,
@@ -14,8 +16,12 @@ export function useThinkingIndicatorState({
   const activity = useMemo(() => deriveActivity(events), [events]);
 
   const [lastEnvelopeAt, setLastEnvelopeAt] = useState<number>(() => Date.now());
+  const lastEnvelopeAtRef = useRef(lastEnvelopeAt);
   useEffect(() => {
-    setLastEnvelopeAt(Date.now());
+    const now = Date.now();
+    if (now - lastEnvelopeAtRef.current < LAST_ENVELOPE_UPDATE_MIN_MS) return;
+    lastEnvelopeAtRef.current = now;
+    setLastEnvelopeAt(now);
   }, [events.length]);
 
   const [thinkingStartedAt, setThinkingStartedAt] = useState<number | null>(null);
