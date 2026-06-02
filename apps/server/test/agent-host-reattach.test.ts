@@ -132,6 +132,10 @@ test('reconcileAgentRunsAgainstHost re-seeds a registered host handle on a non-t
     updateStatus: (input) => {
       currentRow = { ...currentRow, status: input.status };
     },
+    // No-op announce: this is a pure unit test of handle re-seeding; the default
+    // announce reads the row from the DB (selects contract_id post-slice-013),
+    // which this test never migrates. Announce DB-writes are covered elsewhere.
+    announce: () => {},
     broadcast: () => {},
   });
 
@@ -159,6 +163,7 @@ test('applyAgentHostEvent run-state case re-seeds a registered host handle', () 
       updateStatus: (input) => {
         currentRow = { ...currentRow, status: input.status };
       },
+      announce: () => {}, // no-op: pure unit test, avoid the default DB read
       broadcast: () => {},
     },
   );
@@ -340,6 +345,7 @@ test('T1.4 row reappears in list-runs before threshold → counter resets, no fi
     updateStatus: (input) => {
       currentRow = { ...currentRow, status: input.status };
     },
+    announce: () => {}, // no-op: pure unit test, avoid the default DB read
   });
   assert.equal(res.hostLost, 0);
   assert.equal(calls.length, 0);
