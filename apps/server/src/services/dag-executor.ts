@@ -1,7 +1,7 @@
 // Section 19.4d — v2 DAG executor orchestration. Drives the pure 19.4c brain
 // (@pc/workflows `dag/`) against injected live deps (spawn / work-item / review
 // / persistence). Deps-injected so the control flow is unit-testable with
-// fakes; the live wiring (createAgentWorkItem + spawnSubagent + worktree +
+// fakes; the live wiring (createAgentWorkItem + agent dispatch + worktree +
 // broadcast + deliverReview) is supplied by apps/server at construction.
 //
 // Model: await-per-layer (matches PC's existing tick — `await Promise.all(ready)`).

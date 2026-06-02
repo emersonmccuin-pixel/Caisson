@@ -19,19 +19,6 @@ export type {
 export { JsonlTailer } from './jsonl-tailer.ts';
 export type { JsonlEvent, JsonlEventMeta, JsonlTailerOptions } from './jsonl-tailer.ts';
 
-// Workflow subagent spawner — the LowLevelSpawn-based default.
-export { spawnSubagent } from './subagent-spawner.ts';
-export type {
-  SubagentSessionLike,
-  SubagentSpawnerDeps,
-  SubagentSpawnFailure,
-  SubagentSpawnFailureCause,
-  SubagentSpawnHandle,
-  SubagentSpawnRequest,
-  SubagentSpawnResult,
-  SubagentSpawnSuccess,
-} from './subagent-spawner.ts';
-
 export {
   attachWorktree,
   createWorktree,
@@ -143,9 +130,6 @@ export type {
   AgentHostRunState,
   AgentHostStartRunRequest,
   AgentHostTerminalResult,
-  AgentHostWorkflowSubagentRequest,
-  AgentHostWorkflowSubagentSnapshot,
-  AgentHostWorkflowSubagentState,
 } from './agent-host-protocol.ts';
 
 export {

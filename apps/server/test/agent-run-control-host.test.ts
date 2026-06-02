@@ -1,7 +1,7 @@
-// T1.3 — host-aware hardKillAgentRun. With a `host` dep, kill AWAITS a host stop
-// (cancel / cancel-workflow-subagent) before the local pid-kill, so a host-backed
-// run (pid null) actually terminates instead of orphaning compute. Host errors
-// are swallowed — the local kill + idempotent finalize stay the net.
+// T1.3 — host-aware hardKillAgentRun. With a `host` dep, kill AWAITS a host
+// `cancel` (by runId) before the local pid-kill, so a host-backed run (pid null)
+// actually terminates instead of orphaning compute. Host errors are swallowed —
+// the local kill + idempotent finalize stay the net.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -77,7 +77,9 @@ test('T1.3 host-backed kill (pid null) issues host cancel, finalizes, reports ho
   assert.equal(finalized, 1, 'row force-finalized (idempotent net)');
 });
 
-test('T1.3 workflow-subagent kill (wf- dispatcher) issues cancel-workflow-subagent', async () => {
+test('T1.3 workflow-dispatched run (wf- dispatcher) issues a plain cancel by runId (door unified)', async () => {
+  // Post door-unification, a workflow agent run is a normal host run keyed by
+  // runId — no `cancel-workflow-subagent` special-case for the `wf-` dispatcher.
   const commands: SentCommand[] = [];
   const deps: AgentRunControlDeps = {
     getAgentRun: () => row({ pid: null, dispatcherSessionId: 'wf-abc-node1-def' }),
@@ -87,9 +89,7 @@ test('T1.3 workflow-subagent kill (wf- dispatcher) issues cancel-workflow-subage
   };
   const res = await hardKillAgentRun('run-1' as ULID, deps);
   assert.equal(res.ok, true);
-  assert.deepEqual(commands, [
-    { type: 'cancel-workflow-subagent', pcSessionId: 'wf-abc-node1-def' },
-  ]);
+  assert.deepEqual(commands, [{ type: 'cancel', runId: 'run-1' }]);
 });
 
 test('T1.3 no host + a pid → existing local-kill behavior (regression guard)', async () => {

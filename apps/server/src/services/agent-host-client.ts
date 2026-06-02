@@ -9,7 +9,6 @@ import type {
   AgentHostEvent,
   AgentHostIdentity,
   AgentHostRunSnapshot,
-  AgentHostWorkflowSubagentSnapshot,
 } from '@pc/runtime';
 import {
   discoverAgentHostEndpoint,
@@ -623,9 +622,6 @@ function isAgentHostCommandResponse(
     case 'answer-pending':
     case 'cancel':
       return isAgentHostRunSnapshot(value.run);
-    case 'start-workflow-subagent':
-    case 'cancel-workflow-subagent':
-      return isAgentHostWorkflowSubagentSnapshot(value.workflowSubagent);
     case 'notify-mcp-handshake':
     case 'shutdown':
       return true;
@@ -663,24 +659,6 @@ function isAgentHostRunSnapshot(value: unknown): value is AgentHostRunSnapshot {
     typeof value.queuedAt === 'number' &&
     (typeof value.spawnedAt === 'number' || value.spawnedAt === null) &&
     (typeof value.readyAt === 'number' || value.readyAt === null) &&
-    typeof value.updatedAt === 'number' &&
-    (typeof value.terminalAt === 'number' || value.terminalAt === null)
-  );
-}
-
-function isAgentHostWorkflowSubagentSnapshot(
-  value: unknown,
-): value is AgentHostWorkflowSubagentSnapshot {
-  return (
-    isObject(value) &&
-    typeof value.pcSessionId === 'string' &&
-    (typeof value.ccSessionId === 'string' || value.ccSessionId === null) &&
-    typeof value.agentName === 'string' &&
-    typeof value.worktreeDir === 'string' &&
-    typeof value.state === 'string' &&
-    typeof value.transcriptPath === 'string' &&
-    (typeof value.jsonlPath === 'string' || value.jsonlPath === null) &&
-    typeof value.startedAt === 'number' &&
     typeof value.updatedAt === 'number' &&
     (typeof value.terminalAt === 'number' || value.terminalAt === null)
   );

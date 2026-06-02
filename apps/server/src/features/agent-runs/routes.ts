@@ -294,9 +294,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
    *    running"). Distinct from /kill: we do NOT force-finalize the row — the
    *    host's own `run-terminal` event finalizes it, so a clean cancel reports
    *    the real terminal status and an in-grace turn-end still honors as
-   *    completion. Workflow subagents (pcSessionId-tracked) ride
-   *    cancel-workflow-subagent. 404 only when the run is genuinely unknown — not
-   *    merely absent from the in-process registry. */
+   *    completion. 404 only when the run is genuinely unknown — not merely
+   *    absent from the in-process registry. */
   app.post('/api/projects/:projectId/agent-runs/:runId/cancel', async (c) => {
     const projectId = c.req.param('projectId') as ULID;
     const project = getProjectById(projectId);
@@ -315,9 +314,9 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     // T1.3 — host-aware path. Resolve the run's DB row; a host-backed run carries
     // NO server-side pid (the host owns the child). For such a run — registered
     // or not — AWAIT a host cancel so the request proves the stop landed and a
-    // non-registry phantom / reattached host run / workflow subagent all
-    // converge. An in-process run (pid non-null) with a registry entry keeps the
-    // existing synchronous handle teardown only — no host command.
+    // non-registry phantom / reattached host run all converge. An in-process run
+    // (pid non-null) with a registry entry keeps the existing synchronous handle
+    // teardown only — no host command.
     const row = getAgentRunRow(runId);
     if (!entry && !row) {
       return c.json({ ok: false, error: `unknown run: ${runId}` }, 404);
@@ -330,11 +329,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     const host = resolveHost();
     const hostBacked = row !== null && row.pid === null;
     if (host && row && hostBacked && !isTerminalRunStatus(row.status)) {
-      const command = row.dispatcherSessionId.startsWith('wf-')
-        ? ({ type: 'cancel-workflow-subagent', pcSessionId: row.dispatcherSessionId } as const)
-        : ({ type: 'cancel', runId } as const);
       try {
-        const response = await Promise.resolve(host.sendCommand(command));
+        const response = await Promise.resolve(host.sendCommand({ type: 'cancel', runId }));
         hostCancelled = !response || response.ok === true;
       } catch {
         /* swallow — the host's own terminal event / reconcile sweep is the net */

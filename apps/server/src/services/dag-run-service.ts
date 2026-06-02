@@ -1,6 +1,6 @@
 // Section 19.4e — LIVE wiring for the v2 DAG executor. Implements DagExecutorDeps
-// against the real machinery (work-item-as-contract creation, spawnSubagent,
-// verification, worktree exec, channel posts, the v2 sidecar repo) and provides
+// against the real machinery (work-item-as-contract creation, the agent-dispatch
+// door, verification, worktree exec, channel posts, the v2 sidecar repo) and provides
 // the fire entry point. Spawner / verification / exec / channel are injectable
 // so the integration is testable against a real DB with a FAKE claude.exe (see
 // test/dag-run-service.test.ts); the live claude.exe smoke is 19.14.
@@ -24,7 +24,7 @@ import {
 import { createAgentWorkItem } from './agent-work-item.ts';
 // Door-unification — workflow agent nodes dispatch through the SAME door the
 // orchestrator uses (active-runs registration, canonical spawn, unified terminal
-// + verification). The forked spawnSubagent path is gone.
+// + verification). The forked subagent-spawn path is gone.
 import { dispatchFreshAgent } from './agent-run-factory.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import type { WorkItemService } from './work-item.ts';
