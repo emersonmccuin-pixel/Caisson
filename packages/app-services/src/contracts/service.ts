@@ -22,6 +22,7 @@ import {
   getContractInDb,
   getDb,
   insertLiveEvent,
+  listContractsForProjectInDb,
   listContractsForRunInDb,
   listContractsForWorkItemInDb,
   setContractDeliverable as setContractDeliverableInDb,
@@ -116,6 +117,13 @@ export class ContractService {
   /** Read-only — contracts produced by one run (newest-first). No event. */
   listByRun(agentRunId: ULID): Contract[] {
     return listContractsForRunInDb(getDb(), agentRunId as DomainULID).map(toContractDto);
+  }
+
+  /** Read-only — every contract in a project (newest-first), including
+   *  WI-optional (workItemId === null) dispatches the work-log can't reach.
+   *  No event. */
+  listByProject(projectId: ULID): Contract[] {
+    return listContractsForProjectInDb(getDb(), projectId as DomainULID).map(toContractDto);
   }
 
   create(input: CreateContractServiceInput): Contract {

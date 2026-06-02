@@ -43,18 +43,14 @@ export interface WorkItemsToolbarProps {
     type?: boolean;
     updated?: boolean;
   };
-  /** Count of hidden agent-contract rows — surfaced beside the toggle. */
-  hiddenAgentCount?: number;
 }
 
-export function WorkItemsToolbar({ rightSlot, hide, hiddenAgentCount = 0 }: WorkItemsToolbarProps) {
+export function WorkItemsToolbar({ rightSlot, hide }: WorkItemsToolbarProps) {
   const filters = useWorkItemsView((s) => s.filters);
   const setFilters = useWorkItemsView((s) => s.setFilters);
   const clearFilters = useWorkItemsView((s) => s.clearFilters);
   const sort = useWorkItemsView((s) => s.sort);
   const setSort = useWorkItemsView((s) => s.setSort);
-  const showAgentContracts = useWorkItemsView((s) => s.showAgentContracts);
-  const setShowAgentContracts = useWorkItemsView((s) => s.setShowAgentContracts);
   const showTopLevelOnly = useWorkItemsView((s) => s.showTopLevelOnly);
   const setShowTopLevelOnly = useWorkItemsView((s) => s.setShowTopLevelOnly);
   const active = hasActiveFilters(filters);
@@ -144,21 +140,6 @@ export function WorkItemsToolbar({ rightSlot, hide, hiddenAgentCount = 0 }: Work
           className="h-3 w-3 cursor-pointer accent-primary"
         />
         <span>Parent items only</span>
-      </label>
-
-      <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground">
-        <input
-          type="checkbox"
-          checked={showAgentContracts}
-          onChange={(e) => setShowAgentContracts(e.target.checked)}
-          className="h-3 w-3 cursor-pointer accent-primary"
-        />
-        <span>
-          Agent contracts
-          {!showAgentContracts && hiddenAgentCount > 0 && (
-            <span className="ml-1 text-[var(--fg-dim)]">({hiddenAgentCount} hidden)</span>
-          )}
-        </span>
       </label>
 
       <SortSelect

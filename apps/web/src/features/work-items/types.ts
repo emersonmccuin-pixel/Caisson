@@ -85,7 +85,6 @@ export interface WorkItem {
   updatedAt: number;
   deletedAt: number | null;
   history: WorkItemHistoryEntry[];
-  isAgentTask: boolean;
   callsign: string | null;
 }
 

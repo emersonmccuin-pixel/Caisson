@@ -67,17 +67,11 @@ export function WorkItemsTable({ project, events, onOpenInspector }: Props) {
   const { areas } = useProjectAreas(project, events);
   const [openItemId, setOpenItemId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const showAgentContracts = useWorkItemsView((s) => s.showAgentContracts);
   const showTopLevelOnly = useWorkItemsView((s) => s.showTopLevelOnly);
   const filters = useWorkItemsView((s) => s.filters);
   const sort = useWorkItemsView((s) => s.sort);
   const setSort = useWorkItemsView((s) => s.setSort);
   const areaFilter = useWorkItemsView((s) => s.areaFilter);
-
-  const hiddenAgentCount = useMemo(
-    () => items.filter((i) => i.isAgentTask).length,
-    [items],
-  );
 
   // T3.2b — refetch on a NEW `deleted` area frame so items that fell back to
   // Uncaptured reconcile (no per-item work-item.changed fact). Off the identity-
@@ -92,10 +86,10 @@ export function WorkItemsTable({ project, events, onOpenInspector }: Props) {
   // Slice 010 — rail counts use the visibility-filtered (but not area-filtered)
   // list; the table applies the area filter on top.
   const railItems = useMemo(() => {
-    let base = showAgentContracts ? items : items.filter((i) => !i.isAgentTask);
+    let base = items;
     if (showTopLevelOnly) base = base.filter((i) => i.parentId == null);
     return applyFilters(base, filters);
-  }, [items, showAgentContracts, showTopLevelOnly, filters]);
+  }, [items, showTopLevelOnly, filters]);
 
   const visibleItems = useMemo(
     () =>
@@ -134,7 +128,7 @@ export function WorkItemsTable({ project, events, onOpenInspector }: Props) {
     <div className="flex h-full">
       <AreaFilterRail areas={areas} items={railItems} />
       <div className="flex min-w-0 flex-1 flex-col">
-      <WorkItemsToolbar hiddenAgentCount={hiddenAgentCount} />
+      <WorkItemsToolbar />
 
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="w-full border-collapse text-[12px]">

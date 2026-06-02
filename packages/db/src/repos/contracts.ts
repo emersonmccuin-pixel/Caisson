@@ -5,7 +5,7 @@
 // A contract is a first-class agent assignment with a typed, verified output.
 // Optionally links to one work item (1:many). The deliverable lives here.
 
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { asc, desc, eq } from 'drizzle-orm';
 import type {
   AcceptanceCriteria,
   ContractStatus,
@@ -96,6 +96,22 @@ export function listContractsForRunInDb(db: DbExecutor, agentRunId: ULID): Contr
     .select()
     .from(agentContracts)
     .where(eq(agentContracts.agentRunId, agentRunId))
+    .orderBy(desc(agentContracts.createdAt), desc(agentContracts.id))
+    .all() as ContractRow[];
+}
+
+/** All contracts in one project, newest first — the project-scoped contract
+ *  list. Surfaces WI-optional dispatches (contracts with workItemId === null)
+ *  that the work-log timeline can't reach. */
+export function listContractsForProject(projectId: ULID): ContractRow[] {
+  return listContractsForProjectInDb(getDb(), projectId);
+}
+
+export function listContractsForProjectInDb(db: DbExecutor, projectId: ULID): ContractRow[] {
+  return db
+    .select()
+    .from(agentContracts)
+    .where(eq(agentContracts.projectId, projectId))
     .orderBy(desc(agentContracts.createdAt), desc(agentContracts.id))
     .all() as ContractRow[];
 }

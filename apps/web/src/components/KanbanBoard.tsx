@@ -92,7 +92,6 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
       alive = false;
     };
   }, []);
-  const showAgentContracts = useWorkItemsView((s) => s.showAgentContracts);
   const showTopLevelOnly = useWorkItemsView((s) => s.showTopLevelOnly);
   const filters = useWorkItemsView((s) => s.filters);
   const areaFilter = useWorkItemsView((s) => s.areaFilter);
@@ -101,30 +100,20 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
   // WITHOUT per-item work-item.changed facts (carry-forward).
   const { areas } = useProjectAreas(project, events);
 
-  // Section 26.7. Agent-contract work items render only when the toggle is on.
-  // Hidden rows still flow through child-count + parent lookups so non-agent
-  // children of an agent contract remain visible (rare today; reserved for
-  // Section 19's workflow-root-as-work-item).
-  const hiddenAgentCount = useMemo(
-    () => items.filter((i) => i.isAgentTask).length,
-    [items],
-  );
-  // Section 37.6 — toolbar filters + sort apply on top of the agent-contract
-  // visibility toggle. Sort affects within-stage ordering on the board; the
-  // explicit `position` still wins for drag-and-drop reorders inside a stage,
-  // so the toolbar sort only applies when the user hasn't manually reordered
-  // (default 'activity' desc effectively becomes a tiebreaker on equal positions).
-  // Kanban honors drag positions inside each column, so toolbar `sort` doesn't
-  // apply here — only filters. Table view (37.7) is where sort is load-bearing.
+  // Section 37.6 — toolbar filters apply on top of the visibility toggle. Sort
+  // affects within-stage ordering on the board, but the explicit `position`
+  // still wins for drag-and-drop reorders inside a stage, so the toolbar sort
+  // doesn't apply here — only filters. Table view (37.7) is where sort is
+  // load-bearing.
   // Section 38 — "Parent items only" toggle hides child items (parentId != null).
-  // Visibility-filtered (agent / top-level / toolbar) but NOT area-filtered —
-  // this is the list the rail counts against so each bucket's count reflects
-  // the same population the board would show under "All".
+  // Visibility-filtered (top-level / toolbar) but NOT area-filtered — this is the
+  // list the rail counts against so each bucket's count reflects the same
+  // population the board would show under "All".
   const railItems = useMemo(() => {
-    let base = showAgentContracts ? items : items.filter((i) => !i.isAgentTask);
+    let base = items;
     if (showTopLevelOnly) base = base.filter((i) => i.parentId == null);
     return applyFilters(base, filters);
-  }, [items, showAgentContracts, showTopLevelOnly, filters]);
+  }, [items, showTopLevelOnly, filters]);
 
   const visibleItems = useMemo(
     () => applyFilters(railItems, { search: '', types: [], statuses: [], updatedWithin: 'all' }, undefined, areaFilter),
@@ -194,8 +183,6 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
   }, [project.stages, cancelledHidden]);
 
   // Pre-sort items by position within each stage. Stable across renders.
-  // Uses `visibleItems` so the "See Agent Contracts" toggle (Section 26.7)
-  // hides agent-task rows from each column when off.
   const itemsByStage = useMemo(() => {
     const map = new Map<string, WorkItem[]>();
     for (const stage of sortedStages) map.set(stage.id, []);
@@ -282,7 +269,7 @@ export function KanbanBoard({ project, events }: KanbanBoardProps) {
       <div className="flex h-full">
         <AreaFilterRail areas={areas} items={railItems} />
         <div className="flex min-w-0 flex-1 flex-col">
-        <WorkItemsToolbar hiddenAgentCount={hiddenAgentCount} />
+        <WorkItemsToolbar />
         <div className="min-h-0 flex-1">
           <KanbanScrollContainer>
             {sortedStages.map((stage) => (

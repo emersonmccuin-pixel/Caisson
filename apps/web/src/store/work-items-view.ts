@@ -1,9 +1,9 @@
-// Work-items view preferences. Section 26.7: "See Agent Contracts" toggle
-// that hides `isAgentTask` rows from the kanban (and the table view).
-// Flipped to OFF in Section 1.5.10 — agent work items now surface in chat
-// as rich-link pills (hover preview + click to modal), so kanban no longer
-// needs to render them by default. User can re-enable via the toolbar
-// toggle if they want to see the full picture.
+// Work-items view preferences.
+//
+// Slice 022 (contract-first switchover): the "See Agent Contracts" toggle is
+// gone — agent tasks are no longer hidden work items. Contracts are a
+// first-class entity surfaced via the contract views (work-log + the
+// project-scoped contract list), so the board never renders them.
 //
 // Section 37: extended with `activeSubTab` for the Dashboard / Kanban / Table
 // sub-tab strip above the Work Items page. Default = 'dashboard'.
@@ -47,8 +47,6 @@ const DEFAULT_FILTERS: WorkItemsFilters = {
 const DEFAULT_SORT: WorkItemsSort = { by: 'activity', dir: 'desc' };
 
 interface WorkItemsViewState {
-  showAgentContracts: boolean;
-  setShowAgentContracts: (value: boolean) => void;
   /** Section 38 — "Parent items only" toggle. When true, both kanban and table
    *  only render items where parentId == null (top-level items). Default off. */
   showTopLevelOnly: boolean;
@@ -68,8 +66,6 @@ interface WorkItemsViewState {
 export const useWorkItemsView = create<WorkItemsViewState>()(
   persist(
     (set, get) => ({
-      showAgentContracts: false,
-      setShowAgentContracts: (showAgentContracts) => set({ showAgentContracts }),
       showTopLevelOnly: false,
       setShowTopLevelOnly: (showTopLevelOnly) => set({ showTopLevelOnly }),
       activeSubTab: 'dashboard',

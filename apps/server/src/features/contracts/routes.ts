@@ -35,4 +35,13 @@ export function registerContractRoutes(app: Hono, deps: ContractRoutesDeps = {})
     const contracts = service.listByWorkItem(workItemId);
     return c.json({ ok: true, contracts });
   });
+
+  // Slice 022 — project-scoped, WI-optional contract list (newest-first).
+  // Surfaces contract-only dispatches (workItemId === null) the per-WI work-log
+  // can't reach. Empty array (not 404) when the project has no contracts.
+  app.get('/api/projects/:id/contracts', (c) => {
+    const projectId = c.req.param('id') as ULID;
+    const contracts = service.listByProject(projectId);
+    return c.json({ ok: true, contracts });
+  });
 }

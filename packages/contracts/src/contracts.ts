@@ -202,6 +202,10 @@ export const contractRoutes = {
   detail: (id: ULID) => `/api/contracts/${encodeURIComponent(id)}`,
   forWorkItem: (workItemId: ULID) =>
     `/api/work-items/${encodeURIComponent(workItemId)}/contracts`,
+  /** Slice 022 — project-scoped, WI-optional contract list (surfaces
+   *  contract-only dispatches the per-WI work-log can't reach). */
+  forProject: (projectId: ULID) =>
+    `/api/projects/${encodeURIComponent(projectId)}/contracts`,
 } as const;
 
 export interface ListContractsResponse {

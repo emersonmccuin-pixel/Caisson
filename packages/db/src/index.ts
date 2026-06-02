@@ -84,6 +84,8 @@ export {
   getBackfilledContractForWorkItem,
   getContract,
   getContractInDb,
+  listContractsForProject,
+  listContractsForProjectInDb,
   listContractsForRun,
   listContractsForRunInDb,
   listContractsForWorkItem,
