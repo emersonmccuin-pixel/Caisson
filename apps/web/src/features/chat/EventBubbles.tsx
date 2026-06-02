@@ -352,18 +352,80 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
   );
 }
 
+// Human label for each agent-event kind, shown on the collapsed pill.
+const AGENT_EVENT_LABELS: Record<string, string> = {
+  'agent-asks-orchestrator': 'asks a question',
+  'agent-asks-user': 'asks you',
+  'agent-approval-request': 'requests approval',
+  'agent-completed': 'finished',
+  'agent-failed': 'failed',
+  'agent-queued-started': 'started',
+};
+
+function agentEventLabel(kind: string | undefined): string {
+  if (!kind) return 'message';
+  return AGENT_EVENT_LABELS[kind] ?? kind.replace(/^agent-/, '').replace(/-/g, ' ');
+}
+
+// Drop the leading `[tag: …]` header lines (and the blank line after them) so
+// the expanded pill shows just the agent's question / context, not the wire tags.
+function stripEventTags(text: string): string {
+  const lines = text.split('\n');
+  let i = 0;
+  while (i < lines.length && /^\[[^\]]*\]\s*$/.test(lines[i])) i += 1;
+  while (i < lines.length && lines[i].trim() === '') i += 1;
+  return lines.slice(i).join('\n').trim();
+}
+
+// Collapsed, expandable pill for an agent→orchestrator turn. The agent name is
+// pulled straight from the message's `[agentName: …]` tag by the parser.
+function AgentEventPill({ part }: { part: UserPart }) {
+  const [expanded, setExpanded] = useState(false);
+  const label = agentEventLabel(part.agentEventKind);
+  const name = part.agentName ?? 'agent';
+  const body = stripEventTags(part.text);
+  return (
+    <div className="border-l-2 border-primary/60 bg-muted/20">
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        title={expanded ? 'Collapse' : 'Expand'}
+        className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <span className="shrink-0 opacity-70">🤖</span>
+        <span className="font-medium text-foreground">{name}</span>
+        <span className="text-muted-foreground/70">· {label}</span>
+        <span className="ml-auto shrink-0 opacity-60">{expanded ? '▾' : '▸'}</span>
+      </button>
+      {expanded && (
+        <div className="whitespace-pre-wrap break-words px-2 pb-2 pl-[1.85rem] text-xs text-foreground">
+          {body || '(no message body)'}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function UserBubble({ event, projectId }: { event: UserEvent; projectId: string }) {
   const parts = useMemo(() => {
     const all = parseUserText(event.text ?? '');
-    return all.filter((p) => p.kind !== 'workflow-event' && p.kind !== 'agent-event');
+    // Workflow events stay hidden; agent events render as a collapsed pill.
+    return all.filter((p) => p.kind !== 'workflow-event');
   }, [event.text]);
   if (parts.length === 0) return null;
-  // Group consecutive non-channel parts (text + rich-link + external-link)
-  // into one block so links render inline with their surrounding text.
-  const groups: Array<{ kind: 'channel'; part: UserPart } | { kind: 'inline'; parts: UserPart[] }> = [];
+  // Group consecutive inline parts (text + rich-link + external-link) into one
+  // block so links render inline with their surrounding text. Channel + agent
+  // parts each stand alone.
+  const groups: Array<
+    | { kind: 'channel'; part: UserPart }
+    | { kind: 'agent'; part: UserPart }
+    | { kind: 'inline'; parts: UserPart[] }
+  > = [];
   for (const p of parts) {
     if (p.kind === 'channel') {
       groups.push({ kind: 'channel', part: p });
+    } else if (p.kind === 'agent-event') {
+      groups.push({ kind: 'agent', part: p });
     } else {
       const last = groups[groups.length - 1];
       if (last && last.kind === 'inline') last.parts.push(p);
@@ -382,6 +444,8 @@ export function UserBubble({ event, projectId }: { event: UserEvent; projectId: 
               {g.part.text || '(empty body)'}
             </div>
           </div>
+        ) : g.kind === 'agent' ? (
+          <AgentEventPill key={idx} part={g.part} />
         ) : (
           <div key={idx} className="group relative text-sm text-foreground">
             <div className="whitespace-pre-wrap break-words">

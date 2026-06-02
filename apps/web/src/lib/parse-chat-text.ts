@@ -68,12 +68,42 @@ const VALID_RICH_KINDS = new Set<RichLinkKind>([
 ]);
 
 /**
- * Split a chat text body into typed parts. Outer pass extracts <channel> blocks
- * (and identifies workflow / agent event headers within); inner pass splits the
- * remaining text segments on markdown + bare URLs.
+ * Classify a text block whose first line is a `[pc:agent-event …]` /
+ * `[pc:workflow-event …]` header into a typed event part. Returns null when no
+ * known header leads the block. Shared by the top-level (mailbox) path and the
+ * legacy <channel>-wrapped path so both yield identical parts.
+ */
+function classifyEventBlock(body: string): UserPart | null {
+  const wfMatch = body.match(WORKFLOW_EVENT_HEADER_RE);
+  if (wfMatch) {
+    const runMatch = body.match(WORKFLOW_RUN_ID_RE);
+    const part: UserPart = { kind: 'workflow-event', text: body, workflowEventKind: wfMatch[1] };
+    if (runMatch?.[1]) part.workflowRunId = runMatch[1];
+    return part;
+  }
+  const agMatch = body.match(AGENT_EVENT_HEADER_RE);
+  if (agMatch) {
+    const runMatch = body.match(AGENT_RUN_ID_RE);
+    const nameMatch = body.match(AGENT_NAME_RE);
+    const part: UserPart = { kind: 'agent-event', text: body, agentEventKind: agMatch[1] };
+    if (runMatch?.[1]) part.agentRunId = runMatch[1];
+    if (nameMatch?.[1]) part.agentName = nameMatch[1];
+    return part;
+  }
+  return null;
+}
+
+/**
+ * Split a chat text body into typed parts. A mailbox-delivered agent/workflow
+ * event arrives as a bare turn whose body leads with a `[pc:agent-event …]`
+ * header (no <channel> wrapper) — detected first. Otherwise the outer pass
+ * extracts any legacy <channel> blocks; the inner pass splits remaining text
+ * segments on markdown + bare URLs.
  */
 export function parseUserText(text: string): UserPart[] {
   if (!text) return [{ kind: 'text', text: '' }];
+  const topLevel = classifyEventBlock(text.trim());
+  if (topLevel) return [topLevel];
   const parts: UserPart[] = [];
   let last = 0;
   let sawChannel = false;
@@ -87,30 +117,9 @@ export function parseUserText(text: string): UserPart[] {
     const attrs = m[1] ?? '';
     const body = (m[2] ?? '').trim();
     last = idx + m[0].length;
-    const wfMatch = body.match(WORKFLOW_EVENT_HEADER_RE);
-    if (wfMatch) {
-      const runMatch = body.match(WORKFLOW_RUN_ID_RE);
-      const part: UserPart = {
-        kind: 'workflow-event',
-        text: body,
-        workflowEventKind: wfMatch[1],
-      };
-      if (runMatch?.[1]) part.workflowRunId = runMatch[1];
-      parts.push(part);
-      continue;
-    }
-    const agMatch = body.match(AGENT_EVENT_HEADER_RE);
-    if (agMatch) {
-      const runMatch = body.match(AGENT_RUN_ID_RE);
-      const nameMatch = body.match(AGENT_NAME_RE);
-      const part: UserPart = {
-        kind: 'agent-event',
-        text: body,
-        agentEventKind: agMatch[1],
-      };
-      if (runMatch?.[1]) part.agentRunId = runMatch[1];
-      if (nameMatch?.[1]) part.agentName = nameMatch[1];
-      parts.push(part);
+    const eventPart = classifyEventBlock(body);
+    if (eventPart) {
+      parts.push(eventPart);
       continue;
     }
     const sourceMatch = attrs.match(/source\s*=\s*"([^"]+)"/);
