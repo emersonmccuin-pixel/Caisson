@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>PC — Target Architecture Map</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --ink:#e6edf3; --muted:#8b949e;
+    --keep:#3fb950; --merge:#d29922; --delete:#f85149; --create:#58a6ff; --policy:#bc8cff;
+    --ctrl:#58a6ff; --event:#3fb950; --data:#d29922; --notify:#bc8cff; --merge-edge:#f85149;
+    --line:#30363d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  header{position:sticky;top:0;z-index:50;background:rgba(13,17,23,.92);backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--line);padding:14px 20px}
+  h1{font-size:18px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:12.5px}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;font-size:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .layout{display:flex;gap:0;align-items:flex-start}
+  #stage{position:relative;flex:1;padding:20px;min-width:0}
+  svg#wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:5}
+  .role{border:1px solid var(--line);border-radius:12px;margin:0 0 18px;background:var(--panel);overflow:hidden;position:relative;z-index:10}
+  .role>.rhead{padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .role>.rhead .rt{font-weight:700;font-size:15px}
+  .role>.rhead .rs{color:var(--muted);font-size:12px}
+  .cards{display:flex;flex-wrap:wrap;gap:10px;padding:14px}
+  .card{position:relative;width:235px;border:1px solid var(--line);border-radius:9px;background:#0f141b;
+    padding:10px 11px;cursor:pointer;transition:transform .08s,box-shadow .12s,border-color .12s;z-index:11}
+  .card:hover{transform:translateY(-2px);border-color:#4b5563}
+  .card .nm{font-weight:650;font-size:13px;display:flex;align-items:center;gap:6px}
+  .card .jb{color:var(--muted);font-size:11.5px;margin-top:3px}
+  .card .src{color:#586069;font-size:10.5px;margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
+  .card .badge{font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:20px;font-weight:700}
+  .vk{background:rgba(63,185,80,.15);color:var(--keep)}
+  .vm{background:rgba(210,153,34,.15);color:var(--merge)}
+  .vd{background:rgba(248,81,73,.15);color:var(--delete)}
+  .vc{background:rgba(88,166,255,.15);color:var(--create)}
+  .vp{background:rgba(188,140,255,.15);color:var(--policy)}
+  .card[data-v=keep]{border-left:3px solid var(--keep)}
+  .card[data-v=merge]{border-left:3px solid var(--merge)}
+  .card[data-v=delete]{border-left:3px solid var(--delete)}
+  .card[data-v=create]{border-left:3px solid var(--create)}
+  .card[data-v=policy]{border-left:3px solid var(--policy)}
+  .star{color:#f0c000;font-size:12px}
+  .dim{opacity:.18}
+  .hl{box-shadow:0 0 0 2px var(--ink),0 0 22px rgba(230,237,243,.25);transform:translateY(-2px)}
+  .nbr{box-shadow:0 0 0 2px #6cf}
+  /* inspector */
+  #inspector{position:sticky;top:96px;align-self:flex-start;width:340px;flex:0 0 340px;
+    margin:20px 20px 20px 0;border:1px solid var(--line);border-radius:12px;background:var(--panel);
+    max-height:calc(100vh - 120px);overflow:auto}
+  #inspector .ih{padding:12px 14px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  #inspector .ib{padding:14px}
+  #inspector h3{margin:0 0 2px;font-size:15px}
+  #inspector .role-of{color:var(--muted);font-size:12px}
+  #inspector .field{margin:12px 0}
+  #inspector .label{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:4px}
+  #inspector .val{font-size:13px}
+  #inspector code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:#9cd0ff;word-break:break-all}
+  #inspector .conn{display:block;padding:5px 8px;margin:3px 0;border:1px solid var(--line);border-radius:7px;cursor:pointer;font-size:12px}
+  #inspector .conn:hover{border-color:#4b5563;background:#0f141b}
+  #inspector .conn .ek{font-size:9.5px;text-transform:uppercase;color:var(--muted);float:right}
+  .empty{color:var(--muted);font-size:12.5px}
+  .pill{display:inline-block;font-size:10px;padding:1px 7px;border-radius:20px;background:#0f141b;border:1px solid var(--line);color:var(--muted);margin-right:5px}
+  .efk-control{color:var(--ctrl)} .efk-event{color:var(--event)} .efk-data{color:var(--data)} .efk-notify{color:var(--notify)} .efk-merge{color:var(--merge-edge)}
+</style>
+</head>
+<body>
+<header>
+  <h1>PC — Target Architecture (first-principles)</h1>
+  <div class="sub">Five roles, one home each. Every subsystem placed where it belongs in the target, color-coded by its consolidation verdict. <b>Click any box</b> to see its detail + draw its connections. Click empty space to reset.</div>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--keep)"></i> Keep — the one true home</span>
+    <span><i class="dot" style="background:var(--merge)"></i> Merge — fold into a keeper</span>
+    <span><i class="dot" style="background:var(--delete)"></i> Delete — dead / duplicate</span>
+    <span><i class="dot" style="background:var(--create)"></i> Create — build new</span>
+    <span><i class="dot" style="background:var(--policy)"></i> Session (policy on the one primitive)</span>
+    <span>★ = touched by Step 1 (the stall fix)</span>
+  </div>
+</header>
+<div class="layout">
+  <div id="stage"><svg id="wires"></svg></div>
+  <aside id="inspector"><div class="ib"><p class="empty">Click a subsystem to inspect it. Lines show what it talks to; neighbors highlight in blue.</p></div></aside>
+</div>
+<script>
+const roles = [
+  {id:'supervisor', t:'Supervisor (root)', s:'dumb · durable · keeps the service processes alive — one impl for dev AND packaged'},
+  {id:'brain', t:'Brain — control plane', s:'stateless · owns the Store (truth) · ONE reconciler · routing · workflow engine · spawns NO claude.exe'},
+  {id:'engine', t:'Engine / Host', s:'the single owner of every claude.exe · one lifecycle · worker pool'},
+  {id:'store', t:'Store', s:'append-only event log = truth; everything else is a projection'},
+  {id:'ui', t:'UI shell', s:'pure view + input · reattachable · owns nothing'},
+];
+// verdict: keep|merge|delete|create|policy
+const nodes = [
+  // SUPERVISOR
+  {id:'sup-core', role:'supervisor', nm:'Process supervisor', v:'create', jb:'spawn → watch → respawn-with-backoff; crash-loop cap; graceful shutdown', src:'unify dev-supervisor.mjs + desktop/main.ts', note:'One dumb durable root for both dev and packaged. Today the logic is split (dev-supervisor does it; Electron main only half-does it).'},
+  {id:'sup-launch', role:'supervisor', nm:'Coordinator / launcher', v:'merge', mergeInto:'sup-core', jb:'boots the stack in order', src:'scripts/dev-app.mjs · desktop/main.ts', note:'Folds into the one supervisor.'},
+  {id:'sup-hostspawn', role:'supervisor', nm:'Host process spawn + respawn', v:'merge', mergeInto:'sup-core', jb:'launch the Engine; respawn it if it dies', src:'desktop/agent-host-process.ts', note:'Packaged mode does NOT respawn the host today — that gap closes here.'},
+  // ENGINE
+  {id:'eng-life', role:'engine', nm:'Session lifecycle primitive', v:'keep', jb:'the ONE state machine: pending→starting→ready→working⇌waiting→done', src:'packages/runtime/src/agent-run.ts', note:'AgentRun becomes the single primitive; orchestrator/agent/modal differ only by policy flags.'},
+  {id:'eng-spawn', role:'engine', nm:'LowLevelSpawn (PTY)', v:'keep', jb:'the one node-pty spawn primitive — every claude.exe goes through it', src:'packages/runtime/src/low-level-spawn.ts'},
+  {id:'eng-ready', role:'engine', nm:'ReadyGate', v:'keep', jb:'the one ready-detector (MCP handshake + bracketed-paste signals)', src:'packages/runtime/src/ready-gate.ts'},
+  {id:'eng-tailbase', role:'engine', nm:'JsonlTailer (base)', v:'keep', jb:'base transcript reader + JsonlEvent type', src:'packages/runtime/src/jsonl-tailer.ts', note:'FOUNDATIONAL — not legacy. Used by spawn/session/agent layers. (A sweep wrongly flagged this for deletion; verified KEEP.)'},
+  {id:'eng-tailrun', role:'engine', nm:'AgentRun JSONL tailer', v:'keep', jb:'agent-run layer of transcript events (typed turn-end / pause)', src:'packages/runtime/src/agent-run-jsonl-tailer.ts', note:'Sits ON TOP of the base tailer; not a replacement.'},
+  {id:'eng-pool', role:'engine', nm:'Run pool (cap + queue)', v:'keep', jb:'concurrency admission for one-shot agents', src:'packages/runtime/src/agent-run-registry.ts'},
+  {id:'eng-timers', role:'engine', nm:'Per-run timers', v:'keep', jb:'idle / wall-clock / spawn-stuck → TYPED FAILURE (never a silent hang)', src:'packages/runtime/src/agent-run.ts', note:'Backstops only. The positive done-signal is the deliverable.'},
+  {id:'eng-proto', role:'engine', nm:'Host protocol + service', v:'keep', jb:'start / resume / send / cancel / complete-run + authoritative event stream', src:'agent-host-protocol.ts · agent-host-service.ts'},
+  {id:'eng-mcp', role:'engine', nm:'MCP child (per session)', v:'keep', jb:'the agent’s hands — tools call back to the Brain', src:'packages/mcp (pc-rig)', note:'Intrinsic to Claude Code; one per session. Unchanged.'},
+  {id:'eng-sess-orch', role:'engine', nm:'Session · orchestrator', v:'policy', jb:'policy{persistent, interactive, fire-and-watch}', src:'(was InteractiveSession)', note:'A policy instance of the one primitive.'},
+  {id:'eng-sess-agent', role:'engine', nm:'Session · agent worker', v:'policy', jb:'policy{one-shot, awaited, pausable}', src:'(AgentRun today)'},
+  {id:'eng-sess-modal', role:'engine', nm:'Session · modal', v:'policy', jb:'policy{ephemeral, streaming} — designer/workflow/setup', src:'(was PtySession)'},
+  {id:'eng-del-interactive', role:'engine', nm:'InteractiveSession', v:'merge', mergeInto:'eng-sess-orch', jb:'2nd lifecycle for the orchestrator', src:'packages/runtime/src/interactive-session.ts', note:'LIVE today (orchestrator). Folds into the one primitive as the orchestrator policy.'},
+  {id:'eng-del-pty', role:'engine', nm:'PtySession', v:'delete', jb:'3rd lifecycle; runs the 3 modals + its own ready-regex + file-watching', src:'packages/runtime/src/pty-session.ts', note:'LIVE today (modals). Migrate modals to the Engine first, THEN delete. (A sweep wrongly called it dead; verified live.)'},
+  {id:'eng-del-reattach', role:'engine', nm:'reattach path', v:'delete', jb:'dead branch referencing a non-existent attach-spawn', src:'agent-run.ts reattachLifecycle', note:'No caller sets reattach. Safe delete.'},
+  {id:'eng-del-inproc', role:'engine', nm:'in-process dispatch branch', v:'delete', jb:'the else-branch that runs an agent inside the Brain', src:'agent-run-factory.ts startDispatchedRun', note:'Dead in any real server (host always wired); only unit tests hit it. Move tests to a host-fake, then cut.'},
+  // BRAIN
+  {id:'brain-dispatch', role:'brain', nm:'Dispatch door', v:'keep', jb:'the one way to start an agent (workflow + orchestrator)', src:'dispatchFreshAgent / dispatchContinueAgent'},
+  {id:'brain-recon', role:'brain', nm:'THE reconciler', v:'create', jb:'one control loop, all states, mode-agnostic; never kills on an unreachable Engine', src:'unify boot + sweep + liveness', note:'★ collapses the racing listeners + the ~6 deciders into one loop. Kills the stranded-run bug class.', step1:true},
+  {id:'brain-terminal', role:'brain', nm:'Terminal authority', v:'keep', jb:'the one place a finish is recorded: DB-flip + gate + verify + envelope + settle', src:'agent-run-terminal-effects.ts', note:'★ all terminal paths funnel here.', step1:true},
+  {id:'brain-gate', role:'brain', nm:'Completion gate', v:'keep', jb:'deliverable = the sole “good done”; no-deliverable → typed failure', src:'agent-run-settle.ts'},
+  {id:'brain-waiter', role:'brain', nm:'Run-keyed waiter', v:'keep', jb:'wakes the waiting workflow step BY RUN ID — no listener race', src:'resolveDone → ActiveRunRegistry', note:'★ STEP 1 core. Move the done-resolver into the registry so any terminal path resolves it.', step1:true},
+  {id:'brain-activereg', role:'brain', nm:'ActiveRunRegistry', v:'keep', jb:'live-run lookup + home of the run-keyed waiter', src:'agent-active-runs.ts'},
+  {id:'brain-hostconn', role:'brain', nm:'Host connection client', v:'create', jb:'the link to the Engine + RE-RESOLVE endpoint on respawn', src:'host-connection.ts (+ reconnect fix)', note:'Today caches the endpoint at boot; must re-discover after a host respawn. Prereq for moving orchestrator/modals onto the Engine.'},
+  {id:'brain-workflow', role:'brain', nm:'Workflow engine (DAG)', v:'keep', jb:'steps · transitions · run log; awaits a run via the waiter', src:'dag-executor.ts · dag-run-service.ts'},
+  {id:'brain-contracts', role:'brain', nm:'Contracts + verification', v:'keep', jb:'the deliverable’s home + acceptance check', src:'ContractService · agent-verification.ts'},
+  {id:'brain-api', role:'brain', nm:'HTTP + WS API / routing', v:'keep', jb:'receives tool callbacks + serves the UI', src:'apps/server/src (routes)'},
+  {id:'brain-channel', role:'brain', nm:'Channel server', v:'merge', mergeInto:'eng-proto', jb:'per-project orchestrator bridge (stdio children)', src:'index.ts ChannelServer', note:'Re-evaluate once the Engine owns the orchestrator — the bridge may fold into the Engine protocol.'},
+  {id:'brain-mailbox', role:'brain', nm:'Mailbox / delivery', v:'keep', jb:'the ONE durable notify door (survives offline recipients)', src:'agent-delivery.ts · mailbox service'},
+  {id:'brain-relay', role:'brain', nm:'Live relay', v:'keep', jb:'the ONE live fanout — tails the event log to the UI', src:'live-relay.ts'},
+  {id:'brain-replay', role:'brain', nm:'Envelope replay', v:'keep', jb:'idempotent notify safety net', src:'agent-run-terminal-effects.ts (replay)'},
+  {id:'brain-del-bcast', role:'brain', nm:'raw WS broadcast', v:'merge', mergeInto:'brain-relay', jb:'legacy direct fanout', src:'broadcast / agent.run.changed', note:'Everything routes through announce → outbox → relay.'},
+  {id:'brain-del-fed', role:'brain', nm:'per-run terminal listener', v:'delete', jb:'the redundant 2nd listener that loses the race', src:'agent-run-factory.ts onEvent', note:'★ STEP 1: replaced by the run-keyed waiter.', step1:true},
+  {id:'brain-del-hostsnap', role:'brain', nm:'applyHostTerminalSnapshot (standalone)', v:'merge', mergeInto:'brain-terminal', jb:'host-path terminal that skips the wake-up', src:'agent-host-reattach.ts', note:'★ STEP 1: route through the one terminal authority so it always settles.', step1:true},
+  {id:'brain-del-inbox', role:'brain', nm:'agent_inbox repo', v:'delete', jb:'superseded by the mailbox', src:'repos/agent-inbox.ts', note:'Never written post-mailbox; delete after old rows archived.'},
+  {id:'brain-del-sync', role:'brain', nm:'sync-invoke type', v:'delete', jb:'a sync dispatch mode never implemented', src:'PcInvokeAgentResultSync / .wait', note:'Vestigial type; nothing respects it.'},
+  // STORE
+  {id:'store-runs', role:'store', nm:'agent_runs', v:'keep', jb:'TRUTH for run status', src:'DB table', note:'Registries + host caches are projections of this.'},
+  {id:'store-outbox', role:'store', nm:'live_outbox', v:'keep', jb:'TRUTH for live events (append-only)', src:'DB table'},
+  {id:'store-wihist', role:'store', nm:'work_items.history', v:'keep', jb:'TRUTH for card transitions (append-only)', src:'DB column', note:'Denormalized position/status are projections.'},
+  {id:'store-contracts', role:'store', nm:'agent_contracts', v:'keep', jb:'TRUTH for the deliverable', src:'DB table'},
+  {id:'store-events', role:'store', nm:'workflow_run_events', v:'create', jb:'append-only run log = workflow truth', src:'(not built yet — redesign slice 3)', note:'Today dag_state JSON is the store. The log is the unshipped piece that makes state a projection.'},
+  {id:'store-dag', role:'store', nm:'workflow dag_state', v:'merge', mergeInto:'store-events', jb:'current workflow store', src:'workflow_runs_v2.dag_state', note:'Becomes a projection of the event log once that exists.'},
+  {id:'store-asks', role:'store', nm:'pending_asks', v:'keep', jb:'TRUTH for agent pauses', src:'DB table'},
+  {id:'store-mailbox', role:'store', nm:'mailbox table', v:'keep', jb:'TRUTH for pending notifications', src:'DB table'},
+  {id:'store-misc', role:'store', nm:'field_schemas · orchestrator_sessions · areas · workflows', v:'keep', jb:'project + session + workflow definitions', src:'DB tables', note:'Verified real, repo-backed.'},
+  {id:'store-toolreg', role:'store', nm:'PC_RIG_TOOL_REGISTRY', v:'keep', jb:'single source for the tool catalog (all lists .map() off it)', src:'domain/tool-registry.ts', note:'Already unified (Slice 016) + parity check. Not a drift target.'},
+  {id:'store-del-wibody', role:'store', nm:'legacy wi.body contract mirror', v:'delete', jb:'old deliverable mirror on work_items', src:'work_items legacy columns', note:'Contract is canonical; delete the mirror.'},
+  // UI
+  {id:'ui-shell', role:'ui', nm:'Electron shell + renderer', v:'keep', jb:'desktop window (target: stops hosting the API)', src:'apps/desktop', note:'In the target, the Brain is its own process; Electron is a thin shell. Re-evaluate the in-process API.'},
+  {id:'ui-vite', role:'ui', nm:'Vite (dev server)', v:'keep', jb:'frontend HMR (dev only)', src:'apps/web (dev)'},
+  {id:'ui-web', role:'ui', nm:'Web frontend', v:'keep', jb:'the app UI', src:'apps/web'},
+  {id:'ui-modals', role:'ui', nm:'Modal UIs', v:'keep', jb:'designer / workflow-creator / setup-wizard (backend moves to Engine)', src:'apps/web (modals)'},
+  {id:'ui-live', role:'ui', nm:'Activity panel / live store', v:'keep', jb:'consumes the live relay', src:'apps/web live store'},
+  {id:'ui-inbox', role:'ui', nm:'Inboxes', v:'keep', jb:'user + orchestrator — consume the mailbox', src:'apps/web inboxes'},
+];
+// kind: control|event|data|notify
+const edges = [
+  ['sup-core','brain','spawn + respawn','control'],
+  ['sup-core','eng-proto','spawn + respawn','control'],
+  ['sup-core','ui-shell','spawn','control'],
+  ['sup-core','ui-vite','spawn (dev)','control'],
+  ['brain-workflow','brain-dispatch','dispatch a step','control'],
+  ['brain-dispatch','eng-proto','start / resume / cancel','control'],
+  ['brain-hostconn','eng-proto','the connection','control'],
+  ['eng-proto','brain-recon','authoritative events (state / transcript / terminal)','event'],
+  ['brain-recon','brain-terminal','apply terminal','event'],
+  ['brain-terminal','brain-gate','gate completion','data'],
+  ['brain-terminal','brain-waiter','resolve waiter','event'],
+  ['brain-waiter','brain-workflow','wake the waiting step','event'],
+  ['brain-terminal','brain-contracts','write deliverable + verify','data'],
+  ['brain-terminal','store-runs','finalize run','data'],
+  ['eng-mcp','brain-api','tool calls: deliverable / asks','data'],
+  ['eng-sess-orch','eng-mcp','has an MCP child','control'],
+  ['eng-sess-agent','eng-mcp','has an MCP child','control'],
+  ['eng-sess-modal','eng-mcp','has an MCP child','control'],
+  ['eng-life','eng-spawn','spawns via','control'],
+  ['eng-spawn','eng-ready','ready signal','event'],
+  ['eng-spawn','eng-tailbase','reads transcript','event'],
+  ['eng-tailrun','eng-tailbase','built on','control'],
+  ['eng-life','eng-pool','admitted by','control'],
+  ['eng-life','eng-timers','guarded by','control'],
+  ['brain-api','store-runs','write','data'],
+  ['brain-api','store-contracts','write','data'],
+  ['brain-api','store-asks','write','data'],
+  ['brain-workflow','store-events','append','data'],
+  ['store-outbox','brain-relay','tail','event'],
+  ['brain-relay','ui-live','live fanout','notify'],
+  ['brain-mailbox','ui-inbox','durable notify','notify'],
+  ['brain-mailbox','store-mailbox','persist','data'],
+  ['ui-web','brain-api','HTTP / WS','control'],
+  ['ui-modals','brain-api','start modal session','control'],
+  ['brain-api','live_outbox_dummy','',''], // ignored if target missing
+  // merge relations (drawn red when a merge/delete node is selected)
+];
+const vClass={keep:'vk',merge:'vm',delete:'vd',create:'vc',policy:'vp'};
+const vWord={keep:'keep',merge:'merge',delete:'delete',create:'create',policy:'session'};
+const byId=Object.fromEntries(nodes.map(n=>[n.id,n]));
+const adj={}; nodes.forEach(n=>adj[n.id]=[]);
+edges.forEach(([a,b,l,k])=>{ if(byId[a]&&byId[b]){ adj[a].push({o:b,l,k,dir:'out'}); adj[b].push({o:a,l,k,dir:'in'}); }});
+// merge edges
+nodes.forEach(n=>{ if(n.mergeInto&&byId[n.mergeInto]){ adj[n.id].push({o:n.mergeInto,l:'folds into',k:'merge',dir:'out'}); adj[n.mergeInto].push({o:n.id,l:'absorbs',k:'merge',dir:'in'}); }});
+
+const stage=document.getElementById('stage');
+const svg=document.getElementById('wires');
+const insp=document.querySelector('#inspector');
+roles.forEach(r=>{
+  const role=document.createElement('div'); role.className='role';
+  role.innerHTML=`<div class="rhead"><div class="rt">${r.t}</div><div class="rs">${r.s}</div></div>`;
+  const cards=document.createElement('div'); cards.className='cards';
+  nodes.filter(n=>n.role===r.id).forEach(n=>{
+    const c=document.createElement('div'); c.className='card'; c.dataset.v=n.v; c.id='card-'+n.id;
+    c.innerHTML=`<div class="nm">${n.step1?'<span class="star">★</span>':''}${n.nm}<span class="badge ${vClass[n.v]}" style="margin-left:auto">${vWord[n.v]}</span></div>
+      <div class="jb">${n.jb}</div>${n.src?`<div class="src">${n.src}</div>`:''}`;
+    c.style.display='flex'; c.style.flexDirection='column';
+    c.querySelector('.nm').style.display='flex'; c.querySelector('.nm').style.width='100%';
+    c.addEventListener('click',e=>{e.stopPropagation();select(n.id);});
+    cards.appendChild(c);
+  });
+  role.appendChild(cards); stage.appendChild(role);
+});
+stage.addEventListener('click',()=>clearSel());
+
+let selected=null;
+function clearSel(){
+  selected=null;
+  document.querySelectorAll('.card').forEach(c=>c.classList.remove('dim','hl','nbr'));
+  svg.innerHTML='';
+  insp.innerHTML='<div class="ib"><p class="empty">Click a subsystem to inspect it. Lines show what it talks to; neighbors highlight in blue.</p></div>';
+}
+function select(id){
+  selected=id; const n=byId[id]; const conns=adj[id];
+  const nbrs=new Set(conns.map(c=>c.o)); nbrs.add(id);
+  document.querySelectorAll('.card').forEach(c=>{
+    const cid=c.id.replace('card-','');
+    c.classList.toggle('dim',!nbrs.has(cid));
+    c.classList.toggle('hl',cid===id);
+    c.classList.toggle('nbr',cid!==id&&nbrs.has(cid));
+  });
+  drawWires(id,conns);
+  renderInspector(n,conns);
+}
+function center(el){
+  const r=el.getBoundingClientRect(), s=stage.getBoundingClientRect();
+  return {x:r.left-s.left+r.width/2, y:r.top-s.top+r.height/2};
+}
+const edgeColor={control:'#58a6ff',event:'#3fb950',data:'#d29922',notify:'#bc8cff',merge:'#f85149'};
+function drawWires(id,conns){
+  svg.innerHTML='';
+  const from=document.getElementById('card-'+id); if(!from)return;
+  const a=center(from);
+  const defs=document.createElementNS('http://www.w3.org/2000/svg','defs');
+  defs.innerHTML=Object.entries(edgeColor).map(([k,c])=>`<marker id="ar-${k}" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="${c}"/></marker>`).join('');
+  svg.appendChild(defs);
+  conns.forEach(c=>{
+    const to=document.getElementById('card-'+c.o); if(!to)return; const b=center(to);
+    const col=edgeColor[c.k]||'#888';
+    const mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
+    const p=document.createElementNS('http://www.w3.org/2000/svg','path');
+    const cx=(a.x+b.x)/2, cy=(a.y+b.y)/2 - Math.min(80,Math.abs(b.x-a.x)/3);
+    p.setAttribute('d',`M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`);
+    p.setAttribute('fill','none'); p.setAttribute('stroke',col); p.setAttribute('stroke-width','2');
+    p.setAttribute('opacity','.85'); p.setAttribute('marker-end',`url(#ar-${c.k||'control'})`);
+    if(c.k==='merge') p.setAttribute('stroke-dasharray','6 4');
+    svg.appendChild(p);
+  });
+}
+function renderInspector(n,conns){
+  const out=conns.filter(c=>c.dir==='out'), inc=conns.filter(c=>c.dir==='in');
+  const connHtml=arr=>arr.length?arr.map(c=>`<span class="conn" data-go="${c.o}"><span class="ek efk-${c.k}">${c.k}</span>${byId[c.o].nm} <span style="color:#586069">— ${c.l}</span></span>`).join(''):'<span class="empty">none</span>';
+  insp.innerHTML=`<div class="ih"><h3>${n.step1?'★ ':''}${n.nm}</h3><div class="role-of">${roles.find(r=>r.id===n.role).t}</div>
+    <div style="margin-top:8px"><span class="badge ${vClass[n.v]}">${vWord[n.v]}</span>${n.step1?' <span class="pill" style="color:#f0c000;border-color:#5a4a00">Step 1 — stall fix</span>':''}${n.mergeInto?` <span class="pill">→ ${byId[n.mergeInto].nm}</span>`:''}</div></div>
+    <div class="ib">
+      <div class="field"><div class="label">Job</div><div class="val">${n.jb}</div></div>
+      ${n.src?`<div class="field"><div class="label">Source today</div><div class="val"><code>${n.src}</code></div></div>`:''}
+      ${n.note?`<div class="field"><div class="label">Note</div><div class="val">${n.note}</div></div>`:''}
+      <div class="field"><div class="label">Sends to (outgoing)</div>${connHtml(out)}</div>
+      <div class="field"><div class="label">Receives from (incoming)</div>${connHtml(inc)}</div>
+    </div>`;
+  insp.querySelectorAll('[data-go]').forEach(el=>el.addEventListener('click',()=>select(el.dataset.go)));
+}
+window.addEventListener('resize',()=>{ if(selected) drawWires(selected,adj[selected]); });
+</script>
+</body>
+</html>
