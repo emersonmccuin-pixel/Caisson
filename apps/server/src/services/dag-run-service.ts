@@ -64,6 +64,19 @@ export type WorkflowReviewDelivery = (input: {
   body: string;
 }) => boolean;
 
+/** Workflow-engine redesign — failed-run notification seam. Enqueues a durable
+ *  `workflow-run-failed` mailbox message to BOTH the human user-inbox AND the
+ *  project orchestrator (active-orchestrator). When no orchestrator is live the
+ *  delivery persists and drains on its next liveness pass. Injected from
+ *  index.ts where the mailboxService lives. */
+export type WorkflowRunFailedDelivery = (input: {
+  projectId: ULID;
+  runId: ULID;
+  workflowName: string;
+  workItemId: ULID | null;
+  reason: string;
+}) => void;
+
 // Slice 015b — durable workflow.review.changed facts via the run gateway. The
 // gateway writes the in-txn `live_outbox` row; the 015a relay drains + delivers
 // it. The run-row state still flows through workflow-run-writer; this is the
@@ -113,6 +126,9 @@ export interface DagRunServiceOptions {
   /** Mailbox review delivery seam — the review prompt is enqueued as a mailbox
    *  message. Injected from index.ts. */
   deliverReview?: WorkflowReviewDelivery;
+  /** Mailbox failed-run delivery seam — a failed run notifies the human inbox +
+   *  the project orchestrator. Injected from index.ts. */
+  deliverRunFailed?: WorkflowRunFailedDelivery;
 }
 
 const liveExec: CommandExec = async (kind, code, { cwd, timeout }) => {
@@ -422,6 +438,14 @@ export function makeExecutorDeps(
       });
     },
     isCancelled: () => workflowRunsV2Repo.getRun(run.id)?.status === 'cancelled',
+    notifyRunFailed: (reason) =>
+      opts.deliverRunFailed?.({
+        projectId: opts.projectId,
+        runId: run.id,
+        workflowName: workflow.name,
+        workItemId: run.workItemId ?? null,
+        reason,
+      }),
     holdForHuman: (_nodeId, _reason) => {
       // Slice 015c — the legacy `workflow-v2-human-hold` envelope is deleted: it
       // had no web consumer, and the durable fact (the run advancing to `failed`

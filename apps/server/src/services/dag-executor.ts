@@ -73,6 +73,11 @@ export interface DagExecutorDeps {
   isCancelled(): boolean;
   /** Route a ceiling-exceeded review to Human Review (Section 7). */
   holdForHuman(nodeId: string, reason: string): void;
+  /** Workflow-engine redesign — fired once when the run finalizes as `failed`,
+   *  carrying the derived failure reason. Delivers a notice to the human inbox +
+   *  the project orchestrator (offline → persists, drains next pass). Optional so
+   *  tests + the review/cancel paths don't have to wire it. */
+  notifyRunFailed?(reason: string): void;
 }
 
 const DEFAULT_MAX_CONCURRENCY = 4;
@@ -285,6 +290,10 @@ export class DagExecutor {
     if (status === 'completed') this.deps.event({ type: 'workflow_completed' });
     else if (status === 'failed') this.deps.event({ type: 'workflow_failed' });
     this.persistRun(status);
+    // Workflow-engine redesign — a failed run notifies the human inbox + the
+    // project orchestrator (durable; survives an offline orchestrator). Fired
+    // after persist so the run row is already terminal when the notice lands.
+    if (status === 'failed') this.deps.notifyRunFailed?.(this.deriveFailureReason());
     return status;
   }
 

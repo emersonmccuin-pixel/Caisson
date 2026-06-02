@@ -45,6 +45,10 @@ export const MAILBOX_MESSAGE_KINDS = [
   'agent-approval',
   'agent-terminal',
   'workflow-review',
+  /** Workflow-engine redesign — a run failed. Delivered to BOTH the human
+   *  user-inbox AND the project orchestrator (active-orchestrator); when no
+   *  orchestrator is live the delivery persists and drains on its next pass. */
+  'workflow-run-failed',
   'external-webhook',
   'runtime-hook-ask',
   'system-notice',
