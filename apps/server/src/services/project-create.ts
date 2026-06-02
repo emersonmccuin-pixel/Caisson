@@ -31,7 +31,7 @@
 // retry. Atomic-rollback is a followup once the create flow has tests.
 
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -51,6 +51,8 @@ export interface CreateProjectFlowInput {
   folderPath: string;
   mode: CreateProjectMode;
   gitRemote?: string | null;
+  /** attach-to-git only: delete a pre-existing `.project-companion/` and re-adopt. */
+  replaceExisting?: boolean;
 }
 
 // Section 27 — default stages carry the three flag slots. User can rename /
@@ -103,9 +105,16 @@ export class ProjectCreate {
     if (input.mode === 'attach-to-git') {
       const pcDir = resolve(folderPath, '.project-companion');
       if (existsSync(pcDir) && directoryContainsFiles(pcDir)) {
-        throw new Error(
-          `${folderPath}/.project-companion already exists — remove it first to re-adopt this repo`,
-        );
+        if (input.replaceExisting) {
+          // Re-adopt: wipe the prior scaffold so the fresh one (+ new project
+          // id) can be written. The git history is untouched; this only removes
+          // the working-tree folder, committed below as part of the scaffold.
+          rmSync(pcDir, { recursive: true, force: true });
+        } else {
+          throw new Error(
+            `${folderPath}/.project-companion already exists — remove it first to re-adopt this repo`,
+          );
+        }
       }
     }
 

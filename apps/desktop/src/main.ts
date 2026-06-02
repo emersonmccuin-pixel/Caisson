@@ -13,7 +13,7 @@
 //     process, hosts the bundled API server in-process, and loads the server's
 //     static bundle on 127.0.0.1:PORT.
 
-import { app, BrowserWindow, Menu, shell, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, Menu, shell, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import type { ChildProcess } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -27,6 +27,7 @@ import {
   waitForChildExit,
   waitForPackagedAgentHostLock,
 } from './agent-host-process';
+import { findPortConflicts, freeCaissonPorts, type PortConflict } from './port-conflict';
 
 const DEV = process.env.PC_DESKTOP_DEV === '1';
 const APP_NAME = DEV ? 'Caisson Dev' : 'Caisson';
@@ -184,6 +185,75 @@ async function startInProcessServer(): Promise<void> {
   // bundle has top-level await, so this resolves once the server is listening.
   const serverEntry = join(PC_ROOT, 'server.mjs');
   await import(pathToFileURL(serverEntry).href);
+}
+
+const CHANNEL_PORT = Number(process.env.CHANNEL_PORT ?? 8788);
+
+function describeConflict(c: PortConflict): string {
+  if (c.isCaisson) {
+    return `  • port ${c.port} — another Caisson/dev process (PID ${c.pid})`;
+  }
+  const who = c.pid ? `${c.name} (PID ${c.pid})` : 'an unknown process';
+  return `  • port ${c.port} — ${who}`;
+}
+
+/**
+ * Packaged boot with a port-conflict guard. Detects whether the API/channel
+ * ports are taken, and — on explicit user action — frees the Caisson processes
+ * holding them and retries. Returns true once the in-process server has booted;
+ * false means the user chose to quit (caller should exit).
+ */
+async function bootPackagedServerWithGuard(): Promise<boolean> {
+  const ports = [PORT, CHANNEL_PORT];
+
+  // Up to two free-and-retry rounds, then give up with a clear message.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const conflicts = await findPortConflicts(ports);
+    if (conflicts.length === 0) break;
+
+    const freeable = conflicts.some((c) => c.isCaisson);
+    const buttons = freeable ? ['Free ports & retry', 'Quit'] : ['Retry', 'Quit'];
+    const detail =
+      `Caisson needs ports ${ports.join(' and ')}, but they're already in use:\n\n` +
+      conflicts.map(describeConflict).join('\n') +
+      (freeable
+        ? `\n\nThis is usually another Caisson window or a running dev stack. ` +
+          `"Free ports & retry" will close those Caisson processes and start up.`
+        : `\n\nClose whatever is using these ports, then click Retry.`);
+
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'Caisson can’t start',
+      message: 'Another program is using Caisson’s ports.',
+      detail,
+      buttons,
+      defaultId: 0,
+      cancelId: buttons.length - 1,
+      noLink: true,
+    });
+
+    if (response === buttons.length - 1) return false; // Quit
+    if (freeable && response === 0) {
+      const result = await freeCaissonPorts(ports);
+      console.log(`[boot] freed ${result.killed.length} process(es): ${result.killed.map((k) => k.pid).join(', ')}`);
+      await new Promise((r) => setTimeout(r, 1500)); // let the OS release the sockets
+    }
+    // loop re-checks
+  }
+
+  const remaining = await findPortConflicts(ports);
+  if (remaining.length > 0) {
+    dialog.showErrorBox(
+      'Caisson can’t start',
+      `These ports are still in use:\n\n` +
+        remaining.map(describeConflict).join('\n') +
+        `\n\nClose the program using them and launch Caisson again.`,
+    );
+    return false;
+  }
+
+  await startInProcessServer();
+  return true;
 }
 
 async function startPackagedAgentHost(): Promise<void> {
@@ -370,7 +440,24 @@ async function createWindow(): Promise<void> {
 void app.whenReady().then(async () => {
   if (!DEV) {
     // PC_DATA_DIR is set in packaged mode (1.3) before the server boots.
-    await startInProcessServer();
+    // The guard surfaces a dialog on port conflicts (and any other boot
+    // failure) instead of dying silently with no window.
+    try {
+      const booted = await bootPackagedServerWithGuard();
+      if (!booted) {
+        app.quit();
+        return;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      dialog.showErrorBox(
+        'Caisson failed to start',
+        `Something went wrong while starting up:\n\n${message}\n\n` +
+          `If this keeps happening, restart your computer or reinstall Caisson.`,
+      );
+      app.quit();
+      return;
+    }
   }
   initAutoUpdater();
   await createWindow();

@@ -38,6 +38,7 @@ export function CreateProjectModal({
   const [browserOpen, setBrowserOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [replaceExisting, setReplaceExisting] = useState(false);
   const probeReqId = useRef(0);
 
   useEffect(() => {
@@ -49,6 +50,7 @@ export function CreateProjectModal({
   }, [browserOpen, onClose]);
 
   function probe(path: string) {
+    setReplaceExisting(false);
     if (!path.trim()) {
       setProbeState({ status: 'idle' });
       return;
@@ -72,9 +74,17 @@ export function CreateProjectModal({
     probe(p);
   }
 
-  const mode = probeState.status === 'ready'
+  // A repo that already carries a Caisson scaffold is normally refused; the
+  // re-adopt checkbox lets the user replace it and attach fresh.
+  const blockedByExistingScaffold =
+    probeState.status === 'ready' &&
+    probeState.probe.isGitRepo &&
+    probeState.probe.hasPcScaffold;
+  const baseMode = probeState.status === 'ready'
     ? createProjectModeFromProbe(probeState.probe)
     : null;
+  const mode =
+    baseMode ?? (blockedByExistingScaffold && replaceExisting ? 'attach-to-git' : null);
   const canCreate =
     !busy && name.trim().length > 0 && mode !== null;
 
@@ -87,6 +97,7 @@ export function CreateProjectModal({
         name: name.trim(),
         folder_path: folderPath,
         mode,
+        ...(replaceExisting ? { replace_existing: true } : {}),
       });
       onCreated(project);
     } catch (e) {
@@ -171,6 +182,21 @@ export function CreateProjectModal({
                 </code>
               </div>
               <ProbePreview state={probeState} />
+              {blockedByExistingScaffold && (
+                <label className="mt-1 flex items-start gap-2 border border-warning/50 bg-warning/10 px-2 py-1.5 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={replaceExisting}
+                    onChange={(e) => setReplaceExisting(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    Replace the existing Caisson setup and re-adopt this repo. This deletes
+                    the current <code className="bg-muted px-1">.project-companion/</code>{' '}
+                    folder and starts fresh. Your code and git history are untouched.
+                  </span>
+                </label>
+              )}
             </div>
 
             {err && <div className="text-xs text-destructive">{err}</div>}
@@ -224,9 +250,10 @@ function ProbePreview({ state }: { state: ProbeState }) {
   if (probe.isGitRepo) {
     if (probe.hasPcScaffold) {
       return (
-        <div className="text-xs text-destructive">
-          A <code className="bg-muted px-1">.project-companion/</code> folder already
-          exists here. Remove it first to re-adopt this repo.
+        <div className="text-xs text-warning">
+          This repo is already set up with Caisson (a{' '}
+          <code className="bg-muted px-1">.project-companion/</code> folder exists).
+          Check the box below to replace it and re-adopt.
         </div>
       );
     }
