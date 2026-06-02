@@ -217,7 +217,6 @@ export function reconcileAgentRunsAgainstHost(
   const hostByRunId = new Map(hostRuns.map((run) => [run.runId, run]));
   const missingTicks = deps.missingFromHostTicks;
   const lostAfter = deps.hostLostAfterTicks ?? 2;
-  const hasOpenAsk = deps.hasOpenPendingAskForRun ?? defaultHasOpenPendingAskForRun;
 
   let terminalApplied = 0;
   let statusUpdated = 0;
@@ -231,7 +230,6 @@ export function reconcileAgentRunsAgainstHost(
         deps,
         missingTicks,
         lostAfter,
-        hasOpenAsk,
       });
       continue;
     }
@@ -271,28 +269,36 @@ export function reconcileAgentRunsAgainstHost(
 
 /** T1.4 — decide a single host-missing row. Increments the consecutive-miss
  *  counter and finalizes `host-lost` once ALL of the false-positive guards pass:
- *  (1) the caller asserted authoritative host absence this tick (a `refreshRuns`
- *  that COMPLETED found no live host / the run unowned), (2) a counter is wired,
- *  (3) the row is NOT a paused run waiting on an open ask, and (4) the row has
- *  been missing for `>= lostAfter` consecutive ticks. Else leaves the row
- *  untouched (counter standing). Returns 1 if finalized, else 0. */
+ *  (1) the caller asserted authoritative host absence this tick (we are CONNECTED
+ *  to a host whose fresh list-runs we just pulled, and this run is absent from
+ *  it), (2) a counter is wired, (3) the row is `running` — a confirmed-started
+ *  run; `queued`/`spawning` may legitimately not be listed yet (slow spawn) and a
+ *  `paused` run is host-less while it waits on an ask, so none of those are
+ *  host-lost-eligible, (4) the row has been missing for `>= lostAfter` consecutive
+ *  ticks. Else leaves the row untouched (counter standing for an eligible row,
+ *  dropped for an ineligible one). Returns 1 if finalized, else 0. */
 function handleHostMissingRow(
   row: AgentRunRow,
   ctx: {
     deps: AgentHostReattachDeps;
     missingTicks: Map<string, number> | undefined;
     lostAfter: number;
-    hasOpenAsk: (runId: ULID) => boolean;
   },
 ): number {
-  const { deps, missingTicks, lostAfter, hasOpenAsk } = ctx;
+  const { deps, missingTicks, lostAfter } = ctx;
 
   // Conservative gates: without the authoritative-absence signal or a counter,
-  // we cannot tell "host gone" from "host mid-restart" — leave the row alone.
+  // we cannot trust that the run is genuinely gone — leave the row alone.
   if (!deps.hostAuthoritativelyAbsent || !missingTicks) return 0;
 
-  // A paused run legitimately has no live PTY while it waits on a pending ask.
-  if (row.status === 'paused' && hasOpenAsk(row.id)) return 0;
+  // Only a confirmed-started `running` run is host-lost-eligible. A queued/
+  // spawning run may not be in the host's list yet (slow spawn), and a paused
+  // run is legitimately host-less while it waits on an ask. None are "lost" —
+  // drop any standing counter so they never accrue toward finalize.
+  if (row.status !== 'running') {
+    missingTicks.delete(row.id);
+    return 0;
+  }
 
   const ticks = (missingTicks.get(row.id) ?? 0) + 1;
   missingTicks.set(row.id, ticks);

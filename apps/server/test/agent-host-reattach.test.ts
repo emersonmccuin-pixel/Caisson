@@ -368,6 +368,26 @@ test('T1.4 paused row with open pending ask, host absent → never host-lost', (
   const res = reconcileAgentRunsAgainstHost(deps);
   assert.equal(res.hostLost, 0);
   assert.equal(calls.length, 0);
-  // Counter not advanced for a legitimately host-less paused-with-ask row.
-  assert.equal(missingTicks.get('run-paused'), 5);
+  // A paused (non-running) row is not host-lost-eligible — its counter is dropped.
+  assert.equal(missingTicks.has('run-paused'), false);
+});
+
+test('T1.4 spawning row absent + authoritative → NOT finalized (only running is eligible)', () => {
+  const calls: TerminalCall[] = [];
+  // A slow-spawning run may legitimately not be in the host list yet — even at
+  // threshold it must never be host-lost'd. Only a confirmed `running` run is.
+  const missingTicks = new Map<string, number>([['run-spawning', 5]]);
+  const { deps } = hostLostDeps({
+    rows: [row('run-spawning', { status: 'spawning' })],
+    hostRuns: [],
+    missingTicks,
+    hostAuthoritativelyAbsent: true,
+    hostLostAfterTicks: 2,
+    calls,
+  });
+
+  const res = reconcileAgentRunsAgainstHost(deps);
+  assert.equal(res.hostLost, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(missingTicks.has('run-spawning'), false);
 });

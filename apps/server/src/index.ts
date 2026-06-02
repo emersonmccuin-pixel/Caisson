@@ -532,8 +532,8 @@ const agentRunWatchdogSweep = setInterval(() => {
     try {
       if (hostMode) {
         // T1.4 — only run the host-lost finalize when refreshRuns COMPLETED. A
-        // thrown refresh is exactly the false-positive case (transient blip /
-        // mid-respawn): skip the finalize AND do not increment counters.
+        // thrown refresh is the transient case: skip the finalize AND do not
+        // increment counters.
         let refreshed = true;
         try {
           await hostConnection.refreshRuns();
@@ -547,9 +547,15 @@ const agentRunWatchdogSweep = setInterval(() => {
           mailboxEnqueue: enqueueMailboxAndFanout,
           // hasOpenPendingAskForRun defaults to the real @pc/db repo inside the
           // reconcile (the paused-with-open-ask guard) — no need to thread it.
-          // Authoritative absence ONLY when the refresh completed and the
-          // connection still has no live inner client this tick.
-          hostAuthoritativelyAbsent: refreshed && !hostConnection.isConnected(),
+          // Authoritative absence = we are CONNECTED to a host whose fresh
+          // list-runs we just refreshed (so `listRuns()` is the live inner list,
+          // not the stale `lastRuns` cache that disconnected returns) AND the run
+          // is absent from it. After a dev-supervisor respawn the new host has no
+          // memory of pre-respawn runs, so a still-`running` row missing from its
+          // list for HOST_LOST_TICKS ticks is genuinely lost. The reconcile gates
+          // finalize on `status==='running'`, so a slow-spawning/queued run that
+          // legitimately isn't listed yet is never false-killed.
+          hostAuthoritativelyAbsent: refreshed && hostConnection.isConnected(),
           missingFromHostTicks: refreshed ? hostMissingTicks : undefined,
           hostLostAfterTicks: HOST_LOST_TICKS,
         });
