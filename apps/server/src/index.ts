@@ -14,6 +14,7 @@ import type {
 import { parseMailboxAddress } from '@pc/contracts';
 import {
   getActiveOrchestratorSession,
+  getLatestLiveEventForEntity,
   getMailboxMessage,
   getMailboxRecipient,
   insertPostTurnSummary,
@@ -925,6 +926,14 @@ registerProjectRoutes(app, {
 });
 
 registerLiveEventRoutes(app);
+
+// T2.3 — current-state seed for the global host-health pill/banner. The replay
+// route is catch-up-from-cursor (empty without a prior cursor), so a cold page
+// load can't seed the pill from it. This returns the latest host-health frame
+// (already a fully-formed live-event) so the client seeds the store on load.
+app.get('/api/agent-host/health', (c) =>
+  c.json({ ok: true, event: getLatestLiveEventForEntity('host-health') }),
+);
 
 // Section 17d.1 — Pod (DB-resident agent) routes. Pods are global-scope in
 // v1; v2 (17c) overlays project rows.

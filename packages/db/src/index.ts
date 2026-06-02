@@ -27,6 +27,7 @@ export type {
 } from './repos/projects.ts';
 
 export {
+  getLatestLiveEventForEntity,
   getLiveEventFloor,
   getLiveEventHighWater,
   insertLiveEvent,

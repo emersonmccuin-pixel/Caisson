@@ -11,6 +11,7 @@ const {
   closeDb,
   createProject,
   getDb,
+  getLatestLiveEventForEntity,
   getLiveEventFloor,
   getProjectById,
   insertLiveEvent,
@@ -71,6 +72,34 @@ test('live outbox inserts global events and replays by exclusive cursor', () => 
     events: [second],
     nextCursor: second.cursor,
   });
+});
+
+test('getLatestLiveEventForEntity returns the most-recent row, or null when none', () => {
+  // T2.3 cold-load seed source. No host-health rows yet → null.
+  assert.equal(getLatestLiveEventForEntity('host-health'), null);
+
+  insertLiveEvent(getDb(), {
+    scope: 'global',
+    projectId: null,
+    type: 'host-health.changed',
+    entity: 'host-health',
+    entityId: 'host-health',
+    version: null,
+    payload: { health: { state: 'reconnecting', since: 1 } },
+  });
+  const latest = insertLiveEvent(getDb(), {
+    scope: 'global',
+    projectId: null,
+    type: 'host-health.changed',
+    entity: 'host-health',
+    entityId: 'host-health',
+    version: null,
+    payload: { health: { state: 'connected', hostId: 'h1', pid: 42, since: 2 } },
+  });
+
+  const got = getLatestLiveEventForEntity('host-health');
+  assert.equal(got?.cursor, latest.cursor);
+  assert.equal((got?.payload as { health: { state: string } }).health.state, 'connected');
 });
 
 test('live replay filters global/project rows and excludes other projects', () => {

@@ -197,18 +197,20 @@ export default function App() {
   }, [projects !== null, ws.status, backgroundWs.status, storeProjectChangedCursor]);
 
   // T2.3-C — cold-load seed for the global host-health pill/banner. A fresh
-  // reload replays NOTHING over the WS catch-up, so the pill was blank until the
-  // next host transition. Seed the current state ONCE from the same durable
-  // replay route the relay drains from (no parallel source). Host-health only
-  // this slice (D4); T3.x generalizes.
+  // reload replays NOTHING over the WS catch-up (the replay route is catch-up-
+  // from-cursor, empty without a prior cursor), so the pill was blank until the
+  // next host transition. Seed the current state ONCE from the dedicated
+  // snapshot endpoint, which returns the latest host-health frame. A later WS
+  // frame (version null → last-write-wins) supersedes it. Host-health only this
+  // slice (D4); T3.x generalizes.
   const hostHealthSeededRef = useRef(false);
   useEffect(() => {
     if (hostHealthSeededRef.current) return;
     hostHealthSeededRef.current = true;
     void liveEventsApi
-      .listEvents({ includeGlobal: true, type: 'host-health.changed' })
+      .hostHealthSeed()
       .then((response) => {
-        useLiveStore.getState().seedEvents(response.events);
+        if (response.event) useLiveStore.getState().seedEvents([response.event]);
       })
       .catch(() => {});
   }, []);

@@ -28,10 +28,12 @@ interface LiveStore {
   byKey: Map<string, LiveEvent>;
   /** Apply one WS envelope; no-op unless it's a relay live-event frame. */
   applyEnvelope: (env: unknown) => void;
-  /** T2.3-C — cold-load HTTP seed: merge raw `LiveEvent[]` (from the
-   *  `/api/live-events` replay route) with the SAME (entity,entityId)+version
-   *  dedup as `applyEnvelope`, so a fresh reload shows current global state
-   *  immediately instead of waiting for the next WS transition. */
+  /** T2.3-C — cold-load HTTP seed: merge raw `LiveEvent[]` (from a current-state
+   *  snapshot endpoint, e.g. `/api/agent-host/health`) with the SAME
+   *  (entity,entityId)+version dedup as `applyEnvelope`, so a fresh reload shows
+   *  current global state immediately instead of waiting for the next WS
+   *  transition. (The replay route can't seed cold-load — it's catch-up-from-
+   *  cursor and returns nothing without a prior cursor.) */
   seedEvents: (events: readonly LiveEvent[]) => void;
   /** Drop everything. Wired to `live-reset` (the below-floor catch-up gap) so a
    *  stale frame can never re-merge over freshly reseeded HTTP truth. */

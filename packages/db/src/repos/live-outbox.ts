@@ -161,6 +161,28 @@ export function listLiveEventsAfter(
 }
 
 /**
+ * T2.3 — the single most-recent row for an entity, as a fully-formed event.
+ * Powers the cold-load seed for last-write-wins global entities (host-health):
+ * the replay route is catch-up-from-cursor (returns nothing without a prior
+ * cursor), so a fresh page load needs this "current state" snapshot instead.
+ * Null when the entity has never emitted (e.g. host-health before the first
+ * connection transition).
+ */
+export function getLatestLiveEventForEntity<TPayload = unknown>(
+  entity: LiveOutboxEntity,
+  db: DbExecutor = getDb(),
+): LiveOutboxEvent<TPayload> | null {
+  const row = db
+    .select()
+    .from(liveOutbox)
+    .where(eq(liveOutbox.entity, entity))
+    .orderBy(desc(liveOutbox.seq))
+    .limit(1)
+    .get();
+  return row ? rowToEvent<TPayload>(row) : null;
+}
+
+/**
  * Slice 015a — raw drain read for the relay. Returns ALL committed rows (both
  * `global` and `project` scope) with `seq > after`, ordered by `seq`, capped at
  * `limit`. Unlike `listLiveEventsAfter` (which the replay route uses and which

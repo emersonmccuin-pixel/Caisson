@@ -1,6 +1,7 @@
 import { getJson } from '@/api/http';
 import {
   liveEventRoutes,
+  type LiveEvent,
   type ListLiveEventsQuery,
   type ListLiveEventsResponse,
 } from '@pc/contracts';
@@ -18,4 +19,10 @@ export const liveEventsApi = {
       qs ? `${liveEventRoutes.list}?${qs}` : liveEventRoutes.list,
     );
   },
+
+  /** T2.3 — current host-health frame for the cold-load pill/banner seed. The
+   *  replay route can't serve current state without a prior cursor, so the
+   *  store is seeded from this snapshot endpoint instead. */
+  hostHealthSeed: () =>
+    getJson<{ ok: boolean; event: LiveEvent | null }>('/api/agent-host/health'),
 };
