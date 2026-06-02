@@ -15,11 +15,15 @@ import {
 } from '@pc/runtime';
 import {
   getAgentRunRow,
+  getContract,
   getProjectById,
   listActiveAgentRunsForProject,
   listAgentRunsForSession,
+  listContractsForRun,
   listProjectVisibleAgents,
 } from '@pc/db';
+import { ContractService } from '@pc/app-services';
+import { EXTERNAL_SYSTEMS, type Deliverable, type ExternalSystem } from '@pc/contracts';
 
 import {
   dispatchContinueAgent as defaultDispatchContinueAgent,
@@ -92,6 +96,84 @@ function continuationFailureStatus(cause: string): number {
     'scratch-mkdir-failed': 500,
   };
   return statusFor[cause] ?? 400;
+}
+
+const DELIVERABLE_KINDS = [
+  'answer',
+  'prose',
+  'payload',
+  'repo',
+  'external',
+  'binary',
+  'action',
+] as const;
+
+/** Slice 014b — shape-validate a submitted deliverable against its declared
+ *  kind. Returns the typed Deliverable or an error string. Keeps the route the
+ *  single guard so the agent can't persist a malformed deliverable. */
+function parseDeliverable(raw: unknown): { ok: true; deliverable: Deliverable } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'deliverable must be an object' };
+  }
+  const d = raw as Record<string, unknown>;
+  const kind = typeof d.kind === 'string' ? d.kind : '';
+  if (!(DELIVERABLE_KINDS as readonly string[]).includes(kind)) {
+    return { ok: false, error: `deliverable.kind must be one of ${DELIVERABLE_KINDS.join(' | ')}` };
+  }
+  const str = (v: unknown): v is string => typeof v === 'string';
+  switch (kind) {
+    case 'answer':
+      if (!str(d.text) || !d.text.trim()) return { ok: false, error: 'answer deliverable requires non-empty `text`' };
+      return { ok: true, deliverable: { kind: 'answer', text: d.text } };
+    case 'prose':
+      if (!str(d.text) && !str(d.attachmentId) && !str(d.ref)) {
+        return { ok: false, error: 'prose deliverable requires one of `text` / `attachmentId` / `ref`' };
+      }
+      return { ok: true, deliverable: { kind: 'prose', ...(str(d.text) ? { text: d.text } : {}), ...(str(d.attachmentId) ? { attachmentId: d.attachmentId } : {}), ...(str(d.ref) ? { ref: d.ref } : {}) } };
+    case 'payload':
+      if (d.data === undefined) return { ok: false, error: 'payload deliverable requires `data`' };
+      return { ok: true, deliverable: { kind: 'payload', data: d.data } };
+    case 'repo':
+      return {
+        ok: true,
+        deliverable: {
+          kind: 'repo',
+          ...(str(d.branch) ? { branch: d.branch } : {}),
+          ...(str(d.commit) ? { commit: d.commit } : {}),
+          ...(str(d.prUrl) ? { prUrl: d.prUrl } : {}),
+          ...(d.diffStat && typeof d.diffStat === 'object' ? { diffStat: d.diffStat as { files: number; insertions: number; deletions: number } } : {}),
+        },
+      };
+    case 'external':
+      if (!str(d.system) || !(EXTERNAL_SYSTEMS as readonly string[]).includes(d.system)) {
+        return { ok: false, error: `external deliverable requires \`system\` ∈ ${EXTERNAL_SYSTEMS.join(' | ')}` };
+      }
+      if (!str(d.handle) || !str(d.idempotencyKey)) {
+        return { ok: false, error: 'external deliverable requires `handle` + `idempotencyKey`' };
+      }
+      return {
+        ok: true,
+        deliverable: {
+          kind: 'external',
+          system: d.system as ExternalSystem,
+          handle: d.handle,
+          idempotencyKey: d.idempotencyKey,
+          ...(str(d.url) ? { url: d.url } : {}),
+        },
+      };
+    case 'binary':
+      if (!str(d.attachmentId) || !str(d.mime) || typeof d.bytes !== 'number') {
+        return { ok: false, error: 'binary deliverable requires `attachmentId`, `mime`, `bytes`' };
+      }
+      return { ok: true, deliverable: { kind: 'binary', attachmentId: d.attachmentId, mime: d.mime, bytes: d.bytes } };
+    case 'action':
+      if (!str(d.tool) || typeof d.count !== 'number') {
+        return { ok: false, error: 'action deliverable requires `tool` (string) + `count` (number)' };
+      }
+      return { ok: true, deliverable: { kind: 'action', tool: d.tool, count: d.count } };
+    default:
+      return { ok: false, error: `unsupported deliverable kind: ${kind}` };
+  }
 }
 
 function loadAgentRunEvents(jsonlPath: string): AgentRunJsonlEvent[] {
@@ -518,6 +600,73 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       status: result.initialState,
       continues: parentAgentRunId,
     });
+  });
+
+  /** `pc_submit_deliverable` HTTP surface (slice 014b). The dispatched agent
+   *  submits its typed deliverable against ITS contract — the authoritative
+   *  output the verification path reads, replacing the end_turn-then-scrape
+   *  trust model. Resolves the contract from the run's `contract_id` (falls back
+   *  to the latest contract produced by the run). Validates the deliverable
+   *  shape + (when the contract carries an `expectedOutput`) the kind match,
+   *  then writes it via ContractService (status → `submitted`). */
+  app.post('/api/projects/:projectId/agent-runs/:runId/deliverable', async (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const project = getProjectById(projectId);
+    if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+
+    const runId = c.req.param('runId') as ULID;
+    const row = getAgentRunRow(runId);
+    if (!row) return c.json({ ok: false, error: `unknown run: ${runId}` }, 404);
+    if (row.projectId !== projectId) {
+      return c.json({ ok: false, error: `run ${runId} not in project ${projectId}` }, 400);
+    }
+
+    const body = await c.req.json<{ deliverable?: unknown; report?: unknown }>();
+    const parsed = parseDeliverable(body.deliverable);
+    if (!parsed.ok) return c.json({ ok: false, error: parsed.error }, 400);
+
+    // Resolve the contract this run produced. `contract_id` is the spine (slice
+    // 019); fall back to the newest contract linked to the run for older rows.
+    const contractId =
+      row.contractId ?? listContractsForRun(runId)[0]?.id ?? null;
+    if (!contractId) {
+      return c.json(
+        { ok: false, error: `run ${runId} has no contract to submit against`, cause: 'no-contract' },
+        409,
+      );
+    }
+    const contract = getContract(contractId);
+    if (!contract) {
+      return c.json({ ok: false, error: `contract ${contractId} not found`, cause: 'no-contract' }, 409);
+    }
+
+    // Kind-match guard: when the contract declares an expected output kind, the
+    // submission must match it (an `answer` contract can't be satisfied by a
+    // `repo` deliverable). Contracts with no declared kind accept any shape.
+    const expectedKind = contract.expectedOutput?.kind;
+    if (expectedKind && expectedKind !== parsed.deliverable.kind) {
+      return c.json(
+        {
+          ok: false,
+          error: `deliverable kind "${parsed.deliverable.kind}" does not match the contract's expected output "${expectedKind}"`,
+          cause: 'kind-mismatch',
+        },
+        400,
+      );
+    }
+
+    const report = typeof body.report === 'string' ? body.report : null;
+    const service = new ContractService();
+    const updated = service.setDeliverable({
+      id: contractId,
+      deliverable: parsed.deliverable,
+      report,
+    });
+    if (!updated) {
+      return c.json({ ok: false, error: `contract ${contractId} not found`, cause: 'no-contract' }, 409);
+    }
+
+    return c.json({ ok: true, contractId, status: updated.status });
   });
 
   /** `pc_list_my_runs` HTTP surface. Reads from the `agent_runs` table. */

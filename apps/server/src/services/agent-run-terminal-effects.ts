@@ -12,10 +12,12 @@ import {
   getAgentRunRow as defaultGetAgentRunRow,
   getProjectById as defaultGetProjectById,
   getWorkItem as defaultGetWorkItem,
+  hasPendingAskForRun,
   type MarkAgentRunTerminalInput,
 } from '@pc/db';
+import { AgentRunJsonlTailer, jsonlPathFor, type AgentRunJsonlEvent } from '@pc/runtime';
 import { ContractService } from '@pc/app-services';
-import type { Deliverable } from '@pc/contracts';
+import type { Contract, Deliverable } from '@pc/contracts';
 
 import {
   buildAgentCompletedBody,
@@ -165,12 +167,13 @@ export function applyAgentRunTerminalEffects(
   return { applied: 1 };
 }
 
-/** Slice 013 — write the typed deliverable onto the contract + return the
- *  result text to surface in the terminal envelope. The deliverable's home is
- *  the contract, NOT a live `wi.body` read. Capture rule: the agent's free-text
- *  `result` is the `answer` deliverable; if empty (the agent reported by
- *  writing into the work item), fall back to `wi.body` for the captured text
- *  (same bytes the old fallback surfaced). 014 makes submission the source. */
+/** Slice 014b — resolve the captured deliverable + return the result text the
+ *  terminal envelope surfaces. SUBMISSION is now the source of truth: if the
+ *  agent called `pc_submit_deliverable` (slice 014b), the contract already
+ *  carries its typed deliverable + report — we do NOT overwrite it. Only when
+ *  the agent submitted NOTHING do we fall back to the legacy capture (free-text
+ *  `result`, else `wi.body`) and write a synthesized `answer` deliverable —
+ *  preserving the dual-read shim for un-migrated agents. */
 function captureDeliverable(
   input: AgentRunTerminalEffectsInput,
   row: AgentRunRow,
@@ -179,6 +182,33 @@ function captureDeliverable(
   let result = input.result ?? '';
   if (input.status !== 'completed') return result;
 
+  const service = deps.contractService ?? new ContractService();
+  const contractId = input.contractId ?? row.contractId ?? null;
+
+  // Submission-gated path: a deliverable submitted via pc_submit_deliverable is
+  // authoritative — keep it. Surface its text in the envelope when the agent
+  // left no free-text result.
+  if (contractId) {
+    let existing: Contract | null = null;
+    try {
+      existing = service.get(contractId);
+    } catch {
+      existing = null;
+    }
+    if (existing?.deliverable) {
+      if (result.trim() === '') {
+        const submittedText =
+          existing.deliverable.kind === 'answer' || existing.deliverable.kind === 'prose'
+            ? existing.deliverable.text ?? ''
+            : existing.report ?? '';
+        if (submittedText.trim()) result = submittedText;
+      }
+      return result;
+    }
+  }
+
+  // Legacy fallback (no submission): the agent's free-text `result` is the
+  // `answer` deliverable; if empty, fall back to `wi.body`.
   const workItemId = input.workItemId !== undefined ? input.workItemId : row.parentWorkItemId;
   let deliverableText = result.trim();
   if (deliverableText === '' && workItemId) {
@@ -187,9 +217,7 @@ function captureDeliverable(
   }
   if (deliverableText && result.trim() === '') result = deliverableText;
 
-  const contractId = input.contractId ?? row.contractId ?? null;
   if (contractId && deliverableText) {
-    const service = deps.contractService ?? new ContractService();
     const deliverable: Deliverable = { kind: 'answer', text: deliverableText };
     try {
       service.setDeliverable({ id: contractId, deliverable, report: result || null });
@@ -198,6 +226,54 @@ function captureDeliverable(
     }
   }
   return result;
+}
+
+/** Slice 014b — strip the MCP server prefix (`mcp__pc-rig__pc_ask_user` →
+ *  `pc_ask_user`) so the `tool_called` predicate can match on the bare tool
+ *  name the orchestrator authored. Non-MCP tool names (Read/Bash/...) pass
+ *  through unchanged. */
+function bareToolName(name: string): string {
+  if (!name.startsWith('mcp__')) return name;
+  const parts = name.split('__');
+  return parts.length >= 3 ? parts[parts.length - 1]! : name;
+}
+
+/** Slice 014b — production verification evidence loaders. `loadToolCalls` reads
+ *  the producing run's CC transcript (the same `AgentRunJsonlTailer` the events
+ *  route uses) and surfaces both prefixed + bare tool names so a `tool_called`
+ *  predicate matches whether the orchestrator wrote `pc_ask_user` or the full
+ *  `mcp__pc-rig__pc_ask_user`. `loadPendingAskCreated` reads the DB (any-status
+ *  pending-ask for the run). Injected in production; tests pass their own. */
+function buildProductionVerificationDeps(projectFolderPath: string): VerificationDeps {
+  return {
+    loadToolCalls: async (input) => {
+      if (!input.ccSessionId) return [];
+      try {
+        const jsonlPath = jsonlPathFor(projectFolderPath, input.ccSessionId);
+        const tailer = new AgentRunJsonlTailer({ filePath: jsonlPath, pollIntervalMs: 60_000 });
+        const names: { name: string }[] = [];
+        tailer.on('event', (event: AgentRunJsonlEvent) => {
+          if (event.kind === 'jsonl-tool-call' && event.name) {
+            names.push({ name: event.name });
+            const bare = bareToolName(event.name);
+            if (bare !== event.name) names.push({ name: bare });
+          }
+        });
+        tailer.drainAvailable();
+        return names;
+      } catch {
+        return [];
+      }
+    },
+    loadPendingAskCreated: async (input) => {
+      if (!input.runId) return false;
+      try {
+        return hasPendingAskForRun(input.runId);
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 async function finishTerminalEffects(args: {
@@ -232,7 +308,12 @@ async function finishTerminalEffects(args: {
         ccSessionId: input.ccSessionId,
         project,
       },
-      deps.verificationDeps ?? {},
+      // Slice 014b — wire the PRODUCTION evidence loaders when no test deps are
+      // injected: `loadToolCalls` reads the producing run's CC transcript;
+      // `loadPendingAskCreated` reads the DB. `executorsFor` stays on the
+      // verifier's `createWorktreeExecutors` default. These power `tool_called`
+      // / `pending_ask_created` for `action`-kind contracts.
+      deps.verificationDeps ?? buildProductionVerificationDeps(project.folderPath),
     );
   }
 

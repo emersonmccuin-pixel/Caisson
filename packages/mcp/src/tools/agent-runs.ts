@@ -394,6 +394,70 @@ export async function handleAgentRunTool(
       }
     }
 
+    case 'pc_submit_deliverable': {
+      // Slice 014b — the agent submits its typed deliverable against its
+      // contract. This BECOMES the verified output source (replacing the
+      // end_turn-then-scrape model). The contract is resolved server-side from
+      // PC_AGENT_RUN_ID; the agent never needs to know its contract id.
+      const kind = typeof args.kind === 'string' ? args.kind.trim() : '';
+      if (!kind) {
+        return {
+          content: [{ type: 'text', text: 'pc_submit_deliverable: kind required' }],
+          isError: true,
+        };
+      }
+      if (!ctx.agentRunId) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'pc_submit_deliverable: PC_AGENT_RUN_ID not set — only dispatched agents have a contract to submit against',
+            },
+          ],
+          isError: true,
+        };
+      }
+      if (!ctx.projectId) {
+        return {
+          content: [{ type: 'text', text: 'pc_submit_deliverable: PC_PROJECT_ID not set' }],
+          isError: true,
+        };
+      }
+      const deliverable =
+        args.deliverable && typeof args.deliverable === 'object' && !Array.isArray(args.deliverable)
+          ? (args.deliverable as Record<string, unknown>)
+          : {};
+      const payload: Record<string, unknown> = {
+        agentRunId: ctx.agentRunId,
+        // Merge `kind` into the deliverable so the agent may pass it at either
+        // level; the explicit top-level `kind` wins.
+        deliverable: { ...deliverable, kind },
+      };
+      if (typeof args.report === 'string') payload.report = args.report;
+      try {
+        const res = await ctx.postServer(
+          ctx.projectPath(`agent-runs/${encodeURIComponent(ctx.agentRunId)}/deliverable`),
+          payload,
+        );
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [
+            { type: 'text', text: `pc_submit_deliverable failed (${res.status}): ${res.body}` },
+          ],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [
+            { type: 'text', text: `pc_submit_deliverable failed: ${(err as Error).message}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     default:
       return null;
   }

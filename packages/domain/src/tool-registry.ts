@@ -1546,6 +1546,43 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "answeredBy"
       ]
     }
+  },
+  {
+    "name": "pc_submit_deliverable",
+    "family": "agent-run",
+    "label": "Submit your deliverable",
+    "description": "Submit the typed deliverable for YOUR contract — the authoritative output your dispatch is verified against. Call this ONCE, as your final action, before you end your turn; it REPLACES the old \"end your turn and we scrape your transcript / work-item body\" model. The `kind` MUST match your contract's expected output: `answer` → { text } (a direct answer / report); `prose` → { text } or { attachmentId } or { ref } (a written document); `payload` → { data } (structured JSON matching your schema); `repo` → { branch?, commit?, diffStat?, prUrl? } (code you wrote); `external` → { system, handle, idempotencyKey, url? } (an external side-effect you performed, e.g. an email sent); `binary` → { attachmentId, mime, bytes }; `action` → { tool, count } (a tool you were required to call). Optional `report` is free-text to the orchestrator that accompanies the deliverable. Requires PC_AGENT_RUN_ID (set on every dispatched agent). Returns { ok, contractId, status: 'submitted' }.",
+    "catalogDescription": "Submit the typed deliverable for your contract (the verified output source).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "answer",
+            "prose",
+            "payload",
+            "repo",
+            "external",
+            "binary",
+            "action"
+          ],
+          "description": "deliverable kind — must match the contract's expected output kind"
+        },
+        "deliverable": {
+          "type": "object",
+          "description": "the typed deliverable payload (shape depends on kind). The server merges `kind` in, so you may omit it here. answer:{text}; prose:{text|attachmentId|ref}; payload:{data}; repo:{branch?,commit?,diffStat?,prUrl?}; external:{system,handle,idempotencyKey,url?}; binary:{attachmentId,mime,bytes}; action:{tool,count}.",
+          "additionalProperties": true
+        },
+        "report": {
+          "type": "string",
+          "description": "optional free-text report to the orchestrator accompanying the deliverable"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
   }
 ];
 

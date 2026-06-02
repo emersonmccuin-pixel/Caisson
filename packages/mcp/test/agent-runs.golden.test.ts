@@ -133,6 +133,36 @@ test('pc_answer_pending success: emits raw body; posts answer', async () => {
   });
 });
 
+test('pc_submit_deliverable success: posts to run deliverable route, merges kind', async () => {
+  const serverBody = JSON.stringify({ ok: true, contractId: 'C1', status: 'submitted' });
+  const { ctx, calls } = makeFakeContext({ ...BASE, responder: () => ok(serverBody) });
+  const res = await handleAgentRunTool(
+    'pc_submit_deliverable',
+    { kind: 'answer', deliverable: { text: 'Node LTS is 22.' }, report: 'done' },
+    ctx,
+  );
+  assert.equal(firstText(res), serverBody);
+  assert.deepEqual(calls[0], {
+    method: 'POST',
+    path: '/api/projects/P01/agent-runs/AR1/deliverable',
+    body: { agentRunId: 'AR1', deliverable: { text: 'Node LTS is 22.', kind: 'answer' }, report: 'done' },
+  });
+});
+
+test('pc_submit_deliverable requires PC_AGENT_RUN_ID', async () => {
+  const { ctx } = makeFakeContext({ projectId: 'P01', dispatcherSessionId: 'D', responder: () => ok('{}') });
+  const res = await handleAgentRunTool('pc_submit_deliverable', { kind: 'answer' }, ctx);
+  assert.equal(res!.isError, true);
+  assert.match(firstText(res), /PC_AGENT_RUN_ID not set/);
+});
+
+test('pc_submit_deliverable failure: exact failure string', async () => {
+  const { ctx } = makeFakeContext({ ...BASE, responder: () => err(400, 'kind-mismatch') });
+  const res = await handleAgentRunTool('pc_submit_deliverable', { kind: 'repo' }, ctx);
+  assert.equal(firstText(res), 'pc_submit_deliverable failed (400): kind-mismatch');
+  assert.equal(res!.isError, true);
+});
+
 test('pc_list_my_runs success: emits raw body (left raw — no covering DTO)', async () => {
   const serverBody = JSON.stringify({ ok: true, runs: [] });
   const { ctx, calls } = makeFakeContext({ ...BASE, responder: () => ok(serverBody) });

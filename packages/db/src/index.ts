@@ -267,6 +267,7 @@ export {
   createPendingAsk,
   getPendingAsk,
   hasOpenPendingAskForRun,
+  hasPendingAskForRun,
   listOpenPendingAsksForProject,
   listOpenPendingAsksForSession,
   markPendingAskAnswered,
