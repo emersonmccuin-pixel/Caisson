@@ -70,6 +70,7 @@ export function insertAgentRunRow(input: InsertAgentRunRowInput): AgentRunRow {
     readyAt: null,
     pid: null,
     lastActivityAt: null,
+    deliveredAt: null,
     completedAt: null,
     rev: 0,
     contractId: input.contractId ?? null,
@@ -152,6 +153,19 @@ export function markAgentRunTerminal(input: MarkAgentRunTerminalInput): void {
       rev: REV_INC,
     })
     .where(eq(agentRuns.id, input.id))
+    .run();
+}
+
+/** Workflow-engine redesign — stamp the delivery receipt when the worker
+ *  submits its deliverable (`pc_submit_deliverable`). The positive done-signal:
+ *  read back at terminal time to distinguish a real completion from a
+ *  `no-deliverable` failure. Idempotent (first delivery wins); does NOT bump rev
+ *  (delivery is not itself a status transition — completion follows it). */
+export function markAgentRunDelivered(id: ULID, at: number): void {
+  getDb()
+    .update(agentRuns)
+    .set({ deliveredAt: at })
+    .where(and(eq(agentRuns.id, id), sql`${agentRuns.deliveredAt} IS NULL`))
     .run();
 }
 

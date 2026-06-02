@@ -87,6 +87,10 @@ export const agentRuns = sqliteTable(
     /** Epoch-ms of the last observed JSONL activity for this run. Updated by the
      *  tailer; the liveness sweep flags an alive-but-idle run as wedged. */
     lastActivityAt: integer('last_activity_at'),
+    /** Workflow-engine redesign — epoch-ms the worker submitted its deliverable
+     *  (`pc_submit_deliverable`). The positive done-receipt: a contract-first run
+     *  that reaches terminal without this set is a `no-deliverable` failure. */
+    deliveredAt: integer('delivered_at'),
     completedAt: integer('completed_at'),
     /** Monotonic write counter — incremented on every status transition.
      *  WS deltas carry this so the frontend can discard stale deliveries. */

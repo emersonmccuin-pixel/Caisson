@@ -27,6 +27,7 @@ import {
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
 import { deliverAgentEnvelope, type MailboxEnqueuePort } from './agent-delivery.ts';
 import { commitAgentRunTerminal } from './agent-run-writer.ts';
+import { gateTerminalForDeliverable } from './agent-run-settle.ts';
 import {
   runVerificationOnTerminal,
   type VerificationDeps,
@@ -124,6 +125,25 @@ export function applyAgentRunTerminalEffects(
       });
     }
     return { applied: 0 };
+  }
+
+  // Workflow-engine redesign — the completion gate. A contract-first run that
+  // reaches `completed` with nothing delivered is rewritten to a typed
+  // `no-deliverable` failure BEFORE any downstream effect (row commit, verify,
+  // envelope, onSettled) sees it. Delivery is the sole done-signal; no-contract
+  // / legacy runs are exempt (gate passes them through unchanged).
+  const gated = gateTerminalForDeliverable(
+    { status: input.status, failureCause: null, failureReason: input.failureReason ?? null },
+    row,
+    { ...(deps.contractService ? { contractService: deps.contractService } : {}) },
+  );
+  if (gated.downgraded) {
+    input = {
+      ...input,
+      status: gated.status,
+      failureCause: gated.failureCause,
+      failureReason: gated.failureReason,
+    };
   }
 
   const completedAt = input.completedAt ?? (deps.now ?? Date.now)();

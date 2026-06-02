@@ -21,6 +21,7 @@ import {
   listAgentRunsForSession,
   listContractsForRun,
   listProjectVisibleAgents,
+  markAgentRunDelivered,
 } from '@pc/db';
 import { ContractService } from '@pc/app-services';
 import { EXTERNAL_SYSTEMS, type Deliverable, type ExternalSystem } from '@pc/contracts';
@@ -44,7 +45,7 @@ import type { MailboxEnqueuePort } from '../../services/agent-delivery.ts';
 
 interface AgentRunCancelEntry {
   projectId: ULID;
-  run: { cancel(): void };
+  run: { cancel(): void; complete?(result?: string): void };
 }
 
 export interface AgentRunActiveRegistry {
@@ -681,6 +682,23 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     });
     if (!updated) {
       return c.json({ ok: false, error: `contract ${contractId} not found`, cause: 'no-contract' }, 409);
+    }
+
+    // Workflow-engine redesign — delivery is the SOLE done-signal. Stamp the
+    // positive receipt, then drive the live run running→completed directly (the
+    // active path: independent of JSONL turn-end inference, so a diverged tailer
+    // can no longer hang the run). Host-backed / already-gone runs no-op here and
+    // complete via their own terminal path + the completion gate.
+    markAgentRunDelivered(runId, services.now());
+    const deliverableText =
+      report ??
+      (parsed.deliverable.kind === 'answer' || parsed.deliverable.kind === 'prose'
+        ? parsed.deliverable.text ?? ''
+        : '');
+    try {
+      services.getActiveRunRegistry().get(runId)?.run.complete?.(deliverableText);
+    } catch {
+      /* best-effort — the completion gate + terminal path are the durable backstop */
     }
 
     return c.json({ ok: true, contractId, status: updated.status });

@@ -294,6 +294,7 @@ export {
   listAndReconcileOrphanedRuns,
   listNonTerminalAgentRuns,
   listRecentTerminalAgentRuns,
+  markAgentRunDelivered,
   markAgentRunTerminal,
   reconcileOrphanedRunningRuns,
   setAgentRunContractId,

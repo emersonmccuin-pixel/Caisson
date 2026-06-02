@@ -44,6 +44,11 @@ export interface ActiveRunHandle {
    *  fire-and-forget mark-paused lands, dropping the eventual answer. */
   markPaused(askId: string): void | Promise<void>;
   resumeWithAnswer(answer: string): Promise<ResumeWithAnswerResult>;
+  /** Workflow-engine redesign — drive running→completed from the deliverable
+   *  receipt (`pc_submit_deliverable`), the sole done-signal. In-process this
+   *  calls AgentRun.complete(); host-backed runs complete via their own
+   *  turn-end + the server completion gate, so this is a no-op there. */
+  complete(result?: string): void;
   onTerminal(listener: () => void): void;
 }
 
@@ -61,6 +66,7 @@ export function activeRunHandleForAgentRun(run: AgentRun): ActiveRunHandle {
       run._resumeWithAnswer(answer);
       return { ok: true };
     },
+    complete: (result) => run.complete(result),
     onTerminal: (listener) => {
       run.once('terminal', listener);
     },
@@ -164,6 +170,14 @@ export class HostBackedActiveRunHandle implements ActiveRunHandle {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, cause: 'host-error', error: message };
     }
+  }
+
+  /** Host-backed runs complete via their own turn-end → run-terminal snapshot,
+   *  which routes through the server completion gate (delivered-or-fail). The
+   *  in-process active-completion shortcut doesn't apply, so this is a no-op.
+   *  (Production has no out-of-process host today.) */
+  complete(_result?: string): void {
+    /* no-op — see doc comment */
   }
 
   onTerminal(listener: () => void): void {

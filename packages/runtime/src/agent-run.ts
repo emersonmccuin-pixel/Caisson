@@ -55,7 +55,11 @@ export type AgentRunFailureCause =
   | 'host-unavailable'
   | 'host-lost'
   | 'host-crashed'
-  | 'host-protocol-error';
+  | 'host-protocol-error'
+  /** Mirror of @pc/domain — reached terminal without a submitted deliverable.
+   *  Produced by the server's terminal gate, not the runtime; kept here so the
+   *  two failure-cause unions stay in sync. */
+  | 'no-deliverable';
 
 export interface AgentRunRecord {
   agentRunId: string;
@@ -294,6 +298,18 @@ export class AgentRun extends EventEmitter {
     this.armCancelGrace();
   }
 
+  /** External signal: the dispatched worker submitted its deliverable
+   *  (`pc_submit_deliverable`) — the SOLE done-signal in the workflow-engine
+   *  redesign. The server's deliverable route calls this after persisting the
+   *  deliverable, driving running→completed WITHOUT depending on JSONL turn-end
+   *  inference (a diverged tailer can no longer hang or fabricate a result).
+   *  No-op unless running (already terminal / queued / paused). `result` is the
+   *  free-text envelope; the contract carries the authoritative typed output. */
+  complete(result?: string): void {
+    if (this.state !== 'running') return;
+    this.toTerminal('completed', undefined, result ?? this.lastAssistantText ?? '');
+  }
+
   /** External signal: an observer (Session 8's MCP route or Session 7's
    *  tailer pause-detector) has detected a pause. Transition running→paused.
    *  No-op if state isn't 'running'. */
@@ -526,20 +542,14 @@ export class AgentRun extends EventEmitter {
     if (this.timers.firstTurn && isAgentProgress(ev)) {
       this.clearFirstTurn();
     }
-    // Turn-end signal (the OR rule per design §7.1).
-    if (isTurnEnd(ev) && this.state === 'running') {
-      // Normal completion path. ALSO the late-success path during cancel-
-      // grace: state is still 'running' (we don't transition during grace),
-      // so a turn-end landing in the grace window after kill() honors as
-      // completion per the Section 18 V-4 lesson — Windows kill() isn't
-      // synchronous, so reporting cancelled while the run actually finished
-      // is a regression we explicitly tolerate this race for.
-      this.toTerminal(
-        'completed',
-        undefined,
-        this.lastAssistantText ?? '',
-      );
-    }
+    // Workflow-engine redesign — a turn-end is NO LONGER a completion signal.
+    // Completion comes solely from `complete()` (the agent's
+    // `pc_submit_deliverable` receipt). A turn-end here is just activity (idle
+    // already reset above); a worker that ends its turn or exits WITHOUT
+    // delivering falls to the idle/exit failure path, and the server's terminal
+    // gate records it as a `no-deliverable` failure — never a "completed-but-
+    // empty". This kills completion-by-JSONL-inference (and the dual-end_turn
+    // premature-complete race) at the root.
   }
 
   private onSpawnExit(_code: number | null, _signal: number | null): void {
@@ -778,28 +788,3 @@ function extractAssistantText(ev: JsonlEvent): string | null {
   return null;
 }
 
-/** Turn-end signal — assistant row with stop_reason !== 'tool_use'. Detects
- *  both event shapes: the v1 JsonlTailer's `kind: 'jsonl-turn-end'` (the
- *  production tailer Session 5's LowLevelSpawn wires through) AND the
- *  raw-row shape used by Session 6's unit tests + Session 7's
- *  AgentRunJsonlTailer (which carries `row` alongside `kind`). */
-function isTurnEnd(ev: JsonlEvent): boolean {
-  // v1/v2 typed shape — the tailer itself decided this line ends the turn.
-  // The tailer filters out `tool_use` stop reasons before emitting, so this
-  // event kind is by-definition a real turn boundary.
-  if ((ev as { kind?: unknown }).kind === 'jsonl-turn-end') {
-    const stopReason = (ev as { stopReason?: unknown }).stopReason;
-    if (stopReason === 'tool_use') return false;
-    return true;
-  }
-  // Raw-row fallback (Session 6 fake events / future inline detection).
-  const row = (ev as { row?: unknown }).row ?? (ev as { entry?: unknown }).entry;
-  if (!row || typeof row !== 'object') return false;
-  const r = row as Record<string, unknown>;
-  if (r.type !== 'assistant') return false;
-  const msg = (r.message ?? r) as Record<string, unknown>;
-  const stopReason = msg.stop_reason ?? (r as Record<string, unknown>).stop_reason;
-  if (stopReason === 'tool_use') return false;
-  return stopReason === 'end_turn' || stopReason === 'stop_sequence' ||
-         stopReason === 'max_tokens';
-}
