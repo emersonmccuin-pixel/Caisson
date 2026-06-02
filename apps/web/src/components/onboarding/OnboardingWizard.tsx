@@ -343,30 +343,45 @@ export function OnboardingWizard({
                 />
               )}
 
-              {step === 'claude' && (
-                <DependencyStep
-                  title="Install Claude Code"
-                  blurb="Caisson runs every chat, agent, and workflow by driving Claude Code on your machine. Let's make sure it's installed."
-                  ok={claudeOk}
-                  okLabel={
-                    claudeOk
-                      ? `Claude Code ${preflight.claude.version ?? ''} found.`
-                      : undefined
-                  }
-                  problem={
-                    preflight.claude.status === 'version-too-old'
-                      ? `Found ${preflight.claude.version}, but Caisson needs ${preflight.claude.minVersion} or newer.`
-                      : preflight.claude.status === 'unverified'
-                        ? 'A claude binary was found but its version could not be read.'
-                        : 'Claude Code is not installed yet.'
-                  }
-                  actionLabel="Install Claude Code"
-                  busy={busy === 'claude'}
-                  busyLabel="Installing Claude Code…"
-                  onAction={handleInstallClaude}
-                  onNext={goNext}
-                />
-              )}
+              {step === 'claude' && (() => {
+                // Caisson ships a pinned, isolated Claude Code inside the app
+                // (resolver `source: 'bundled'`), so on a packaged build there is
+                // nothing for the user to install — reframe the step from
+                // "install it" to "it's already here". The install action stays
+                // for the dev/fallback case where no bundle resolves.
+                const bundled = preflight.claude.source === 'bundled';
+                const v = preflight.claude.version ?? '';
+                return (
+                  <DependencyStep
+                    title="Claude Code"
+                    blurb={
+                      bundled
+                        ? "Caisson ships with its own pinned copy of Claude Code, so there's nothing to install. It runs every chat, agent, and workflow for you."
+                        : "Caisson runs every chat, agent, and workflow by driving Claude Code on your machine. Let's make sure it's installed."
+                    }
+                    ok={claudeOk}
+                    okLabel={
+                      claudeOk
+                        ? bundled
+                          ? `Claude Code ${v} — bundled with Caisson. Nothing to install.`
+                          : `Claude Code ${v} found on your machine.`
+                        : undefined
+                    }
+                    problem={
+                      preflight.claude.status === 'version-too-old'
+                        ? `Found ${preflight.claude.version}, but Caisson needs ${preflight.claude.minVersion} or newer.`
+                        : preflight.claude.status === 'unverified'
+                          ? 'A claude binary was found but its version could not be read.'
+                          : 'Claude Code is not installed yet.'
+                    }
+                    actionLabel="Install Claude Code"
+                    busy={busy === 'claude'}
+                    busyLabel="Installing Claude Code…"
+                    onAction={handleInstallClaude}
+                    onNext={goNext}
+                  />
+                );
+              })()}
 
               {step === 'git' && (
                 <DependencyStep
