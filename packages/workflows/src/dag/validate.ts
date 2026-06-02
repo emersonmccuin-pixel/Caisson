@@ -8,9 +8,9 @@
 // every field read is defensive — never assume the discriminated union holds.
 
 import type { WorkflowV2 } from '@pc/domain';
-import { findForwardCycle } from './topo.ts';
+import { computeUpstreams, findForwardCycle } from './topo.ts';
 import { evaluateCondition } from './when.ts';
-import type { RefResolver } from './refs.ts';
+import { extractRefs, type RefResolver } from './refs.ts';
 
 export interface ValidationResult {
   ok: boolean;
@@ -109,6 +109,68 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
   // ── forward-edge acyclicity (reject back-edges are excluded by forwardEdges) ──
   const cycle = findForwardCycle(nodes as unknown as WorkflowV2.WorkflowNode[]);
   if (cycle) errors.push(`cycle in forward edges: ${cycle.join(' → ')}`);
+
+  // ── ref ordering ("Saved ⇒ runnable", §4.1) ──
+  // Every `$X.output[.field]` a step reads must point at a STRICTLY-EARLIER step
+  // (a forward-edge ancestor) or the run-root card (`$root`). A step can't read
+  // its own output or a downstream/sibling step's output that hasn't run yet —
+  // the chain can't be wired to read a value before it exists. Skipped when the
+  // graph has a cycle (the upstream relation is meaningless until that's fixed).
+  if (!cycle) {
+    const upstreams = computeUpstreams(nodes as unknown as WorkflowV2.WorkflowNode[]);
+    const ancestorCache = new Map<string, Set<string>>();
+    const ancestorsOf = (nodeId: string): Set<string> => {
+      const cached = ancestorCache.get(nodeId);
+      if (cached) return cached;
+      const acc = new Set<string>();
+      const stack = [...(upstreams.get(nodeId) ?? [])];
+      while (stack.length) {
+        const u = stack.pop()!;
+        if (acc.has(u)) continue;
+        acc.add(u);
+        for (const p of upstreams.get(u) ?? []) stack.push(p);
+      }
+      ancestorCache.set(nodeId, acc);
+      return acc;
+    };
+    for (const n of nodes) {
+      const id = typeof n.id === 'string' ? n.id : '';
+      if (!id) continue;
+      // The substitutable text bodies a step renders refs from.
+      const bodies = [n.task, n.bash, n.script, n.prompt].filter(
+        (v): v is string => typeof v === 'string',
+      );
+      if (bodies.length === 0) continue;
+      const ancestors = ancestorsOf(id);
+      const seen = new Set<string>();
+      for (const body of bodies) {
+        for (const ref of extractRefs(body)) {
+          const fieldSuffix = ref.field ? `.${ref.field}` : '';
+          const key = `${ref.nodeId}${fieldSuffix}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          if (ref.nodeId === 'root') continue; // the run-root card is always available
+          if (ref.nodeId === 'self') {
+            errors.push(`node "${id}": $self.output is only valid in a reject edge's carry, not in a body`);
+            continue;
+          }
+          if (ref.nodeId === id) {
+            errors.push(`node "${id}": reads its own output ($${id}.output${fieldSuffix})`);
+            continue;
+          }
+          if (!known(ref.nodeId)) {
+            errors.push(`node "${id}": reads $${ref.nodeId}.output${fieldSuffix} — no such node`);
+            continue;
+          }
+          if (!ancestors.has(ref.nodeId)) {
+            errors.push(
+              `node "${id}": reads $${ref.nodeId}.output${fieldSuffix} but "${ref.nodeId}" is not an upstream step — a ref must point at a strictly-earlier step`,
+            );
+          }
+        }
+      }
+    }
+  }
 
   // ── when: grammar ──
   for (const n of nodes) {

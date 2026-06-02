@@ -23,6 +23,19 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+/** Extract every `$nodeId.output[.field]` reference from a template. Used by the
+ *  save-time validator (§4) to check refs point at a strictly-earlier step.
+ *  Returns one entry per match (duplicates preserved). */
+export function extractRefs(template: string): { nodeId: string; field?: string }[] {
+  const out: { nodeId: string; field?: string }[] = [];
+  const re = new RegExp(REF_PATTERN.source, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(template)) !== null) {
+    out.push(m[2] !== undefined ? { nodeId: m[1]!, field: m[2] } : { nodeId: m[1]! });
+  }
+  return out;
+}
+
 /**
  * Replace every `$nodeId.output[.field]` in `template` with the resolver's
  * value. With `escapedForBash`, each substituted value is single-quoted so it
