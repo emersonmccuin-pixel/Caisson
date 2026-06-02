@@ -71,6 +71,7 @@ export interface ChatSessionReducerState {
 export type ChatSessionReducerAction =
   | { type: 'reset-project'; projectId: string | null }
   | { type: 'envelope'; env: WsEnvelope }
+  | { type: 'envelopes'; envs: WsEnvelope[] }
   | { type: 'session-transition'; projectId: string; transition: SessionTransitionResponse };
 
 export function createChatSessionState(projectId: string | null): ChatSessionReducerState {
@@ -134,6 +135,8 @@ export function chatSessionReducer(
       return applySessionTransition(state, action.projectId, action.transition);
     case 'envelope':
       return applyEnvelope(state, action.env);
+    case 'envelopes':
+      return action.envs.reduce(applyEnvelope, state);
   }
 }
 

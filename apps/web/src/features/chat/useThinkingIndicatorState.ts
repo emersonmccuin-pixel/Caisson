@@ -25,29 +25,16 @@ export function useThinkingIndicatorState({
   }, [events.length]);
 
   const [thinkingStartedAt, setThinkingStartedAt] = useState<number | null>(null);
-  const [elapsedMs, setElapsedMs] = useState(0);
   const [interruptedAt, setInterruptedAt] = useState<number | null>(null);
 
   useEffect(() => {
     if (isThinking) {
-      if (thinkingStartedAt === null) {
-        setThinkingStartedAt(Date.now());
-        setElapsedMs(0);
-      }
+      if (thinkingStartedAt === null) setThinkingStartedAt(Date.now());
     } else if (thinkingStartedAt !== null) {
       setThinkingStartedAt(null);
-      setElapsedMs(0);
       setInterruptedAt(null);
     }
   }, [isThinking, thinkingStartedAt]);
-
-  useEffect(() => {
-    if (thinkingStartedAt === null) return;
-    const tick = () => setElapsedMs(Date.now() - thinkingStartedAt);
-    tick();
-    const id = setInterval(tick, 200);
-    return () => clearInterval(id);
-  }, [thinkingStartedAt]);
 
   const markInterrupted = useCallback(() => {
     if (isThinking) setInterruptedAt(Date.now());
@@ -55,7 +42,7 @@ export function useThinkingIndicatorState({
 
   return {
     activity,
-    elapsedMs,
+    thinkingStartedAt,
     interruptedAt,
     lastEnvelopeAt,
     markInterrupted,

@@ -98,7 +98,7 @@ export function ChatSurface({
   const {
     isThinking,
     activity,
-    elapsedMs,
+    thinkingStartedAt,
     interruptedAt,
     lastEnvelopeAt,
     markInterrupted,
@@ -163,7 +163,7 @@ export function ChatSurface({
         thinkingIndicator={
           isThinking ? (
             <ThinkingIndicator
-              elapsedMs={elapsedMs}
+              thinkingStartedAt={thinkingStartedAt}
               interruptedAt={interruptedAt}
               activity={activity}
               lastEnvelopeAt={lastEnvelopeAt}

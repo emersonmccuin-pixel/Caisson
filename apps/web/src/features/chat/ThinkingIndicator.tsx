@@ -12,13 +12,13 @@ export function formatElapsed(ms: number): string {
 }
 
 export function ThinkingIndicator({
-  elapsedMs,
+  thinkingStartedAt,
   interruptedAt,
   activity,
   lastEnvelopeAt,
   wsStatus,
 }: {
-  elapsedMs: number;
+  thinkingStartedAt: number | null;
   interruptedAt: number | null;
   activity: string | null;
   lastEnvelopeAt: number;
@@ -79,6 +79,7 @@ export function ThinkingIndicator({
   const stuck = interrupting && sinceInterrupt > 5_000;
   const stalled = !interrupting && sinceEnvelope > STALL_WARN_MS;
   const showAgo = !interrupting && sinceEnvelope > 4_000;
+  const elapsedMs = thinkingStartedAt === null ? 0 : Date.now() - thinkingStartedAt;
   return (
     <div
       className={

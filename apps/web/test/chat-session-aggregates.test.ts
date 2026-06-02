@@ -230,6 +230,21 @@ test('no double-count on re-delivery; replay is idempotent', () => {
   assert.deepEqual(once.aggregates, twice.aggregates);
 });
 
+test('batched envelopes produce the same projection as sequential envelopes', () => {
+  const envs = [
+    rawEnv(),
+    rawEnv(),
+    usageEnv({ inputTokens: 3, outputTokens: 1, model: 'm1' }, 101),
+    rawEnv(),
+  ];
+  const start = createChatSessionState(PROJECT);
+  const sequential = envs.reduce((s, env) => dispatch(s, env), start);
+  const batched = chatSessionReducer(start, { type: 'envelopes', envs });
+
+  assert.deepEqual(materializeChatSessionEvents(batched), materializeChatSessionEvents(sequential));
+  assert.deepEqual(batched.aggregates, sequential.aggregates);
+});
+
 test('snapshot re-seeds aggregates from the replay set', () => {
   // Live state with prior usage that the snapshot does NOT carry forward.
   let state = createChatSessionState(PROJECT);

@@ -52,6 +52,7 @@ import {
 } from '@/features/live/hooks';
 
 const INBOUND_DIAGNOSTICS_MIN_INTERVAL_MS = 250;
+const RAW_FRAME_BATCH_MS = 50;
 
 interface UseProjectWsResult {
   events: WsEnvelope[];
@@ -158,6 +159,34 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
     // can judge socket freshness across reconnects, not just within one socket.
     let lastInboundAt = Date.now();
     let lastDiagnosticsPublishedAt = 0;
+    let rawFrameBatch: WsEnvelope[] = [];
+    let rawFrameFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function flushRawFrames(): void {
+      if (rawFrameFlushTimer !== null) {
+        clearTimeout(rawFrameFlushTimer);
+        rawFrameFlushTimer = null;
+      }
+      if (rawFrameBatch.length === 0) return;
+      const envs = rawFrameBatch;
+      rawFrameBatch = [];
+      if (cancelled) return;
+      dispatchSession({ type: 'envelopes', envs });
+    }
+
+    function dispatchRuntimeEnvelope(env: WsEnvelope): void {
+      if (env.type !== 'raw') {
+        flushRawFrames();
+        dispatchSession({ type: 'envelope', env });
+        return;
+      }
+      rawFrameBatch.push(env);
+      if (rawFrameFlushTimer !== null) return;
+      rawFrameFlushTimer = setTimeout(() => {
+        rawFrameFlushTimer = null;
+        flushRawFrames();
+      }, RAW_FRAME_BATCH_MS);
+    }
 
     function connect(): void {
       if (cancelled) return;
@@ -336,10 +365,11 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
           if (transition === 'new-session') {
             seenTsRef.current.clear();
           }
-          dispatchSession({ type: 'envelope', env: final });
+          dispatchRuntimeEnvelope(final);
           return;
         }
         if (final.type === 'session-replay') {
+          flushRawFrames();
           const replay = replayEventsFromEnvelope(final, pid);
           const seenTs = seenTsRef.current;
           seenTs.clear();
@@ -350,7 +380,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
           dispatchSession({ type: 'envelope', env: final });
           return;
         }
-        dispatchSession({ type: 'envelope', env: final });
+        dispatchRuntimeEnvelope(final);
       });
     }
 
@@ -406,6 +436,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
         clearInterval(activeHeartbeatTimer);
         activeHeartbeatTimer = null;
       }
+      flushRawFrames();
       const ws = wsRef.current;
       wsRef.current = null;
       if (ws) {
