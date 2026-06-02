@@ -586,6 +586,10 @@ export class AgentHostService extends EventEmitter {
       settingSources: request.settingSources,
       pluginDirs: request.pluginDirs,
       transcriptPath: request.transcriptPath,
+      // Server-authoritative path (computed with the server's normalized env).
+      // Thread it straight through instead of letting AgentRun/low-level-spawn
+      // recompute from the host's own env — the recompute is the divergence bug.
+      jsonlPath: request.jsonlPath,
       spawnStuckMs: request.timeouts?.spawnStuckMs,
       idleMs: request.timeouts?.idleMs,
       wallClockMs: request.timeouts?.wallClockMs,

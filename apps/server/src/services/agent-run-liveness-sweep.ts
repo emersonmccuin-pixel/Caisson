@@ -28,7 +28,10 @@ import { jsonlPathFor } from '@pc/runtime';
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
 import { computeIdleMs, resolveIdleTimeoutMs } from './agent-run-idle.ts';
-import { applyAgentRunTerminalEffects } from './agent-run-terminal-effects.ts';
+import {
+  applyAgentRunTerminalEffects,
+  replayMissingTerminalEnvelopes,
+} from './agent-run-terminal-effects.ts';
 import { isProcessAlive as defaultIsProcessAlive, killProcessTree as defaultKill } from './process-control.ts';
 
 export interface LivenessSweepDeps {
@@ -46,6 +49,10 @@ export interface LivenessSweepDeps {
   killProcess?: (pid: number) => void;
   /** Test seam — defaults to the real terminal-effects pipeline. */
   applyTerminalEffects?: typeof applyAgentRunTerminalEffects;
+  /** S3 — replay the orchestrator envelope for any recently-terminal run whose
+   *  notify tail threw before enqueuing it. Test seam; defaults to the real
+   *  idempotent replay. */
+  replayEnvelopes?: typeof replayMissingTerminalEnvelopes;
 }
 
 export interface LivenessSweepResult {
@@ -98,6 +105,16 @@ export function sweepAgentRunLiveness(deps: LivenessSweepDeps = {}): LivenessSwe
       finalize(row, 'idle-timeout', now, deps);
       failedIdle += 1;
     }
+  }
+
+  // S3 — re-emit any terminal run's orchestrator envelope that the fire-and-
+  // forget notify tail dropped. Idempotent on `agent:${runId}:${kind}`; runs
+  // every tick. Detached: it must not block (or fail) the liveness sweep.
+  if (deps.mailboxEnqueue) {
+    void (deps.replayEnvelopes ?? replayMissingTerminalEnvelopes)({
+      mailboxEnqueue: deps.mailboxEnqueue,
+      now: deps.now,
+    }).catch(() => {});
   }
 
   return { checked: rows.length, failedDead, failedIdle, killed };

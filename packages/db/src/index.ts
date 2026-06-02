@@ -293,6 +293,7 @@ export {
   listAgentRunsForSession,
   listAndReconcileOrphanedRuns,
   listNonTerminalAgentRuns,
+  listRecentTerminalAgentRuns,
   markAgentRunTerminal,
   reconcileOrphanedRunningRuns,
   setAgentRunContractId,

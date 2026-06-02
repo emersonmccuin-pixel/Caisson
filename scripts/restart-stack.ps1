@@ -110,6 +110,18 @@ if (-not $SkipKill) {
 
 if ($NoLaunch) { Write-Host "`n-NoLaunch set; not relaunching."; return }
 
+# Safety net for the host/server CLAUDE_CONFIG_DIR split: if this shell was
+# launched by a Claude Code session, CLAUDE_CONFIG_DIR points at .claude-work.
+# The server normalizes it away but the out-of-process agent host does NOT, so
+# the host would tail the wrong transcript folder and every run false-fails
+# idle-timeout. Clear it before launch so host + server + spawned agents all
+# resolve to the default ~/.claude. (Belt-and-suspenders with the authoritative
+# jsonlPath sent in the start-run request, which also covers the workflow path.)
+if ($env:CLAUDE_CONFIG_DIR) {
+  Write-Host "`n== Clearing inherited CLAUDE_CONFIG_DIR ($env:CLAUDE_CONFIG_DIR) for the stack =="
+  Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
+}
+
 Write-Host "`n== Relaunching pnpm dev:app (detached; logs -> $logFile) =="
 Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', 'pnpm dev:app' `
   -WorkingDirectory $repo -WindowStyle Hidden `

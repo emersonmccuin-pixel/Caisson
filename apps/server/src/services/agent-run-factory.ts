@@ -57,6 +57,7 @@ import type { AgentRunChangedReason } from '@pc/contracts';
 import {
   AgentRun,
   AgentRunRegistry,
+  jsonlPathFor,
   type AgentHostCommandResponse,
   type AgentHostEvent,
   type AgentHostResumeRunRequest,
@@ -813,6 +814,11 @@ function buildHostStartRunRequest(args: ConstructAndStartArgs): AgentHostStartRu
     settingSources: args.podPrep.settingSources,
     pluginDirs: [args.podPrep.pluginDir],
     transcriptPath: transcriptPathFor(args),
+    // Authoritative JSONL path computed with the SERVER's normalized env (the
+    // same CLAUDE_CONFIG_DIR the spawned agent inherits via buildAgentEnv). The
+    // host must NOT recompute this from its own env, or the two can diverge and
+    // the host tails a folder the agent never writes to → false idle-timeout.
+    jsonlPath: jsonlPathFor(args.input.worktreeDir, args.ccSessionId),
   };
 }
 

@@ -8,7 +8,7 @@
 // Continuation lineage via `continues` self-FK. `findActiveContinuation`
 // guards `pc_continue_agent` against double-continuation of the same parent.
 
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 
 import type {
   AgentRunFailureCause,
@@ -214,6 +214,23 @@ export function listNonTerminalAgentRuns(): AgentRunRow[] {
     .from(agentRuns)
     .where(inArray(agentRuns.status, ['queued', 'spawning', 'running', 'paused']))
     .orderBy(desc(agentRuns.queuedAt))
+    .all();
+}
+
+/** S3 envelope-replay feeder. Lists terminal rows that finalized at/after
+ *  `since` across projects (bounds the replay scan to a recent window so it's
+ *  not a full-table sweep). Newest first. */
+export function listRecentTerminalAgentRuns(since: number): AgentRunRow[] {
+  return getDb()
+    .select()
+    .from(agentRuns)
+    .where(
+      and(
+        inArray(agentRuns.status, ['completed', 'failed', 'cancelled']),
+        gte(agentRuns.completedAt, since),
+      ),
+    )
+    .orderBy(desc(agentRuns.completedAt))
     .all();
 }
 

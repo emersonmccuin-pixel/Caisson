@@ -125,7 +125,7 @@ test('reconnect-on-new-port: sendCommand re-discovers + retries once (T1-A)', as
   conn.close();
 });
 
-test('host-id-change: re-hello + /events resubscribe carries lastSeq + refreshRuns', async () => {
+test('host-id-change: re-hello + /events resubscribe RESETS lastSeq to 0 (new host restarts seq) + refreshRuns', async () => {
   let port = 6001;
   let hostId = 'hA';
   const live = () => `http://127.0.0.1:${port}`;
@@ -155,10 +155,16 @@ test('host-id-change: re-hello + /events resubscribe carries lastSeq + refreshRu
   // (the inner against 6001 is dead since liveBase moved to 6002).
   await conn.sendCommand({ type: 'list-runs' });
   assert.equal(conn.currentIdentity()?.hostId, 'hB');
-  // an /events request to the new host carried the tracked lastSeq (7)
+  // S2: a respawned host is a fresh process — its seq counter restarts at 0.
+  // Carrying the old watermark (7) would make /events?after=7 return nothing and
+  // drop every live frame, so on host-id change we reset lastSeq to 0.
   assert.ok(
-    rec.urls.some((u) => u.startsWith('http://127.0.0.1:6002') && u.includes('/events?after=7')),
-    `expected /events?after=7 on new host; saw ${JSON.stringify(rec.urls)}`,
+    rec.urls.some((u) => u.startsWith('http://127.0.0.1:6002') && u.includes('/events?after=0')),
+    `expected /events?after=0 on new host (reset); saw ${JSON.stringify(rec.urls)}`,
+  );
+  assert.ok(
+    !rec.urls.some((u) => u.startsWith('http://127.0.0.1:6002') && u.includes('/events?after=7')),
+    `new host must NOT receive the stale watermark; saw ${JSON.stringify(rec.urls)}`,
   );
   conn.close();
 });

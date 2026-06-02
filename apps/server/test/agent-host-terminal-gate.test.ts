@@ -17,7 +17,7 @@ const { ContractService } = await import('@pc/app-services');
 const { applyHostTerminalSnapshot, reconcileAgentRunsAgainstHost } = await import(
   '../src/services/agent-host-reattach.ts'
 );
-const { applyAgentRunTerminalEffects } = await import(
+const { applyAgentRunTerminalEffects, replayMissingTerminalEnvelopes } = await import(
   '../src/services/agent-run-terminal-effects.ts'
 );
 const { reattachAgentRunsDuringServerBoot } = await import(
@@ -160,6 +160,10 @@ test('reconcile-sweep: a host terminal enqueues ONE mailbox turn', async () => {
     mailboxEnqueue: mb.port,
     broadcast: () => {},
     terminalCleanup: () => {},
+    // The fake mailbox port never persists a row, so the S3 envelope-replay's
+    // idempotency probe can't see this just-emitted envelope and would re-emit
+    // it. Stub it off — replay is covered by its own test.
+    replayEnvelopes: () => Promise.resolve({ scanned: 0, replayed: 0 }),
   });
   assert.equal(res.terminalApplied, 1);
   await new Promise((r) => setTimeout(r, 150));
@@ -181,6 +185,8 @@ test('liveness-sweep finalize: a swept failure routes to the mailbox', async () 
     // Process is gone => unexpected-exit, finalize immediately.
     isProcessAlive: () => false,
     killProcess: () => {},
+    // Fake mailbox port doesn't persist; stub the S3 replay (own test below).
+    replayEnvelopes: () => Promise.resolve({ scanned: 0, replayed: 0 }),
   });
   assert.equal(res.failedDead, 1);
   await new Promise((r) => setTimeout(r, 150));
@@ -255,4 +261,55 @@ test('completed contract dispatch with empty result surfaces the submitted deliv
   const body = (mb.calls[0]!.message as { body: string }).body;
   assert.ok(body.includes('DONE'), 'surfaces the submitted deliverable');
   assert.ok(!body.includes('(no output)'), 'must not read (no output) when a deliverable exists');
+});
+
+// S3 — a terminal run whose notify tail threw (no orchestrator envelope ever
+// enqueued) is recovered by the replay pass: exactly ONE envelope, and a second
+// pass is a no-op once the idempotency key exists.
+test('S3 replay re-emits a missing terminal envelope exactly once', async () => {
+  const { runId, projectId } = seedRun(`htg-replay-${Date.now()}`);
+  void projectId;
+  // Simulate "tail threw": flip the row terminal directly, never enqueue.
+  applyAgentRunTerminalEffects(
+    {
+      runId,
+      ccSessionId: 'cc-1',
+      podName: 'builder',
+      projectId,
+      dispatcherSessionId: 'disp-1',
+      parentWorkItemId: null,
+      worktreeDir: join(tmpDir, 'wt'),
+      status: 'completed',
+      result: 'done',
+    },
+    { broadcast: () => {} }, // NO mailboxEnqueue → no envelope ever written
+  );
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(getAgentRunRow(runId)!.status, 'completed');
+
+  const seen = new Set<string>();
+  const port = (input: EnqueueMailboxMessageInput) => {
+    seen.add(input.message.idempotencyKey);
+    return {};
+  };
+  // Scope the scan to THIS run only (the shared test DB carries other tests'
+  // terminal rows). hasMailboxKey reflects the (now real-ish) enqueue ledger.
+  const onlyThisRun = () => [getAgentRunRow(runId)!];
+
+  // First pass: the key is absent → emit once.
+  const r1 = await replayMissingTerminalEnvelopes({
+    mailboxEnqueue: port,
+    listRecentTerminalRuns: onlyThisRun,
+    hasMailboxKey: (key) => seen.has(key),
+  });
+  assert.equal(r1.replayed, 1, 'first replay emits the missing envelope');
+  assert.ok(seen.has(`agent:${runId}:agent-completed`));
+
+  // Second pass: the key now exists → no-op (exactly-once).
+  const r2 = await replayMissingTerminalEnvelopes({
+    mailboxEnqueue: port,
+    listRecentTerminalRuns: onlyThisRun,
+    hasMailboxKey: (key) => seen.has(key),
+  });
+  assert.equal(r2.replayed, 0, 'second replay is a no-op once the key exists');
 });

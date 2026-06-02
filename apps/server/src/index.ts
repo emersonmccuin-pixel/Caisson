@@ -425,22 +425,34 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
 // emitter (truly one stream). `mode === 'host'` is the host-mode discriminator.
 {
   try {
-    await hostConnection.refreshRuns().catch(() => {});
-    const result = await reattachAgentRunsDuringServerBoot({
-      getHostClient: () => hostConnection,
-      broadcast: broadcastTo,
-      mailboxEnqueue: enqueueMailboxAndFanout,
+    // S1 — refreshRuns() on an unreachable host returns an EMPTY cache (the
+    // throw is swallowed inside ensureConnected), so a boot reattach against
+    // that empty list would mark every live run host-lost. Only reconcile when
+    // the host was actually reached this boot; otherwise stay host-mode and let
+    // the continuous sweep (which has the hostAuthoritativelyAbsent +
+    // consecutive-tick guard) converge safely.
+    let refreshOk = true;
+    await hostConnection.refreshRuns().catch(() => {
+      refreshOk = false;
     });
-    if (result.mode === 'host') {
+    const hostReached = refreshOk && hostConnection.isConnected();
+    const result = hostReached
+      ? await reattachAgentRunsDuringServerBoot({
+          getHostClient: () => hostConnection,
+          broadcast: broadcastTo,
+          mailboxEnqueue: enqueueMailboxAndFanout,
+        })
+      : null;
+    if (!result) {
+      // Host expected but not reachable this boot — skip the destructive
+      // reconcile. The sweep converges once the host comes back; dispatch
+      // self-heals on reconnect. The UI surfaces it via the host-health banner.
       hostMode = true;
-      // T2.3-B — the old silent degrade made a boot with no reachable host
-      // invisible. The connection self-heals (no dispatch change), but log it so
-      // the degrade is observable; the UI surfaces it via the host-health banner.
-      if (!hostConnection.isConnected()) {
-        console.warn(
-          '[agent-host] boot: host expected but not reachable; dispatch will retry on reconnect',
-        );
-      }
+      console.warn(
+        '[agent-host] boot: host not reachable; skipped boot reconcile (sweep will converge), dispatch will retry on reconnect',
+      );
+    } else if (result.mode === 'host') {
+      hostMode = true;
       const reattach = result.reattach;
       const changed =
         reattach.reconcile.reconciled +

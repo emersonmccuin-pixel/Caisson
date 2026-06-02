@@ -138,7 +138,12 @@ function streamEvents(
     writeEvent(event);
   }
   service.on('event', writeEvent);
+  // S4 — periodic bare-newline keepalive so an idle stream stays warm and a dead
+  // socket surfaces (clients skip empty lines, so it's a safe no-op frame).
+  const keepalive = setInterval(() => res.write('\n'), 15_000);
+  keepalive.unref?.();
   req.on('close', () => {
+    clearInterval(keepalive);
     service.off('event', writeEvent);
   });
 }

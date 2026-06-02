@@ -33,6 +33,7 @@ import {
 } from './agent-run-boot-reconcile.ts';
 import {
   applyAgentRunTerminalEffects,
+  replayMissingTerminalEnvelopes,
 } from './agent-run-terminal-effects.ts';
 import { announceAgentRunChange as defaultAnnounceAgentRunChange } from './agent-run-writer.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
@@ -93,6 +94,10 @@ export interface AgentHostReattachDeps {
    *  real full-effects helper so the `failed` live-event + orchestrator notify
    *  fire through the gateway/outbox door (never a direct broadcast). */
   applyTerminalEffects?: typeof applyAgentRunTerminalEffects;
+  /** S3 — replay the orchestrator envelope for any recently-terminal run whose
+   *  notify tail threw before enqueuing it. Test seam; defaults to the real
+   *  idempotent replay. */
+  replayEnvelopes?: typeof replayMissingTerminalEnvelopes;
 }
 
 export interface AgentHostReattachResult {
@@ -262,6 +267,17 @@ export function reconcileAgentRunsAgainstHost(
       if (h instanceof HostBackedActiveRunHandle) h.applySnapshot(hostRun);
       statusUpdated += 1;
     }
+  }
+
+  // S3 — re-emit any terminal run's orchestrator envelope that the fire-and-
+  // forget notify tail dropped. Idempotent on `agent:${runId}:${kind}`; runs
+  // every reconcile tick. Detached: must not block (or fail) the reconcile.
+  if (deps.mailboxEnqueue) {
+    void (deps.replayEnvelopes ?? replayMissingTerminalEnvelopes)({
+      mailboxEnqueue: deps.mailboxEnqueue,
+      now: deps.now,
+      onError: deps.onTerminalError,
+    }).catch(() => {});
   }
 
   return { checked: rows.length, terminalApplied, statusUpdated, hostLost };

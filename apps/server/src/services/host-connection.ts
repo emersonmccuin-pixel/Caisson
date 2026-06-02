@@ -104,6 +104,7 @@ class HostConnectionImpl implements HostConnection {
 
   private heartbeat: NodeJS.Timeout | null = null;
   private heartbeatBackoff: number;
+  private streamRestart: NodeJS.Timeout | null = null;
 
   constructor(options: CreateHostConnectionOptions) {
     this.dataDir = options.dataDir ?? getDataDir();
@@ -198,6 +199,8 @@ class HostConnectionImpl implements HostConnection {
     this.closed = true;
     if (this.heartbeat) clearTimeout(this.heartbeat);
     this.heartbeat = null;
+    if (this.streamRestart) clearTimeout(this.streamRestart);
+    this.streamRestart = null;
     this.teardownInner();
     this.eventListeners.clear();
     this.healthListeners.clear();
@@ -244,6 +247,8 @@ class HostConnectionImpl implements HostConnection {
     // Same host-id and an existing client → just swap baseUrl is impossible
     // (baseUrl is frozen in HttpAgentHostClient), so always rebuild against the
     // discovered endpoint. The persistent emitter survives the swap.
+    // S2 — capture the prior host id BEFORE teardownInner() nulls innerHostId.
+    const prevHostId = this.innerHostId;
     this.teardownInner();
     const client = new HttpAgentHostClient(endpoint, {
       ...(this.requestTimeoutMs !== undefined ? { requestTimeoutMs: this.requestTimeoutMs } : {}),
@@ -253,10 +258,34 @@ class HostConnectionImpl implements HostConnection {
 
     try {
       const identity = await client.hello();
+      // S2 — a respawned host is a fresh process whose seq restarts at 0; seeding
+      // the new client with the old high watermark would make /events?after= skip
+      // every live frame. Reset on host-id change; preserve it for a same-host reconnect.
+      if (prevHostId !== null && prevHostId !== endpoint.lock.hostId) this.lastSeq = 0;
       // Seed the new inner stream from the connection's tracked lastSeq so the
       // /events?after= resubscribe avoids replaying the whole backlog.
       seedLastSeq(client, this.lastSeq);
-      this.innerUnsub = client.onEvent((e) => this.onInnerEvent(e));
+      const offEvent = client.onEvent((e) => this.onInnerEvent(e));
+      // S4 — the inner /events stream can die while the host stays up on the same
+      // port (sendCommand still succeeds, so nothing else restarts it). On its
+      // protocol-error, debounce-reopen the SAME client's stream (not a full
+      // reconnect) from its tracked lastSeq. Guard against a stale/torn client.
+      const onErr = (err: Error) => {
+        this.onProtocolError?.(err);
+        if (this.closed || client !== this.inner) return;
+        if (this.streamRestart) return;
+        this.streamRestart = setTimeout(() => {
+          this.streamRestart = null;
+          if (this.closed || client !== this.inner) return;
+          client.startEventStream();
+        }, 500);
+        this.streamRestart.unref?.();
+      };
+      client.on('protocol-error', onErr);
+      this.innerUnsub = () => {
+        offEvent();
+        client.off('protocol-error', onErr);
+      };
       client.startEventStream();
       const runs = await client.refreshRuns();
       this.lastRuns = runs;
@@ -276,6 +305,8 @@ class HostConnectionImpl implements HostConnection {
   }
 
   private teardownInner(): void {
+    if (this.streamRestart) clearTimeout(this.streamRestart);
+    this.streamRestart = null;
     this.innerUnsub?.();
     this.innerUnsub = null;
     this.inner?.close();

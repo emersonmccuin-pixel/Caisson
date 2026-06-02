@@ -57,6 +57,13 @@ export interface AgentHostStartRunRequest {
   settingSources?: string;
   pluginDirs?: readonly string[];
   transcriptPath?: string;
+  /** Server-authoritative CC JSONL path. The server computes this with ITS
+   *  normalized CLAUDE_CONFIG_DIR (the same env the spawned agent inherits) and
+   *  the host threads it straight through to the AgentRun instead of recomputing
+   *  it from its own (possibly divergent) env. Without this the host can tail a
+   *  different folder than the agent writes to and never sees turn-end → the run
+   *  false-fails idle-timeout at exactly readyAt+idleMs. */
+  jsonlPath?: string;
   timeouts?: {
     spawnStuckMs?: number;
     idleMs?: number;

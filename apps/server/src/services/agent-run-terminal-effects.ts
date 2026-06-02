@@ -9,8 +9,10 @@ import {
 } from '@pc/domain';
 import {
   getAgentRunRow as defaultGetAgentRunRow,
+  getMailboxMessageByIdempotencyKey as defaultGetMailboxMessageByIdempotencyKey,
   getProjectById as defaultGetProjectById,
   hasPendingAskForRun,
+  listRecentTerminalAgentRuns as defaultListRecentTerminalAgentRuns,
   type MarkAgentRunTerminalInput,
 } from '@pc/db';
 import { AgentRunJsonlTailer, jsonlPathFor, type AgentRunJsonlEvent } from '@pc/runtime';
@@ -394,6 +396,125 @@ function emitTerminalEnvelope(args: EmitTerminalArgs): void {
     },
     { mailboxEnqueue: args.mailboxEnqueue },
   );
+}
+
+// ─────────────────────────── S3 envelope replay ──────────────────────────────
+
+export interface ReplayMissingEnvelopesDeps {
+  mailboxEnqueue?: MailboxEnqueuePort | null;
+  /** Recent-terminal feeder. Defaults to the @pc/db window query. */
+  listRecentTerminalRuns?: (since: number) => AgentRunRow[];
+  /** Idempotency-key probe. Defaults to the @pc/db mailbox read. */
+  hasMailboxKey?: (key: string) => boolean;
+  /** Read door for the producing contract's STORED verification state. Replay
+   *  never RE-RUNS verification (that has side effects — accept/advance); it
+   *  reads what the contract already carries. Defaults to ContractService. */
+  contractService?: ContractService;
+  /** How far back to scan. Default 6h — comfortably past any tail-throw window
+   *  without growing into a full-table sweep. */
+  windowMs?: number;
+  now?: () => number;
+  onError?: (error: Error) => void;
+}
+
+export interface ReplayMissingEnvelopesResult {
+  scanned: number;
+  replayed: number;
+}
+
+/**
+ * S3 safety net — guarantees the orchestrator is eventually notified of a
+ * terminal run EXACTLY ONCE even when the detached notify tail
+ * (`finishTerminalEffects`) threw before enqueuing the agent-completed/failed
+ * envelope (verification crash, mailbox write error). The terminal row + UI fact
+ * commit synchronously and durably; only the orchestrator envelope rode the
+ * fire-and-forget tail. This pass re-derives that envelope from the durable row.
+ *
+ * Separate from `applyAgentRunTerminalEffects` ON PURPOSE: that function
+ * short-circuits on already-terminal rows (`:89`), which would block replay.
+ * This is reachable for terminal rows.
+ *
+ * EXACTLY-ONCE: the mailbox enqueue is idempotent on `agent:${runId}:${kind}`.
+ * We probe for that key first and only emit when absent — and even a lost race
+ * (two passes emit at once) collapses to one row at the repo's idempotency
+ * guard. A successfully-notified run is skipped on every subsequent pass.
+ */
+export async function replayMissingTerminalEnvelopes(
+  deps: ReplayMissingEnvelopesDeps = {},
+): Promise<ReplayMissingEnvelopesResult> {
+  const enqueue = deps.mailboxEnqueue;
+  if (!enqueue) return { scanned: 0, replayed: 0 };
+
+  const now = (deps.now ?? Date.now)();
+  const windowMs = deps.windowMs ?? 6 * 60 * 60 * 1000;
+  const rows = (deps.listRecentTerminalRuns ?? defaultListRecentTerminalAgentRuns)(now - windowMs);
+  const hasKey =
+    deps.hasMailboxKey ??
+    ((key) => defaultGetMailboxMessageByIdempotencyKey(key) !== null);
+
+  let replayed = 0;
+  for (const row of rows) {
+    const status = row.status as TerminalStatus;
+    const kind: AgentInboxEventKind =
+      status === 'completed' ? 'agent-completed' : 'agent-failed';
+    if (hasKey(`agent:${row.id}:${kind}`)) continue;
+
+    const project = safeGetProject(row.projectId);
+    const slug = project?.slug ?? null;
+    if (!slug) continue; // no recipient address derivable — leave for next pass
+
+    // Enrichment from the contract's STORED verification (no re-verify — that
+    // accepts/advances and would double-apply). A base envelope still notifies.
+    const verification = storedVerificationFor(row, deps);
+
+    try {
+      emitTerminalEnvelope({
+        mailboxEnqueue: enqueue,
+        projectId: row.projectId,
+        dispatcherSessionId: row.dispatcherSessionId,
+        slug,
+        runId: row.id,
+        ccSessionId: row.ccSessionId,
+        podName: row.podName,
+        parentWorkItemId: row.parentWorkItemId,
+        terminalStatus: status,
+        result: row.result ?? '',
+        failureCause: row.failureCause,
+        verification,
+      });
+      replayed += 1;
+    } catch (err) {
+      deps.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
+  return { scanned: rows.length, replayed };
+}
+
+/** Read the producing contract's STORED verification state for the replay
+ *  envelope. Never re-runs the verifier (which accepts/advances — side effects
+ *  that would double-apply). Returns null when there's no contract or no stored
+ *  status yet; the base envelope still notifies. */
+function storedVerificationFor(
+  row: AgentRunRow,
+  deps: ReplayMissingEnvelopesDeps,
+): VerificationBlock | null {
+  const contractId = row.contractId ?? null;
+  if (!contractId) return null;
+  try {
+    const service = deps.contractService ?? new ContractService();
+    const contract = service.get(contractId);
+    if (!contract || !contract.verificationStatus || !contract.verificationTier) return null;
+    return {
+      contractId,
+      workItemId: contract.workItemId,
+      status: contract.verificationStatus,
+      tier: contract.verificationTier,
+      notes: contract.verificationNotes,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function terminalFailureCause(
