@@ -126,6 +126,11 @@ export interface DispatchFreshAgentInput {
    *  on the spawn env. Caller (orchestrator) creates the work item via
    *  `pc_create_agent_work_item`, then passes the returned ULID here. */
   workItemId?: ULID | null;
+  /** Slice 019 (contract-first) — the dispatch's own v2 expected-output spec,
+   *  authored directly onto the contract (wins over a linked WI's legacy
+   *  columns). Optional: legacy WI-sourced dispatches omit it and the contract
+   *  falls back to the WI's columns. */
+  expectedOutput?: Parameters<ContractService['create']>[0]['expectedOutput'];
   /** Caller's nesting depth + 1. The orchestrator dispatches at depth 1; an
    *  agent dispatched by that one runs at depth 2. */
   invokeDepth: number;
@@ -395,6 +400,7 @@ export async function dispatchFreshAgent(
     agentRunId,
     podName: input.agentName,
     contractService: deps.contractService,
+    expectedOutput: input.expectedOutput,
   });
 
   const started = await startDispatchedRun({
@@ -1177,43 +1183,72 @@ function defaultScratchDirFor(projectId: ULID, agentRunId: ULID): string {
  *  Then point the contract at the run (`dispatched`) AND stamp
  *  `agent_runs.contract_id`. Best-effort: never blocks the dispatch — a failure
  *  here leaves the legacy WI path (verification) untouched. */
-function resolveContractForDispatch(args: {
-  projectId: ULID;
-  workItemId: ULID | null;
-  agentRunId: ULID;
-  podName: string;
-  contractService?: ContractService;
-}): ULID | null {
-  if (!args.workItemId) return null;
+/** Deps seam (ESM named exports can't be redefined by node:test) — tests inject
+ *  fakes; production defaults to the real repo functions. */
+export interface ResolveContractForDispatchDeps {
+  getWorkItem?: typeof getWorkItem;
+  listContractsForWorkItem?: typeof listContractsForWorkItem;
+  setAgentRunContractId?: typeof setAgentRunContractId;
+}
+
+/** Slice 019 (contract-first) — resolve the dispatch's contract. ALWAYS returns
+ *  a contract: it reuses an open contract on the attached work item when one
+ *  exists, else creates a fresh one — with or without a work item. (The old
+ *  `!workItemId → null` gate, which made "no WI ⇒ no contract", is gone: the
+ *  contract is the spine now.) An explicit v2 `expectedOutput`/AC wins over the
+ *  linked WI's legacy columns (the WI fallback survives until dispatch authors
+ *  v2 specs everywhere — 021/023). */
+export function resolveContractForDispatch(
+  args: {
+    projectId: ULID;
+    workItemId: ULID | null;
+    agentRunId: ULID;
+    podName: string;
+    contractService?: ContractService;
+    expectedOutput?: Parameters<ContractService['create']>[0]['expectedOutput'];
+    acceptanceCriteria?: Parameters<ContractService['create']>[0]['acceptanceCriteria'];
+    verificationTier?: Parameters<ContractService['create']>[0]['verificationTier'];
+    worktreePath?: string | null;
+  },
+  deps: ResolveContractForDispatchDeps = {},
+): ULID | null {
   const service = args.contractService ?? new ContractService();
+  const getWi = deps.getWorkItem ?? getWorkItem;
+  const listForWi = deps.listContractsForWorkItem ?? listContractsForWorkItem;
+  const setRunContract = deps.setAgentRunContractId ?? setAgentRunContractId;
   try {
     let contractId: ULID | null = null;
-    const existing = listContractsForWorkItem(args.workItemId);
-    if (existing.length > 0) {
-      // Prefer an un-dispatched contract; else the most recently created.
-      const open = existing.find((c) => c.agentRunId === null);
-      contractId = (open ?? existing[existing.length - 1]!).id;
-    } else {
-      const wi = getWorkItem(args.workItemId);
+    // Reuse an existing contract ONLY when this dispatch is attached to a WI.
+    if (args.workItemId) {
+      const existing = listForWi(args.workItemId);
+      if (existing.length > 0) {
+        // Prefer an un-dispatched contract; else the most recently created.
+        const open = existing.find((c) => c.agentRunId === null);
+        contractId = (open ?? existing[existing.length - 1]!).id;
+      }
+    }
+    if (!contractId) {
+      // Contract-first: create a contract whether or not a WI is attached.
+      // Explicit spec wins; else fall back to the linked WI's legacy columns.
+      const wi = args.workItemId ? getWi(args.workItemId) : null;
       const created = service.create({
         projectId: args.projectId,
         workItemId: args.workItemId,
         podName: args.podName,
-        // v1 JSON stored opaquely on the v2-typed columns this slice.
-        expectedOutput: (wi?.expectedOutput ?? null) as Parameters<
+        expectedOutput: (args.expectedOutput ?? wi?.expectedOutput ?? null) as Parameters<
           ContractService['create']
         >[0]['expectedOutput'],
-        acceptanceCriteria: (wi?.acceptanceCriteria ?? null) as Parameters<
+        acceptanceCriteria: (args.acceptanceCriteria ?? wi?.acceptanceCriteria ?? null) as Parameters<
           ContractService['create']
         >[0]['acceptanceCriteria'],
-        verificationTier: wi?.verificationTier ?? null,
-        worktreePath: wi?.worktreePath ?? null,
+        verificationTier: args.verificationTier ?? wi?.verificationTier ?? null,
+        worktreePath: args.worktreePath ?? wi?.worktreePath ?? null,
       });
       contractId = created.id as ULID;
     }
     if (contractId) {
       service.setRun(contractId, args.agentRunId);
-      setAgentRunContractId(args.agentRunId, contractId);
+      setRunContract(args.agentRunId, contractId);
     }
     return contractId;
   } catch (err) {
