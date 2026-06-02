@@ -33,7 +33,6 @@ export const WORKFLOW_NODE_KINDS = [
   'bash',
   'script',
   'review',
-  'move-work-item',
 ] as const;
 export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
 
@@ -125,6 +124,9 @@ export interface RejectEdge {
   /** Values wired into the back_to node's next run. e.g.
    *  `{ feedback: '$self.output.notes' }`. `$self` = this review node. */
   carry?: Record<string, string>;
+  /** Card move applied on kick-back (locked decision 1) — e.g. move the card
+   *  back to the build stage when a QA gate rejects. Omit = card stays put. */
+  move?: string;
 }
 
 /** Fields common to every node. */
@@ -144,6 +146,12 @@ export interface WorkflowNodeBase {
    *  ceiling (no JSONL activity). Default idle 5 min / wall-clock 2 h for agent
    *  nodes; applied by the executor, not stored when unset. */
   timeout?: number;
+  /** Workflow-engine redesign (locked decision 1) — card move as a TRANSITION
+   *  EFFECT, not a node. After this step settles `completed`, the run-root card
+   *  moves to this stage id (without firing that stage's on-entry workflows, so a
+   *  workflow can advance its own card loop-safely). Omit = card stays put.
+   *  Replaces the separate `move-work-item` node. */
+  move?: string;
   /** Visualizer-layer position override. Persisted so user drags survive a
    *  reload and the agent-author can read positions between turns
    *  (sync-model-A, Section 19 lock 8). When absent, the visualizer falls back
@@ -204,24 +212,11 @@ export interface ReviewNode extends WorkflowNodeBase {
   reject?: RejectEdge;
 }
 
-/** Moves the run-root work item to a different stage. Does NOT fire
- *  stage-on-entry workflows on the destination (avoids trigger loops).
- *  On success the node's `output` is the new stage id. */
-export interface MoveWorkItemNode extends WorkflowNodeBase {
-  kind: 'move-work-item';
-  /** Destination stage id (required, non-empty). */
-  to_stage: string;
-  /** Explicit opt-in to move into a stage that has its own stage-on-entry
-   *  workflow (which the move will silently skip). */
-  allow_stage_workflow_skip?: boolean;
-}
-
 export type WorkflowNode =
   | AgentNode
   | BashNode
   | ScriptNode
-  | ReviewNode
-  | MoveWorkItemNode;
+  | ReviewNode;
 
 // Type guards
 export function isReviewNode(n: WorkflowNode): n is ReviewNode {
@@ -325,6 +320,8 @@ export const WORKFLOW_EVENT_TYPES = [
   'review_approved',
   'review_rejected',
   'iteration_ceiling_hit',
+  /** Card-move transition effect fired (locked decision 1). */
+  'card_moved',
 ] as const;
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 

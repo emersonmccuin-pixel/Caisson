@@ -57,8 +57,10 @@ export interface DagExecutorDeps {
   dispatchAgent(node: WorkflowV2.AgentNode, ctx: DagNodeContext): Promise<NodeOutcome>;
   /** Run a bash/script node in the worktree; resolve when done. */
   runCommand(node: WorkflowV2.BashNode | WorkflowV2.ScriptNode, ctx: DagNodeContext): Promise<NodeOutcome>;
-  /** Move the run-root card to `node.to_stage` without firing stage-on-entry workflows. */
-  moveWorkItem(node: WorkflowV2.MoveWorkItemNode, ctx: DagNodeContext): Promise<NodeOutcome>;
+  /** Card-move TRANSITION EFFECT (locked decision 1) — move the run-root card to
+   *  `stage` without firing that stage's on-entry workflows. Applied after a step
+   *  settles `completed` (its `move`) or on a reject kick-back (`reject.move`). */
+  moveCard(stage: string): Promise<{ ok: boolean; error?: string }>;
   /** Post the review gate (orchestrator channel event / Human Review inbox). */
   requestReview(
     node: WorkflowV2.ReviewNode,
@@ -209,8 +211,6 @@ export class DagExecutor {
             const outcome =
               node.kind === 'agent'
                 ? await this.deps.dispatchAgent(node, this.ctx(resolve, carry))
-                : node.kind === 'move-work-item'
-                ? await this.deps.moveWorkItem(node, this.ctx(resolve, carry))
                 : await this.deps.runCommand(
                     node as WorkflowV2.BashNode | WorkflowV2.ScriptNode,
                     this.ctx(resolve, carry)
@@ -231,6 +231,18 @@ export class DagExecutor {
           nodeId: id,
           ...(outcome.error ? { data: { error: outcome.error } } : {}),
         });
+        // Card-move TRANSITION EFFECT (locked decision 1) — a step that declares
+        // `move` advances the run-root card on completion. Best-effort: a move
+        // failure is logged but does not fail the (already-completed) step.
+        const moved = this.byId.get(id)?.move;
+        if (outcome.state === 'completed' && moved) {
+          const res = await this.deps.moveCard(moved);
+          this.deps.event({
+            type: 'card_moved',
+            nodeId: id,
+            data: res.ok ? { stage: moved } : { stage: moved, error: res.error ?? 'move failed' },
+          });
+        }
       }
     }
   }
@@ -279,6 +291,19 @@ export class DagExecutor {
       // finalizes to `failed`.
       this.deps.event({ type: 'iteration_ceiling_hit', nodeId: reviewNodeId });
       this.deps.holdForHuman(reviewNodeId, 'reject iteration ceiling reached');
+    } else if (outcome.kickedBack) {
+      // Card-move transition effect on kick-back (locked decision 1) — e.g. a QA
+      // gate reject moves the card back to the build stage before the loop re-runs.
+      const reviewNode = this.byId.get(reviewNodeId);
+      const moved = reviewNode && isReview(reviewNode) ? reviewNode.reject?.move : undefined;
+      if (moved) {
+        const res = await this.deps.moveCard(moved);
+        this.deps.event({
+          type: 'card_moved',
+          nodeId: reviewNodeId,
+          data: res.ok ? { stage: moved } : { stage: moved, error: res.error ?? 'move failed' },
+        });
+      }
     }
     return this.advance();
   }

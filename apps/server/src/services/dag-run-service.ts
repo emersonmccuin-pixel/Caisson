@@ -339,33 +339,26 @@ export function makeExecutorDeps(
     return { state: 'completed', ...(r.stdout !== undefined ? { output: r.stdout } : {}) };
   };
 
-  const moveWorkItem = async (
-    node: WorkflowV2.MoveWorkItemNode,
-    _ctx: DagNodeContext
-  ): Promise<NodeOutcome> => {
-    if (!run.workItemId) {
-      return { state: 'failed', error: 'move-work-item: run has no root work item' };
+  // Card-move TRANSITION EFFECT (locked decision 1) — move the run-root card to
+  // `stage` WITHOUT firing that stage's on-entry workflows (loop-safe). Replaces
+  // the old move-work-item node. Best-effort: returns ok/error so the executor
+  // can log a failed move without failing the (already-completed) step.
+  const moveCard = async (stage: string): Promise<{ ok: boolean; error?: string }> => {
+    if (!run.workItemId) return { ok: false, error: 'run has no root work item' };
+    const stages = opts.getProject().stages ?? [];
+    if (!stages.some((s) => s.id === stage)) {
+      return { ok: false, error: `stage "${stage}" not found in project` };
     }
-    const project = opts.getProject();
-    const stages = project.stages ?? [];
-    const targetStage = stages.find((s) => s.id === node.to_stage);
-    if (!targetStage) {
-      return {
-        state: 'failed',
-        error: `move-work-item node "${node.id}": stage "${node.to_stage}" not found in project`,
-      };
+    if (!getWorkItem(run.workItemId)) {
+      return { ok: false, error: `run root work item ${run.workItemId} not found` };
     }
-    const wi = getWorkItem(run.workItemId);
-    if (!wi) {
-      return { state: 'failed', error: `move-work-item: run root work item ${run.workItemId} not found` };
-    }
-    const moved = moveWorkItemStage(run.workItemId, node.to_stage);
+    const moved = moveWorkItemStage(run.workItemId, stage);
     if (moved) {
       // Slice 015b — announce through the durable door (outbox row); the relay
       // delivers the canonical work-item.changed frame. No hand-fanout.
       announceWorkItemRow(moved, opts.projectId, 'moved');
     }
-    return { state: 'completed', output: node.to_stage };
+    return { ok: true };
   };
 
   const requestReview = async (
@@ -426,7 +419,7 @@ export function makeExecutorDeps(
     resolveRef,
     dispatchAgent,
     runCommand,
-    moveWorkItem,
+    moveCard,
     requestReview,
     persist,
     event: (ev) => {

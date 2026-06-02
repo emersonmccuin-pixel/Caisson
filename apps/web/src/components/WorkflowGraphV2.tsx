@@ -23,7 +23,6 @@ import {
   ShieldCheck,
   Terminal,
   Code,
-  ArrowRightLeft,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -47,7 +46,6 @@ const KIND_CONFIG: Record<WorkflowV2.WorkflowNode['kind'], KindConfig> = {
   bash: { label: 'bash', icon: Terminal, band: 'bg-foreground/60' },
   script: { label: 'script', icon: Code, band: 'bg-foreground/60' },
   review: { label: 'review', icon: ShieldCheck, band: 'bg-warning' },
-  'move-work-item': { label: 'move card', icon: ArrowRightLeft, band: 'bg-foreground/60' },
 };
 
 // Border + animation classes per lock 9 (runtime overlay vocabulary).

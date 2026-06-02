@@ -17,7 +17,7 @@ export interface ValidationResult {
   errors: string[];
 }
 
-const NODE_KINDS = new Set(['agent', 'bash', 'script', 'review', 'move-work-item']);
+const NODE_KINDS = new Set(['agent', 'bash', 'script', 'review']);
 const TRIGGER_KINDS = new Set(['manual', 'stage-on-entry', 'schedule', 'event']);
 const SCRIPT_RUNTIMES = new Set(['node', 'python']);
 const REVIEW_KINDS = new Set(['review']);
@@ -86,8 +86,6 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
       if (!SCRIPT_RUNTIMES.has(n.runtime as string))
         errors.push(`script node "${id}": runtime must be "node" or "python"`);
     }
-    if (kind === 'move-work-item' && (typeof n.to_stage !== 'string' || n.to_stage === ''))
-      errors.push(`move-work-item node "${id}": missing "to_stage"`);
     if (kind === 'review' && !REVIEWERS.has(n.reviewer as string))
       errors.push(`review node "${id}": reviewer must be "human" or "orchestrator"`);
   }
@@ -201,18 +199,28 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
   }
 
   // ── cross-workflow stage-on-entry collision ──
+  // A card-move EFFECT (a step's `move`, or a review `reject.move`) does NOT fire
+  // the destination stage's on-entry workflows — so moving a card into a stage
+  // that owns one silently skips it. Flag unless `allow_stage_workflow_skip`.
   if (opts?.stageOnEntryWorkflows && opts.stageOnEntryWorkflows.length > 0) {
+    const collidesWith = (stage: unknown): { name: string } | undefined =>
+      typeof stage === 'string' && stage
+        ? opts.stageOnEntryWorkflows!.find((w) => w.stage === stage)
+        : undefined;
     for (const n of nodes) {
-      if ((n.kind as string) !== 'move-work-item') continue;
-      const toStage = n.to_stage as unknown;
-      if (typeof toStage !== 'string' || !toStage) continue;
+      const id = typeof n.id === 'string' ? n.id : '?';
       if ((n as Record<string, unknown>).allow_stage_workflow_skip === true) continue;
-      const collision = opts.stageOnEntryWorkflows.find((w) => w.stage === toStage);
-      if (collision) {
-        const id = typeof n.id === 'string' ? n.id : '?';
-        errors.push(
-          `move-work-item node "${id}": destination stage is the on-entry trigger of workflow "${collision.name}" — that workflow will be silently skipped. Inline its steps, pick another stage, or set allow_stage_workflow_skip: true to do this intentionally.`,
-        );
+      const reject = n.reject as { move?: unknown } | undefined;
+      for (const [where, stage] of [
+        ['move', n.move],
+        ['reject.move', reject?.move],
+      ] as const) {
+        const collision = collidesWith(stage);
+        if (collision) {
+          errors.push(
+            `node "${id}": ${where} → "${String(stage)}" is the on-entry trigger of workflow "${collision.name}" — that workflow will be silently skipped. Inline its steps, pick another stage, or set allow_stage_workflow_skip: true to do this intentionally.`,
+          );
+        }
       }
     }
   }
