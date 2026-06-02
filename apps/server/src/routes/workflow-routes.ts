@@ -29,6 +29,7 @@ import type { Hono } from 'hono';
 import {
   getAgentByName,
   getDb,
+  getProjectById,
   insertLiveEvent,
   listWorkflowAudit,
   workflowsRepo,
@@ -42,7 +43,7 @@ import type {
   WorkflowRow,
   WorkflowV2,
 } from '@pc/domain';
-import { POD_AUDIT_ACTORS, WORKFLOW_AUDIT_FIELDS } from '@pc/domain';
+import { POD_AUDIT_ACTORS, WORKFLOW_AUDIT_FIELDS, getPodDefaultExpectedOutput } from '@pc/domain';
 import {
   parseWorkflowV2Text,
   serializeWorkflowV2,
@@ -305,6 +306,93 @@ function validateAgentNodesProjectScoped(
   return errors;
 }
 
+/** Project-aware feasibility checks that mirror what the dispatch door + the
+ *  runtime require at fire time — so a workflow that SAVES is a workflow that
+ *  will RUN (deterministic pathway, caught at authoring not at fire):
+ *   (1) every agent node resolves an `expected_output` (node override → pod row
+ *       → stock default) — the contract the dispatch door requires;
+ *   (2) every move-work-item `to_stage` + stage-on-entry trigger stage is a real
+ *       stage in the project;
+ *   (3) every `$node.output` reference points at a real node (or `root`).
+ *  Returns one error string per problem; empty when the workflow is runnable. */
+function validateWorkflowFeasibility(
+  def: WorkflowV2.Workflow,
+  projectId: ULID,
+): string[] {
+  const errors: string[] = [];
+  const nodes = Array.isArray((def as unknown as { nodes?: unknown }).nodes)
+    ? ((def as unknown as { nodes: Record<string, unknown>[] }).nodes)
+    : [];
+
+  // (1) contract-resolvable — mirrors createAgentWorkItem's resolution order.
+  for (const node of nodes) {
+    if (node.kind !== 'agent') continue;
+    const agentName = typeof node.agent === 'string' ? node.agent : '';
+    if (!agentName) continue;
+    if (node.expected_output) continue; // node-level override present
+    const row = getAgentByName({ name: agentName, scope: 'project', projectId });
+    if (row?.expectedOutput) continue; // pod row carries a default
+    if (getPodDefaultExpectedOutput(agentName)) continue; // stock default
+    errors.push(
+      `agent node "${String(node.id ?? '?')}": pod "${agentName}" has no expected_output — set one on the node or give the pod a default (an agent can't be dispatched without a contract)`,
+    );
+  }
+
+  // (2) stages exist in the project.
+  const project = getProjectById(projectId);
+  const stageIds = new Set((project?.stages ?? []).map((s) => s.id));
+  for (const node of nodes) {
+    if (node.kind !== 'move-work-item') continue;
+    const to = typeof node.to_stage === 'string' ? node.to_stage : '';
+    if (to && !stageIds.has(to)) {
+      errors.push(
+        `move-work-item node "${String(node.id ?? '?')}": stage "${to}" does not exist in this project`,
+      );
+    }
+  }
+  const triggers = Array.isArray((def as unknown as { triggers?: unknown }).triggers)
+    ? ((def as unknown as { triggers: Record<string, unknown>[] }).triggers)
+    : [];
+  for (const t of triggers) {
+    if (t.kind !== 'stage-on-entry') continue;
+    const st = typeof t.stage === 'string' ? t.stage : '';
+    if (st && !stageIds.has(st)) {
+      errors.push(`stage-on-entry trigger: stage "${st}" does not exist in this project`);
+    }
+  }
+
+  // (3) `$node.output` refs point at a real node (or the synthetic `root`/`self`).
+  const ids = new Set<string>(
+    nodes.map((n) => (typeof n.id === 'string' ? n.id : '')).filter(Boolean),
+  );
+  ids.add('root');
+  const ALLOWED_NON_NODE = new Set(['root', 'self']);
+  const refRe = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
+  for (const node of nodes) {
+    const id = String(node.id ?? '?');
+    const texts = [node.task, node.bash, node.script, node.prompt].filter(
+      (t): t is string => typeof t === 'string',
+    );
+    const flagged = new Set<string>();
+    for (const text of texts) {
+      refRe.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = refRe.exec(text)) !== null) {
+        const ref = m[1]!;
+        if (ALLOWED_NON_NODE.has(ref)) continue;
+        if (!ids.has(ref) && !flagged.has(ref)) {
+          flagged.add(ref);
+          errors.push(
+            `node "${id}": references "$${ref}.output" but no node "${ref}" exists`,
+          );
+        }
+      }
+    }
+  }
+
+  return errors;
+}
+
 /** Register every workflow route on `app`. Idempotent — call once per Hono
  *  instance. */
 export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): void {
@@ -430,6 +518,10 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
       if (podErrors.length > 0) {
         return c.json({ ok: false, error: `workflow has unresolvable pods: ${podErrors.join('; ')}` }, 400);
       }
+      const feasErrors = validateWorkflowFeasibility(normalised.parsedDefinition, projectId);
+      if (feasErrors.length > 0) {
+        return c.json({ ok: false, error: `workflow cannot run as written: ${feasErrors.join('; ')}` }, 400);
+      }
     }
 
     // Per-scope slug + name uniqueness — return 409 instead of a raw UNIQUE
@@ -551,6 +643,10 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
         const podErrors = validateAgentNodesProjectScoped(normalised.parsedDefinition, existing.projectId);
         if (podErrors.length > 0) {
           return c.json({ ok: false, error: `workflow has unresolvable pods: ${podErrors.join('; ')}` }, 400);
+        }
+        const feasErrors = validateWorkflowFeasibility(normalised.parsedDefinition, existing.projectId);
+        if (feasErrors.length > 0) {
+          return c.json({ ok: false, error: `workflow cannot run as written: ${feasErrors.join('; ')}` }, 400);
         }
       }
 
