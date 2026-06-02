@@ -152,6 +152,10 @@ export interface WorkflowNodeBase {
    *  workflow can advance its own card loop-safely). Omit = card stays put.
    *  Replaces the separate `move-work-item` node. */
   move?: string;
+  /** Opt-in to a `move` whose destination stage owns another workflow's
+   *  stage-on-entry trigger (which the move will silently skip). Suppresses the
+   *  save-time collision error for an intentional skip. */
+  allow_stage_workflow_skip?: boolean;
   /** Visualizer-layer position override. Persisted so user drags survive a
    *  reload and the agent-author can read positions between turns
    *  (sync-model-A, Section 19 lock 8). When absent, the visualizer falls back

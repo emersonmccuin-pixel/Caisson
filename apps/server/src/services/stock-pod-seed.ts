@@ -690,7 +690,7 @@ The current v2 node set (6 kinds):
 - agent: dispatches a specialist to complete work.
 - bash: runs a shell command in the workflow worktree.
 - script: runs a node or python script.
-- move-work-item: advances the run's card to another stage. It does NOT re-fire stage-on-entry triggers, so a workflow can move its own card across the board without re-triggering itself.
+- card-move (the \`move\` field on any step, not a node): advances the run's card to another stage when the step completes. It does NOT re-fire stage-on-entry triggers, so a workflow can move its own card across the board without re-triggering itself.
 - review: pauses the run at a human-judgment gate until a decision lands. \`reviewer: "orchestrator"\` posts the review bundle to the orchestrator's inbox (the orchestrator + user judge — the common gate); \`reviewer: "human"\` parks it in the user's own inbox. Both pause durably and never auto-advance.
 
 Loop nodes and nested sub-workflows are deferred.
