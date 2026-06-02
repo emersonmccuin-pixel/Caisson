@@ -8,14 +8,6 @@
 // so multiple projects don't fight for the same `worktrees/` dir and so
 // nothing leaks into the user's actual repo.
 
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
@@ -32,10 +24,6 @@ export interface WorktreeRegistry {
   updatedAt: string;
   worktrees: WorktreeEntry[];
 }
-
-/** 4a.8 / D18. Scratch sweep threshold. Configurability deferred to Section 9
- *  (Global settings); for now this is the trunk default. */
-export const SCRATCH_SWEEP_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 export class WorktreeService {
   private cache: WorktreeRegistry = { updatedAt: new Date(0).toISOString(), worktrees: [] };
@@ -116,76 +104,6 @@ export class WorktreeService {
   /** Cached read for polling endpoints. Empty until the first list() / mutate(). */
   readCached(): WorktreeRegistry {
     return this.cache;
-  }
-
-  /** 4a.8 / D18. Ensure `<worktreePath>/scratch/` exists + has a `.gitignore`
-   *  with `*` so its contents are never tracked. Idempotent. Called from the
-   *  runtime's dispatch path the first time a workflow targets the worktree. */
-  ensureScratchDir(worktreePath: string): string {
-    const scratchPath = resolve(worktreePath, 'scratch');
-    mkdirSync(scratchPath, { recursive: true });
-    const gitignore = resolve(scratchPath, '.gitignore');
-    if (!existsSync(gitignore)) {
-      writeFileSync(gitignore, '*\n!.gitignore\n', 'utf-8');
-    }
-    return scratchPath;
-  }
-
-  /** 4a.8 / D18. Wipe `<worktreePath>/scratch/`. Idempotent. Called on
-   *  workflow terminal status when the workflow declares `scratch_cleanup:
-   *  auto`. Re-creates the dir + .gitignore after removal so the next run
-   *  starts clean without further setup. */
-  wipeScratchDir(worktreePath: string): void {
-    const scratchPath = resolve(worktreePath, 'scratch');
-    if (existsSync(scratchPath)) {
-      rmSync(scratchPath, { recursive: true, force: true });
-    }
-    this.ensureScratchDir(worktreePath);
-  }
-
-  /** 4a.8 / D18. Boot-time sweep. Walks this project's baseDir for first-
-   *  level worktree dirs, removes top-level entries inside their `scratch/`
-   *  whose mtime is older than the threshold. Top-level entries only — no
-   *  recursive stat — pragmatic for v1; if dir-with-fresh-children needs to
-   *  survive, the workflow author touches a sentinel file at the top level. */
-  sweepStaleScratch(maxAgeMs: number = SCRATCH_SWEEP_MAX_AGE_MS): {
-    removed: string[];
-  } {
-    const removed: string[] = [];
-    if (!existsSync(this.baseDir)) return { removed };
-    const cutoff = Date.now() - maxAgeMs;
-    let worktreeDirs: string[] = [];
-    try {
-      worktreeDirs = readdirSync(this.baseDir, { withFileTypes: true })
-        .filter((e) => e.isDirectory())
-        .map((e) => resolve(this.baseDir, e.name));
-    } catch {
-      return { removed };
-    }
-    for (const wt of worktreeDirs) {
-      const scratchPath = resolve(wt, 'scratch');
-      if (!existsSync(scratchPath)) continue;
-      let entries: string[];
-      try {
-        entries = readdirSync(scratchPath);
-      } catch {
-        continue;
-      }
-      for (const name of entries) {
-        if (name === '.gitignore') continue;
-        const entryPath = resolve(scratchPath, name);
-        try {
-          const stat = statSync(entryPath);
-          if (stat.mtimeMs < cutoff) {
-            rmSync(entryPath, { recursive: true, force: true });
-            removed.push(entryPath);
-          }
-        } catch {
-          /* best-effort */
-        }
-      }
-    }
-    return { removed };
   }
 
   private async refresh(): Promise<void> {

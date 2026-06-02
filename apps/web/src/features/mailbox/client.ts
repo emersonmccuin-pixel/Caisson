@@ -3,7 +3,7 @@
 
 import { getJson, postJson } from '@/api/http';
 import type { ULID } from '@/features/projects/types';
-import type { MailboxDeliveryDto, MailboxInboxItem } from './types';
+import type { MailboxInboxItem } from './types';
 
 export const mailboxApi = {
   /** Project inbox (recipients addressed to the project). */
@@ -15,11 +15,6 @@ export const mailboxApi = {
   /** Global single-user inbox (project-less user-inbox messages). */
   listGlobalInbox: (opts: { unreadOnly?: boolean; actionableOnly?: boolean } = {}) =>
     getJson<{ ok: true; items: MailboxInboxItem[] }>(`/api/mailbox${query(opts)}`).then((r) => r.items),
-
-  listDeliveries: (projectId: ULID) =>
-    getJson<{ ok: true; deliveries: MailboxDeliveryDto[] }>(
-      `/api/projects/${projectId}/mailbox/deliveries`,
-    ).then((r) => r.deliveries),
 
   markRead: (projectId: ULID, recipientId: string) =>
     postJson<{ ok: boolean }>(

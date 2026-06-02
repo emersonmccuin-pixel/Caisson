@@ -44,7 +44,7 @@ function errMessage(err: unknown): string {
 }
 
 /** Classify a thrown error into transient (worth retrying / 503) vs terminal. */
-export function classifyThrow(err: unknown): FailureClassification {
+function classifyThrow(err: unknown): FailureClassification {
   const code = errCode(err);
   const msg = errMessage(err);
 
@@ -68,50 +68,4 @@ export function classifyThrow(err: unknown): FailureClassification {
 
 export function isTransient(err: unknown): boolean {
   return classifyThrow(err).kind === 'transient';
-}
-
-export interface TransientRetryOptions {
-  attempts?: number;
-  baseMs?: number;
-  maxMs?: number;
-  /** Test seam — supply a deterministic sleep / no-jitter source. */
-  sleep?: (ms: number) => Promise<void>;
-  jitter?: () => number;
-}
-
-const defaultSleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
-
-function backoffMs(attempt: number, baseMs: number, maxMs: number, jitter: () => number): number {
-  const exp = Math.min(maxMs, baseMs * 2 ** attempt);
-  // Full jitter: random point in [0, exp].
-  return Math.floor(exp * jitter());
-}
-
-/**
- * Run `fn`, retrying only on transient throws with exponential backoff + jitter.
- * Terminal throws propagate immediately; the last transient throw propagates
- * after the attempt budget is spent.
- */
-export async function withTransientRetry<T>(
-  fn: () => Promise<T>,
-  options: TransientRetryOptions = {},
-): Promise<T> {
-  const attempts = options.attempts ?? 4;
-  const baseMs = options.baseMs ?? 50;
-  const maxMs = options.maxMs ?? 1000;
-  const sleep = options.sleep ?? defaultSleep;
-  const jitter = options.jitter ?? Math.random;
-
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (!isTransient(err) || attempt === attempts - 1) throw err;
-      await sleep(backoffMs(attempt, baseMs, maxMs, jitter));
-    }
-  }
-  throw lastErr;
 }

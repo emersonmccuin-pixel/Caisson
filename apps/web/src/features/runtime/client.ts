@@ -2,7 +2,6 @@ import { getJson, postJson } from '@/api/http';
 import type { ULID } from '@/features/projects/types';
 import type {
   OrchestratorRuntimeSnapshot,
-  OrchestratorSendQueueItem,
   OrchestratorSession,
   SessionReplayItem,
   SessionTransitionResponse,
@@ -44,18 +43,6 @@ export const runtimeApi = {
   closeSession: (projectId: ULID) =>
     postJson<{ ok: true; transition: 'close-session'; closed: boolean }>(
       `/api/projects/${projectId}/sessions/close`,
-      {},
-    ),
-
-  cancelQueuedOrchestratorSend: (projectId: ULID, sendId: ULID) =>
-    postJson<{ ok: true; item: OrchestratorSendQueueItem }>(
-      `/api/projects/${projectId}/send-queue/${sendId}/cancel`,
-      {},
-    ),
-
-  retryOrchestratorSend: (projectId: ULID, sendId: ULID) =>
-    postJson<{ ok: true; item: OrchestratorSendQueueItem }>(
-      `/api/projects/${projectId}/send-queue/${sendId}/retry`,
       {},
     ),
 

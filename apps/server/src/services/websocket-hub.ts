@@ -62,12 +62,20 @@ export class ProjectWebSocketHub<ProjectId extends string = string> {
   broadcastAll(msg: unknown): number {
     const data = JSON.stringify(msg);
     let sent = 0;
-    for (const set of this.subscribers.values()) {
+    for (const projectId of [...this.subscribers.keys()]) {
+      const set = this.subscribers.get(projectId);
+      if (!set) continue;
       for (const socket of set) {
-        if (socket.readyState !== socket.OPEN) continue;
+        // Prune dead subscribers as we go, matching broadcast(): a closed/
+        // closing socket otherwise lingers until the keepalive sweep.
+        if (socket.readyState !== socket.OPEN) {
+          set.delete(socket);
+          continue;
+        }
         socket.send(data);
         sent++;
       }
+      if (set.size === 0) this.subscribers.delete(projectId);
     }
     return sent;
   }

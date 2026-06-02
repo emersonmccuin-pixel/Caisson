@@ -85,7 +85,6 @@ export async function handleWorkItemTool(
         payload.parent_work_item_id = args.parent_work_item_id;
       if (typeof args.stage_id === 'string') payload.stage_id = args.stage_id;
       if (typeof args.worktree === 'string') payload.worktree = args.worktree;
-      if (typeof args.ephemeral === 'boolean') payload.ephemeral = args.ephemeral;
       if (args.raw_acceptance_criteria !== undefined)
         payload.raw_acceptance_criteria = args.raw_acceptance_criteria;
       try {

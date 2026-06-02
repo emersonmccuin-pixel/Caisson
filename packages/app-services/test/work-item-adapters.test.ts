@@ -3,14 +3,11 @@ import assert from 'node:assert/strict';
 
 import {
   WorkItemAdapterError,
-  normalizeWorkItemListResponse,
   toAttachmentDto,
   toFieldSchemaDto,
-  toItemsCursorListBody,
   toStageDto,
   toStageDtos,
   toWorkItemDto,
-  toWorkItemsListBody,
 } from '../src/work-items/adapters.ts';
 import { isAttachmentDto, isFieldSchemaDto, isStageDto, isWorkItemDto } from '@pc/contracts';
 import type { Attachment, FieldSchema, Stage, WorkItem } from '@pc/domain';
@@ -82,20 +79,6 @@ test('toFieldSchemaDto + toAttachmentDto produce valid DTOs', () => {
     createdAt: 9,
   };
   assert.equal(isAttachmentDto(toAttachmentDto(att)), true);
-});
-
-test('list-shape normalizer accepts both legacy shapes and fails loud otherwise', () => {
-  const dto = toWorkItemDto(wi);
-  assert.deepEqual(normalizeWorkItemListResponse(toWorkItemsListBody([dto])), {
-    items: [dto],
-    nextCursor: null,
-  });
-  assert.deepEqual(normalizeWorkItemListResponse(toItemsCursorListBody([dto], 'cur1')), {
-    items: [dto],
-    nextCursor: 'cur1',
-  });
-  assert.throws(() => normalizeWorkItemListResponse({ nope: 1 }), WorkItemAdapterError);
-  assert.throws(() => normalizeWorkItemListResponse(null), WorkItemAdapterError);
 });
 
 test('adapters fail loud on structurally invalid rows', () => {

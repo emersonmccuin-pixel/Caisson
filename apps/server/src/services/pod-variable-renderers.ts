@@ -34,10 +34,12 @@ export function renderAvailableAgents(projectId: ULID | null | undefined): strin
   // Agents-tab list route. Global user-created pods are NOT discoverable here;
   // the user must copy one into the project (Add agent) to make it usable.
   const rows = listProjectVisibleAgents(projectId);
-  if (rows.length === 0) return '';
+  // The orchestrator must never advertise itself as a dispatch target.
+  const dispatchable = rows.filter((a) => a.name !== 'orchestrator');
+  if (dispatchable.length === 0) return '';
 
   // Sort: stock first (alpha), then user-created (alpha).
-  const sorted = [...rows].sort((a, b) => {
+  const sorted = [...dispatchable].sort((a, b) => {
     if (a.origin !== b.origin) return a.origin === 'stock' ? -1 : 1;
     return a.name.localeCompare(b.name);
   });

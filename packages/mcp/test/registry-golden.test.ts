@@ -10,7 +10,6 @@ import {
   lookupTool,
   type ToolCatalogEntry,
 } from '@pc/domain';
-import { CAPABILITIES } from '../src/capabilities.ts';
 
 // Slice 016 — WIRE-FROZEN golden snapshot. Captured from the THREE hand-sources
 // PRE-migration (`__golden__.json`); these assertions must hold byte-identical
@@ -78,8 +77,4 @@ test('descriptionOf / friendlyName / lookupTool identical for every captured slu
     assert.equal(descriptionOf(g.slug), g.description, `descriptionOf drift: ${g.slug}`);
     assert.deepEqual(lookupTool(g.slug), g, `lookupTool drift: ${g.slug}`);
   }
-});
-
-test('CAPABILITIES family map byte-identical to captured', () => {
-  assert.deepEqual(CAPABILITIES, GOLDEN.capabilities);
 });

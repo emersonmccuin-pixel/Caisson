@@ -5,7 +5,6 @@
 // the stall logic no longer lives in two mode-split copies.
 //
 //   computeIdleMs(row, {now, jsonlMtime})  → ms since the last sign of life
-//   evaluateIdle(idleMs)                    → 'ok' | 'warn' | 'kill'
 //
 // Two thresholds:
 //   WARN_MS  (~3 min)  → non-terminal `stalled` badge (visible, never kills)
@@ -50,15 +49,4 @@ export function computeIdleMs(
     opts.jsonlMtime ?? 0,
   );
   return opts.now - lastActivity;
-}
-
-export function evaluateIdle(
-  idleMs: number,
-  thresholds: { warnMs?: number; killMs?: number } = {},
-): IdleVerdict {
-  const warnMs = thresholds.warnMs ?? resolveStallWarnMs();
-  const killMs = thresholds.killMs ?? resolveIdleTimeoutMs();
-  if (idleMs > killMs) return 'kill';
-  if (idleMs > warnMs) return 'warn';
-  return 'ok';
 }

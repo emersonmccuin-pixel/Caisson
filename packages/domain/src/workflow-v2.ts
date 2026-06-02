@@ -34,10 +34,6 @@ export const WORKFLOW_NODE_KINDS = [
 ] as const;
 export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
 
-export function isWorkflowNodeKind(value: unknown): value is WorkflowNodeKind {
-  return typeof value === 'string' && (WORKFLOW_NODE_KINDS as readonly string[]).includes(value);
-}
-
 /** Review kinds carry a `reject` back-edge + `bundle_from`. */
 export const REVIEW_NODE_KINDS = ['human-review', 'orchestrator-review'] as const;
 export type ReviewNodeKind = (typeof REVIEW_NODE_KINDS)[number];
@@ -225,15 +221,6 @@ export type WorkflowNode =
   | MoveWorkItemNode;
 
 // Type guards
-export function isAgentNode(n: WorkflowNode): n is AgentNode {
-  return n.kind === 'agent';
-}
-export function isBashNode(n: WorkflowNode): n is BashNode {
-  return n.kind === 'bash';
-}
-export function isScriptNode(n: WorkflowNode): n is ScriptNode {
-  return n.kind === 'script';
-}
 export function isReviewNode(n: WorkflowNode): n is HumanReviewNode | OrchestratorReviewNode {
   return n.kind === 'human-review' || n.kind === 'orchestrator-review';
 }

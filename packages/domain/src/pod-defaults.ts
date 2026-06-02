@@ -23,7 +23,7 @@ export interface PodDefault {
   expectedOutput: ExpectedOutput;
   /** Decision-4: true ⇒ the default output must land in a work item (the
    *  dispatch needs a `workItemId`). Derived from `expectedOutput` via the
-   *  policy fn, asserted at module load so the two never drift. */
+   *  policy fn, so the flag can never drift from the spec. */
   requiresWorkItem: boolean;
 }
 

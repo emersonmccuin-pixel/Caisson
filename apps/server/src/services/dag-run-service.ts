@@ -122,7 +122,7 @@ export interface DagRunServiceOptions {
   getProject: () => Project;
   workItemService: WorkItemService;
   worktrees: WorktreeService;
-  /** Per-dispatch session-data dir factory (mirrors WorkflowRuntime). */
+  /** Per-dispatch session-data dir factory. */
   sessionDirFor: (pcSessionId: string) => string;
   broadcast: (event: unknown) => void;
   hostClient?: AgentHostReattachClient | null;

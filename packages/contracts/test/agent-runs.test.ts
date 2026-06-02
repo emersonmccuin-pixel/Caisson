@@ -10,9 +10,7 @@ import {
   isAgentRunDto,
   isPendingAskDto,
   parseAnswerPendingAskRequest,
-  parseContinueAgentRequest,
   parseCreatePendingAskRequest,
-  parseInvokeAgentRequest,
   toLegacyAgentRunChanged,
   toLegacyAgentRunRecord,
   type AgentRunChangedLiveEvent,
@@ -124,27 +122,6 @@ test('legacy agent-run-changed adapter round-trips the v1 record incl. model + w
 
   const fromEvent = toLegacyAgentRunChanged(makeEvent({ payload: { reason: 'running', run: dto } }));
   assert.deepEqual(fromEvent.record, toLegacyAgentRunRecord(dto));
-});
-
-test('parseInvokeAgentRequest enforces input + dispatcherSessionId', () => {
-  assert.equal(parseInvokeAgentRequest({ input: '', dispatcherSessionId: 'd' }).ok, false);
-  assert.equal(parseInvokeAgentRequest({ input: 'go' }).ok, false);
-  const ok = parseInvokeAgentRequest({
-    input: 'go',
-    dispatcherSessionId: 'd1',
-    parentWorkItemId: 'wi1',
-    parentInvokeDepth: 2,
-  });
-  assert.equal(ok.ok, true);
-  if (ok.ok) {
-    assert.equal(ok.value.input, 'go');
-    assert.equal(ok.value.parentInvokeDepth, 2);
-  }
-});
-
-test('parseContinueAgentRequest enforces input + dispatcherSessionId', () => {
-  assert.equal(parseContinueAgentRequest({ input: 'go' }).ok, false);
-  assert.equal(parseContinueAgentRequest({ input: 'go', dispatcherSessionId: 'd1' }).ok, true);
 });
 
 test('parseCreatePendingAskRequest requires options for approval kind', () => {

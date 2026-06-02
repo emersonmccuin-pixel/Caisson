@@ -4,7 +4,6 @@
 export type {
   MailboxAddress,
   MailboxDeliveryChannel,
-  MailboxDeliveryDto,
   MailboxDeliveryStatus,
   MailboxMessageDto,
   MailboxMessageKind,

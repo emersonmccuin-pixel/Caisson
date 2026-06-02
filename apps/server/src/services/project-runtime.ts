@@ -1,9 +1,9 @@
-// ProjectRuntime — per-project bundle of PtySession + WorkflowRuntime +
+// ProjectRuntime — per-project bundle of PtySession + DagExecutor +
 // WorktreeService. Replaces the singleton wiring that lived in apps/server's
 // bootstrap during the rig phase. One instance per active project; held by
 // ProjectRegistry.
 //
-// Lazy spawn: the PtySession + WorkflowRuntime are only constructed on first
+// Lazy spawn: the PtySession + DagExecutor are only constructed on first
 // access. Lets the server boot with N projects in the DB without spawning N
 // claude.exe processes — each waits for a UI subscriber.
 
@@ -269,7 +269,7 @@ export class ProjectRuntime {
   }
 
   /** Section 19.4f — assemble the live deps options for the v2 DAG executor
-   *  from this project's existing context (same surfaces WorkflowRuntime uses). */
+   *  from this project's existing context. */
   private dagRunOptions(): DagRunServiceOptions {
     return {
       projectId: this.project.id,

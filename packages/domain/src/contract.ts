@@ -11,8 +11,8 @@
 //
 // 013 wires the union FOR REAL (DTO, persistence, parsers) but does NOT change
 // verification behavior — submission-gated enforcement + the reworked predicate
-// engine are slice 014. The legacy v1 union stays alive in `work-item-contract.ts`
-// (re-export shim) until 014 supersedes it.
+// engine are slice 014. Slice 023 deleted the legacy v1 work-item-contract.ts;
+// this file (the v2 7-mechanism union) is now the single authority.
 //
 // Browser-safe: zero runtime deps.
 

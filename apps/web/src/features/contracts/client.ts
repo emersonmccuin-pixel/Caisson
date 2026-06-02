@@ -24,11 +24,4 @@ export const contractsApi = {
     getJson<ListContractsResponse>(contractRoutes.forWorkItem(workItemId)).then(
       (r) => r.contracts,
     ),
-
-  /** Slice 022 — every contract in a project, newest-first (WI-optional, so
-   *  contract-only dispatches show up here too). Empty array when none. */
-  getProjectContracts: (projectId: ULID): Promise<Contract[]> =>
-    getJson<ListContractsResponse>(contractRoutes.forProject(projectId)).then(
-      (r) => r.contracts,
-    ),
 };

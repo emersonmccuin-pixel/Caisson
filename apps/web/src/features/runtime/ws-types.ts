@@ -69,7 +69,7 @@ export interface TerminalInputAckEnvelope extends WsEnvelope {
 
 // Chat-event shapes
 // Server emits hook-driven events as `{type:'event', event:{kind,...}}`. The
-// kinds + fields below mirror packages/runtime/src/hook-scripts/event-capture.cjs
+// kinds + fields below mirror templates/.claude/hooks/event-capture.cjs
 // (plus the workflow-runtime's `approval-required`). Keep in sync if those
 // hook payloads grow.
 
@@ -152,47 +152,6 @@ export interface ApprovalRequiredEvent extends ChatEventBase {
   nodeId: string;
   message?: string;
   on_reject_prompt?: string;
-}
-
-/** Section 4e.3 - per-project envelope fired by `persistAndBroadcast` on
- *  every workflow_runs mutation. Carries the minimum shape needed to drive
- *  the WorkflowDrawer's live-tick without forcing a full refetch. The drawer
- *  re-fetches the full run record for the inspected run on demand. */
-export interface WorkflowRunChangedEnvelope {
-  type: 'workflow-run-changed';
-  projectId: string;
-  workflowId: string;
-  runId: string;
-  status: string;
-  nodeOutputs: Record<string, unknown>;
-}
-
-/** UI Spine step 2 — versioned full-snapshot delta for workflow_runs_v2.
- *  Replaces the prior partial-ping shape (runId + status + dagState only).
- *  The `run` object is the full DB row including `rev`; the frontend discards
- *  any incoming message where `run.rev <= stored.rev` to handle out-of-order
- *  or duplicate WS delivery. */
-export interface WorkflowV2RunChangedEnvelope extends WsEnvelope {
-  type: 'workflow-v2-run-changed';
-  projectId: string;
-  run: {
-    id: string;
-    workflowId: string;
-    workflowName: string;
-    projectId: string;
-    workItemId: string | null;
-    trigger: string;
-    stageId: string | null;
-    status: string;
-    worktreePath: string | null;
-    lastReason: string | null;
-    rev: number;
-    createdAt: number;
-    startedAt: number | null;
-    endedAt: number | null;
-    lastActivityAt: number | null;
-    [k: string]: unknown;
-  };
 }
 
 // Section 0 phase 0e - supplemental hook events.

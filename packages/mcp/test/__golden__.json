@@ -76,10 +76,6 @@
             "type": "string",
             "description": "optional absolute path to a worktree the agent should write into."
           },
-          "ephemeral": {
-            "type": "boolean",
-            "description": "true marks the work item for auto-archive 24h after reaching 'done'. Use for throwaway lookups ('what's Node LTS?'). Defaults to false."
-          },
           "raw_acceptance_criteria": {
             "type": "array",
             "description": "Escape hatch: override the derived AC predicate list. Rare-use; prefer expected_output. Each entry needs a 'kind' from: files_exist, fields_populated, field_matches, bash_exit_zero, attachments_present, body_contains, child_work_items_done, schema_valid, git_diff_nonempty, external_handle_present, tool_called, pending_ask_created, report_contains.",

@@ -39,7 +39,6 @@ import {
 } from '@pc/db';
 import type { FieldSchema, Stage, ULID as DomainULID, WorkItem } from '@pc/domain';
 import {
-  toAttachmentDto,
   toFieldSchemaDto,
   toStageDtos,
   toWorkItemDto,
@@ -304,5 +303,3 @@ export class WorkItemMutationGateway {
     });
   }
 }
-
-export { toAttachmentDto };

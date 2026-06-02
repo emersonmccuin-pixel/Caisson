@@ -13,7 +13,7 @@ import {
   type LiveEvent,
   type LiveEventFrame,
 } from './live-events.ts';
-import { parseErr, parseOk, type ParseResult, type ULID } from './shared.ts';
+import { type ULID } from './shared.ts';
 
 export const AGENT_RUN_STATUSES = [
   'queued',
@@ -46,68 +46,6 @@ export interface AgentRunDto {
   endedAt: number | null;
   /** Monotonic write counter (agent_runs.rev). */
   rev: number;
-}
-
-// ── Request schemas ──────────────────────────────────────────────────────────
-
-export interface InvokeAgentRequest {
-  input: string;
-  parentWorkItemId?: ULID | null;
-  workItemId?: ULID | null;
-  parentInvokeDepth?: number;
-  dispatcherSessionId: string;
-}
-
-export interface ContinueAgentRequest {
-  input: string;
-  dispatcherSessionId: string;
-  workItemId?: ULID | null;
-}
-
-export function parseInvokeAgentRequest(input: unknown): ParseResult<InvokeAgentRequest> {
-  if (!isRecord(input)) return parseErr('request body must be an object');
-  const text = typeof input.input === 'string' ? input.input : '';
-  if (!text.trim()) return parseErr('input required');
-  const dispatcherSessionId =
-    typeof input.dispatcherSessionId === 'string' ? input.dispatcherSessionId.trim() : '';
-  if (!dispatcherSessionId) {
-    return parseErr('dispatcherSessionId required (orchestrator must forward PC_SESSION_ID)');
-  }
-  const request: InvokeAgentRequest = { input: text, dispatcherSessionId };
-  if (input.parentWorkItemId !== undefined && input.parentWorkItemId !== null) {
-    if (typeof input.parentWorkItemId !== 'string') {
-      return parseErr('parentWorkItemId must be a string');
-    }
-    request.parentWorkItemId = input.parentWorkItemId;
-  }
-  if (input.workItemId !== undefined && input.workItemId !== null) {
-    if (typeof input.workItemId !== 'string') return parseErr('workItemId must be a string');
-    request.workItemId = input.workItemId;
-  }
-  if (input.parentInvokeDepth !== undefined) {
-    if (typeof input.parentInvokeDepth !== 'number') {
-      return parseErr('parentInvokeDepth must be a number');
-    }
-    request.parentInvokeDepth = input.parentInvokeDepth;
-  }
-  return parseOk(request);
-}
-
-export function parseContinueAgentRequest(input: unknown): ParseResult<ContinueAgentRequest> {
-  if (!isRecord(input)) return parseErr('request body must be an object');
-  const text = typeof input.input === 'string' ? input.input : '';
-  if (!text.trim()) return parseErr('input required');
-  const dispatcherSessionId =
-    typeof input.dispatcherSessionId === 'string' ? input.dispatcherSessionId.trim() : '';
-  if (!dispatcherSessionId) {
-    return parseErr('dispatcherSessionId required (orchestrator must forward PC_SESSION_ID)');
-  }
-  const request: ContinueAgentRequest = { input: text, dispatcherSessionId };
-  if (input.workItemId !== undefined && input.workItemId !== null) {
-    if (typeof input.workItemId !== 'string') return parseErr('workItemId must be a string');
-    request.workItemId = input.workItemId;
-  }
-  return parseOk(request);
 }
 
 // ── Canonical live-event payload ─────────────────────────────────────────────

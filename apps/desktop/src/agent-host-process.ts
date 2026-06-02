@@ -1,3 +1,10 @@
+// DRIFT TWIN: PackagedAgentHostLockFile, packagedAgentHostLockFilePath, and
+// protocolVersion 1 below are a hand-copy of packages/runtime/src/agent-host-lock-file.ts
+// (AgentHostLockFile / agentHostLockFilePath / AGENT_HOST_PROTOCOL_VERSION). They
+// are deliberately NOT imported from @pc/runtime — that would pull node-pty into
+// the desktop main bundle. Any change to the lock-file shape, the
+// 'agent-host'/'host.lock.json' path, or protocolVersion MUST be mirrored in that
+// file by hand, or host discovery breaks.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';

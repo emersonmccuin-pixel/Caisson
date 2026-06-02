@@ -1,3 +1,9 @@
+// DRIFT TWIN: the lock-file shape, the 'agent-host'/'host.lock.json' path, and
+// protocolVersion 1 are duplicated in apps/desktop/src/agent-host-process.ts
+// (PackagedAgentHostLockFile / packagedAgentHostLockFilePath). The two are NOT
+// shared via @pc/runtime on purpose — importing this package into the desktop
+// main bundle would drag in node-pty. Any change to the shape, path, or
+// protocolVersion here MUST be mirrored there by hand, or host discovery breaks.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 

@@ -47,10 +47,10 @@ export interface ProjectCreateFlowInput {
   folderPath: string;
   mode: CreateProjectMode;
   gitRemote?: string | null;
+  replaceExisting?: boolean;
 }
 
 export interface ProjectChangedPublication {
-  event: ProjectChangedRefetchEnvelope;
   legacyEvent: ProjectChangedRefetchEnvelope;
   liveEvent: ProjectChangedLiveEvent;
 }
@@ -101,12 +101,12 @@ export class ProjectService {
       folderPath: request.folder_path,
       mode: request.mode,
       gitRemote: request.git_remote ?? null,
+      ...(request.replace_existing === true ? { replaceExisting: true } : {}),
     });
     const project = toProjectDto(created.project);
     return {
       ok: true,
       project,
-      event: created.legacyEvent,
       legacyEvent: created.legacyEvent,
       liveEvent: created.liveEvent,
     };
@@ -251,7 +251,6 @@ function projectChanged(
     ? toProjectChangedLiveEvent(insertLiveEvent(db, buildProjectChangedLiveEventDraft(payload)))
     : buildEphemeralProjectChangedLiveEvent(payload);
   return {
-    event: legacyEvent,
     legacyEvent,
     liveEvent,
   };

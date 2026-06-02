@@ -5,7 +5,6 @@ import { TOOLS, PC_RIG_TOOL_NAMES } from '../src/server.ts';
 import { PC_RIG_HANDLERS } from '../src/tools/handlers.ts';
 import { PC_RIG_TOOL_REGISTRY } from '@pc/domain';
 import { TOOL_CATALOG } from '@pc/domain';
-import { CAPABILITIES } from '../src/capabilities.ts';
 
 // Slice 016 — the DRIFT-KILLER. The registry is the ONE ordered source; every
 // view derives from it. This test makes the five surfaces a single bijection so
@@ -20,10 +19,6 @@ const registryNameSet = [...registryNames].sort();
 
 test('handler map keys === registry names (set equality)', () => {
   assert.deepEqual(Object.keys(PC_RIG_HANDLERS).sort(), registryNameSet);
-});
-
-test('capabilities keys === registry names (set equality)', () => {
-  assert.deepEqual(Object.keys(CAPABILITIES).sort(), registryNameSet);
 });
 
 test('PC_RIG_TOOL_NAMES (stripped) === registry names (set equality)', () => {

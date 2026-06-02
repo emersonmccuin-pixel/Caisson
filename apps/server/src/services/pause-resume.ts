@@ -45,6 +45,7 @@ import {
   insertAgentRunRow,
   markAgentRunTerminal,
   newId,
+  resolveAgentForDispatch,
 } from '@pc/db';
 import { jsonlPathFor } from '@pc/runtime';
 import type { AgentRunState } from '@pc/runtime';
@@ -643,19 +644,14 @@ function isTerminalStatus(
   return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
-/** Determine the pod scope at the project level. Pods can be project-scoped
- *  or global; we look up at dispatch time and remember which we found. For
- *  now we accept the project-scoped pod first, falling back to global,
- *  matching the existing `getPodForSpawn` precedence. */
-function lookupPodScope(_podName: string, _projectId: ULID): ULID | null {
-  // Conservative default: pass projectId NULL (= search globals) so the
-  // revision query matches the same row the materialiser would pick if no
-  // project override exists. The materialiser's actual precedence lives in
-  // packages/db/src/repos/pods.ts § getPodForSpawn (project-scope first);
-  // when we wire Section 9, the orchestration will plumb the resolved
-  // scope explicitly through ActiveRunEntry. For Session 8 we pass null,
-  // which is correct for all six stock pods (all global) + agent-designer.
-  return null;
+/** Resolve the SAME pod row the dispatch path resolved (mirrors
+ *  agent-run-factory.ts:364-367), returning the project id only for a
+ *  project-scoped resolved pod and null for a global pod — so
+ *  computePodRevision queries the same row dispatch stored. */
+function lookupPodScope(podName: string, projectId: ULID): ULID | null {
+  const agent = resolveAgentForDispatch(podName, projectId);
+  if (!agent) return null;
+  return agent.scope === 'project' ? (agent.projectId as ULID | null) : null;
 }
 
 interface PauseEventBodyArgs {
@@ -671,7 +667,7 @@ interface PauseEventBodyArgs {
 }
 
 /** Compose the <channel source="agent" ...> body for a pause event. Same
- *  header tag set as v1's `buildAgentAsksOrchestratorBody` so the
+ *  header tag set as the v1 channel builders so the
  *  orchestrator's pod prompt parser keeps working unchanged. */
 function buildPauseEventBody(args: PauseEventBodyArgs): string {
   const lines: string[] = [

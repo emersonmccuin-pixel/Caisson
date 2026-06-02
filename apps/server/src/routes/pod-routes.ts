@@ -452,7 +452,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
   });
 
   /** Reset a stock pod's scalar fields to its canonical seed content. Only
-   *  the eight stock specialists are valid targets; any other pod returns
+   *  stock pods are valid targets; any other pod returns
    *  400. Knowledge / secrets / mcp servers are untouched.
    *  Body: `{ actor?, reason? }` — actor defaults to 'user', reason defaults
    *  to 'ui-reset-to-default'. */

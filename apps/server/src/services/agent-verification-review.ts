@@ -46,7 +46,6 @@ export class VerificationReviewError extends Error {
   constructor(
     public readonly cause:
       | 'wi-not-found'
-      | 'not-agent-task'
       | 'not-awaiting-verification'
       | 'feedback-required'
       | 'no-assigned-run',

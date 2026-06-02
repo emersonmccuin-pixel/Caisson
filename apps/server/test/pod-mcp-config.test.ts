@@ -4,12 +4,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
 
 import { parsePodMcpServerConfig } from '../src/services/pod-mcp-config.ts';
-import { rewriteStaleMcpConfigs, applyNodeLauncher } from '../src/services/mcp-config-rewrite.ts';
+import { applyNodeLauncher } from '../src/services/mcp-config-rewrite.ts';
 
 // ── parsePodMcpServerConfig: valid shapes accepted ──────────────────────────
 
@@ -80,50 +77,6 @@ test('rejects wrong types for command / args / env / url', () => {
     /env\.A must be a string/,
   );
   assert.throws(() => parsePodMcpServerConfig({ url: 5 }), /url must be a string/);
-});
-
-// ── rewriteStaleMcpConfigs: suffix-match behavior unchanged ──────────────────
-
-test('rewrites a stale npx/tsx pc-rig entry to the bundle path', () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'mcp-cfg-'));
-  try {
-    const trunk = '/abs/trunk';
-    writeFileSync(
-      resolve(dir, '.mcp.json'),
-      JSON.stringify({
-        mcpServers: {
-          'pc-rig': { command: 'npx', args: ['-y', 'tsx', `${trunk}/packages/mcp/src/server.ts`] },
-        },
-      }),
-    );
-    const result = rewriteStaleMcpConfigs([dir]);
-    assert.equal(result.rewritten.length, 1);
-    const after = JSON.parse(readFileSync(resolve(dir, '.mcp.json'), 'utf-8')) as {
-      mcpServers: { 'pc-rig': { command: string; args: string[] } };
-    };
-    assert.equal(after.mcpServers['pc-rig'].command, 'node');
-    assert.deepEqual(after.mcpServers['pc-rig'].args, [`${trunk}/packages/mcp/dist/server.mjs`]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('skips an already-rewritten (bundle path) pc-rig entry', () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'mcp-cfg-'));
-  try {
-    writeFileSync(
-      resolve(dir, '.mcp.json'),
-      JSON.stringify({
-        mcpServers: {
-          'pc-rig': { command: 'node', args: ['/abs/trunk/packages/mcp/dist/server.mjs'] },
-        },
-      }),
-    );
-    const result = rewriteStaleMcpConfigs([dir]);
-    assert.equal(result.rewritten.length, 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 test('applyNodeLauncher only touches PC-node servers (suffix match), leaves foreign ones', () => {

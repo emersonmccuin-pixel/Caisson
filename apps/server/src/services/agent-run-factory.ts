@@ -100,12 +100,6 @@ function getRunRegistry(): AgentRunRegistry {
   return runRegistrySingleton;
 }
 
-/** Test-only override. Pass `null` to revert to a fresh singleton on next
- *  read. */
-export function setRunRegistryForTest(reg: AgentRunRegistry | null): void {
-  runRegistrySingleton = reg;
-}
-
 export interface DispatchFreshAgentInput {
   projectId: ULID;
   /** Absolute path to the project's worktree. Becomes the spawn cwd + the

@@ -28,9 +28,6 @@ export interface ProjectRegistryDeps {
 
 export class ProjectRegistry {
   private readonly runtimes = new Map<ULID, ProjectRuntime>();
-  /** projectId → slug cache. Populated at boot/register; refreshed on rename
-   *  (P6). Hot path: WorktreeService path resolution + future channel routing. */
-  private readonly slugById = new Map<ULID, string>();
 
   constructor(private readonly deps: ProjectRegistryDeps) {}
 
@@ -39,7 +36,6 @@ export class ProjectRegistry {
     for (const p of listProjects()) {
       const runtime = this.construct(p);
       this.runtimes.set(p.id, runtime);
-      this.slugById.set(p.id, p.slug);
       // Section 19.13 — run one-shot init (YAML→DB workflow import) before
       // any UI fetch lands. bootstrap() is idempotent.
       runtime.bootstrap();
@@ -54,7 +50,6 @@ export class ProjectRegistry {
     if (!project) return null;
     const runtime = this.construct(project);
     this.runtimes.set(projectId, runtime);
-    this.slugById.set(project.id, project.slug);
     runtime.bootstrap();
     return runtime;
   }
@@ -63,16 +58,10 @@ export class ProjectRegistry {
     return this.runtimes.get(projectId) ?? null;
   }
 
-  /** Cached slug for `projectId`. Null if unknown. */
-  slugOf(projectId: ULID): string | null {
-    return this.slugById.get(projectId) ?? null;
-  }
-
   /** Register a freshly-created project so subsequent calls skip the DB hit. */
   register(project: Project): ProjectRuntime {
     const runtime = this.construct(project);
     this.runtimes.set(project.id, runtime);
-    this.slugById.set(project.id, project.slug);
     runtime.bootstrap();
     return runtime;
   }
@@ -83,7 +72,6 @@ export class ProjectRegistry {
   refresh(project: Project): void {
     const runtime = this.runtimes.get(project.id);
     if (runtime) runtime.refresh(project);
-    this.slugById.set(project.id, project.slug);
   }
 
   /** Drop a runtime (e.g. on soft-delete). Kills its PtySession + clears caches. */
@@ -92,7 +80,6 @@ export class ProjectRegistry {
     if (!runtime) return;
     runtime.shutdown();
     this.runtimes.delete(projectId);
-    this.slugById.delete(projectId);
   }
 
   list(): ProjectRuntime[] {
@@ -102,7 +89,6 @@ export class ProjectRegistry {
   shutdownAll(): void {
     for (const r of this.runtimes.values()) r.shutdown();
     this.runtimes.clear();
-    this.slugById.clear();
   }
 
   private construct(project: Project): ProjectRuntime {

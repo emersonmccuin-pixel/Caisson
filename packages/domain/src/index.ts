@@ -207,35 +207,8 @@ export type {
   PodSpawnBundle,
 } from './pod.ts';
 export { POD_AUDIT_ACTORS, POD_AUDIT_FIELDS, POD_KNOWLEDGE_KINDS, POD_SCOPES } from './pod.ts';
-export type {
-  AgentBodyContext,
-  AgentBodyContextWorkItem,
-  AgentBodyTemplateIssue,
-} from './agent-body.ts';
 export type { SubagentFailureCause, SubagentFailureSignal } from './subagent-failure.ts';
-export type {
-  CatalogEntry,
-  CatalogName,
-  CatalogSource,
-  CatalogType,
-} from './workflow-catalog.ts';
-export {
-  CATALOG_TYPES,
-  WORKFLOW_CATALOG,
-  WORKFLOW_CATALOG_NAMES,
-  catalogNameHasSource,
-  getCatalogEntry,
-  isCatalogName,
-} from './workflow-catalog.ts';
-export type {
-  NodePortSchema,
-  PortShape,
-  PortSpec,
-  TemplateFieldSpec,
-} from './workflow-ports.ts';
-export { NODE_PORT_SCHEMAS, getPortSchema } from './workflow-ports.ts';
-export type { EdgeRef, NodeEdges } from './workflow-edges.ts';
-export { formatEdgeRef, isCompactEdgeRef, parseEdgeRef } from './workflow-edges.ts';
+export type { CatalogType, EdgeRef, NodeEdges } from './workflow-edges.ts';
 export type { ToolCatalogEntry, ToolCatalogSource } from './tool-catalog.ts';
 export {
   REQUIRED_AGENT_TOOLS,
@@ -254,12 +227,6 @@ export {
   PC_RIG_TOOL_REGISTRY,
   PC_RIG_TOOL_REGISTRY_NAMES,
 } from './tool-registry.ts';
-export {
-  AGENT_BODY_VARIABLES,
-  AgentBodyTemplateError,
-  EXAMPLE_AGENT_BODY_CONTEXT,
-  renderAgentBody,
-} from './agent-body.ts';
 export type {
   AgentApprovalRequestPayload,
   AgentAsksOrchestratorPayload,

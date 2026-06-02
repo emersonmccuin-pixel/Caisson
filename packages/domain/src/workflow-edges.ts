@@ -19,7 +19,15 @@
 // This file is data + types only. The actual YAML parser lives in
 // `@pc/workflows`'s `typed-parser.ts`.
 
-import type { CatalogType } from './workflow-catalog.ts';
+/** Primitive types carried by catalog entries + node-port schemas. */
+export type CatalogType =
+  | 'ulid'
+  | 'string'
+  | 'text'
+  | 'int'
+  | 'bool'
+  | 'object'
+  | 'array';
 
 /** Where a typed-edge value originates. Literals are not EdgeRefs — they
  *  remain on the node body as plain values. */
@@ -45,41 +53,4 @@ export interface NodeEdges {
   /** Author-declared output schema. Subagent kind only (D78). Maps output
    *  field name to its catalog type. */
   readonly output_schema?: Readonly<Record<string, CatalogType>>;
-}
-
-/** Compact edge-ref regex. `@<source>.<field>` where source can be a node
- *  id (catalog-name-style identifier), `trigger`, or `env`, and field is
- *  also an identifier. */
-const EDGE_REF_RE = /^@([A-Za-z_][A-Za-z0-9_-]*)\.([A-Za-z_][A-Za-z0-9_-]*)$/;
-
-/** True if `value` looks like a compact edge-ref (`'@X.Y'`). Cheap pre-check
- *  before calling parseEdgeRef. */
-export function isCompactEdgeRef(value: unknown): value is string {
-  return typeof value === 'string' && value.startsWith('@');
-}
-
-/** Parse a compact edge-ref string into a structured EdgeRef. Returns null
- *  when the string isn't a valid ref (doesn't start with `@`, malformed,
- *  etc.). Caller should treat null as "not a ref — leave as literal." */
-export function parseEdgeRef(value: string): EdgeRef | null {
-  const m = EDGE_REF_RE.exec(value);
-  if (!m) return null;
-  const source = m[1]!;
-  const field = m[2]!;
-  if (source === 'trigger') return { kind: 'trigger', output: field };
-  if (source === 'env') return { kind: 'env', name: field };
-  return { kind: 'node', nodeId: source, output: field };
-}
-
-/** Render an EdgeRef back to its compact `'@X.Y'` form. Inverse of
- *  parseEdgeRef. Used by the serializer + diagnostic messages. */
-export function formatEdgeRef(ref: EdgeRef): string {
-  switch (ref.kind) {
-    case 'node':
-      return `@${ref.nodeId}.${ref.output}`;
-    case 'trigger':
-      return `@trigger.${ref.output}`;
-    case 'env':
-      return `@env.${ref.name}`;
-  }
 }

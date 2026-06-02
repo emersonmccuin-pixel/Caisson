@@ -127,10 +127,6 @@ export function useRichLinkData(projectId: ULID | string | null, url: string): R
 
 // ── Invalidators (called from the WS subscriber wired in Shell) ──────────
 
-export function invalidateRichLink(url: string): void {
-  if (cache.delete(url)) notify();
-}
-
 export function invalidateByWorkItemId(workItemId: string): void {
   let dirty = false;
   for (const url of cache.keys()) {
@@ -148,18 +144,6 @@ export function invalidateByAttachmentId(attachmentId: string): void {
   for (const url of cache.keys()) {
     const parsed = parsePcUrl(url);
     if (parsed && parsed.kind === 'attachment' && parsed.ref === attachmentId) {
-      cache.delete(url);
-      dirty = true;
-    }
-  }
-  if (dirty) notify();
-}
-
-export function invalidateByFilePath(path: string): void {
-  let dirty = false;
-  for (const url of cache.keys()) {
-    const parsed = parsePcUrl(url);
-    if (parsed && parsed.kind === 'file' && parsed.ref === path) {
       cache.delete(url);
       dirty = true;
     }

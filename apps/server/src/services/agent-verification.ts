@@ -51,6 +51,7 @@ import type {
 import { ContractV2, KINDS_REQUIRING_EVIDENCE, evaluateAcceptance } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
+import { announceWorkItemRow } from './work-item-writer.ts';
 
 /** Default cap on a single `bash_exit_zero` predicate. Keeps the terminal
  *  handler from blocking on a runaway verifier script. Override per test. */
@@ -305,8 +306,19 @@ function acceptContract(args: {
   // contract owns verification status/notes now; the WI roll-up only flips
   // status + appends a history note.
   if (workItemId) {
-    applyRunOutcome(workItemId, 'complete', null, historyNote);
-    if (input.project) autoAdvanceToDoneStage(workItemId, input.project);
+    const updated = applyRunOutcome(workItemId, 'complete', null, historyNote);
+    if (updated) {
+      if (input.project) {
+        const advanced = autoAdvanceToDoneStage(workItemId, input.project);
+        if (advanced) {
+          announceWorkItemRow(advanced, advanced.projectId, 'auto-advanced');
+        } else {
+          announceWorkItemRow(updated, updated.projectId, 'verified');
+        }
+      } else {
+        announceWorkItemRow(updated, updated.projectId, 'verified');
+      }
+    }
   }
   return {
     contractId,

@@ -231,10 +231,3 @@ export function setContractVerification(
   db.update(agentContracts).set(patch).where(eq(agentContracts.id, id)).run();
   return getContractInDb(db, id);
 }
-
-/** True iff a contract row already exists for this work item id (the backfill's
- *  deterministic id == work item id). Lets the shim resolve "is this WI
- *  backfilled?" without a full list. */
-export function getBackfilledContractForWorkItem(workItemId: ULID): ContractRow | null {
-  return getContract(workItemId);
-}

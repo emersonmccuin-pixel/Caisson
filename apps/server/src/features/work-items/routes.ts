@@ -69,7 +69,6 @@ export interface WorkItemRoutesDeps {
 function verificationReviewStatus(err: VerificationReviewError): 400 | 404 | 409 {
   const statusFor: Record<VerificationReviewError['cause'], 400 | 404 | 409> = {
     'wi-not-found': 404,
-    'not-agent-task': 400,
     'not-awaiting-verification': 409,
     'feedback-required': 400,
     'no-assigned-run': 409,
@@ -285,7 +284,6 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       parent_work_item_id?: string | null;
       stage_id?: string;
       worktree?: string | null;
-      ephemeral?: boolean;
       raw_acceptance_criteria?: unknown;
     }>();
     const input: CreateAgentWorkItemInput = {
@@ -306,7 +304,6 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
         : {}),
       ...(typeof body.stage_id === 'string' ? { stageId: body.stage_id } : {}),
       ...(body.worktree !== undefined ? { worktree: body.worktree } : {}),
-      ...(typeof body.ephemeral === 'boolean' ? { ephemeral: body.ephemeral } : {}),
       ...(body.raw_acceptance_criteria !== undefined
         ? {
             rawAcceptanceCriteria:

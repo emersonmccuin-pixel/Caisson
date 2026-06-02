@@ -78,7 +78,6 @@ export type {
 export {
   createContract,
   createContractInDb,
-  getBackfilledContractForWorkItem,
   getContract,
   getContractInDb,
   listContractsForProject,

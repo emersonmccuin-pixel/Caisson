@@ -1,5 +1,5 @@
 // T2.2 — idle math + the non-terminal `stalled` warn pass. Fully deps-injected,
-// no DB: covers computeIdleMs/evaluateIdle and the emit-once warn + un-stall +
+// no DB: covers computeIdleMs and the emit-once warn + un-stall +
 // set-prune behavior of sweepStallWarn.
 
 import { test } from 'node:test';
@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 import type { AgentRunRow, AgentRunStatus, ULID } from '@pc/domain';
 
-import { computeIdleMs, evaluateIdle } from '../src/services/agent-run-idle.ts';
+import { computeIdleMs } from '../src/services/agent-run-idle.ts';
 import { sweepStallWarn } from '../src/services/agent-run-stall-warn.ts';
 
 function row(patch: Partial<AgentRunRow> = {}): AgentRunRow {
@@ -46,13 +46,6 @@ test('computeIdleMs takes the latest sign of life incl. jsonl mtime', () => {
   assert.equal(computeIdleMs(r, { now: 20_000, jsonlMtime: 9000 }), 11_000);
   // null mtime → falls back to lastActivityAt (the max row timestamp).
   assert.equal(computeIdleMs(r, { now: 20_000, jsonlMtime: null }), 15_000);
-});
-
-test('evaluateIdle returns ok/warn/kill by threshold', () => {
-  const t = { warnMs: 100, killMs: 1000 };
-  assert.equal(evaluateIdle(50, t), 'ok');
-  assert.equal(evaluateIdle(500, t), 'warn');
-  assert.equal(evaluateIdle(5000, t), 'kill');
 });
 
 interface Emit {
