@@ -44,7 +44,7 @@ import type {
   VerificationTier,
   WorkItemStatus,
 } from '@pc/domain';
-import { evaluateAcceptance } from '@pc/domain';
+import { ContractV2, KINDS_REQUIRING_EVIDENCE, evaluateAcceptance } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
 
@@ -66,6 +66,11 @@ export interface RunVerificationInput {
   /** Agent's worktree absolute path. Default `cwd` for `bash_exit_zero` +
    *  the resolution root for `files_exist` relative paths. */
   worktreeDir: string;
+  /** Slice 014a — the producing run + its CC session. The tool-call loader
+   *  reads the run's transcript via the session id; optional so legacy callers
+   *  + tests can omit them (the loaders then yield empty evidence). */
+  runId?: ULID;
+  ccSessionId?: string;
   /** Section 27.7 — full project record. When provided + verification PASS
    *  resolves + the project has an `is_done` stage, the WI auto-advances
    *  there after the status flip. `null` skips auto-advance (test paths
@@ -90,6 +95,13 @@ export interface VerificationDeps {
   /** Inject the predicate executors for tests. Production constructs a
    *  worktree-bound impl via `createWorktreeExecutors`. */
   executorsFor?: (input: RunVerificationInput) => PredicateExecutors;
+  /** Slice 014a — load the producing run's tool-call names from its session
+   *  transcript (powers `tool_called`). Injected; production reads the session
+   *  checkpoint via `loadSessionReplayCheckpoint`. Omitted ⇒ no tool evidence. */
+  loadToolCalls?: (input: RunVerificationInput) => Promise<ReadonlyArray<{ name: string }>>;
+  /** Slice 014a — true when the run created a durable pending-ask (powers
+   *  `pending_ask_created`). Injected; production reads the DB. */
+  loadPendingAskCreated?: (input: RunVerificationInput) => Promise<boolean>;
   now?: () => number;
 }
 
@@ -171,6 +183,37 @@ export async function runVerificationOnTerminal(
   // derivation library — flip directly to complete with no diagnostic.
   // Slice 013 — AC sourced through the contract shim (same bytes; WI fallback).
   const criteria = contract?.acceptanceCriteria ?? wi.acceptanceCriteria ?? [];
+
+  // Slice 014a — fail-closed. An evidence-requiring output kind (action /
+  // external / repo) that derived to ZERO predicates must NOT auto-pass: an
+  // auto-verifier with nothing to check on a side-effect contract escalates to
+  // review instead of passing open. (Inert until dispatch authors v2 specs —
+  // a v1 `expectedOutput.kind` never matches `KINDS_REQUIRING_EVIDENCE`.)
+  const specKind = (contract?.expectedOutput as { kind?: unknown } | null | undefined)?.kind;
+  const requiresEvidence =
+    ContractV2.isExpectedOutputKind(specKind) &&
+    (KINDS_REQUIRING_EVIDENCE as readonly string[]).includes(specKind);
+  if (criteria.length === 0 && requiresEvidence) {
+    const notes = `"${specKind}" output requires evidence but no acceptance criteria were derived — escalated to review`;
+    applyAgentVerification(input.workItemId, {
+      workItemStatus: 'awaiting-verification',
+      statusReason: `agent reported done — ${notes}`,
+      verificationStatus: 'pending',
+      verificationNotes: null,
+      historyNote: `verification held (fail-closed): ${specKind} output needs evidence`,
+    });
+    return {
+      workItemId: input.workItemId,
+      workItemStatus: 'awaiting-verification',
+      verificationStatus: 'pending',
+      verificationTier: tier,
+      notes,
+      predicatesEvaluated: 0,
+    };
+  }
+
+  // Tier-1 auto. Empty AC = "trust the agent's end-of-turn signal" per the
+  // derivation library — flip directly to complete with no diagnostic.
   if (criteria.length === 0) {
     applyAgentVerification(input.workItemId, {
       workItemStatus: 'complete',
@@ -192,6 +235,12 @@ export async function runVerificationOnTerminal(
 
   const attachments = listAttachmentsForWorkItem(input.workItemId);
   const children = listChildWorkItems(input.workItemId);
+  // Slice 014a — the captured deliverable (set synchronously before this runs)
+  // feeds the payload/external predicates.
+  const deliverable = contract?.deliverable as
+    | { kind?: string; data?: unknown; handle?: string }
+    | null
+    | undefined;
   const evalCtx: EvaluationContext = {
     body: wi.body,
     fields: wi.fields,
@@ -200,6 +249,12 @@ export async function runVerificationOnTerminal(
     // deliverables as attachments.
     attachments: attachments.map((a) => ({ name: a.name, content: a.content })),
     childWorkItems: children.map((c) => ({ status: c.status })),
+    // Slice 014a — evidence sources for the v2 predicates.
+    report: contract?.report ?? '',
+    toolCalls: (await deps.loadToolCalls?.(input)) ?? [],
+    pendingAskCreated: (await deps.loadPendingAskCreated?.(input)) ?? false,
+    payload: deliverable?.kind === 'payload' ? deliverable.data : undefined,
+    externalHandle: deliverable?.kind === 'external' ? deliverable.handle ?? null : undefined,
   };
 
   const executors = (deps.executorsFor ?? createWorktreeExecutors)(input);
@@ -300,6 +355,35 @@ export function createWorktreeExecutors(input: {
           clearTimeout(timer);
           resolveResult(code ?? 0);
         });
+      });
+    },
+    async hasGitDiff(cwd) {
+      // True iff the tree has any change — tracked, staged, or untracked.
+      // `git status --porcelain` prints one line per change; empty = clean.
+      const cwdAbs = cwd === 'project' ? input.projectFolderPath : input.worktreeDir;
+      return await new Promise<boolean>((resolveResult) => {
+        let settled = false;
+        let out = '';
+        const child = spawn('git', ['status', '--porcelain'], { cwd: cwdAbs });
+        const finish = (value: boolean) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolveResult(value);
+        };
+        const timer = setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            /* best-effort */
+          }
+          finish(false);
+        }, bashTimeoutMs);
+        child.stdout?.on('data', (d) => {
+          out += String(d);
+        });
+        child.on('error', () => finish(false));
+        child.on('exit', () => finish(out.trim().length > 0));
       });
     },
   };
