@@ -23,15 +23,13 @@ import type { VerificationTier } from './contract.ts';
 // Node kinds
 // ---------------------------------------------------------------------------
 
-/** Node kinds. Workflow-engine redesign: the two review kinds
- *  (`human-review` / `orchestrator-review`) are unified into ONE `review` worker
- *  whose `reviewer` field selects the flavor — same contract, same inbox pause,
- *  same reject loop. bash/script/move-work-item are still here pending their
- *  deletion (slice 8). */
+/** Node kinds. Workflow-engine redesign: just TWO workers — `agent` (runs
+ *  autonomously, an agent runs any commands it needs and reports) and `review`
+ *  (a human-judgment gate; `reviewer` = human | orchestrator). The old
+ *  bash/script/move-work-item kinds + the two split review kinds are deleted —
+ *  card-move is a node `move` effect, not a node. */
 export const WORKFLOW_NODE_KINDS = [
   'agent',
-  'bash',
-  'script',
   'review',
 ] as const;
 export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
@@ -184,22 +182,6 @@ export interface AgentNode extends WorkflowNodeBase {
   verification_tier?: VerificationTier;
 }
 
-/** Runs a shell command in the run's worktree, path-guarded. SIGKILL on
- *  timeout. No AI, no child-WI dispatch (output = `{stdout, stderr, exitCode}`). */
-export interface BashNode extends WorkflowNodeBase {
-  kind: 'bash';
-  /** Shell body. Supports `$nodeId.output[.field]` (bash-escaped). */
-  bash: string;
-}
-
-/** Runs a TS (node) or Python script in the run's worktree. SIGKILL on timeout.
- *  PC convention is node/python (NOT Archon's bun/uv — port-map open Q #1). */
-export interface ScriptNode extends WorkflowNodeBase {
-  kind: 'script';
-  script: string;
-  runtime: 'node' | 'python';
-}
-
 /** Unified review step (workflow-engine redesign). Pauses the run durably until
  *  a decision lands in an inbox — the user's (`reviewer: 'human'`) or the project
  *  orchestrator's (`reviewer: 'orchestrator'`). On approve, follows `next`; on
@@ -216,11 +198,7 @@ export interface ReviewNode extends WorkflowNodeBase {
   reject?: RejectEdge;
 }
 
-export type WorkflowNode =
-  | AgentNode
-  | BashNode
-  | ScriptNode
-  | ReviewNode;
+export type WorkflowNode = AgentNode | ReviewNode;
 
 // Type guards
 export function isReviewNode(n: WorkflowNode): n is ReviewNode {

@@ -87,7 +87,7 @@ test('commitRunChange emits exactly one canonical workflow.run.changed with rev 
 });
 
 test('definitionHash is surfaced on the run DTO and is snapshot-derived', () => {
-  const snapshot = JSON.stringify({ id: 'deploy', name: 'Deploy', triggers: [], nodes: [{ id: 'a', kind: 'bash', bash: 'echo hi' }] });
+  const snapshot = JSON.stringify({ id: 'deploy', name: 'Deploy', triggers: [], nodes: [{ id: 'a', kind: 'agent', agent: 'writer', task: 'go' }] });
   const { gateway } = makeGateway(makeRow({ workflowYamlSnapshot: snapshot }));
   const pub = gateway.commitRunChange({ projectId: 'p1', reason: 'advanced', mutate: () => makeRow({ workflowYamlSnapshot: snapshot }) });
   assert.equal(typeof pub.run.definitionHash, 'string');

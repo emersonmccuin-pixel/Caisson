@@ -55,8 +55,6 @@ export interface DagExecutorDeps {
   resolveRef(state: State): RefResolver;
   /** Create the child work item + spawn the pod; resolve when terminal. */
   dispatchAgent(node: WorkflowV2.AgentNode, ctx: DagNodeContext): Promise<NodeOutcome>;
-  /** Run a bash/script node in the worktree; resolve when done. */
-  runCommand(node: WorkflowV2.BashNode | WorkflowV2.ScriptNode, ctx: DagNodeContext): Promise<NodeOutcome>;
   /** Card-move TRANSITION EFFECT (locked decision 1) — move the run-root card to
    *  `stage` without firing that stage's on-entry workflows. Applied after a step
    *  settles `completed` (its `move`) or on a reject kick-back (`reject.move`). */
@@ -208,13 +206,12 @@ export class DagExecutor {
           const node = this.byId.get(id)!;
           const carry = this.carryFor(id, resolve);
           try {
-            const outcome =
-              node.kind === 'agent'
-                ? await this.deps.dispatchAgent(node, this.ctx(resolve, carry))
-                : await this.deps.runCommand(
-                    node as WorkflowV2.BashNode | WorkflowV2.ScriptNode,
-                    this.ctx(resolve, carry)
-                  );
+            // runLayer only ever sees non-review ready nodes (review nodes pause
+            // via requestReview), and the only non-review kind is `agent`.
+            if (node.kind !== 'agent') {
+              return { id, outcome: { state: 'failed' as const, error: `unexpected node kind "${node.kind}" in run layer` } };
+            }
+            const outcome = await this.deps.dispatchAgent(node, this.ctx(resolve, carry));
             return { id, outcome };
           } catch (err) {
             return {

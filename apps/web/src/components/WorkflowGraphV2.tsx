@@ -21,8 +21,6 @@ import {
   Check,
   Eye,
   ShieldCheck,
-  Terminal,
-  Code,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -43,8 +41,6 @@ interface KindConfig {
 
 const KIND_CONFIG: Record<WorkflowV2.WorkflowNode['kind'], KindConfig> = {
   agent: { label: 'agent', icon: Bot, band: 'bg-primary/70' },
-  bash: { label: 'bash', icon: Terminal, band: 'bg-foreground/60' },
-  script: { label: 'script', icon: Code, band: 'bg-foreground/60' },
   review: { label: 'review', icon: ShieldCheck, band: 'bg-warning' },
 };
 

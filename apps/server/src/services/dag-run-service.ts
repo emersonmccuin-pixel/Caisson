@@ -6,8 +6,6 @@
 // test/dag-run-service.test.ts); the live claude.exe smoke is 19.14.
 
 import { randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import type { ExpectedOutput, Project, ULID, WorkflowV2 } from '@pc/domain';
 import { substituteRefs, type RefResolver, type ReviewDecision, type RunStatus } from '@pc/workflows';
 import {
@@ -32,24 +30,6 @@ import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import type { WorkItemService } from './work-item.ts';
 import { announceWorkItemRow } from './work-item-writer.ts';
 import type { WorktreeService } from './worktree.ts';
-
-const execFileAsync = promisify(execFile);
-
-export type CommandExec = (
-  kind: 'bash' | 'node' | 'python',
-  code: string,
-  opts: { cwd: string; timeout?: number }
-) => Promise<{ ok: boolean; error?: string; stdout?: string }>;
-
-/** Per-node stdout cap stored in the DAG state. Plenty for typical
- *  `echo`/`git status`/`jq` outputs; trims giant logs that would otherwise
- *  bloat the workflow_runs_v2.dagState JSON column. */
-const STDOUT_CAP_BYTES = 16 * 1024;
-
-function truncateStdout(s: string): string {
-  if (s.length <= STDOUT_CAP_BYTES) return s;
-  return s.slice(0, STDOUT_CAP_BYTES) + `\n…[truncated, ${String(s.length - STDOUT_CAP_BYTES)} more bytes]`;
-}
 
 /** Workflow-review delivery seam. The DAG executor calls this to enqueue a
  *  durable `workflow-review` mailbox message (active-orchestrator +
@@ -122,7 +102,6 @@ export interface DagRunServiceOptions {
   broadcast: (event: unknown) => void;
   hostClient?: AgentHostReattachClient | null;
   // ── injectable seams (live defaults) ──
-  exec?: CommandExec;
   /** Mailbox review delivery seam — the review prompt is enqueued as a mailbox
    *  message. Injected from index.ts. */
   deliverReview?: WorkflowReviewDelivery;
@@ -130,26 +109,6 @@ export interface DagRunServiceOptions {
    *  the project orchestrator. Injected from index.ts. */
   deliverRunFailed?: WorkflowRunFailedDelivery;
 }
-
-const liveExec: CommandExec = async (kind, code, { cwd, timeout }) => {
-  const [cmd, args]: [string, string[]] =
-    kind === 'bash' ? ['bash', ['-c', code]] : kind === 'node' ? ['node', ['-e', code]] : ['python', ['-c', code]];
-  try {
-    const { stdout } = await execFileAsync(cmd, args, {
-      cwd,
-      timeout,
-      killSignal: 'SIGKILL', // hard-kill on timeout (PC improvement over Archon's soft abort)
-      maxBuffer: 10 * 1024 * 1024,
-      windowsHide: true,
-      encoding: 'utf8',
-    });
-    return { ok: true, stdout: truncateStdout(String(stdout).replace(/\r?\n$/, '')) };
-  } catch (err) {
-    const e = err as Error & { killed?: boolean };
-    const reason = e.killed && timeout !== undefined ? `timeout (${String(timeout)}ms exceeded)` : e.message;
-    return { ok: false, error: reason };
-  }
-};
 
 /** awaiting-review maps to the persisted `paused` status. */
 function toRunStatus(s: RunStatus): WorkflowV2.WorkflowRunStatus {
@@ -174,8 +133,6 @@ export function makeExecutorDeps(
   workflow: WorkflowV2.Workflow,
   opts: DagRunServiceOptions
 ): DagExecutorDeps {
-  const exec = opts.exec ?? liveExec;
-
   const resolveRef =
     (state: WorkflowV2.WorkflowDagState): RefResolver =>
     (nodeId, field) => {
@@ -327,18 +284,6 @@ export function makeExecutorDeps(
     };
   };
 
-  const runCommand = async (
-    node: WorkflowV2.BashNode | WorkflowV2.ScriptNode,
-    ctx: DagNodeContext
-  ): Promise<NodeOutcome> => {
-    const cwd = run.worktreePath ?? opts.workspaceDir;
-    const kind: 'bash' | 'node' | 'python' = node.kind === 'bash' ? 'bash' : node.runtime;
-    const code = node.kind === 'bash' ? render(node.bash, ctx, true) : render(node.script, ctx);
-    const r = await exec(kind, code, { cwd, ...(node.timeout !== undefined ? { timeout: node.timeout } : {}) });
-    if (!r.ok) return { state: 'failed', ...(r.error ? { error: r.error } : {}) };
-    return { state: 'completed', ...(r.stdout !== undefined ? { output: r.stdout } : {}) };
-  };
-
   // Card-move TRANSITION EFFECT (locked decision 1) — move the run-root card to
   // `stage` WITHOUT firing that stage's on-entry workflows (loop-safe). Replaces
   // the old move-work-item node. Best-effort: returns ok/error so the executor
@@ -418,7 +363,6 @@ export function makeExecutorDeps(
   return {
     resolveRef,
     dispatchAgent,
-    runCommand,
     moveCard,
     requestReview,
     persist,

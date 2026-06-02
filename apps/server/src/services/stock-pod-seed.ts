@@ -685,11 +685,9 @@ The v1 UI affordances are manual and stage-on-entry. Stage-on-entry fires on for
 
 ## Node kinds
 
-The current v2 node set (6 kinds):
+The current v2 node set (2 kinds):
 
-- agent: dispatches a specialist to complete work.
-- bash: runs a shell command in the workflow worktree.
-- script: runs a node or python script.
+- agent: dispatches a specialist to complete work — including any shell commands, builds, tests, or git it needs (it runs them itself in the worktree).
 - card-move (the \`move\` field on any step, not a node): advances the run's card to another stage when the step completes. It does NOT re-fire stage-on-entry triggers, so a workflow can move its own card across the board without re-triggering itself.
 - review: pauses the run at a human-judgment gate until a decision lands. \`reviewer: "orchestrator"\` posts the review bundle to the orchestrator's inbox (the orchestrator + user judge — the common gate); \`reviewer: "human"\` parks it in the user's own inbox. Both pause durably and never auto-advance.
 

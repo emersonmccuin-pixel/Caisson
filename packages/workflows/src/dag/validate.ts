@@ -17,9 +17,8 @@ export interface ValidationResult {
   errors: string[];
 }
 
-const NODE_KINDS = new Set(['agent', 'bash', 'script', 'review']);
+const NODE_KINDS = new Set(['agent', 'review']);
 const TRIGGER_KINDS = new Set(['manual', 'stage-on-entry', 'schedule', 'event']);
-const SCRIPT_RUNTIMES = new Set(['node', 'python']);
 const REVIEW_KINDS = new Set(['review']);
 const REVIEWERS = new Set(['human', 'orchestrator']);
 
@@ -79,13 +78,6 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
       errors.push(`agent node "${id}": missing "agent" (pod name)`);
     if (kind === 'agent' && (typeof n.task !== 'string' || n.task === ''))
       errors.push(`agent node "${id}": missing "task"`);
-    if (kind === 'bash' && (typeof n.bash !== 'string' || n.bash === ''))
-      errors.push(`bash node "${id}": missing "bash" command`);
-    if (kind === 'script') {
-      if (typeof n.script !== 'string' || n.script === '') errors.push(`script node "${id}": missing "script" body`);
-      if (!SCRIPT_RUNTIMES.has(n.runtime as string))
-        errors.push(`script node "${id}": runtime must be "node" or "python"`);
-    }
     if (kind === 'review' && !REVIEWERS.has(n.reviewer as string))
       errors.push(`review node "${id}": reviewer must be "human" or "orchestrator"`);
   }
@@ -138,7 +130,7 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
       const id = typeof n.id === 'string' ? n.id : '';
       if (!id) continue;
       // The substitutable text bodies a step renders refs from.
-      const bodies = [n.task, n.bash, n.script, n.prompt].filter(
+      const bodies = [n.task, n.prompt].filter(
         (v): v is string => typeof v === 'string',
       );
       if (bodies.length === 0) continue;

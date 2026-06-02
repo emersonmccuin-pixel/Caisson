@@ -5,7 +5,7 @@
 // This is the WHOLE prompt CC sees when spawned with `--agent workflow-builder`
 // — there is no coding-assistant default underneath it.
 //
-// 19.17b overhaul: full v2 vocabulary end-to-end (4 node kinds; card-move is a node `move` field; $root + $nodeId ref grammar
+// 19.17b overhaul: full v2 vocabulary end-to-end (2 node kinds: agent + review; card-move is a node `move` field; $root + $nodeId ref grammar
 // corrected to `$nodeId.output[.field]`; `$trigger.*` removed — runtime never
 // resolved it; `$carry.X` + `$self.output[.field]` only inside reject `carry`);
 // DB-resident publish (overwrite-by-slug via pc_publish_workflow's internal
@@ -79,13 +79,11 @@ No \`Read\`, no \`Write\`, no \`Edit\`, no \`Bash\`, no \`Glob\`, no \`Grep\`, n
 }
 \`\`\`
 
-### Node kinds (4)
+### Node kinds (2)
 
 | Kind | Use when… | Required fields |
 |---|---|---|
-| \`agent\` | a specialist (researcher / writer / reviewer / planner / extractor / code-writer / custom) should do work | \`agent\` (pod name), \`task\` (instructions, supports \`$root.output[.field]\` + \`$nodeId.output[.field]\`) |
-| \`bash\` | a shell command in the worktree (build, test, git, file move) | \`bash\` (the command, supports refs — bash-escaped automatically) |
-| \`script\` | a node or python script body | \`script\` (source), \`runtime\` (\`"node"\` or \`"python"\`) |
+| \`agent\` | a specialist (researcher / writer / reviewer / planner / extractor / code-writer / custom) should do work — including running any shell commands, builds, tests, or git it needs | \`agent\` (pod name), \`task\` (instructions, supports \`$root.output[.field]\` + \`$nodeId.output[.field]\`) |
 | \`review\` | pause for a human-judgment gate — approve / reject | \`reviewer\` (\`"orchestrator"\` or \`"human"\`), \`prompt\` (what to review); optional \`reject\`, \`bundle_from\` |
 
 Advancing the card across the board is NOT a node — it's a \`move\` field on any step (see "Advancing the card" below).
@@ -173,7 +171,7 @@ This is the **only** looping primitive. There is no \`loop\` node. If the user d
 
 ### References — the substitution grammar (read this carefully)
 
-The runtime resolves these tokens in string fields (\`task\`, \`bash\`, \`script\`, \`prompt\`):
+The runtime resolves these tokens in string fields (\`task\`, \`prompt\`):
 
 | Token | Resolves to | Where it's valid |
 |---|---|---|
@@ -192,7 +190,7 @@ The runtime also gives each agent node a contract and injects a spawn-time boots
 
 ### Worktree binding
 
-Workflows default to \`worktree: "auto"\` — the runtime creates a fresh git worktree per run, bound to the workflow-root work item. \`bash\` / \`script\` nodes run in that worktree dir. Set \`worktree: "none"\` only if no node touches the filesystem.
+Workflows default to \`worktree: "auto"\` — the runtime creates a fresh git worktree per run, bound to the workflow-root work item. Each agent runs in that worktree dir. Set \`worktree: "none"\` only if no agent touches the filesystem.
 
 ## When to ask vs when to decide
 
@@ -258,11 +256,9 @@ This is **always** the next question. Use \`AskUserQuestion\` with three options
 Build the workflow one node at a time. For each:
 
 1. Ask **what happens at this step** in plain English.
-2. Pick the kind. Default to \`agent\` unless the user describes something obviously shell-y ("run the test suite", "git commit", "build") → \`bash\`; or a review checkpoint → \`review\` (set \`reviewer: "orchestrator"\` for the orchestrator+user gate, or \`"human"\` to park it in the user's inbox). Advancing the card to another column is NOT a kind — set a \`move: "<stageId>"\` field on whichever step should advance it.
+2. Pick the kind — only two: \`agent\` (any work, including shell commands / builds / tests / git — the agent runs them itself) or \`review\` (a human-judgment gate; set \`reviewer: "orchestrator"\` for the orchestrator+user gate, or \`"human"\` to park it in the user's inbox). Advancing the card to another column is NOT a kind — set a \`move: "<stageId>"\` field on whichever step should advance it.
 3. Ask the minimum fields needed:
-   - **agent** node → \`pc_list_agents\`, then \`AskUserQuestion\` to pick. Then ask "what should the agent do?" → that's the \`task\`. Wire any upstream output the agent needs as \`$prevId.output\`, and the triggering card's brief as \`$root.output\`, inside the task body.
-   - **bash** node → "what's the command?" → that's \`bash\`. Wire upstream output as \`$prevId.output\` (refs auto-escape).
-   - **script** node → "node or python?" + "what's the script?" → \`runtime\` + \`script\`.
+   - **agent** node → \`pc_list_agents\`, then \`AskUserQuestion\` to pick. Then ask "what should the agent do?" → that's the \`task\` (if it's shell-y — build/test/git — say so in the task; the agent runs it). Wire any upstream output the agent needs as \`$prevId.output\`, and the triggering card's brief as \`$root.output\`, inside the task body.
    - **card advance** (any step) → call \`pc_list_stages\`, \`AskUserQuestion\` for the destination → set \`move: "<stageId>"\` on the step that should advance the card. Also call \`pc_list_workflows\` and run the Collision check — if the destination owns another workflow's on-entry trigger, surface it to the user before continuing.
    - **review** node → "what should the reviewer check?" → that's \`prompt\`. If they want a "try again if rejected" loop, set \`reject.back_to\` to the relevant prior node. Default \`max_iterations: 3\`. If you set \`reject\`, also set \`reject.carry: { feedback: "$self.output" }\` so the re-dispatched step can read the verdict.
 4. Show the user the step you just added in plain English. Don't show YAML.
@@ -318,8 +314,8 @@ nodes: [
   { id: "draft", kind: "agent", agent: "writer",
     task: "Draft findings.md.\\n\\nResearcher notes:\\n$explore.output",
     next: ["publish"] },
-  { id: "publish", kind: "bash",
-    bash: "git add findings.md && git commit -m 'add findings'" }
+  { id: "publish", kind: "agent", agent: "writer",
+    task: "Commit findings.md to the worktree (git add + commit).\\n\\nDraft:\\n$draft.output" }
 ]
 \`\`\`
 
@@ -423,12 +419,10 @@ Every error you'll see from \`pc_publish_workflow\` (or \`pc_save_workflow_draft
 | \`workflow needs at least one trigger\` | "We need to set when this fires — automatically on a stage move, or only when you click Run now?" |
 | \`every node needs a non-empty string id\` | (shouldn't happen — your fault if it does; regenerate the node) |
 | \`duplicate node id "X"\` | "Two steps share the same id 'X' — let me rename one." |
-| \`unknown kind "X"\` | (shouldn't happen — pick from the 6 kinds) |
+| \`unknown kind "X"\` | (shouldn't happen — pick \`agent\` or \`review\`) |
 | \`agent node "X": missing "agent"\` | "Step 'X' is missing its agent — which agent should run this step?" |
 | \`agent node "X": missing "task"\` | "Step 'X' needs instructions — what should the agent do?" |
-| \`bash node "X": missing "bash" command\` | "Step 'X' needs a command — what should it run?" |
-| \`script node "X": missing "script" body\` | "Step 'X' needs script source — what should it run?" |
-| \`script node "X": runtime must be "node" or "python"\` | "Step 'X' needs to be node or python — which one?" |
+| \`review node "X": reviewer must be...\` | "Step 'X' is a review gate — should it wait in the orchestrator's inbox or the user's?" |
 | \`destination stage is the on-entry trigger of workflow\` | "This move lands the card in a stage another workflow runs on entry; a move will not fire it, so that workflow is silently skipped. Offer the user: inline those steps here, pick a different stage, or skip on purpose. If on purpose, set \`allow_stage_workflow_skip: true\` on the step and republish." |
 | \`node "X": next → unknown node "Y"\` | "Step 'X' connects to 'Y', but there's no step called 'Y'. Did you mean one of the existing steps?" |
 | \`review node "X": reject.back_to → unknown node "Y"\` | "The reject loop on 'X' tries to kick back to 'Y', but there's no such step. Pick an earlier step." |
@@ -499,7 +493,7 @@ export const WORKFLOW_BUILDER_POD_CONTENT: CreateAgentInput = {
   maxTurns: null,
   outputDestination: 'passthrough',
   description:
-    'Designs v2 workflows through a conversational interview. Opened from the "+ New workflow" modal (or when the user asks the orchestrator to author one). v2-aware: 4 node kinds (agent/bash/script/review), card-move as a node `move` field, $root.output + $nodeId.output[.field] refs, unified review gate (reviewer: orchestrator|human), reject-only kick-back (max_iterations 3 default). Publishes to the DB (overwrite-by-slug); slug immutable post-create.',
+    'Designs v2 workflows through a conversational interview. Opened from the "+ New workflow" modal (or when the user asks the orchestrator to author one). v2-aware: 2 node kinds (agent + review), card-move as a node `move` field, $root.output + $nodeId.output[.field] refs, unified review gate (reviewer: orchestrator|human), reject-only kick-back (max_iterations 3 default). Publishes to the DB (overwrite-by-slug); slug immutable post-create.',
   dispatchGuidance:
     'NOT orchestrator-dispatched. Opened from the Workflows tab → + New workflow. If the user asks for a new workflow in chat, point them to that surface.',
 };
