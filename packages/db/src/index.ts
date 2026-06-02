@@ -76,6 +76,28 @@ export type {
   WorkItemAreaFilter,
 } from './repos/work-items.ts';
 
+// Slice 013 — agent_contracts repo (persistence-only; app-services announces).
+export {
+  createContract,
+  createContractInDb,
+  getBackfilledContractForWorkItem,
+  getContract,
+  getContractInDb,
+  listContractsForRun,
+  listContractsForRunInDb,
+  listContractsForWorkItem,
+  listContractsForWorkItemInDb,
+  setContractDeliverable,
+  setContractRun,
+  setContractVerification,
+} from './repos/contracts.ts';
+export type {
+  ContractRow,
+  CreateContractInput,
+  SetDeliverableInput,
+  SetVerificationInput,
+} from './repos/contracts.ts';
+
 // Slice 010 — Areas repo (persistence-only; app-services announces).
 export {
   createArea,
@@ -272,6 +294,7 @@ export {
   listNonTerminalAgentRuns,
   markAgentRunTerminal,
   reconcileOrphanedRunningRuns,
+  setAgentRunContractId,
   touchAgentRunActivity,
   updateAgentRunPid,
   updateAgentRunStatus,

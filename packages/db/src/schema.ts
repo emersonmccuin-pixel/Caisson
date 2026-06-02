@@ -101,6 +101,7 @@ export const liveOutbox = sqliteTable(
         | 'session-title'
         | 'pod'
         | 'area'
+        | 'contract'
         | 'host-health'
       >(),
     entityId: text('entity_id').$type<ULID | null>(),
@@ -793,6 +794,7 @@ export const agentAudit = sqliteTable(
 // drizzle-kit's single-file config picks them up.
 export {
   agentRuns,
+  agentContracts,
   pendingAsks,
   agentInbox,
   agentDeliveryAudit,

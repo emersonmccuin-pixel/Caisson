@@ -267,6 +267,13 @@
       "when": 1781654400000,
       "tag": "0037_areas",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1781740800000,
+      "tag": "0038_agent_contracts",
+      "breakpoints": true
     }
   ]
 }

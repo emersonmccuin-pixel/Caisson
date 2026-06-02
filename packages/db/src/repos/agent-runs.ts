@@ -39,6 +39,9 @@ export interface InsertAgentRunRowInput {
    *  drift detection on resume. Null when the materialiser didn't supply a
    *  revision. */
   podRevisionAtDispatch?: string | null;
+  /** Slice 013 — FK to the first-class `agent_contracts` row this run is
+   *  producing. NULL for legacy/non-contract dispatches. */
+  contractId?: ULID | null;
   queuedAt: number;
 }
 
@@ -69,6 +72,7 @@ export function insertAgentRunRow(input: InsertAgentRunRowInput): AgentRunRow {
     lastActivityAt: null,
     completedAt: null,
     rev: 0,
+    contractId: input.contractId ?? null,
   };
   getDb().insert(agentRuns).values(row).run();
   return row;
@@ -273,4 +277,13 @@ export function listAndReconcileOrphanedRuns(now: number): AgentRunRow[] {
     .from(agentRuns)
     .where(inArray(agentRuns.id, ids))
     .all() as AgentRunRow[];
+}
+
+// ── Slice 013 — agent_runs.contract_id link (additive) ───────────────────────
+
+/** Point an agent_run at the first-class contract it's producing. Does NOT
+ *  bump rev — the contract link is dispatch bookkeeping, not a status
+ *  transition the frontend versions. Idempotent. */
+export function setAgentRunContractId(id: ULID, contractId: ULID | null): void {
+  getDb().update(agentRuns).set({ contractId }).where(eq(agentRuns.id, id)).run();
 }

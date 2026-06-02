@@ -14,6 +14,13 @@ import { getDb } from '../connection.ts';
 import { newId } from '../id.ts';
 import { projects, workItems } from '../schema.ts';
 
+// Slice 013 — a work item renders its associated contracts as a work log.
+// Re-export the read so callers reaching for work-item data find it here.
+export {
+  listContractsForWorkItem,
+  listContractsForWorkItemInDb,
+} from './contracts.ts';
+
 /** Optimistic-concurrency conflict. Server returns 409 + current row when this throws. */
 export class WorkItemVersionConflictError extends Error {
   constructor(

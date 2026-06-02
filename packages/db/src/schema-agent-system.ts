@@ -10,18 +10,24 @@
 
 import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import type {
+  AcceptanceCriteria,
   AgentInboxDriver,
   AgentInboxEventKind,
   AgentInboxStatus,
   AgentRunFailureCause,
   AgentRunStatus,
+  ContractStatus,
+  ContractV2,
+  Deliverable,
   PendingAskKind,
   PendingAskOption,
   PendingAskStatus,
   ULID,
+  VerificationStatus,
+  VerificationTier,
 } from '@pc/domain';
 
-import { projects } from './schema.ts';
+import { projects, workItems } from './schema.ts';
 
 /**
  * Persisted dispatch record. Mirrors the in-memory AgentRunRecord 1:1 —
@@ -59,6 +65,11 @@ export const agentRuns = sqliteTable(
     continues: text('continues').$type<ULID | null>(),
     parentInvokeDepth: integer('parent_invoke_depth').notNull().default(0),
     parentWorkItemId: text('parent_work_item_id').$type<ULID | null>(),
+    /** Slice 013 — FK to the first-class `agent_contracts` row this run is
+     *  producing. Nullable: legacy/un-backfilled runs + non-contract dispatches
+     *  stay NULL (the read-through shim falls back to the work-item contract
+     *  columns). No DB FK declared (app-enforced, mirrors `areaId`). */
+    contractId: text('contract_id').$type<ULID | null>(),
     /** Verbatim initial input. NULL on resumes carrying no new input. */
     input: text('input'),
     /** Final assistant text. NULL until terminal-completed. */
@@ -86,6 +97,65 @@ export const agentRuns = sqliteTable(
     index('agent_runs_continues_idx').on(t.continues),
     index('agent_runs_project_status_idx').on(t.projectId, t.status),
     index('agent_runs_cc_session_idx').on(t.ccSessionId),
+    index('agent_runs_contract_idx').on(t.contractId),
+  ],
+);
+
+/**
+ * Slice 013 — first-class agent contract. A machine assignment with a typed,
+ * verified output — NOT a work item. Extracts the contract off `work_items`
+ * (Section 26 bolted it on); the legacy work_items contract columns are KEPT
+ * this slice as a read-through shim, removed in 014/cleanup.
+ *
+ * - `workItemId` — OPTIONAL FK; many contracts : one work item (powers the
+ *   work-log). Null = a contract with no human work item. No DB FK declared
+ *   (app-enforced, mirrors `work_items.area_id`).
+ * - `deliverable` lives HERE (typed v2 union), not borrowed from `wi.body`.
+ * - `report` is the free-text envelope to the orchestrator.
+ * - `attempt` carries retries (retries don't mint new work items).
+ *
+ * Verification behavior is unchanged this slice — predicates/tiers move as-is.
+ */
+export const agentContracts = sqliteTable(
+  'agent_contracts',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    projectId: text('project_id')
+      .notNull()
+      .$type<ULID>()
+      .references(() => projects.id),
+    /** Optional, one-to-many rollup to a human work item. */
+    workItemId: text('work_item_id').$type<ULID | null>(),
+    /** The producing run. NULL until dispatched. */
+    agentRunId: text('agent_run_id').$type<ULID | null>(),
+    /** Retry counter — retries live here, not on new work items. */
+    attempt: integer('attempt').notNull().default(0),
+    /** Provenance (orchestrator session / workflow stage / parent run). */
+    issuedBy: text('issued_by'),
+    podName: text('pod_name'),
+    /** Orchestrator's typed spec (v2 union). */
+    expectedOutput: text('expected_output', { mode: 'json' }).$type<ContractV2.ExpectedOutput>(),
+    /** Derived predicate set. */
+    acceptanceCriteria: text('acceptance_criteria', { mode: 'json' }).$type<AcceptanceCriteria>(),
+    verificationTier: text('verification_tier').$type<VerificationTier>(),
+    verificationStatus: text('verification_status').$type<VerificationStatus>(),
+    verificationNotes: text('verification_notes'),
+    /** Free text to the orchestrator. */
+    report: text('report'),
+    /** The captured typed artifact — owned here (v2 Deliverable union). */
+    deliverable: text('deliverable', { mode: 'json' }).$type<Deliverable>(),
+    /** Isolation axis for repo/file producers. */
+    worktreePath: text('worktree_path'),
+    status: text('status').notNull().default('issued').$type<ContractStatus>(),
+    /** Optimistic-concurrency counter. */
+    version: integer('version').notNull().default(1),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [
+    index('agent_contracts_project_idx').on(t.projectId),
+    index('agent_contracts_work_item_idx').on(t.workItemId),
+    index('agent_contracts_run_idx').on(t.agentRunId),
   ],
 );
 
