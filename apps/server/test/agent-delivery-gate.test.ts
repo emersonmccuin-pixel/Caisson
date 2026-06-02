@@ -8,20 +8,9 @@ import {
   deliverAgentEnvelope,
   type DeliverAgentEnvelopeInput,
 } from '../src/services/agent-delivery.ts';
-import { fixedDeliveryRouter } from '../src/services/delivery-routing.ts';
 
-// A fake ChannelServer that records emitToSession + asserts it's the ONLY
-// delivery path used on the channel gate. We never construct a real one.
-function fakeChannelServer() {
-  const emits: { recipientSessionId: string; body: string }[] = [];
-  const cs = {
-    emitToSession(input: { recipientSessionId: string; body: string }) {
-      emits.push({ recipientSessionId: input.recipientSessionId, body: input.body });
-      return true; // pretend a registrant received it
-    },
-  };
-  return { cs, emits };
-}
+// 017 Phase C — the Channel delivery path is deleted; deliverAgentEnvelope is
+// mailbox-only. Every agent envelope enqueues exactly one mailbox message.
 
 function fakeMailbox() {
   const calls: EnqueueMailboxMessageInput[] = [];
@@ -40,34 +29,9 @@ const baseInput: DeliverAgentEnvelopeInput = {
   sourceId: 'run-1',
 };
 
-test('gate=channel — the envelope rides enqueueAndPush/emitToSession; NO mailbox enqueue', () => {
-  // channel-only transport so emitToSession is the observable path.
-  const prior = process.env.PC_DELIVERY_TRANSPORT;
-  process.env.PC_DELIVERY_TRANSPORT = 'channel-only';
-  const { cs, emits } = fakeChannelServer();
+test('enqueues an orchestrator-session + orchestrator-turn message with the stable key', () => {
   const mb = fakeMailbox();
-  const res = deliverAgentEnvelope(baseInput, {
-    channelServer: cs as never,
-    router: fixedDeliveryRouter({ agent: 'channel' }),
-    mailboxEnqueue: mb.port,
-  });
-  assert.equal(emits.length, 1);
-  assert.equal(emits[0]!.recipientSessionId, 'dispatcher-sess-1');
-  assert.equal(mb.calls.length, 0, 'channel gate must NOT enqueue mailbox');
-  assert.equal(res.channelDelivered, true);
-  if (prior === undefined) delete process.env.PC_DELIVERY_TRANSPORT;
-  else process.env.PC_DELIVERY_TRANSPORT = prior;
-});
-
-test('gate=mailbox — enqueues orchestrator-session + orchestrator-turn with the stable key; NO channel push', () => {
-  const { cs, emits } = fakeChannelServer();
-  const mb = fakeMailbox();
-  const res = deliverAgentEnvelope(baseInput, {
-    channelServer: cs as never,
-    router: fixedDeliveryRouter({ agent: 'mailbox' }),
-    mailboxEnqueue: mb.port,
-  });
-  assert.equal(emits.length, 0, 'mailbox gate must NOT emit to channel');
+  const res = deliverAgentEnvelope(baseInput, { mailboxEnqueue: mb.port });
   assert.equal(mb.calls.length, 1);
   const input = mb.calls[0]!;
   assert.equal(input.message.kind, 'agent-terminal');
@@ -84,6 +48,7 @@ test('gate=mailbox — enqueues orchestrator-session + orchestrator-turn with th
     projectId: 'p1',
     sessionId: 'dispatcher-sess-1',
   });
+  // Mailbox path returns no agent_inbox row + no channel push (legacy fields).
   assert.equal(res.channelDelivered, false);
   assert.equal(res.inboxId, null);
 });
@@ -99,14 +64,7 @@ test('message-kind mapping: asks ⟹ agent-question, approval ⟹ agent-approval
   ];
   for (const [kind, expected] of cases) {
     const mb = fakeMailbox();
-    deliverAgentEnvelope(
-      { ...baseInput, kind },
-      {
-        channelServer: fakeChannelServer().cs as never,
-        router: fixedDeliveryRouter({ agent: 'mailbox' }),
-        mailboxEnqueue: mb.port,
-      },
-    );
+    deliverAgentEnvelope({ ...baseInput, kind }, { mailboxEnqueue: mb.port });
     assert.equal(mb.calls[0]!.message.kind, expected, `kind ${kind}`);
   }
 });
@@ -119,76 +77,15 @@ test('mailbox subject — human title per kind (completed/failed/started use the
   ];
   for (const [kind, expected] of cases) {
     const mb = fakeMailbox();
-    deliverAgentEnvelope(
-      { ...baseInput, kind },
-      {
-        channelServer: fakeChannelServer().cs as never,
-        router: fixedDeliveryRouter({ agent: 'mailbox' }),
-        mailboxEnqueue: mb.port,
-      },
-    );
+    deliverAgentEnvelope({ ...baseInput, kind }, { mailboxEnqueue: mb.port });
     assert.equal(mb.calls[0]!.message.subject, expected, `subject for ${kind}`);
   }
 });
 
-test('no-double-delivery — mailbox gate hits exactly one path (mailbox), channel gate hits exactly one (channel)', () => {
-  // mailbox
-  {
-    const { cs, emits } = fakeChannelServer();
-    const mb = fakeMailbox();
-    deliverAgentEnvelope(baseInput, {
-      channelServer: cs as never,
-      router: fixedDeliveryRouter({ agent: 'mailbox' }),
-      mailboxEnqueue: mb.port,
-    });
-    assert.equal(emits.length + mb.calls.length, 1);
-    assert.equal(mb.calls.length, 1);
-  }
-  // channel (inbox-only transport — no emitToSession, but enqueueInboxRow path;
-  // observable: NO mailbox enqueue)
-  {
-    const { cs } = fakeChannelServer();
-    const mb = fakeMailbox();
-    const prior = process.env.PC_DELIVERY_TRANSPORT;
-    process.env.PC_DELIVERY_TRANSPORT = 'channel-only';
-    const { cs: cs2, emits } = fakeChannelServer();
-    deliverAgentEnvelope(baseInput, {
-      channelServer: cs2 as never,
-      router: fixedDeliveryRouter({ agent: 'channel' }),
-      mailboxEnqueue: mb.port,
-    });
-    assert.equal(mb.calls.length, 0);
-    assert.equal(emits.length, 1);
-    void cs;
-    if (prior === undefined) delete process.env.PC_DELIVERY_TRANSPORT;
-    else process.env.PC_DELIVERY_TRANSPORT = prior;
-  }
-});
-
-test('mailbox gate with NO port wired falls back to channel (boot/sweep recovery-path behavior)', () => {
-  const prior = process.env.PC_DELIVERY_TRANSPORT;
-  process.env.PC_DELIVERY_TRANSPORT = 'channel-only';
-  const { cs, emits } = fakeChannelServer();
-  const res = deliverAgentEnvelope(baseInput, {
-    channelServer: cs as never,
-    router: fixedDeliveryRouter({ agent: 'mailbox' }),
-    mailboxEnqueue: null, // no port (recovery-path emitters)
-  });
-  assert.equal(emits.length, 1, 'no port ⟹ Channel fallback even when gated mailbox');
-  assert.equal(res.channelDelivered, true);
-  if (prior === undefined) delete process.env.PC_DELIVERY_TRANSPORT;
-  else process.env.PC_DELIVERY_TRANSPORT = prior;
-});
-
 test('idempotency key is stable per event (re-fire enqueues with the SAME key)', () => {
   const mb = fakeMailbox();
-  const deps = {
-    channelServer: fakeChannelServer().cs as never,
-    router: fixedDeliveryRouter({ agent: 'mailbox' }),
-    mailboxEnqueue: mb.port,
-  };
-  deliverAgentEnvelope(baseInput, deps);
-  deliverAgentEnvelope(baseInput, deps); // a replay / sweep re-fire
+  deliverAgentEnvelope(baseInput, { mailboxEnqueue: mb.port });
+  deliverAgentEnvelope(baseInput, { mailboxEnqueue: mb.port }); // a replay / sweep re-fire
   assert.equal(mb.calls.length, 2);
   assert.equal(mb.calls[0]!.message.idempotencyKey, mb.calls[1]!.message.idempotencyKey);
   // The real MailboxService.enqueue dedupes by this key → at most one delivery.

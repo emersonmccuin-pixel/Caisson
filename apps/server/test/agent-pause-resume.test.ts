@@ -17,7 +17,6 @@ import { join } from 'node:path';
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-server-obj2a-pause-'));
 process.env.PC_DATA_DIR = tmpDir;
-delete process.env.PC_DELIVERY_TRANSPORT;
 
 const {
   closeDb,
@@ -31,7 +30,6 @@ const {
   updateAgentRunStatus,
   newId,
 } = await import('@pc/db');
-const { ChannelServer } = await import('../src/services/channel-server.ts');
 const { ActiveRunRegistry } = await import('../src/services/agent-active-runs.ts');
 const { answerPendingAsk, recordExplicitPause } = await import(
   '../src/services/pause-resume.ts'
@@ -42,8 +40,6 @@ import type { AgentRunState } from '@pc/runtime';
 
 const stages: Stage[] = [{ id: 'backlog', name: 'Backlog', order: 0 }];
 
-let server: InstanceType<typeof ChannelServer>;
-let actualPort = 0;
 let projectId: ULID;
 let slug: string;
 
@@ -71,28 +67,9 @@ before(async () => {
     },
     { actor: 'orchestrator', reason: 'test seed' },
   );
-
-  server = new ChannelServer({
-    port: 0,
-    allowedSenders: new Set(),
-    onEvent: () => {},
-  });
-  server.start();
-  for (let i = 0; i < 50; i++) {
-    const addr = (
-      server as unknown as { httpServer: { address(): { port: number } | null } }
-    ).httpServer?.address();
-    if (addr && typeof addr === 'object' && 'port' in addr && addr.port > 0) {
-      actualPort = addr.port;
-      break;
-    }
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  assert.ok(actualPort > 0, 'channel server did not bind a port');
 });
 
 after(() => {
-  server.shutdown();
   closeDb();
   rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -178,7 +155,7 @@ test('recordExplicitPause — opens when DB row is running though handle reports
 
   const result = await recordExplicitPause(
     { agentRunId: runId, kind: 'orchestrator', promptBody: '?', now: 1_700_000_001_000 },
-    { channelServer: server, slug, registry: reg },
+    { slug, registry: reg },
   );
 
   assert.ok(result.ok, `expected gate to open; got ${JSON.stringify(result)}`);
@@ -198,7 +175,7 @@ test('recordExplicitPause — rejects when reconciled row is genuinely not runni
 
   const result = await recordExplicitPause(
     { agentRunId: runId, kind: 'orchestrator', promptBody: '?' },
-    { channelServer: server, slug, registry: reg },
+    { slug, registry: reg },
   );
   assert.equal(result.ok, false);
   if (result.ok) return;
@@ -216,7 +193,6 @@ test('recordExplicitPause — on-demand host read: row spawning + hostRunState r
   const result = await recordExplicitPause(
     { agentRunId: runId, kind: 'orchestrator', promptBody: '?' },
     {
-      channelServer: server,
       slug,
       registry: reg,
       hostRunState: async (id) => {
@@ -239,7 +215,6 @@ test('recordExplicitPause — on-demand host read: row spawning + hostRunState s
   const result = await recordExplicitPause(
     { agentRunId: runId, kind: 'orchestrator', promptBody: '?' },
     {
-      channelServer: server,
       slug,
       registry: reg,
       hostRunState: async () => 'spawning' as AgentRunState,
@@ -257,7 +232,7 @@ test('recordExplicitPause — missing handle still returns unknown-run even when
   // No handle registered.
   const result = await recordExplicitPause(
     { agentRunId: runId, kind: 'orchestrator', promptBody: '?' },
-    { channelServer: server, slug, registry: reg },
+    { slug, registry: reg },
   );
   assert.equal(result.ok, false);
   if (result.ok) return;
@@ -285,7 +260,7 @@ test('answerPendingAsk — gate reads reconciled paused row even when handle rep
 
   const result = await answerPendingAsk(
     { pendingAskId: askId, answer: 'blue', answeredBy: 'orchestrator' },
-    { channelServer: server, slug, registry: reg },
+    { slug, registry: reg },
   );
   assert.ok(result.ok, `expected resume; got ${JSON.stringify(result)}`);
   assert.deepEqual(run.resumeAnswers, ['blue']);
@@ -313,7 +288,7 @@ test('answerPendingAsk — rejects when reconciled row is not paused (handle rep
 
   const result = await answerPendingAsk(
     { pendingAskId: askId, answer: 'x', answeredBy: 'orchestrator' },
-    { channelServer: server, slug, registry: reg },
+    { slug, registry: reg },
   );
   assert.equal(result.ok, false);
   if (result.ok) return;

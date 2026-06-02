@@ -59,9 +59,7 @@ import type {
 
 import { buildAgentEventHeader } from './agent-event-header.ts';
 import { deliverAgentEnvelope, type MailboxEnqueuePort } from './agent-delivery.ts';
-import { envDeliveryRouter, type DeliveryRouter } from './delivery-routing.ts';
 import { getActiveRunRegistry, type ActiveRunRegistry } from './agent-active-runs.ts';
-import type { ChannelServer } from './channel-server.ts';
 import {
   answerAndResumeAgentRun,
   cancelAgentRun,
@@ -90,19 +88,15 @@ export type RecordExplicitPauseResult =
   | { ok: false; error: string; cause: 'unknown-run' | 'wrong-state' };
 
 export interface PauseResumeDeps {
-  channelServer: ChannelServer;
-  /** Slice 008 — per-flow delivery gate (default channel). */
-  deliveryRouter?: DeliveryRouter;
-  /** Slice 008 — mailbox enqueue port; consulted only when the agent gate
-   *  resolves to `mailbox`. Omit to force the Channel path. Only the
-   *  agent-asks-* envelope DELIVERY is gated; the pending_asks state +
+  /** Mailbox enqueue port — the agent-asks-* envelope is delivered through it.
+   *  Only the envelope DELIVERY rides this; the pending_asks state +
    *  agent.run.changed fact (slice 005) are untouched. */
   mailboxEnqueue?: MailboxEnqueuePort | null;
-  /** Slug for the channel POST body. Production = `'pc-orchestrator'`. */
+  /** Slug embedded in the envelope. Production = `'pc-orchestrator'`. */
   slug: string;
-  /** Source for the channel POST body. Production = `'agent'`. */
+  /** Source embedded in the envelope. Production = `'agent'`. */
   source?: string;
-  /** Sender for the channel POST body. Production = `'pc'`. */
+  /** Sender embedded in the envelope. Production = `'pc'`. */
   sender?: string;
   /** Active-run lookup. Defaults to the process-wide singleton. */
   registry?: ActiveRunRegistry;
@@ -221,24 +215,23 @@ export async function recordExplicitPause(
     options: input.options ?? null,
   });
 
-  const pushResult = deliverAgentEnvelope(
-    {
-      projectId: entry.projectId,
-      pcSessionId: entry.dispatcherSessionId,
-      kind: eventKind,
-      slug: deps.slug,
-      source: deps.source ?? 'agent',
-      body,
-      sender: deps.sender ?? 'pc',
-      idempotencyKey: `agent-ask:${pendingAskId}`,
-      sourceId: pendingAskId,
-    },
-    {
-      channelServer: deps.channelServer,
-      router: deps.deliveryRouter ?? envDeliveryRouter(),
-      mailboxEnqueue: deps.mailboxEnqueue ?? null,
-    },
-  );
+  const mailboxEnqueue = deps.mailboxEnqueue;
+  const pushResult = mailboxEnqueue
+    ? deliverAgentEnvelope(
+        {
+          projectId: entry.projectId,
+          pcSessionId: entry.dispatcherSessionId,
+          kind: eventKind,
+          slug: deps.slug,
+          source: deps.source ?? 'agent',
+          body,
+          sender: deps.sender ?? 'pc',
+          idempotencyKey: `agent-ask:${pendingAskId}`,
+          sourceId: pendingAskId,
+        },
+        { mailboxEnqueue },
+      )
+    : { inboxId: null, channelDelivered: false };
 
   return {
     ok: true,

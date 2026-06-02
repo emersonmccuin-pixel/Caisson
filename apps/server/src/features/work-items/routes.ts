@@ -15,7 +15,7 @@ import {
   AttachmentNotInProjectError,
   type AttachmentService,
 } from '../../services/attachment.ts';
-import type { ChannelServer } from '../../services/channel-server.ts';
+import type { MailboxEnqueuePort } from '../../services/agent-delivery.ts';
 import type { FieldSchemaService } from '../../services/field-schema.ts';
 import {
   AgentWorkItemInputError,
@@ -57,7 +57,9 @@ export interface WorkItemRoutesDeps {
   resolveProject(projectId: string): WorkItemRoutesRuntime | null;
   broadcastTo(projectId: ULID, msg: unknown): void;
   refreshProject(project: Project): void;
-  channelServer: ChannelServer;
+  /** Mailbox enqueue port — threaded into the verification-rejection
+   *  continuation dispatch. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
   /** T1.1 — resolve the live HostConnection PER REQUEST (not by-value at
    *  register time) so a host respawn on a new port is picked up with no API restart. */
   getHostConnection?: () => AgentHostReattachClient | null;
@@ -397,7 +399,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
           project,
         },
         {
-          channelServer: deps.channelServer,
+          ...(deps.mailboxEnqueue ? { mailboxEnqueue: deps.mailboxEnqueue } : {}),
           broadcast: (env) => deps.broadcastTo(projectId, env),
           ...(host ? { hostClient: host } : {}),
         },

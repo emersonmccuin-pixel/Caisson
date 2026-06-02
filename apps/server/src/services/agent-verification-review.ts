@@ -27,7 +27,7 @@ import type { Project, ULID, WorkItem } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
 import { announceWorkItemRow } from './work-item-writer.ts';
-import type { ChannelServer } from './channel-server.ts';
+import type { MailboxEnqueuePort } from './agent-delivery.ts';
 import {
   dispatchContinueAgent,
   type DispatchAgentResult,
@@ -118,7 +118,9 @@ export interface RejectAgentWorkItemResult {
 }
 
 export interface RejectAgentWorkItemDeps {
-  channelServer: ChannelServer;
+  /** Mailbox enqueue port — threaded into the rejection continuation dispatch
+   *  so its eventual terminal envelope is delivered. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
   hostClient?: AgentHostReattachClient | null;
   broadcast?: (env: { type: string; [k: string]: unknown }) => void;
   /** Test seam — production uses `dispatchContinueAgent` from the agent-run
@@ -178,7 +180,7 @@ export async function rejectAgentWorkItem(
       slug: input.project.slug,
     },
     {
-      channelServer: deps.channelServer,
+      ...(deps.mailboxEnqueue ? { mailboxEnqueue: deps.mailboxEnqueue } : {}),
       ...(deps.broadcast ? { broadcast: deps.broadcast } : {}),
       ...(deps.hostClient ? { hostClient: deps.hostClient } : {}),
     },

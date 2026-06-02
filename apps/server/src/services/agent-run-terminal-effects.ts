@@ -21,9 +21,7 @@ import {
   type VerificationBlock,
 } from './agent-event-header.ts';
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
-import type { ChannelServer } from './channel-server.ts';
 import { deliverAgentEnvelope, type MailboxEnqueuePort } from './agent-delivery.ts';
-import { envDeliveryRouter, type DeliveryRouter } from './delivery-routing.ts';
 import { commitAgentRunTerminal } from './agent-run-writer.ts';
 import {
   runVerificationOnTerminal,
@@ -56,11 +54,8 @@ export interface AgentRunTerminalEffectsInput {
 
 export interface AgentRunTerminalEffectsDeps {
   activeRunRegistry?: ActiveRunRegistry;
-  channelServer?: ChannelServer;
-  /** Slice 008 — per-flow delivery gate (default channel). */
-  deliveryRouter?: DeliveryRouter;
-  /** Slice 008 — mailbox enqueue port; only consulted when the agent gate
-   *  resolves to `mailbox`. Omit to force the Channel path. */
+  /** Mailbox enqueue port. The terminal envelope is delivered through it; when
+   *  omitted (e.g. a bare unit test) the envelope is skipped. */
   mailboxEnqueue?: MailboxEnqueuePort | null;
   broadcast?: (projectId: ULID, msg: unknown) => void;
   getAgentRun?: (id: ULID) => AgentRunRow | null;
@@ -204,11 +199,9 @@ async function finishTerminalEffects(args: {
   // SYNCHRONOUSLY by applyAgentRunTerminalEffects through the gateway; this
   // async tail keeps ONLY verification + the Channel terminal envelope.
   const slug = input.slug ?? project?.slug ?? null;
-  if (deps.channelServer && slug) {
+  if (deps.mailboxEnqueue && slug) {
     emitTerminalEnvelope({
-      channelServer: deps.channelServer,
-      router: deps.deliveryRouter ?? envDeliveryRouter(),
-      mailboxEnqueue: deps.mailboxEnqueue ?? null,
+      mailboxEnqueue: deps.mailboxEnqueue,
       projectId: input.projectId,
       dispatcherSessionId: input.dispatcherSessionId,
       slug,
@@ -225,9 +218,7 @@ async function finishTerminalEffects(args: {
 }
 
 interface EmitTerminalArgs {
-  channelServer: ChannelServer;
-  router: DeliveryRouter;
-  mailboxEnqueue: MailboxEnqueuePort | null;
+  mailboxEnqueue: MailboxEnqueuePort;
   projectId: ULID;
   dispatcherSessionId: string;
   slug: string;
@@ -275,11 +266,7 @@ function emitTerminalEnvelope(args: EmitTerminalArgs): void {
       idempotencyKey: `agent:${args.runId}:${kind}`,
       sourceId: args.runId,
     },
-    {
-      channelServer: args.channelServer,
-      router: args.router,
-      mailboxEnqueue: args.mailboxEnqueue,
-    },
+    { mailboxEnqueue: args.mailboxEnqueue },
   );
 }
 

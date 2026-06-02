@@ -17,7 +17,7 @@ import {
 import { AgentRunJsonlTailer, jsonlPathFor, type AgentRunJsonlEvent } from '@pc/runtime';
 
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
-import type { ChannelServer } from './channel-server.ts';
+import type { MailboxEnqueuePort } from './agent-delivery.ts';
 import { applyAgentRunTerminalEffects } from './agent-run-terminal-effects.ts';
 import {
   isProcessAlive as defaultIsAlive,
@@ -26,7 +26,9 @@ import {
 
 export interface AgentRunControlDeps {
   activeRunRegistry?: ActiveRunRegistry;
-  channelServer?: ChannelServer;
+  /** Mailbox enqueue port — a force-killed run delivers its terminal envelope
+   *  to the orchestrator through it. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
   broadcast?: (projectId: ULID, msg: unknown) => void;
   now?: () => number;
   getAgentRun?: (id: ULID) => AgentRunRow | null;
@@ -93,7 +95,7 @@ export function hardKillAgentRun(runId: ULID, deps: AgentRunControlDeps = {}): H
     },
     {
       activeRunRegistry: deps.activeRunRegistry,
-      channelServer: deps.channelServer,
+      mailboxEnqueue: deps.mailboxEnqueue,
       broadcast: deps.broadcast,
       now: deps.now,
     },

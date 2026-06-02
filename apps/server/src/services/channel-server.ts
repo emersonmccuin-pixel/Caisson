@@ -1,25 +1,18 @@
-// Channel server. Single multiplexed HTTP listener on :8788 plus a WS registry
-// of per-CC channel-stdio children. Replaces the rig-era per-process model
-// where each channel-server.js bound its own port — see the multi-tenancy design
-// §3 for the locked routing.
+// Channel server. Single multiplexed HTTP listener on :8788 for the INBOUND
+// external-webhook entry (`POST /channel/<slug>/<source>`), plus a WS registry
+// of per-CC channel-stdio children (kept for bridge registration/supersede).
 //
-// External callers POST to `/channel/<slug>/<source>` with a plain text body.
-// We resolve the slug → projectId via the registry, fan the event to every
-// registered child of that project (external webhooks have no sessionId, so
-// fan-to-all preserves the "every orchestrator sees external traffic" intent).
-// UI subscribers are notified separately via the project's WS broadcast envelope.
-//
-// Section 18.5a re-keyed `registrants` by `(projectId, sessionId)`. Multi-CC
-// scenarios used to silently route to whichever CC registered most recently
-// (project-only key — newer kicks older). Now each CC's bridge registers with
-// its CC's deterministic sessionId; programmatic emits target a specific
-// recipient session via `emitToSession`.
+// 017 Phase C — the outbound Channel delivery path (per-CC bridge push) was
+// deleted; the mailbox is the sole delivery door. External callers POST a plain
+// text body; we resolve the slug → projectId and route the event UNCONDITIONALLY
+// to the durable mailbox via `webhookSink` (no silent drop on a missing
+// registrant). UI subscribers are notified via the project's WS broadcast.
 
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { getProjectBySlug } from '@pc/db';
-import type { Project, ULID } from '@pc/domain';
+import type { ULID } from '@pc/domain';
 
 export interface ChannelServerDeps {
   /** Port for the HTTP listener (locked: 8788). */
@@ -28,19 +21,11 @@ export interface ChannelServerDeps {
   allowedSenders: Set<string>;
   /** Pushes a UI-side broadcast for a channel event arriving at this project. */
   onEvent: (projectId: ULID, payload: ChannelEvent) => void;
-  /** Section 18.3 — Fires after a fresh WS registrant is accepted. Used to
-   *  drain pending inbox rows for the (projectId, sessionId) pair so a
-   *  post-restart / post-respawn bridge catches up autonomously without
-   *  waiting on a user prompt. Best-effort: handler must not throw. */
-  onRegister?: (args: { projectId: ULID; sessionId: string; slug: string }) => void;
-  /** Slice 008 — external-webhook cutover sink. When wired AND the webhook gate
-   *  = `mailbox`, the handler routes the inbound event to this sink (a durable
-   *  mailbox `external-webhook` message) INSTEAD of fanning to the per-CC bridge
-   *  children — no silent drop on a missing registrant. Return true when the
-   *  sink owned delivery (skip the bridge fan-out); false ⟹ unchanged Channel
-   *  fan-out. The `channel-event` UI broadcast (`onEvent`) still fires in BOTH
-   *  positions (it is the UI's view, not the gated delivery). */
-  webhookSink?: (event: ChannelEvent) => boolean;
+  /** External-webhook sink. Every inbound `/channel/:slug/:source` event is
+   *  routed here as a durable mailbox `external-webhook` message — no silent
+   *  drop on a missing registrant. The `channel-event` UI broadcast (`onEvent`)
+   *  fires alongside it (it is the UI's view, not the delivery). */
+  webhookSink: (event: ChannelEvent) => void;
 }
 
 export interface ChannelEvent {
@@ -97,14 +82,9 @@ export class ChannelServer {
         sender,
         at: Date.now(),
       };
-      // Slice 008 — gated webhook delivery. When the sink owns it (gate =
-      // `mailbox`), route to the durable mailbox inbox and SKIP the per-CC
-      // bridge fan-out; otherwise the unchanged fan-to-all-children runs. The
-      // `channel-event` UI broadcast fires in BOTH positions.
-      const sunkToMailbox = this.deps.webhookSink?.(event) ?? false;
-      if (!sunkToMailbox) {
-        this.forwardToProjectChildren(project, event);
-      }
+      // 017 Phase C — route the inbound event to the durable mailbox sink
+      // unconditionally; the `channel-event` UI broadcast fires alongside it.
+      this.deps.webhookSink(event);
       this.deps.onEvent(project.id, event);
       return c.text('ok', 200);
     });
@@ -156,22 +136,6 @@ export class ChannelServer {
       }
       this.registrants.set(key, { ws, projectId, sessionId, slug });
       console.log(`[channel] registered ${slug} (${projectId} / ${sessionId})`);
-      // 18.3 — auto-flush hook. Defer to next tick so the drain (which uses
-      // `emitToSession` against the map we just wrote to) runs after the
-      // current register handler unwinds. Any throw is logged + swallowed
-      // so a bad drain can't break registration.
-      const onRegister = this.deps.onRegister;
-      if (onRegister) {
-        setImmediate(() => {
-          try {
-            onRegister({ projectId, sessionId, slug });
-          } catch (err) {
-            console.error(
-              `[channel] onRegister handler threw for ${projectId} / ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        });
-      }
       ws.on('close', () => {
         const cur = this.registrants.get(key);
         if (cur && cur.ws === ws) this.registrants.delete(key);
@@ -200,71 +164,4 @@ export class ChannelServer {
     }
   }
 
-  /** Section 16b / 18.5a — Programmatic emit. Server-side code (agent comms,
-   *  workflow runtime) calls this to deliver a synthesised event to a
-   *  specific recipient CC session, without round-tripping through the HTTP
-   *  listener. Returns true if the matching registrant received the forward;
-   *  false if no registrant is currently bound for that (projectId, sessionId)
-   *  pair (event still propagates to UI subscribers via `onEvent`). */
-  emitToSession(args: {
-    projectId: ULID;
-    recipientSessionId: string;
-    slug: string;
-    source: string;
-    body: string;
-    sender?: string;
-  }): boolean {
-    const event: ChannelEvent = {
-      projectId: args.projectId,
-      slug: args.slug,
-      source: args.source,
-      body: args.body,
-      sender: args.sender ?? 'pc',
-      at: Date.now(),
-    };
-    const child = this.registrants.get(registrantKey(args.projectId, args.recipientSessionId));
-    const delivered = !!(child && child.ws.readyState === child.ws.OPEN);
-    if (delivered) {
-      this.sendEnvelope(child!, event);
-    } else {
-      console.warn(
-        `[channel] emitToSession: no registered child for ${args.projectId} / ${args.recipientSessionId}; UI broadcast only`,
-      );
-    }
-    this.deps.onEvent(args.projectId, event);
-    return delivered;
-  }
-
-  /** Fan an event to every registered child for a project. Used by the
-   *  external webhook HTTP path — external callers don't know about
-   *  per-session routing; "deliver to every orchestrator in the project"
-   *  is the documented intent. Returns the number of children that received
-   *  the forward. */
-  private forwardToProjectChildren(project: Project, event: ChannelEvent): number {
-    let delivered = 0;
-    for (const child of this.registrants.values()) {
-      if (child.projectId !== project.id) continue;
-      if (child.ws.readyState !== child.ws.OPEN) continue;
-      this.sendEnvelope(child, event);
-      delivered += 1;
-    }
-    if (delivered === 0) {
-      console.warn(
-        `[channel] no registered child for ${project.id} (${project.name}); dropping event from ${event.source}`,
-      );
-    }
-    return delivered;
-  }
-
-  private sendEnvelope(child: RegisteredChild, event: ChannelEvent): void {
-    child.ws.send(
-      JSON.stringify({
-        type: 'channel-event',
-        content: event.body,
-        path: `/channel/${event.slug}/${event.source}`,
-        method: 'POST',
-        source: event.source,
-      }),
-    );
-  }
 }

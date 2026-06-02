@@ -29,7 +29,6 @@ after(() => {
 });
 
 const stages = [{ id: 'todo', name: 'Todo', order: 0 }];
-const fakeChannelServer = {} as never;
 
 async function json<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
@@ -38,7 +37,6 @@ async function json<T>(res: Response): Promise<T> {
 function mkApp(broadcasts: unknown[]): { app: Hono } {
   const app = new Hono();
   registerAgentRunRoutes(app, {
-    channelServer: fakeChannelServer,
     broadcastTo: (_projectId, msg) => broadcasts.push(msg),
     // no active-run registry handle -> phantom path
     getActiveRunRegistry: () => ({ get: () => null }),

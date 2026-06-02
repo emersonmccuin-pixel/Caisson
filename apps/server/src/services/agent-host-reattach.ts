@@ -25,7 +25,6 @@ import {
   type ActiveRunRegistry,
   type AgentHostCommandSender,
 } from './agent-active-runs.ts';
-import type { ChannelServer } from './channel-server.ts';
 import {
   reconcileAgentRunsOnBoot,
   type AgentRunBootReconcileResult,
@@ -34,7 +33,6 @@ import {
   applyAgentRunTerminalEffects,
 } from './agent-run-terminal-effects.ts';
 import { announceAgentRunChange as defaultAnnounceAgentRunChange } from './agent-run-writer.ts';
-import type { DeliveryRouter } from './delivery-routing.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
 import {
   runVerificationOnTerminal,
@@ -68,13 +66,9 @@ export interface AgentHostReattachDeps {
    *  direct `agent-run-changed` hand-broadcast. Injectable so the in-memory
    *  reconcile tests (no real DB) can stub it. Defaults to the real gateway. */
   announce?: typeof defaultAnnounceAgentRunChange;
-  channelServer?: ChannelServer;
-  /** Slice 008 — per-flow delivery gate (default channel). Forwarded to the
-   *  terminal-effects envelope so host completions honor the agent gate. */
-  deliveryRouter?: DeliveryRouter;
-  /** Slice 008 — mailbox enqueue port; only consulted when the agent gate
-   *  resolves to `mailbox`. Boot-time recovery paths omit it (the port is not
-   *  yet constructed at boot — see slice 009), so they stay on Channel. */
+  /** Mailbox enqueue port — forwarded to the terminal-effects envelope so host
+   *  completions are delivered. Boot-time recovery paths omit it (the port is
+   *  not yet constructed at boot — see slice 009), so they skip the envelope. */
   mailboxEnqueue?: MailboxEnqueuePort | null;
   verifyOnTerminal?: typeof runVerificationOnTerminal;
   verificationDeps?: VerificationDeps;
@@ -319,8 +313,6 @@ export function applyHostTerminalSnapshot(
     },
     {
       activeRunRegistry: deps.activeRunRegistry,
-      channelServer: deps.channelServer,
-      deliveryRouter: deps.deliveryRouter,
       mailboxEnqueue: deps.mailboxEnqueue,
       broadcast: deps.broadcast,
       getAgentRun: deps.getAgentRun,

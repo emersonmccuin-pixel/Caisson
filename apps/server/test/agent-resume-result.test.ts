@@ -21,7 +21,6 @@ import type {
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-resume-result-'));
 process.env.PC_DATA_DIR = tmpDir;
-delete process.env.PC_DELIVERY_TRANSPORT;
 
 const {
   closeDb,
@@ -127,7 +126,6 @@ test('host not-resumable resume → answerPendingAsk maps to resume-failed and F
     {
       registry: reg,
       broadcast: () => {},
-      channelServer: { emitToSession: () => true } as never,
       slug: 'resume-result',
     },
   );
@@ -183,7 +181,7 @@ test('recordExplicitPause does not resolve until the host mark-paused is acked',
   let resolved = false;
   const pending = recordExplicitPause(
     { agentRunId: runId, kind: 'user', promptBody: 'A or B?', context: null, options: null },
-    { registry: reg, broadcast: () => {}, channelServer: { emitToSession: () => true } as never, slug: 'resume-result' },
+    { registry: reg, broadcast: () => {}, slug: 'resume-result' },
   ).then((r) => {
     resolved = true;
     return r;
@@ -207,7 +205,6 @@ test('resumable host resume → answerPendingAsk succeeds and does NOT finalize'
     {
       registry: reg,
       broadcast: () => {},
-      channelServer: { emitToSession: () => true } as never,
       slug: 'resume-result',
     },
   );

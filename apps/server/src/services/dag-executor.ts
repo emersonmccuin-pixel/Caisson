@@ -2,7 +2,7 @@
 // (@pc/workflows `dag/`) against injected live deps (spawn / work-item / review
 // / persistence). Deps-injected so the control flow is unit-testable with
 // fakes; the live wiring (createAgentWorkItem + spawnSubagent + worktree +
-// broadcast + postChannel) is supplied by apps/server at construction.
+// broadcast + deliverReview) is supplied by apps/server at construction.
 //
 // Model: await-per-layer (matches PC's existing tick — `await Promise.all(ready)`).
 //   advance(): loop — selectReady → dispatch non-review ready concurrently

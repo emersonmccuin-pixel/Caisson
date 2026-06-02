@@ -23,8 +23,6 @@ after(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-const fakeChannelServer = {} as never;
-
 test('invoke resolves the host connection PER REQUEST (closure, not by-value)', async () => {
   const project = createProject({
     slug: `arr-hc-${Date.now()}`,
@@ -40,7 +38,6 @@ test('invoke resolves the host connection PER REQUEST (closure, not by-value)', 
   const seen: Array<unknown> = [];
   const app = new Hono();
   registerAgentRunRoutes(app, {
-    channelServer: fakeChannelServer,
     broadcastTo: () => {},
     getHostConnection: () => current,
     getActiveRunRegistry: () => ({ get: () => null }),

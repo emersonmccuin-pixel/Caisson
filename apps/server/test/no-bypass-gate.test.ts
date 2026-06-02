@@ -56,6 +56,19 @@ const DECL_RE = new RegExp(
   String.raw`^\s*(?:readonly\s+)?(?:${GATED_SYMBOLS.join('|')})\s*\([^)]*\)\s*:\s*\w`,
 );
 
+// 017 Phase C — the Channel-delivery primitives that were DELETED when the
+// mailbox became the sole delivery door. Reintroducing ANY of these in
+// apps/server/src means the legacy Channel push path is coming back — a
+// regression with NO allowlist. The gate trips on the bare identifier anywhere
+// in source (calls, imports, decls), ignoring comments.
+const BANNED_RESURRECTION = [
+  'enqueueAndPush',
+  'drainPendingForSession',
+  'emitToSession',
+  'forwardToProjectChildren',
+];
+const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
+
 // The relay is the canonical door — always allowed.
 const RELAY_FILE = 'apps/server/src/services/live-relay.ts';
 
@@ -173,6 +186,37 @@ function gatedCallsIn(content: string): { line: number; symbol: string }[] {
   return hits;
 }
 
+/** Scan one file for any banned (deleted) Channel-delivery primitive, ignoring
+ *  comments. Any hit is a resurrection of the legacy path. */
+function bannedCallsIn(content: string): { line: number; symbol: string }[] {
+  const hits: { line: number; symbol: string }[] = [];
+  const lines = content.split(/\r?\n/);
+  let inBlockComment = false;
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    if (inBlockComment) {
+      const end = line.indexOf('*/');
+      if (end === -1) continue;
+      line = line.slice(end + 2);
+      inBlockComment = false;
+    }
+    const open = line.indexOf('/*');
+    if (open !== -1 && line.indexOf('*/', open) === -1) {
+      inBlockComment = true;
+      line = line.slice(0, open);
+    }
+    const lc = line.indexOf('//');
+    if (lc !== -1) line = line.slice(0, lc);
+    if (!line.trim()) continue;
+    BANNED_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = BANNED_RE.exec(line)) !== null) {
+      hits.push({ line: i + 1, symbol: m[1] });
+    }
+  }
+  return hits;
+}
+
 const scanRoots = ['apps/server/src', 'apps/web/src'].map((p) => join(repoRoot, ...p.split('/')));
 
 test('no-bypass gate: UI fan-out only in the relay + the documented allowlist', () => {
@@ -213,6 +257,24 @@ test('no-bypass gate: UI fan-out only in the relay + the documented allowlist', 
   );
 });
 
+test('no-bypass gate: deleted Channel-delivery primitives stay deleted (017 Phase C)', () => {
+  const offenders: string[] = [];
+  const serverSrc = join(repoRoot, 'apps', 'server', 'src');
+  for (const file of listSourceFiles(serverSrc)) {
+    const hits = bannedCallsIn(readFileSync(file, 'utf8'));
+    if (hits.length === 0) continue;
+    const rel = toPosix(relative(repoRoot, file));
+    offenders.push(`${rel} — ${hits.map((h) => `L${h.line} ${h.symbol}`).join(', ')}`);
+  }
+  assert.equal(
+    offenders.length,
+    0,
+    `Channel-delivery primitive resurrected. The mailbox is the sole delivery ` +
+      `door (017 Phase C); these were deleted and must not return:\n` +
+      offenders.map((o) => `  - ${o}`).join('\n'),
+  );
+});
+
 test('no-bypass gate: would FAIL on a planted bypass (self-check)', () => {
   // Sanity-check the detector itself: a synthetic non-allowlisted file with a
   // gated call must be flagged. (We assert the scanner logic, not the tree.)
@@ -228,4 +290,14 @@ test('no-bypass gate: would FAIL on a planted bypass (self-check)', () => {
   assert.equal(gatedCallsIn(decl).length, 0, 'detector must ignore interface method decls');
   const comment = `// broadcastAll(foo) in a comment must be ignored\nconst x = 1;\n`;
   assert.equal(gatedCallsIn(comment).length, 0, 'detector must ignore comments');
+
+  // The resurrection detector must catch a planted Channel primitive...
+  const planted2 = `channelServer.emitToSession({ recipientSessionId: 's' });\n`;
+  assert.ok(
+    bannedCallsIn(planted2).some((h) => h.symbol === 'emitToSession'),
+    'detector must catch a planted emitToSession call',
+  );
+  // ...and ignore a mere mention in a comment.
+  const banComment = `// the deleted enqueueAndPush primitive must be ignored here\nconst y = 1;\n`;
+  assert.equal(bannedCallsIn(banComment).length, 0, 'resurrection detector must ignore comments');
 });

@@ -1,46 +1,17 @@
-// Section 25 — hybrid delivery primitive.
+// Agent delivery — mailbox-only (slice 017 Phase C).
 //
-// Durable inbox write first + best-effort channel push + auto-flush on bridge
-// registration. Audit row is written ONLY on successful delivery (one row per
-// flip, not one row per enqueue) — the inbox-row `status` field already tells
-// us whether anything ever delivered, so a stub-at-enqueue audit row is noise
-// without diagnostic value.
+// Every agent → recipient envelope (terminal completed/failed, queued-started,
+// asks-orchestrator/user, approval) is delivered as a durable mailbox message
+// to the dispatcher's orchestrator session. The slice-007 mailbox worker drains
+// it into exactly one runtime turn.
 //
-// - Driver values are `'channel' | 'user-prompt'` (no `'autonomous'`,
-//   no `'unknown'`). Matches design §5.4's identifier set.
-//
-// - Renamed `recipientSessionId` → `pcSessionId` to match the identifier
-//   glossary in design §1.
-//
-// This file is NOT wired into channel-server yet — Session 9's cutover
-// swaps the v1 onRegister callback over to `drainPendingForSession`.
-// During Sessions 7–8 it's reachable for tests + future MCP tool work
-// (Session 8 pause/resume) but the production transport path still
-// flows through v1.
-//
-// Emergency kill switch: `PC_DELIVERY_TRANSPORT` env var. Same values
-// as v1 (hybrid | inbox-only | channel-only). Identical semantics.
+// The legacy Channel transport (per-CC bridge push via `enqueueAndPush` /
+// `drainPendingForSession` / the `PC_DELIVERY_*` gate) was deleted in 017 Phase C
+// once the mailbox was verified the sole delivery door. There is no fallback.
 
-import {
-  enqueueInboxRow,
-  listPendingForSession,
-  markInboxDelivered,
-  newId,
-  type EnqueueMailboxMessageInput,
-} from '@pc/db';
-import type { AgentInboxEventKind, AgentInboxRow, ULID } from '@pc/domain';
+import { newId, type EnqueueMailboxMessageInput } from '@pc/db';
+import type { AgentInboxEventKind, ULID } from '@pc/domain';
 import type { MailboxMessageKind } from '@pc/contracts';
-
-import type { ChannelServer } from './channel-server.ts';
-import type { DeliveryRouter } from './delivery-routing.ts';
-
-export type DeliveryTransportMode = 'hybrid' | 'inbox-only' | 'channel-only';
-
-export function readTransportMode(): DeliveryTransportMode {
-  const raw = (process.env.PC_DELIVERY_TRANSPORT ?? '').trim().toLowerCase();
-  if (raw === 'inbox-only' || raw === 'channel-only') return raw;
-  return 'hybrid';
-}
 
 export interface EnqueueAndPushInput {
   projectId: ULID;
@@ -53,151 +24,20 @@ export interface EnqueueAndPushInput {
 }
 
 export interface EnqueueAndPushResult {
-  /** ULID of the inbox row, or null when transport='channel-only' bypassed
-   *  the inbox entirely. */
+  /** Always null on the mailbox path — no agent_inbox row is written. Retained
+   *  so existing callers (pause-resume's `eventInboxId`) compile unchanged. */
   inboxId: ULID | null;
-  /** Whether the channel push landed on a live registrant. False when
-   *  transport='inbox-only', no registrant matched, or the WS was closed. */
+  /** Always false on the mailbox path — there is no best-effort Channel push.
+   *  Retained for the same reason (`eventDelivered` HTTP field). */
   channelDelivered: boolean;
 }
 
-/** Single primitive every agent → recipient emit point uses. Writes the
- *  inbox row + attempts the channel push + writes an audit row on success.
- *  Never throws on push failure — the caller doesn't need to retry; the
- *  user-prompt drain catches it on the next prompt.
- *
- *  Transport modes:
- *   - 'hybrid'        : durable + best-effort push (default)
- *   - 'inbox-only'    : skip channel push (force user-prompt drain path)
- *   - 'channel-only'  : skip inbox writes (pre-Section 18 behavior; emergency
- *                       revert path — durability is sacrificed)
- */
-export function enqueueAndPush(
-  channelServer: ChannelServer,
-  input: EnqueueAndPushInput,
-): EnqueueAndPushResult {
-  const transport = readTransportMode();
-
-  if (transport === 'channel-only') {
-    const delivered = channelServer.emitToSession({
-      projectId: input.projectId,
-      recipientSessionId: input.pcSessionId,
-      slug: input.slug,
-      source: input.source,
-      body: input.body,
-      sender: input.sender,
-    });
-    return { inboxId: null, channelDelivered: delivered };
-  }
-
-  const row = enqueueInboxRow({
-    projectId: input.projectId,
-    pcSessionId: input.pcSessionId,
-    kind: input.kind,
-    body: input.body,
-    now: Date.now(),
-  });
-
-  if (transport === 'inbox-only') {
-    return { inboxId: row.id, channelDelivered: false };
-  }
-
-  // Hybrid: best-effort push; flip row + write audit on success.
-  const delivered = channelServer.emitToSession({
-    projectId: input.projectId,
-    recipientSessionId: input.pcSessionId,
-    slug: input.slug,
-    source: input.source,
-    body: input.body,
-    sender: input.sender,
-  });
-  if (delivered) {
-    markInboxDelivered({
-      inboxId: row.id,
-      deliveredAt: Date.now(),
-      driver: 'channel',
-    });
-  }
-  return { inboxId: row.id, channelDelivered: delivered };
-}
-
-export interface DrainResult {
-  /** Number of pending inbox rows whose `pending → delivered` flip succeeded
-   *  under this drain. */
-  drained: number;
-  /** Total pending rows considered. `drained + (attempted - drained)` =
-   *  attempted; the delta is rows where the channel push failed OR a
-   *  concurrent drain already flipped them. */
-  attempted: number;
-}
-
-/** Auto-flush all pending inbox rows for a recipient session. Called from
- *  channel-server's `onRegister` callback when a fresh bridge connects
- *  (post-restart / post-respawn) so the orchestrator catches up
- *  autonomously without waiting on a user prompt.
- *
- *  Same "drain ALL pending rows" semantics as v1: a fresh bridge generally
- *  means the prior CC for this session-id is gone, so anything still
- *  pending is by definition undelivered. */
-export function drainPendingForSession(
-  channelServer: ChannelServer,
-  projectId: ULID,
-  pcSessionId: string,
-  slug: string,
-): DrainResult {
-  const transport = readTransportMode();
-  if (transport === 'channel-only') {
-    // No inbox writes in channel-only mode — nothing to drain.
-    return { drained: 0, attempted: 0 };
-  }
-
-  const pending: AgentInboxRow[] = listPendingForSession(pcSessionId);
-  let drained = 0;
-  let attempted = 0;
-  for (const row of pending) {
-    // Defensive — pc_session_id is globally unique today, but listPending
-    // doesn't filter by project. Skip foreign-project rows in case a stale
-    // session-id ever recurs across projects.
-    if (row.projectId !== projectId) continue;
-    attempted += 1;
-    const delivered = channelServer.emitToSession({
-      projectId,
-      recipientSessionId: pcSessionId,
-      slug,
-      source: 'agent',
-      body: row.body,
-      sender: 'pc',
-    });
-    if (delivered) {
-      const flipped = markInboxDelivered({
-        inboxId: row.id,
-        deliveredAt: Date.now(),
-        driver: 'channel',
-      });
-      if (flipped) drained += 1;
-    }
-  }
-  return { drained, attempted };
-}
-
-// ──────────────────────── Slice 008 — gated agent delivery ────────────────────
-//
-// The cutover gate (PC_DELIVERY_AGENT) chooses ONE path per emit:
-//   - 'channel'  : the unchanged `enqueueAndPush(channelServer, …)` (default).
-//   - 'mailbox'  : MailboxService.enqueue with an `orchestrator-session` recipient
-//                  + `orchestrator-turn` channel + a stable idempotency key. The
-//                  slice-007 worker delivers exactly one runtime turn per event.
-//
-// Channel is NOT deleted; it remains the default + fallback. The mailbox path
-// never touches the per-CC bridge — it delivers a runtime turn via the send
-// facade. State surfaces (the durable agent.run.changed fact, pending_asks) are
-// owned by slice 005 and are NOT gated here — only the envelope DELIVERY is.
+// ──────────────────────── gated → mailbox-only agent delivery ────────────────
 
 /** A narrow mailbox enqueue port (the slice-007 MailboxService.enqueue). Kept
  *  structural so this module imports no app-services value. */
 export type MailboxEnqueuePort = (input: EnqueueMailboxMessageInput) => unknown;
 
-/** Map the agent inbox event kind onto the mailbox message kind (spec §7). */
 /** A human subject for the mailbox card title, so the inbox shows e.g.
  *  "Agent researcher completed" instead of the raw `[pc:agent-event …]` body
  *  marker. `slug` is the agent name. */
@@ -227,59 +67,51 @@ function mailboxMessageKindFor(kind: AgentInboxEventKind): MailboxMessageKind {
 }
 
 export interface DeliverAgentEnvelopeInput extends EnqueueAndPushInput {
-  /** Stable per-event idempotency key for the mailbox path:
+  /** Stable per-event idempotency key:
    *  `agent:${runId}:${eventKind}` for terminal/queued-started, or
-   *  `agent-ask:${pendingAskId}` for asks. Unused on the channel path. */
+   *  `agent-ask:${pendingAskId}` for asks. */
   idempotencyKey: string;
   /** Source ref for the mailbox message (runId or pendingAskId). */
   sourceId?: string | null;
 }
 
 export interface DeliverAgentEnvelopeDeps {
-  channelServer: ChannelServer;
-  router: DeliveryRouter;
-  /** Present only when the agent gate may resolve to `mailbox`. */
-  mailboxEnqueue?: MailboxEnqueuePort | null;
+  mailboxEnqueue: MailboxEnqueuePort;
   now?: () => number;
 }
 
-/** Route ONE agent delivery envelope through the gate. When the gate resolves
- *  to `mailbox` (and a mailbox port is wired) the envelope is enqueued as a
- *  mailbox message to the dispatcher's orchestrator session; otherwise the
- *  existing `enqueueAndPush` Channel path runs unchanged. */
+/** Route ONE agent delivery envelope to the dispatcher's orchestrator session
+ *  as a durable mailbox message. The slice-007 worker delivers exactly one
+ *  runtime turn per event. */
 export function deliverAgentEnvelope(
   input: DeliverAgentEnvelopeInput,
   deps: DeliverAgentEnvelopeDeps,
 ): EnqueueAndPushResult {
-  if (deps.router.mode('agent') === 'mailbox' && deps.mailboxEnqueue) {
-    deps.mailboxEnqueue({
-      message: {
+  deps.mailboxEnqueue({
+    message: {
+      id: newId(),
+      projectId: input.projectId,
+      kind: mailboxMessageKindFor(input.kind),
+      subject: mailboxSubjectFor(input.kind, input.slug),
+      body: input.body,
+      sourceKind: 'agent',
+      sourceId: input.sourceId ?? null,
+      idempotencyKey: input.idempotencyKey,
+    },
+    recipients: [
+      {
         id: newId(),
-        projectId: input.projectId,
-        kind: mailboxMessageKindFor(input.kind),
-        subject: mailboxSubjectFor(input.kind, input.slug),
-        body: input.body,
-        sourceKind: 'agent',
-        sourceId: input.sourceId ?? null,
-        idempotencyKey: input.idempotencyKey,
-      },
-      recipients: [
-        {
-          id: newId(),
-          addressKind: 'orchestrator-session',
-          addressJson: {
-            kind: 'orchestrator-session',
-            projectId: input.projectId,
-            sessionId: input.pcSessionId,
-          },
-          channel: 'orchestrator-turn',
-          deliveryId: newId(),
+        addressKind: 'orchestrator-session',
+        addressJson: {
+          kind: 'orchestrator-session',
+          projectId: input.projectId,
+          sessionId: input.pcSessionId,
         },
-      ],
-      now: (deps.now ?? Date.now)(),
-    });
-    // Mailbox path: the worker drains the delivery; no Channel push fired.
-    return { inboxId: null, channelDelivered: false };
-  }
-  return enqueueAndPush(deps.channelServer, input);
+        channel: 'orchestrator-turn',
+        deliveryId: newId(),
+      },
+    ],
+    now: (deps.now ?? Date.now)(),
+  });
+  return { inboxId: null, channelDelivered: false };
 }

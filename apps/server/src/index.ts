@@ -50,12 +50,10 @@ import { LiveRelay } from './services/live-relay.ts';
 import { announceSessionTitle } from './services/session-title-writer.ts';
 import { createHostConnection, toHostHealthSnapshot } from './services/host-connection.ts';
 import { announceHostHealth } from './services/host-health-writer.ts';
-import { drainPendingForSession } from './services/agent-delivery.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
 import { sweepEphemeralWorkItems } from './services/ephemeral-work-item-sweep.ts';
 import { backfillStageFlags } from './services/stage-flags-backfill.ts';
 import { ChannelServer, type ChannelEvent } from './services/channel-server.ts';
-import { envDeliveryRouter } from './services/delivery-routing.ts';
 import { ProjectCreate } from './services/project-create.ts';
 import { ProjectRegistry } from './services/project-registry.ts';
 import type { ProjectRuntime } from './services/project-runtime.ts';
@@ -294,10 +292,9 @@ const projectRegistry = new ProjectRegistry({
   channelPort: CHANNEL_PORT,
   getHostClient: () => hostConnection,
   broadcastFor: (projectId) => (event) => broadcastTo(projectId, event),
-  // Slice 008 — workflow-review cutover seam (friction #1). The closure runs at
-  // workflow-fire time (post-boot), so it safely references the mailbox bindings
-  // declared later in this module. Returns true only when the workflow-review
-  // gate = `mailbox` AND a mailbox port is wired (then `postChannel` is skipped).
+  // Workflow-review delivery seam. The closure runs at workflow-fire time
+  // (post-boot), so it safely references the mailbox bindings declared later in
+  // this module. Enqueues the review prompt as a durable mailbox message.
   deliverWorkflowReview: deliverWorkflowReview,
 });
 projectRegistry.loadAll();
@@ -313,19 +310,7 @@ const channelServer = new ChannelServer({
   onEvent: (projectId, event) => {
     broadcastTo(projectId, { type: 'channel-event', projectId, event });
   },
-  // 18.3 / Phase D — When a fresh bridge registers (post-restart / post-
-  // respawn), drain any pending inbox rows for the (projectId, sessionId)
-  // pair so the orchestrator catches up autonomously.
-  onRegister: ({ projectId, sessionId, slug }) => {
-    const result = drainPendingForSession(channelServer, projectId, sessionId, slug);
-    if (result.attempted > 0) {
-      console.log(
-        `[channel] auto-flush ${projectId} / ${sessionId}: drained ${result.drained}/${result.attempted}`,
-      );
-    }
-  },
-  // Slice 008 — external-webhook cutover sink (gate = PC_DELIVERY_WEBHOOK).
-  // Default (gate=channel) returns false → unchanged fan-to-children.
+  // 017 Phase C — external webhooks route unconditionally to the mailbox.
   webhookSink: deliverWebhookToMailbox,
 });
 channelServer.start();
@@ -431,14 +416,6 @@ const mailboxWorker = new MailboxWorker({
   getMessageBody: (messageId) => getMailboxMessage(messageId)?.body ?? null,
 });
 
-// ── Slice 008 — Channel→mailbox cutover gate (default channel; reversible) ──
-// Each flow's mode is read from env (PC_DELIVERY_AGENT / _WORKFLOW_REVIEW /
-// _WEBHOOK), defaulting to `channel`. With no env set, delivery is byte-
-// identical to today. The cutover senders enqueue through this port which
-// commits the message + fans out the canonical mailbox.message.changed frame;
-// the slice-007 worker then drains the delivery + fans delivery frames.
-const deliveryRouter = envDeliveryRouter();
-
 // Slice 015b — the enqueue writes the canonical `mailbox.message.changed`
 // outbox row inside its txn; the relay delivers it. No hand-fanout. (Name kept
 // for the delivery-router cutover call sites; it is now a thin enqueue.)
@@ -457,8 +434,6 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
     const result = await reattachAgentRunsDuringServerBoot({
       getHostClient: () => hostConnection,
       broadcast: broadcastTo,
-      channelServer,
-      deliveryRouter,
       mailboxEnqueue: enqueueMailboxAndFanout,
     });
     if (result.mode === 'host') {
@@ -533,8 +508,6 @@ const agentRunReconcileSweep = setInterval(() => {
         hostClient: hostConnection,
         activeRunRegistry: getActiveRunRegistry(),
         broadcast: broadcastTo,
-        channelServer,
-        deliveryRouter,
         mailboxEnqueue: enqueueMailboxAndFanout,
       });
       if (res.terminalApplied > 0 || res.statusUpdated > 0) {
@@ -563,9 +536,7 @@ const agentRunLivenessSweep = setInterval(() => {
   try {
     const res = sweepAgentRunLiveness({
       activeRunRegistry: getActiveRunRegistry(),
-      channelServer,
       broadcast: broadcastTo,
-      deliveryRouter,
       mailboxEnqueue: enqueueMailboxAndFanout,
     });
     if (res.failedDead > 0 || res.failedIdle > 0) {
@@ -622,10 +593,10 @@ registerMailboxRoutes(app, {
   // no fanout deps.
 });
 
-// Flow B — workflow-review cutover seam. Hoisted so the ProjectRegistry built at
-// boot can reference it; the body runs at workflow-fire time so the const
-// bindings above are initialised by then. When the gate = `channel` (default)
-// it returns false and the DAG executor keeps the `/channel` postChannel path.
+// Workflow-review delivery. Hoisted so the ProjectRegistry built at boot can
+// reference it; the body runs at workflow-fire time so the const bindings above
+// are initialised by then. Enqueues the review prompt as a durable mailbox
+// message (active-orchestrator + orchestrator-turn).
 function deliverWorkflowReview(input: {
   projectId: ULID;
   runId: ULID;
@@ -633,7 +604,6 @@ function deliverWorkflowReview(input: {
   flavor: 'human' | 'orchestrator';
   body: string;
 }): boolean {
-  if (deliveryRouter.mode('workflow-review') !== 'mailbox') return false;
   enqueueMailboxAndFanout({
     message: {
       id: newId(),
@@ -665,9 +635,8 @@ function deliverWorkflowReview(input: {
 // registrant). Idempotency is best-effort: external `/channel` bodies carry no
 // event id, so we hash slug+source+body and include the arrival timestamp.
 function deliverWebhookToMailbox(event: ChannelEvent): boolean {
-  if (deliveryRouter.mode('webhook') !== 'mailbox') return false;
   const hash = createHash('sha256')
-    .update(`${event.slug} ${event.source} ${event.body}`)
+    .update(`${event.slug}|${event.source}|${event.body}`)
     .digest('hex')
     .slice(0, 16);
   enqueueMailboxAndFanout({
@@ -1016,7 +985,7 @@ registerWorkItemRoutes(app, {
   resolveProject,
   broadcastTo,
   refreshProject: (project) => projectRegistry.refresh(project),
-  channelServer,
+  mailboxEnqueue: enqueueMailboxAndFanout,
   getHostConnection: () => hostConnection,
 });
 
@@ -1031,13 +1000,10 @@ registerWorktreeRoutes(app, { resolveProject });
 // review responses go through POST /workflow-v2/review.
 
 registerAgentRunRoutes(app, {
-  channelServer,
   broadcastTo,
   getHostConnection: () => hostConnection,
-  // Slice 008 — gated agent delivery. Default env router resolves to `channel`
-  // unless PC_DELIVERY_AGENT=mailbox is set; the port enqueues + fans out the
-  // mailbox message frame (the worker then drains delivery + fans delivery frames).
-  deliveryRouter,
+  // Agent delivery enqueues + fans out the mailbox message frame (the worker
+  // then drains delivery + fans delivery frames) — the sole delivery door.
   mailboxEnqueue: enqueueMailboxAndFanout,
 });
 

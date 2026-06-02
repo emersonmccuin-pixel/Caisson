@@ -70,16 +70,11 @@ function truncateStdout(s: string): string {
   return s.slice(0, STDOUT_CAP_BYTES) + `\n…[truncated, ${String(s.length - STDOUT_CAP_BYTES)} more bytes]`;
 }
 
-export type ChannelPoster = (body: string, source: string) => Promise<void>;
-
-/** Slice 008 — workflow-review delivery seam. When the workflow-review gate
- *  resolves to `mailbox`, the DAG executor calls this instead of `postChannel`
- *  to enqueue a durable `workflow-review` mailbox message (active-orchestrator
- *  + orchestrator-turn). When it returns `false` (no port / gate=channel) the
- *  caller falls back to `postChannel`. Injected from index.ts where the
- *  mailboxService lives — ProjectRuntime never gains a mailbox ref. The
- *  slice-004 workflow.review.changed fact fires regardless (it is state, not
- *  delivery). */
+/** Workflow-review delivery seam. The DAG executor calls this to enqueue a
+ *  durable `workflow-review` mailbox message (active-orchestrator +
+ *  orchestrator-turn). Injected from index.ts where the mailboxService lives —
+ *  ProjectRuntime never gains a mailbox ref. The slice-004
+ *  workflow.review.changed fact fires regardless (it is state, not delivery). */
 export type WorkflowReviewDelivery = (input: {
   projectId: ULID;
   runId: ULID;
@@ -136,10 +131,8 @@ export interface DagRunServiceOptions {
   spawner?: Spawner;
   verify?: Verifier;
   exec?: CommandExec;
-  postChannel?: ChannelPoster;
-  /** Slice 008 — gated mailbox review delivery. When present and it returns
-   *  true, the review prompt was enqueued as a mailbox message and `postChannel`
-   *  is skipped. Default (absent) keeps the unchanged Channel path. */
+  /** Mailbox review delivery seam — the review prompt is enqueued as a mailbox
+   *  message. Injected from index.ts. */
   deliverReview?: WorkflowReviewDelivery;
 }
 
@@ -376,13 +369,6 @@ export function makeExecutorDeps(
   const spawner = opts.spawner ?? (opts.hostClient ? hostBackedWorkflowSpawner(opts.hostClient) : liveSpawner);
   const verify = opts.verify ?? runVerificationOnTerminal;
   const exec = opts.exec ?? liveExec;
-  const postChannel =
-    opts.postChannel ??
-    (async (body, source) => {
-      const slug = opts.getProject().slug;
-      const url = `http://127.0.0.1:${String(opts.channelPort)}/channel/${encodeURIComponent(slug)}/${encodeURIComponent(source)}`;
-      await fetch(url, { method: 'POST', headers: { 'content-type': 'text/plain' }, body });
-    });
 
   const resolveRef =
     (state: WorkflowV2.WorkflowDagState): RefResolver =>
@@ -653,21 +639,15 @@ export function makeExecutorDeps(
       `${node.prompt ?? 'Please review the work below.'}\n\n${summary}\n\n` +
       `Approve: pc_complete_node-equivalent (v2 review endpoint) · Reject sends it back.`;
     if (node.kind === 'orchestrator-review') {
-      // Slice 008 — gated delivery. When the workflow-review gate = `mailbox`
-      // and a delivery seam is wired, the review prompt is enqueued as a
-      // durable mailbox message (active-orchestrator + orchestrator-turn);
-      // otherwise the unchanged `postChannel` Channel path runs.
-      const deliveredViaMailbox =
-        opts.deliverReview?.({
-          projectId: opts.projectId,
-          runId: run.id,
-          nodeId: node.id,
-          flavor,
-          body,
-        }) ?? false;
-      if (!deliveredViaMailbox) {
-        await postChannel(body, 'workflow');
-      }
+      // 017 Phase C — the review prompt is enqueued as a durable mailbox message
+      // (active-orchestrator + orchestrator-turn) via the wired seam. No Channel.
+      opts.deliverReview?.({
+        projectId: opts.projectId,
+        runId: run.id,
+        nodeId: node.id,
+        flavor,
+        body,
+      });
     }
     // Slice 015b — durable workflow.review.changed (pending) fact via the
     // gateway's in-txn live_outbox row. The 015a relay drains + delivers it;

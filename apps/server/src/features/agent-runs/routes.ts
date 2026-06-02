@@ -34,9 +34,7 @@ import { getActiveRunRegistry as defaultGetActiveRunRegistry } from '../../servi
 import { hardKillAgentRun, inspectAgentRun } from '../../services/agent-run-control.ts';
 import { recordAgentInvoke as defaultRecordAgentInvoke } from '../../services/agent-audit.ts';
 import { checkInvokeDepth as defaultCheckInvokeDepth } from '../../services/invoke-depth.ts';
-import type { ChannelServer } from '../../services/channel-server.ts';
 import type { AgentHostReattachClient } from '../../services/agent-host-reattach.ts';
-import { envDeliveryRouter, type DeliveryRouter } from '../../services/delivery-routing.ts';
 import type { MailboxEnqueuePort } from '../../services/agent-delivery.ts';
 
 interface AgentRunCancelEntry {
@@ -49,16 +47,13 @@ export interface AgentRunActiveRegistry {
 }
 
 export interface AgentRunRouteDeps {
-  channelServer: ChannelServer;
   broadcastTo(projectId: ULID, msg: unknown): void;
   /** T1.1 — resolve the live HostConnection PER REQUEST (not captured by-value
    *  at register time) so a host respawn on a new port is picked up without an
    *  API restart. */
   getHostConnection?: () => AgentHostReattachClient | null;
-  /** Slice 008 — per-flow delivery gate (default channel). */
-  deliveryRouter?: DeliveryRouter;
-  /** Slice 008 — mailbox enqueue port; threaded into the factory/terminal/
-   *  pause delivery sites so the agent gate can route to mailbox. */
+  /** Mailbox enqueue port; threaded into the factory/terminal/pause/kill
+   *  delivery sites — the sole delivery door. */
   mailboxEnqueue?: MailboxEnqueuePort | null;
   getActiveRunRegistry?: () => AgentRunActiveRegistry;
   dispatchFreshAgent?: typeof defaultDispatchFreshAgent;
@@ -124,9 +119,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     now: deps.now ?? Date.now,
   };
 
-  // Slice 008 — resolve the delivery gate + mailbox port once; thread into the
-  // factory / terminal / pause delivery sites. Default router = env (channel).
-  const deliveryRouter = deps.deliveryRouter ?? envDeliveryRouter();
+  // Resolve the mailbox port once; thread into the factory / terminal / pause /
+  // kill delivery sites (the sole delivery door post-017-Phase-C).
   const mailboxEnqueue = deps.mailboxEnqueue ?? null;
 
   // T1.1 — resolve the live host connection PER CALL (the route no longer
@@ -237,7 +231,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     }
     const result = hardKillAgentRun(runId, {
       activeRunRegistry: defaultGetActiveRunRegistry(),
-      channelServer: deps.channelServer,
+      mailboxEnqueue,
       broadcast: deps.broadcastTo,
     });
     return c.json(result, result.ok ? 200 : 404);
@@ -334,8 +328,6 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         slug: project.slug,
       },
       {
-        channelServer: deps.channelServer,
-        deliveryRouter,
         mailboxEnqueue,
         broadcast: (env) => deps.broadcastTo(projectId, env),
         ...(host ? { hostClient: host } : {}),
@@ -437,8 +429,6 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         slug: project.slug,
       },
       {
-        channelServer: deps.channelServer,
-        deliveryRouter,
         mailboxEnqueue,
         broadcast: (env) => deps.broadcastTo(projectId, env),
         ...(host ? { hostClient: host } : {}),
@@ -562,8 +552,6 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         options: Array.isArray(body.options) ? body.options : null,
       },
       {
-        channelServer: deps.channelServer,
-        deliveryRouter,
         mailboxEnqueue,
         slug: project.slug,
         broadcast: (env) => deps.broadcastTo(projectId, env),
@@ -617,7 +605,6 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       const result = await services.answerPendingAsk(
         { pendingAskId, answer, answeredBy },
         {
-          channelServer: deps.channelServer,
           slug: project.slug,
           broadcast: (env) => deps.broadcastTo(projectId, env),
         },

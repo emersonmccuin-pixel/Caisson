@@ -22,7 +22,6 @@ const {
   listDeliveriesForMessage,
 } = db;
 const { MailboxService } = await import('@pc/app-services');
-const { fixedDeliveryRouter } = await import('../src/services/delivery-routing.ts');
 const { buildLiveEventFrame } = await import('@pc/contracts');
 
 before(() => runMigrations());
@@ -41,20 +40,19 @@ interface ChannelEvent {
 }
 
 /** Build the index.ts webhook sink closure against a real MailboxService so the
- *  durable "no silent drop" path is exercised end to end. */
-function makeSink(mode: 'channel' | 'mailbox') {
+ *  durable "no silent drop" path is exercised end to end. 017 Phase C — the sink
+ *  is unconditional (the mailbox is the sole door). */
+function makeSink() {
   const service = new MailboxService();
-  const router = fixedDeliveryRouter({ webhook: mode });
   const broadcasts: unknown[] = [];
   const enqueueAndFanout = (input: EnqueueMailboxMessageInput) => {
     const pub = service.enqueue(input);
     broadcasts.push(buildLiveEventFrame(pub.liveEvent));
     return pub;
   };
-  const sink = (event: ChannelEvent): boolean => {
-    if (router.mode('webhook') !== 'mailbox') return false;
+  const sink = (event: ChannelEvent): void => {
     const hash = createHash('sha256')
-      .update(`${event.slug} ${event.source} ${event.body}`)
+      .update(`${event.slug}|${event.source}|${event.body}`)
       .digest('hex')
       .slice(0, 16);
     enqueueAndFanout({
@@ -80,7 +78,6 @@ function makeSink(mode: 'channel' | 'mailbox') {
       ],
       now: Date.now(),
     });
-    return true;
   };
   return { sink, broadcasts };
 }
@@ -97,22 +94,11 @@ function event(over: Partial<ChannelEvent> = {}): ChannelEvent {
   };
 }
 
-test('gate=channel — sink returns false (ChannelServer keeps the fan-to-children path); no mailbox row written', () => {
-  const { sink } = makeSink('channel');
-  const ev = event({ source: 'gitlab', at: 1_700_000_000_001 });
-  const owned = sink(ev);
-  assert.equal(owned, false, 'channel gate ⟹ the handler fans to children');
-  const hash = createHash('sha256').update(`${ev.slug} ${ev.source} ${ev.body}`).digest('hex').slice(0, 16);
-  const msg = getMailboxMessageByIdempotencyKey(`webhook:${ev.slug}:${ev.source}:${hash}:${String(ev.at)}`);
-  assert.equal(msg, null, 'channel gate must NOT enqueue mailbox');
-});
-
-test('gate=mailbox — durable external-webhook message lands in the project inbox (ui-inbox); no silent drop on missing registrant', () => {
-  const { sink, broadcasts } = makeSink('mailbox');
+test('durable external-webhook message lands in the project inbox (ui-inbox); no silent drop on missing registrant', () => {
+  const { sink, broadcasts } = makeSink();
   const ev = event({ source: 'stripe', at: 1_700_000_000_002 });
-  const owned = sink(ev);
-  assert.equal(owned, true, 'mailbox gate ⟹ the handler SKIPS the bridge fan-out');
-  const hash = createHash('sha256').update(`${ev.slug} ${ev.source} ${ev.body}`).digest('hex').slice(0, 16);
+  sink(ev);
+  const hash = createHash('sha256').update(`${ev.slug}|${ev.source}|${ev.body}`).digest('hex').slice(0, 16);
   const key = `webhook:${ev.slug}:${ev.source}:${hash}:${String(ev.at)}`;
   const msg = getMailboxMessageByIdempotencyKey(key);
   assert.ok(msg, 'event landed durably with no registrant present (no drop)');
@@ -128,11 +114,11 @@ test('gate=mailbox — durable external-webhook message lands in the project inb
 });
 
 test('idempotency — a replayed event (same slug/source/body/at) enqueues no duplicate message', () => {
-  const { sink } = makeSink('mailbox');
+  const { sink } = makeSink();
   const ev = event({ source: 'replayed', at: 1_700_000_000_003 });
   sink(ev);
   sink(ev); // replay
-  const hash = createHash('sha256').update(`${ev.slug} ${ev.source} ${ev.body}`).digest('hex').slice(0, 16);
+  const hash = createHash('sha256').update(`${ev.slug}|${ev.source}|${ev.body}`).digest('hex').slice(0, 16);
   const msg = getMailboxMessageByIdempotencyKey(`webhook:${ev.slug}:${ev.source}:${hash}:${String(ev.at)}`);
   assert.ok(msg);
   // listDeliveriesForMessage returns exactly the original delivery (no dup).

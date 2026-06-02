@@ -8,7 +8,7 @@
 //   - `preparePodSpawn` (pod materialisation via the shared `materializePod`).
 //   - `getActiveRunRegistry` (process-wide indexed lookup the pause/resume
 //     layer queries).
-//   - `enqueueAndPush` (hybrid delivery for terminal envelopes).
+//   - `deliverAgentEnvelope` (mailbox delivery for terminal/queued envelopes).
 //
 // Responsibilities:
 //
@@ -66,7 +66,6 @@ import {
   buildAgentQueuedStartedBody,
 } from './agent-event-header.ts';
 import { preparePodSpawn, type PodSpawnPrep } from './pod-spawn.ts';
-import type { ChannelServer } from './channel-server.ts';
 
 import {
   activeRunHandleForAgentRun,
@@ -80,7 +79,6 @@ import {
   type AgentHostReattachClient,
 } from './agent-host-reattach.ts';
 import { deliverAgentEnvelope, type MailboxEnqueuePort } from './agent-delivery.ts';
-import { envDeliveryRouter, type DeliveryRouter } from './delivery-routing.ts';
 import { continueAgent, type ContinueAgentResult } from './pause-resume.ts';
 import {
   runVerificationOnTerminal,
@@ -155,11 +153,7 @@ export interface DispatchContinueAgentInput {
 }
 
 export interface DispatchAgentDeps {
-  channelServer: ChannelServer;
-  /** Slice 008 — per-flow delivery gate (default channel). */
-  deliveryRouter?: DeliveryRouter;
-  /** Slice 008 — mailbox enqueue port; consulted only when the agent gate
-   *  resolves to `mailbox`. Omit to force the Channel path. */
+  /** Mailbox enqueue port — agent envelopes are delivered through it. */
   mailboxEnqueue?: MailboxEnqueuePort | null;
   /** Inject for tests. Defaults to the process-wide singletons. */
   runRegistry?: AgentRunRegistry;
@@ -633,8 +627,6 @@ async function startHostBackedRun(
       const applied = applyHostTerminalSnapshot(event.run, {
         activeRunRegistry: activeReg,
         broadcast: broadcastForFactory(args),
-        channelServer: args.deps.channelServer,
-        deliveryRouter: args.deps.deliveryRouter,
         mailboxEnqueue: args.deps.mailboxEnqueue,
         verifyOnTerminal: args.deps.verifyOnTerminal,
         verificationDeps: args.deps.verificationDeps,
@@ -716,8 +708,6 @@ async function startHostBackedRun(
     applyHostTerminalSnapshot(snapshot, {
       activeRunRegistry: activeReg,
       broadcast: broadcastForFactory(args),
-      channelServer: args.deps.channelServer,
-      deliveryRouter: args.deps.deliveryRouter,
       mailboxEnqueue: args.deps.mailboxEnqueue,
       verifyOnTerminal: args.deps.verifyOnTerminal,
       verificationDeps: args.deps.verificationDeps,
@@ -1047,12 +1037,12 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
     }
   });
 
-  // Phase D — emit `agent-queued-started` channel envelope to the dispatcher
-  // when a previously-queued dispatch actually fires. Rides the hybrid
-  // transport (inbox + best-effort channel) so post-restart catch-up still
-  // works.
+  // Phase D — emit an `agent-queued-started` envelope to the dispatcher's
+  // mailbox when a previously-queued dispatch actually fires.
   run.on('queued-started', () => {
     const startedAt = Date.now();
+    const mailboxEnqueue = args.deps.mailboxEnqueue;
+    if (!mailboxEnqueue) return;
     deliverAgentEnvelope(
       {
         projectId: args.input.projectId,
@@ -1072,11 +1062,7 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
         idempotencyKey: `agent:${args.agentRunId}:agent-queued-started`,
         sourceId: args.agentRunId,
       },
-      {
-        channelServer: args.deps.channelServer,
-        router: args.deps.deliveryRouter ?? envDeliveryRouter(),
-        mailboxEnqueue: args.deps.mailboxEnqueue ?? null,
-      },
+      { mailboxEnqueue },
     );
   });
 
@@ -1105,8 +1091,6 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
         },
         {
           activeRunRegistry: activeReg,
-          channelServer: args.deps.channelServer,
-          deliveryRouter: args.deps.deliveryRouter ?? envDeliveryRouter(),
           mailboxEnqueue: args.deps.mailboxEnqueue ?? null,
           broadcast: (_projectId, msg) => {
             args.deps.broadcast?.(msg as { type: string; [key: string]: unknown });
