@@ -28,28 +28,52 @@ interface LiveStore {
   byKey: Map<string, LiveEvent>;
   /** Apply one WS envelope; no-op unless it's a relay live-event frame. */
   applyEnvelope: (env: unknown) => void;
+  /** T2.3-C — cold-load HTTP seed: merge raw `LiveEvent[]` (from the
+   *  `/api/live-events` replay route) with the SAME (entity,entityId)+version
+   *  dedup as `applyEnvelope`, so a fresh reload shows current global state
+   *  immediately instead of waiting for the next WS transition. */
+  seedEvents: (events: readonly LiveEvent[]) => void;
   /** Drop everything. Wired to `live-reset` (the below-floor catch-up gap) so a
    *  stale frame can never re-merge over freshly reseeded HTTP truth. */
   clearAll: () => void;
+}
+
+/** Merge one raw `LiveEvent` into `byKey` with version dedup. Returns the new
+ *  map only when the event actually applies, else `null` (no-op). Shared by the
+ *  WS-frame path (`applyEnvelope`) and the cold-load seed (`seedEvents`). */
+function mergeEvent(byKey: Map<string, LiveEvent>, ev: LiveEvent): Map<string, LiveEvent> | null {
+  if (!ev.entityId) return null;
+  const key = `${ev.entity}::${ev.entityId}`;
+  const prev = byKey.get(key);
+  // Version dedup: a numeric version that is not newer than what we hold is a
+  // stale/duplicate delivery. A null version (entities without a rev) always
+  // applies — last-write-wins.
+  if (prev && typeof ev.version === 'number' && (prev.version ?? -1) >= ev.version) {
+    return null;
+  }
+  const next = new Map(byKey);
+  next.set(key, ev);
+  return next;
 }
 
 export const useLiveStore = create<LiveStore>((set, get) => ({
   byKey: new Map(),
   applyEnvelope: (env) => {
     if (!isLiveEventFrame(env)) return;
-    const ev = env.event;
-    if (!ev.entityId) return;
-    const key = `${ev.entity}::${ev.entityId}`;
-    const prev = get().byKey.get(key);
-    // Version dedup: a numeric version that is not newer than what we hold is a
-    // stale/duplicate delivery. A null version (entities without a rev) always
-    // applies — last-write-wins.
-    if (prev && typeof ev.version === 'number' && (prev.version ?? -1) >= ev.version) {
-      return;
+    const next = mergeEvent(get().byKey, env.event);
+    if (next) set({ byKey: next });
+  },
+  seedEvents: (events) => {
+    let map = get().byKey;
+    let changed = false;
+    for (const ev of events) {
+      const next = mergeEvent(map, ev);
+      if (next) {
+        map = next;
+        changed = true;
+      }
     }
-    const next = new Map(get().byKey);
-    next.set(key, ev);
-    set({ byKey: next });
+    if (changed) set({ byKey: map });
   },
   clearAll: () => set({ byKey: new Map() }),
 }));

@@ -166,3 +166,202 @@ test('applyAgentHostEvent run-state case re-seeds a registered host handle', () 
   assert.equal(res.statusUpdated, 1);
   assert.equal(handle.getState(), 'running');
 });
+
+// ── T1.4 — host-lost finalize in the continuous reconcile ──────────────────
+//
+// The watchdog passes an authoritative-absence signal + a caller-owned
+// consecutive-miss counter. A host-mode row missing from list-runs for
+// >= hostLostAfterTicks ticks finalizes terminal `host-lost` via the injected
+// terminal-effects seam. Below threshold / no signal → untouched (conservatism).
+
+interface TerminalCall {
+  runId: string;
+  status: string;
+  failureCause: string | null | undefined;
+  failureReason: string | null | undefined;
+}
+
+/** Build a reconcile deps bag with an injected terminal-effects spy. */
+function hostLostDeps(opts: {
+  rows: AgentRunRow[];
+  hostRuns?: AgentHostRunSnapshot[];
+  missingTicks: Map<string, number>;
+  hostAuthoritativelyAbsent: boolean;
+  hostLostAfterTicks?: number;
+  hasOpenAsk?: (runId: string) => boolean;
+  calls: TerminalCall[];
+}) {
+  const host = new FakeHostClient(opts.hostRuns ?? []);
+  return {
+    deps: {
+      hostClient: host,
+      listNonTerminalRuns: () => opts.rows,
+      missingFromHostTicks: opts.missingTicks,
+      hostAuthoritativelyAbsent: opts.hostAuthoritativelyAbsent,
+      ...(opts.hostLostAfterTicks !== undefined
+        ? { hostLostAfterTicks: opts.hostLostAfterTicks }
+        : {}),
+      ...(opts.hasOpenAsk ? { hasOpenPendingAskForRun: (id: ULID) => opts.hasOpenAsk!(id) } : {}),
+      applyTerminalEffects: ((input: {
+        runId: string;
+        status: string;
+        failureCause?: string | null;
+        failureReason?: string | null;
+      }) => {
+        opts.calls.push({
+          runId: input.runId,
+          status: input.status,
+          failureCause: input.failureCause,
+          failureReason: input.failureReason,
+        });
+        return { applied: 1 };
+      }) as never,
+    },
+  };
+}
+
+test('T1.4 host absent, missing < threshold → NOT finalized; counter increments', () => {
+  const calls: TerminalCall[] = [];
+  const missingTicks = new Map<string, number>();
+  const { deps } = hostLostDeps({
+    rows: [row('run-lost', { status: 'running' })],
+    hostRuns: [],
+    missingTicks,
+    hostAuthoritativelyAbsent: true,
+    hostLostAfterTicks: 2,
+    calls,
+  });
+
+  const res = reconcileAgentRunsAgainstHost(deps);
+  assert.equal(res.hostLost, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(missingTicks.get('run-lost'), 1);
+});
+
+test('T1.4 host absent, missing >= threshold → finalized failed/host-lost; counter cleared', () => {
+  const calls: TerminalCall[] = [];
+  const missingTicks = new Map<string, number>([['run-lost', 1]]);
+  const { deps } = hostLostDeps({
+    rows: [row('run-lost', { status: 'running' })],
+    hostRuns: [],
+    missingTicks,
+    hostAuthoritativelyAbsent: true,
+    hostLostAfterTicks: 2,
+    calls,
+  });
+
+  const res = reconcileAgentRunsAgainstHost(deps);
+  assert.equal(res.hostLost, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].status, 'failed');
+  assert.equal(calls[0].failureCause, 'host-lost');
+  assert.ok(calls[0].failureReason && calls[0].failureReason.length > 0);
+  assert.equal(missingTicks.has('run-lost'), false);
+});
+
+test('T1.4 host CONNECTED but row not owned (missing from list-runs) → host-lost after threshold', () => {
+  const calls: TerminalCall[] = [];
+  // hostAuthoritativelyAbsent reflects "the run is absent from a successful
+  // list-runs" — the watchdog sets it from connection + ownership. Other runs
+  // present, this one not owned.
+  const missingTicks = new Map<string, number>([['run-orphan', 1]]);
+  const { deps } = hostLostDeps({
+    rows: [row('run-orphan', { status: 'running' })],
+    hostRuns: [hostRun('some-other-run', 'running')],
+    missingTicks,
+    hostAuthoritativelyAbsent: true,
+    hostLostAfterTicks: 2,
+    calls,
+  });
+
+  const res = reconcileAgentRunsAgainstHost(deps);
+  assert.equal(res.hostLost, 1);
+  assert.equal(calls[0].failureCause, 'host-lost');
+});
+
+test('T1.4 false-positive guard: no absence signal → no finalize, no increment', () => {
+  const calls: TerminalCall[] = [];
+  const missingTicks = new Map<string, number>([['run-lost', 1]]);
+  const { deps } = hostLostDeps({
+    rows: [row('run-lost', { status: 'running' })],
+    hostRuns: [],
+    missingTicks,
+    hostAuthoritativelyAbsent: false, // refreshRuns threw / mid-respawn
+    hostLostAfterTicks: 2,
+    calls,
+  });
+
+  const res = reconcileAgentRunsAgainstHost(deps);
+  assert.equal(res.hostLost, 0);
+  assert.equal(calls.length, 0);
+  // Counter untouched (still 1) — a withheld signal never advances it.
+  assert.equal(missingTicks.get('run-lost'), 1);
+});
+
+test('T1.4 refreshRuns-threw shape (no counter + no absence) → no finalize, counter untouched', () => {
+  // Mirrors the watchdog wiring: when refreshRuns() THROWS this tick, it passes
+  // hostAuthoritativelyAbsent:false AND withholds the counter (undefined). The
+  // reconcile must not finalize and must not mutate any standing counter.
+  const calls: TerminalCall[] = [];
+  const standing = new Map<string, number>([['run-lost', 1]]);
+  const host = new FakeHostClient([]);
+  const res = reconcileAgentRunsAgainstHost({
+    hostClient: host,
+    listNonTerminalRuns: () => [row('run-lost', { status: 'running' })],
+    hostAuthoritativelyAbsent: false,
+    missingFromHostTicks: undefined,
+    hostLostAfterTicks: 2,
+    applyTerminalEffects: ((input: { runId: string }) => {
+      calls.push({ runId: input.runId, status: 'failed', failureCause: null, failureReason: null });
+      return { applied: 1 };
+    }) as never,
+  });
+  assert.equal(res.hostLost, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(standing.get('run-lost'), 1); // never touched
+});
+
+test('T1.4 row reappears in list-runs before threshold → counter resets, no finalize', () => {
+  const calls: TerminalCall[] = [];
+  const missingTicks = new Map<string, number>([['run-back', 1]]);
+  let currentRow = row('run-back', { status: 'running' });
+  const { deps } = hostLostDeps({
+    rows: [currentRow],
+    hostRuns: [hostRun('run-back', 'running')], // host owns it again
+    missingTicks,
+    hostAuthoritativelyAbsent: true,
+    hostLostAfterTicks: 2,
+    calls,
+  });
+  // getAgentRun/updateStatus so the matched-row branch is happy.
+  const res = reconcileAgentRunsAgainstHost({
+    ...deps,
+    getAgentRun: () => currentRow,
+    updateStatus: (input) => {
+      currentRow = { ...currentRow, status: input.status };
+    },
+  });
+  assert.equal(res.hostLost, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(missingTicks.has('run-back'), false); // reset on reappearance
+});
+
+test('T1.4 paused row with open pending ask, host absent → never host-lost', () => {
+  const calls: TerminalCall[] = [];
+  const missingTicks = new Map<string, number>([['run-paused', 5]]);
+  const { deps } = hostLostDeps({
+    rows: [row('run-paused', { status: 'paused' })],
+    hostRuns: [],
+    missingTicks,
+    hostAuthoritativelyAbsent: true,
+    hostLostAfterTicks: 2,
+    hasOpenAsk: () => true,
+    calls,
+  });
+
+  const res = reconcileAgentRunsAgainstHost(deps);
+  assert.equal(res.hostLost, 0);
+  assert.equal(calls.length, 0);
+  // Counter not advanced for a legitimately host-less paused-with-ask row.
+  assert.equal(missingTicks.get('run-paused'), 5);
+});

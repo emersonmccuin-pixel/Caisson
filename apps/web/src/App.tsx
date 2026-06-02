@@ -7,6 +7,7 @@ import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { SessionSwitcher } from '@/components/SessionSwitcher';
 import { HostHealthPill } from '@/features/system/HostHealthPill';
+import { HostHealthBanner } from '@/features/system/HostHealthBanner';
 import { Shell } from '@/components/Shell';
 import { tabLabel } from '@/components/Tabs';
 import { liveEventsApi } from '@/features/live/client';
@@ -20,7 +21,7 @@ import { useProjectUnread } from '@/hooks/use-project-unread';
 import { useProjectWs } from '@/hooks/use-project-ws';
 import { useRichLinkInvalidator } from '@/hooks/use-rich-link-invalidator';
 import { useStatuslineSync } from '@/hooks/use-statusline-sync';
-import { useLiveGlobalSignature } from '@/store/live-store';
+import { useLiveGlobalSignature, useLiveStore } from '@/store/live-store';
 import { useActiveCenterTab } from '@/store/active-center-tab';
 import { useActiveProject } from '@/store/active-project';
 import { useAppSettingsModal } from '@/store/app-settings-modal';
@@ -194,6 +195,23 @@ export default function App() {
         replayInFlightRef.current = false;
       });
   }, [projects !== null, ws.status, backgroundWs.status, storeProjectChangedCursor]);
+
+  // T2.3-C — cold-load seed for the global host-health pill/banner. A fresh
+  // reload replays NOTHING over the WS catch-up, so the pill was blank until the
+  // next host transition. Seed the current state ONCE from the same durable
+  // replay route the relay drains from (no parallel source). Host-health only
+  // this slice (D4); T3.x generalizes.
+  const hostHealthSeededRef = useRef(false);
+  useEffect(() => {
+    if (hostHealthSeededRef.current) return;
+    hostHealthSeededRef.current = true;
+    void liveEventsApi
+      .listEvents({ includeGlobal: true, type: 'host-health.changed' })
+      .then((response) => {
+        useLiveStore.getState().seedEvents(response.events);
+      })
+      .catch(() => {});
+  }, []);
 
   const persistActivityPanelSetting = useCallback(
     (patch: { open?: boolean }) => {
@@ -419,6 +437,7 @@ export default function App() {
         </div>
         </div>
       </header>
+      <HostHealthBanner />
       {restartRequired && (
         <div className="flex items-center justify-between gap-3 border-b border-warning/60 bg-warning/10 px-3 py-1.5 text-xs text-warning">
           <span>

@@ -53,7 +53,7 @@ export interface AgentRunBootReconcileResult {
   reconciled: number;
 }
 
-const HOST_LOST_REASON = 'agent host no longer owns this non-terminal run';
+export const HOST_LOST_REASON = 'agent host no longer owns this non-terminal run';
 const HOST_PROTOCOL_REASON = 'agent host snapshot did not match the database run row';
 
 /**

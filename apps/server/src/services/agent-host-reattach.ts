@@ -8,6 +8,7 @@ import type { AgentRunChangedReason } from '@pc/contracts';
 import {
   getAgentRunRow as defaultGetAgentRunRow,
   getProjectById as defaultGetProjectById,
+  hasOpenPendingAskForRun as defaultHasOpenPendingAskForRun,
   listNonTerminalAgentRuns as defaultListNonTerminalAgentRuns,
   markAgentRunTerminal as defaultMarkAgentRunTerminal,
   updateAgentRunStatus as defaultUpdateAgentRunStatus,
@@ -26,6 +27,7 @@ import {
   type AgentHostCommandSender,
 } from './agent-active-runs.ts';
 import {
+  HOST_LOST_REASON,
   reconcileAgentRunsOnBoot,
   type AgentRunBootReconcileResult,
 } from './agent-run-boot-reconcile.ts';
@@ -75,6 +77,22 @@ export interface AgentHostReattachDeps {
   terminalCleanup?: () => void;
   onTerminalError?: (error: Error) => void;
   onHostCommandError?: (error: Error) => void;
+  /** T1.4 (D1) — this tick the connection authoritatively could not reach a
+   *  live host (`hostConnection.isConnected() === false` after a `refreshRuns`
+   *  that COMPLETED). Required for the host-lost finalize; absent ⇒ no finalize
+   *  (conservative). The caller MUST omit/skip it when `refreshRuns` THREW. */
+  hostAuthoritativelyAbsent?: boolean;
+  /** T1.4 — caller-owned consecutive-tick counter (run id → ticks missing from
+   *  the host's `list-runs`). Persists across sweeps; reset when a row reappears
+   *  or goes terminal. Absent ⇒ no finalize (counter is the false-positive guard). */
+  missingFromHostTicks?: Map<string, number>;
+  /** T1.4 (D1) — finalize host-lost only after this many CONSECUTIVE missing
+   *  ticks (default 2 ≈ 30s at the 15s cadence; env `PC_HOST_LOST_TICKS`). */
+  hostLostAfterTicks?: number;
+  /** T1.4 — injectable terminal-effects seam (tests spy on it). Defaults to the
+   *  real full-effects helper so the `failed` live-event + orchestrator notify
+   *  fire through the gateway/outbox door (never a direct broadcast). */
+  applyTerminalEffects?: typeof applyAgentRunTerminalEffects;
 }
 
 export interface AgentHostReattachResult {
@@ -162,6 +180,8 @@ export interface ReconcileSweepResult {
   checked: number;
   terminalApplied: number;
   statusUpdated: number;
+  /** T1.4 — non-terminal rows finalized `host-lost` this sweep (host gone). */
+  hostLost: number;
 }
 
 /**
@@ -177,9 +197,17 @@ export interface ReconcileSweepResult {
  * Caller MUST refresh the host snapshot first (a `list-runs` command) so we
  * reconcile against a fresh pull, not the client's stale cache. This does NOT
  * register live handles or subscribe to events — boot reattach owns that; the
- * sweep only catches transitions the stream missed. Conservative on
- * host-missing rows: left untouched here (boot reconcile + later epoch handling
- * own orphan finalization) so a just-dispatched run is never killed by a race.
+ * sweep only catches transitions the stream missed.
+ *
+ * T1.4 — host-missing rows are no longer left forever-running. When the caller
+ * passes the authoritative-absence signal (`hostAuthoritativelyAbsent`, set only
+ * after a `refreshRuns()` that COMPLETED) plus a consecutive-tick counter, a
+ * host-mode row absent from `list-runs` for `>= hostLostAfterTicks` ticks is
+ * finalized terminal `host-lost` through the full-effects helper (DB flip +
+ * orchestrator notify + `failed` live-event via the outbox door). Below the
+ * threshold — or when the caller withholds the absence signal (e.g. a
+ * `refreshRuns` blip) — the row is left untouched (the original conservatism),
+ * so a just-dispatched run or a mid-respawn host never false-kills a live run.
  */
 export function reconcileAgentRunsAgainstHost(
   deps: AgentHostReattachDeps,
@@ -187,13 +215,29 @@ export function reconcileAgentRunsAgainstHost(
   const rows = (deps.listNonTerminalRuns ?? defaultListNonTerminalAgentRuns)();
   const hostRuns = deps.hostClient.listRuns();
   const hostByRunId = new Map(hostRuns.map((run) => [run.runId, run]));
+  const missingTicks = deps.missingFromHostTicks;
+  const lostAfter = deps.hostLostAfterTicks ?? 2;
+  const hasOpenAsk = deps.hasOpenPendingAskForRun ?? defaultHasOpenPendingAskForRun;
 
   let terminalApplied = 0;
   let statusUpdated = 0;
+  let hostLost = 0;
 
   for (const row of rows) {
     const hostRun = hostByRunId.get(row.id);
-    if (!hostRun || !hostSnapshotMatchesRow(row, hostRun)) continue;
+    // T1.4 — row absent from (or mismatched against) the host's live snapshots.
+    if (!hostRun || !hostSnapshotMatchesRow(row, hostRun)) {
+      hostLost += handleHostMissingRow(row, {
+        deps,
+        missingTicks,
+        lostAfter,
+        hasOpenAsk,
+      });
+      continue;
+    }
+
+    // Row IS owned by the host again — clear any standing missing-tick counter.
+    missingTicks?.delete(row.id);
 
     if (isTerminalState(hostRun.state)) {
       terminalApplied += applyHostTerminalSnapshot(hostRun, deps);
@@ -222,7 +266,72 @@ export function reconcileAgentRunsAgainstHost(
     }
   }
 
-  return { checked: rows.length, terminalApplied, statusUpdated };
+  return { checked: rows.length, terminalApplied, statusUpdated, hostLost };
+}
+
+/** T1.4 — decide a single host-missing row. Increments the consecutive-miss
+ *  counter and finalizes `host-lost` once ALL of the false-positive guards pass:
+ *  (1) the caller asserted authoritative host absence this tick (a `refreshRuns`
+ *  that COMPLETED found no live host / the run unowned), (2) a counter is wired,
+ *  (3) the row is NOT a paused run waiting on an open ask, and (4) the row has
+ *  been missing for `>= lostAfter` consecutive ticks. Else leaves the row
+ *  untouched (counter standing). Returns 1 if finalized, else 0. */
+function handleHostMissingRow(
+  row: AgentRunRow,
+  ctx: {
+    deps: AgentHostReattachDeps;
+    missingTicks: Map<string, number> | undefined;
+    lostAfter: number;
+    hasOpenAsk: (runId: ULID) => boolean;
+  },
+): number {
+  const { deps, missingTicks, lostAfter, hasOpenAsk } = ctx;
+
+  // Conservative gates: without the authoritative-absence signal or a counter,
+  // we cannot tell "host gone" from "host mid-restart" — leave the row alone.
+  if (!deps.hostAuthoritativelyAbsent || !missingTicks) return 0;
+
+  // A paused run legitimately has no live PTY while it waits on a pending ask.
+  if (row.status === 'paused' && hasOpenAsk(row.id)) return 0;
+
+  const ticks = (missingTicks.get(row.id) ?? 0) + 1;
+  missingTicks.set(row.id, ticks);
+  if (ticks < lostAfter) return 0;
+
+  const applied = (deps.applyTerminalEffects ?? applyAgentRunTerminalEffects)(
+    {
+      runId: row.id,
+      ccSessionId: row.ccSessionId,
+      podName: row.podName,
+      projectId: row.projectId,
+      dispatcherSessionId: row.dispatcherSessionId,
+      parentWorkItemId: row.parentWorkItemId,
+      worktreeDir: '',
+      status: 'failed',
+      result: null,
+      failureCause: 'host-lost',
+      failureReason: HOST_LOST_REASON,
+      completedAt: deps.now?.() ?? Date.now(),
+      startedAt: row.queuedAt,
+      workItemId: row.parentWorkItemId,
+      cleanup: deps.terminalCleanup,
+    },
+    {
+      activeRunRegistry: deps.activeRunRegistry,
+      mailboxEnqueue: deps.mailboxEnqueue,
+      broadcast: deps.broadcast,
+      getAgentRun: deps.getAgentRun,
+      markTerminal: deps.markTerminal,
+      verifyOnTerminal: deps.verifyOnTerminal,
+      verificationDeps: deps.verificationDeps,
+      now: deps.now,
+      onError: deps.onTerminalError,
+    },
+  ).applied;
+
+  // Finalized (or already terminal) — drop the counter either way.
+  missingTicks.delete(row.id);
+  return applied;
 }
 
 export interface ApplyAgentHostEventResult {

@@ -439,6 +439,14 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
     });
     if (result.mode === 'host') {
       hostMode = true;
+      // T2.3-B — the old silent degrade made a boot with no reachable host
+      // invisible. The connection self-heals (no dispatch change), but log it so
+      // the degrade is observable; the UI surfaces it via the host-health banner.
+      if (!hostConnection.isConnected()) {
+        console.warn(
+          '[agent-host] boot: host expected but not reachable; dispatch will retry on reconnect',
+        );
+      }
       const reattach = result.reattach;
       const changed =
         reattach.reconcile.reconciled +
@@ -497,29 +505,56 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
 //      `hostConnection` (picks up a respawned host on a new port, no API
 //      restart) + reconcile non-terminal rows — a terminal transition the live
 //      stream dropped still converges here (full effects: DB flip + orchestrator
-//      notify + rail broadcast).
+//      notify + rail broadcast). T1.4: a non-terminal row absent from the host
+//      for >= PC_HOST_LOST_TICKS consecutive ticks (and the connection
+//      authoritatively unreachable this tick) is finalized terminal `host-lost`,
+//      so a dead host no longer leaves runs stuck "running" forever.
 //   2. in-process mode: liveness kill — pid-dead → `unexpected-exit`; idle past
 //      KILL_MS → kill + `idle-timeout`. Runs BEFORE stall-warn so a just-killed
 //      row is already terminal and skipped below.
 //   3. BOTH modes: stall-warn — a run quiet past WARN_MS gets a visible,
-//      non-terminal `stalled` badge (the missing intermediate state). Warn-only;
-//      the host-mode terminal stall path is T1.4.
+//      non-terminal `stalled` badge (the intermediate state). Stall-warn stays
+//      the intermediate signal in both modes; T1.4 adds the host-mode TERMINAL
+//      path above (host-mode is no longer warn-only).
 const AGENT_RUN_WATCHDOG_MS = 15_000;
 const watchdogStalledRuns = new Set<string>();
+// T1.4 — consecutive ticks each host-mode run has been missing from the host's
+// list-runs. Owned here (persists across sweeps); reconcile resets it when a row
+// reappears or finalizes. The threshold is the false-positive guard.
+const hostMissingTicks = new Map<string, number>();
+const HOST_LOST_TICKS = (() => {
+  const raw = Number(process.env.PC_HOST_LOST_TICKS);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 2;
+})();
 const agentRunWatchdogSweep = setInterval(() => {
   void (async () => {
     try {
       if (hostMode) {
-        await hostConnection.refreshRuns();
+        // T1.4 — only run the host-lost finalize when refreshRuns COMPLETED. A
+        // thrown refresh is exactly the false-positive case (transient blip /
+        // mid-respawn): skip the finalize AND do not increment counters.
+        let refreshed = true;
+        try {
+          await hostConnection.refreshRuns();
+        } catch {
+          refreshed = false;
+        }
         const res = reconcileAgentRunsAgainstHost({
           hostClient: hostConnection,
           activeRunRegistry: getActiveRunRegistry(),
           broadcast: broadcastTo,
           mailboxEnqueue: enqueueMailboxAndFanout,
+          // hasOpenPendingAskForRun defaults to the real @pc/db repo inside the
+          // reconcile (the paused-with-open-ask guard) — no need to thread it.
+          // Authoritative absence ONLY when the refresh completed and the
+          // connection still has no live inner client this tick.
+          hostAuthoritativelyAbsent: refreshed && !hostConnection.isConnected(),
+          missingFromHostTicks: refreshed ? hostMissingTicks : undefined,
+          hostLostAfterTicks: HOST_LOST_TICKS,
         });
-        if (res.terminalApplied > 0 || res.statusUpdated > 0) {
+        if (res.terminalApplied > 0 || res.statusUpdated > 0 || res.hostLost > 0) {
           console.log(
-            `[agent-runs] reconcile: terminal=${res.terminalApplied}, status=${res.statusUpdated}, checked=${res.checked}`,
+            `[agent-runs] reconcile: terminal=${res.terminalApplied}, status=${res.statusUpdated}, hostLost=${res.hostLost}, checked=${res.checked}`,
           );
         }
       } else {
