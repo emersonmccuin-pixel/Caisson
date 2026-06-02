@@ -1162,12 +1162,13 @@ const AGENT_DESIGNER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_get_agent',
     'mcp__pc-rig__pc_create_agent',
     'mcp__pc-rig__pc_create_knowledge',
-    // NB: pc_ask_orchestrator / pc_ask_user are deliberately NOT granted —
+    // NB: pc_ask_orchestrator / pc_ask_user are deliberately NOT granted here:
     // agent-designer runs as an interactive chat (passthrough), and those
     // worker-only tools hard-error here (PC_AGENT_* env not set). The prompt
-    // already forbids them. pc_ask_user is still force-merged by the repo
-    // layer (REQUIRED_AGENT_TOOLS); it stays unusable until conversational
-    // pods are exempted from that merge.
+    // already forbids them. BOTH are now force-merged by the repo layer
+    // (REQUIRED_AGENT_TOOLS) so every dispatched worker can always reach out;
+    // here they stay present-but-unusable until conversational pods are exempted
+    // from that merge (a noted future item).
   ]),
   model: 'sonnet',
   effort: 'medium',

@@ -138,7 +138,15 @@ const BY_SLUG = new Map(TOOL_CATALOG.map((e) => [e.slug, e]));
 export const REQUIRED_AGENT_TOOLS: readonly string[] = [
   'mcp__pc-rig__pc_get_work_item',
   'mcp__pc-rig__pc_submit_deliverable',
+  // Both escalation tools are required so ANY dispatched worker that hits
+  // trouble can reach out: pc_ask_user to the human (host-resume also depends on
+  // it); pc_ask_orchestrator to the orchestrator's project context. A custom pod
+  // can no longer silently lose the ability to ask for help. Conversational /
+  // passthrough pods receive these via the force-merge too, but their prompts
+  // forbid use and the tools hard-error there (no PC_AGENT_* env); exempting
+  // those pods from the merge stays a noted future item.
   'mcp__pc-rig__pc_ask_user',
+  'mcp__pc-rig__pc_ask_orchestrator',
 ] as const;
 
 /** Union the required WI tools into an arbitrary tools list. Preserves order
