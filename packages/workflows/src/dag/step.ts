@@ -21,8 +21,8 @@ type NodeRunState = WorkflowV2.NodeRunState;
 
 const SETTLED: ReadonlySet<NodeRunState> = new Set(['completed', 'failed', 'skipped']);
 
-function isReviewNode(n: Node): n is WorkflowV2.HumanReviewNode | WorkflowV2.OrchestratorReviewNode {
-  return n.kind === 'human-review' || n.kind === 'orchestrator-review';
+function isReviewNode(n: Node): n is WorkflowV2.ReviewNode {
+  return n.kind === 'review';
 }
 
 /** Map a node's run-state into the 5-term vocabulary checkTriggerRule expects.

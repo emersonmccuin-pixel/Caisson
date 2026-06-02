@@ -369,17 +369,17 @@ export function makeExecutorDeps(
   };
 
   const requestReview = async (
-    node: WorkflowV2.HumanReviewNode | WorkflowV2.OrchestratorReviewNode,
+    node: WorkflowV2.ReviewNode,
     _ctx: DagNodeContext,
     bundle: { nodeId: string; output: string }[]
   ): Promise<void> => {
-    const flavor = node.kind === 'orchestrator-review' ? 'orchestrator' : 'human';
+    const flavor = node.reviewer;
     const summary = bundle.map((b) => `### ${b.nodeId}\n${b.output}`).join('\n\n');
     const body =
       `[pc:workflow-review run=${run.id} node=${node.id} flavor=${flavor}]\n` +
       `${node.prompt ?? 'Please review the work below.'}\n\n${summary}\n\n` +
       `Approve: pc_complete_node-equivalent (v2 review endpoint) · Reject sends it back.`;
-    if (node.kind === 'orchestrator-review') {
+    if (node.reviewer === 'orchestrator') {
       // 017 Phase C — the review prompt is enqueued as a durable mailbox message
       // (active-orchestrator + orchestrator-turn) via the wired seam. No Channel.
       opts.deliverReview?.({
@@ -569,7 +569,7 @@ export async function applyV2ReviewDecision(
   // workflow.run.changed via the writer during resume.
   const reviewNode = workflow.nodes.find((n) => n.id === reviewNodeId);
   const flavor: WorkflowReviewFlavor =
-    reviewNode?.kind === 'orchestrator-review' ? 'orchestrator' : 'human';
+    reviewNode && reviewNode.kind === 'review' ? reviewNode.reviewer : 'human';
   emitReviewFact(opts, {
     runId: run.id,
     nodeId: reviewNodeId,

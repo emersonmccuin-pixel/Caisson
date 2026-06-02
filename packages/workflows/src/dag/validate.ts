@@ -17,10 +17,11 @@ export interface ValidationResult {
   errors: string[];
 }
 
-const NODE_KINDS = new Set(['agent', 'bash', 'script', 'human-review', 'orchestrator-review', 'move-work-item']);
+const NODE_KINDS = new Set(['agent', 'bash', 'script', 'review', 'move-work-item']);
 const TRIGGER_KINDS = new Set(['manual', 'stage-on-entry', 'schedule', 'event']);
 const SCRIPT_RUNTIMES = new Set(['node', 'python']);
-const REVIEW_KINDS = new Set(['human-review', 'orchestrator-review']);
+const REVIEW_KINDS = new Set(['review']);
+const REVIEWERS = new Set(['human', 'orchestrator']);
 
 /** Grammar-only probe for `when:`. A resolver returning '0' lets every
  *  well-formed atom parse (string-eq AND numeric), so `parsed: false` means the
@@ -87,6 +88,8 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
     }
     if (kind === 'move-work-item' && (typeof n.to_stage !== 'string' || n.to_stage === ''))
       errors.push(`move-work-item node "${id}": missing "to_stage"`);
+    if (kind === 'review' && !REVIEWERS.has(n.reviewer as string))
+      errors.push(`review node "${id}": reviewer must be "human" or "orchestrator"`);
   }
 
   // ── ref integrity ──

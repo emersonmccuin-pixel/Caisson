@@ -23,20 +23,29 @@ import type { VerificationTier } from './contract.ts';
 // Node kinds
 // ---------------------------------------------------------------------------
 
-/** v1 node set. Five kinds + move-work-item. `loop` + `cancel` dropped (locks 3 + 13). */
+/** Node kinds. Workflow-engine redesign: the two review kinds
+ *  (`human-review` / `orchestrator-review`) are unified into ONE `review` worker
+ *  whose `reviewer` field selects the flavor — same contract, same inbox pause,
+ *  same reject loop. bash/script/move-work-item are still here pending their
+ *  deletion (slice 8). */
 export const WORKFLOW_NODE_KINDS = [
   'agent',
   'bash',
   'script',
-  'human-review',
-  'orchestrator-review',
+  'review',
   'move-work-item',
 ] as const;
 export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
 
-/** Review kinds carry a `reject` back-edge + `bundle_from`. */
-export const REVIEW_NODE_KINDS = ['human-review', 'orchestrator-review'] as const;
+/** The single review kind. (Was two; unified.) Carries `reviewer`, a `reject`
+ *  back-edge, and `bundle_from`. */
+export const REVIEW_NODE_KINDS = ['review'] as const;
 export type ReviewNodeKind = (typeof REVIEW_NODE_KINDS)[number];
+
+/** Who a review step waits on. `human` → the user's inbox; `orchestrator` → the
+ *  project orchestrator's inbox. Both pause the run durably until a decision. */
+export const REVIEWERS = ['human', 'orchestrator'] as const;
+export type Reviewer = (typeof REVIEWERS)[number];
 
 // ---------------------------------------------------------------------------
 // Triggers — four in schema from day one (lock 10). UI exposes manual +
@@ -179,23 +188,18 @@ export interface ScriptNode extends WorkflowNodeBase {
   runtime: 'node' | 'python';
 }
 
-/** Pauses the run; queues in the Human Review inbox (Section 7). On approve,
- *  follows `next`; on reject, kicks back via `reject`. */
-export interface HumanReviewNode extends WorkflowNodeBase {
-  kind: 'human-review';
-  /** What the user should review. Supports substitution. */
+/** Unified review step (workflow-engine redesign). Pauses the run durably until
+ *  a decision lands in an inbox — the user's (`reviewer: 'human'`) or the project
+ *  orchestrator's (`reviewer: 'orchestrator'`). On approve, follows `next`; on
+ *  reject, kicks back via `reject`. Same contract for both flavors. */
+export interface ReviewNode extends WorkflowNodeBase {
+  kind: 'review';
+  /** Which inbox the run waits in. */
+  reviewer: Reviewer;
+  /** What to review. Supports substitution. */
   prompt?: string;
   /** Aggregate these nodes' outputs into one review artifact (Review Bundle,
    *  19.5). Default = the node's immediate upstreams (inverse of `next`). */
-  bundle_from?: string[];
-  reject?: RejectEdge;
-}
-
-/** Pauses the run; wakes the orchestrator via channel event. On approve,
- *  follows `next`; on reject, kicks back via `reject`. */
-export interface OrchestratorReviewNode extends WorkflowNodeBase {
-  kind: 'orchestrator-review';
-  prompt?: string;
   bundle_from?: string[];
   reject?: RejectEdge;
 }
@@ -216,13 +220,12 @@ export type WorkflowNode =
   | AgentNode
   | BashNode
   | ScriptNode
-  | HumanReviewNode
-  | OrchestratorReviewNode
+  | ReviewNode
   | MoveWorkItemNode;
 
 // Type guards
-export function isReviewNode(n: WorkflowNode): n is HumanReviewNode | OrchestratorReviewNode {
-  return n.kind === 'human-review' || n.kind === 'orchestrator-review';
+export function isReviewNode(n: WorkflowNode): n is ReviewNode {
+  return n.kind === 'review';
 }
 
 // ---------------------------------------------------------------------------

@@ -56,3 +56,20 @@ test('a ref to an unknown node is rejected', () => {
   assert.equal(r.ok, false);
   assert.ok(r.errors.some((e) => /no such node/.test(e)), r.errors.join('; '));
 });
+
+// Unified review step (slice 5): one `review` kind, `reviewer` picks the inbox.
+test('a review node requires a valid reviewer', () => {
+  const ok = validateWorkflowV2(
+    wf([
+      { id: 'a', kind: 'agent', agent: 'x', task: 'go', next: ['r'] },
+      { id: 'r', kind: 'review', reviewer: 'orchestrator', prompt: 'ok?' },
+    ]),
+  );
+  assert.equal(ok.ok, true, ok.errors.join('; '));
+
+  const bad = validateWorkflowV2(
+    wf([{ id: 'r', kind: 'review', prompt: 'ok?' } as unknown as WorkflowV2.WorkflowNode]),
+  );
+  assert.equal(bad.ok, false);
+  assert.ok(bad.errors.some((e) => /reviewer must be/.test(e)), bad.errors.join('; '));
+});

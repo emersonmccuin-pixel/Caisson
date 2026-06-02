@@ -61,7 +61,7 @@ export interface DagExecutorDeps {
   moveWorkItem(node: WorkflowV2.MoveWorkItemNode, ctx: DagNodeContext): Promise<NodeOutcome>;
   /** Post the review gate (orchestrator channel event / Human Review inbox). */
   requestReview(
-    node: WorkflowV2.HumanReviewNode | WorkflowV2.OrchestratorReviewNode,
+    node: WorkflowV2.ReviewNode,
     ctx: DagNodeContext,
     bundle: { nodeId: string; output: string }[]
   ): Promise<void>;
@@ -83,8 +83,8 @@ export interface DagExecutorDeps {
 const DEFAULT_MAX_CONCURRENCY = 4;
 const TICK_SAFETY = 1000;
 
-function isReview(n: Node): n is WorkflowV2.HumanReviewNode | WorkflowV2.OrchestratorReviewNode {
-  return n.kind === 'human-review' || n.kind === 'orchestrator-review';
+function isReview(n: Node): n is WorkflowV2.ReviewNode {
+  return n.kind === 'review';
 }
 
 export class DagExecutor {
@@ -130,7 +130,7 @@ export class DagExecutor {
 
   /** Default Review Bundle = the review node's immediate upstreams' outputs. */
   private resolveBundle(
-    node: WorkflowV2.HumanReviewNode | WorkflowV2.OrchestratorReviewNode,
+    node: WorkflowV2.ReviewNode,
     resolve: RefResolver
   ): { nodeId: string; output: string }[] {
     const sources =
@@ -177,9 +177,7 @@ export class DagExecutor {
 
       // Only review nodes ready → pause the run at the gate(s).
       for (const id of reviewReady) {
-        const node = this.byId.get(id) as
-          | WorkflowV2.HumanReviewNode
-          | WorkflowV2.OrchestratorReviewNode;
+        const node = this.byId.get(id) as WorkflowV2.ReviewNode;
         this.state = markRunning(this.state, id);
         this.state = markAwaitingReview(this.state, id);
         const bundle = this.resolveBundle(node, resolve);
