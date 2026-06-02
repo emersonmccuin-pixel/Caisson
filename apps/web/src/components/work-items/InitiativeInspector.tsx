@@ -29,8 +29,9 @@ import { useActiveCenterTab } from '@/store/active-center-tab';
 import { useAttachmentLightbox } from '@/store/attachment-lightbox';
 import { useChatComposerPrefill } from '@/store/chat-composer-prefill';
 import { CreateWorkItemModal } from './CreateWorkItemModal';
+import { WorkLogSection } from './WorkLogSection';
 
-type InspectorTab = 'brief' | 'children' | 'documents' | 'activity';
+type InspectorTab = 'brief' | 'children' | 'documents' | 'worklog' | 'activity';
 
 interface Props {
   project: Project;
@@ -145,6 +146,9 @@ export function InitiativeInspector({
         <InspectorTabButton value="documents" active={tab} onSelect={setTab}>
           Documents
         </InspectorTabButton>
+        <InspectorTabButton value="worklog" active={tab} onSelect={setTab}>
+          Work Log
+        </InspectorTabButton>
         <InspectorTabButton value="activity" active={tab} onSelect={setTab}>
           Activity
         </InspectorTabButton>
@@ -175,6 +179,10 @@ export function InitiativeInspector({
             workItem={workItem}
             events={events}
           />
+        ) : tab === 'worklog' ? (
+          <div className="mx-auto max-w-[1000px] px-7 py-6 pb-16">
+            <WorkLogSection projectId={project.id} workItemId={workItem.id} />
+          </div>
         ) : (
           <ComingSoonPane tab={tab} />
         )}

@@ -22,6 +22,7 @@ export type LiveOutboxEntity =
   | 'session-title'
   | 'pod'
   | 'area'
+  | 'contract'
   | 'host-health';
 
 export interface InsertLiveEventDraft<TPayload = unknown> {

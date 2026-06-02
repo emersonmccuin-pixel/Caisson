@@ -29,6 +29,8 @@ import {
   deriveAcceptanceCriteria,
   getPodDefaultExpectedOutput,
 } from '@pc/domain';
+import type { ContractService } from '@pc/app-services';
+import type { ULID as DomainULID } from '@pc/domain';
 import type { WorkItemService } from './work-item.ts';
 
 export interface CreateAgentWorkItemInput {
@@ -49,6 +51,13 @@ export interface CreateAgentWorkItemInput {
 export interface CreateAgentWorkItemDeps {
   workItemService: WorkItemService;
   getProject: () => Project;
+  /** Slice 013 — when supplied, a first-class `agent_contracts` row is created
+   *  alongside the WI (deterministic id == the WI id, matching the backfill
+   *  convention) so the dispatch path + work-log resolve the SAME contract. The
+   *  legacy WI contract columns stay authoritative for verification this slice;
+   *  the contract mirrors them + owns the deliverable. Omitting this keeps the
+   *  legacy-only behavior (tests that don't care about the contract row). */
+  contractService?: ContractService;
   /** Optional: look up the pod row's expected_output by name (project-scope
    *  first). When set, consulted between caller-supplied expectedOutput and
    *  the stock map. Added for Issue #3 — agents.expected_output column.
@@ -127,7 +136,7 @@ export function createAgentWorkItem(
 
   const ephemeral = input.ephemeral === true;
 
-  return deps.workItemService.create({
+  const workItem = deps.workItemService.create({
     title,
     stageId,
     body: task,
@@ -142,6 +151,30 @@ export function createAgentWorkItem(
     assignedAgentRunId: null,
     worktreePath: input.worktree?.trim() || null,
   });
+
+  // Slice 013 — mint the first-class contract linked to the WI. The dispatch
+  // path (agent-run-factory) resolves it back by work-item id. The WI's contract
+  // columns stay authoritative for verification this slice; the contract mirrors
+  // them + becomes the deliverable's home. The v1 ExpectedOutput /
+  // AcceptanceCriteria JSON is stored opaquely on the v2-typed columns (same
+  // bytes the WI carries) — 014 supersedes the v1 union.
+  if (deps.contractService) {
+    deps.contractService.create({
+      projectId: workItem.projectId as DomainULID,
+      workItemId: workItem.id as DomainULID,
+      podName: pod,
+      expectedOutput: expectedOutput as unknown as Parameters<
+        ContractService['create']
+      >[0]['expectedOutput'],
+      acceptanceCriteria: acceptanceCriteria as unknown as Parameters<
+        ContractService['create']
+      >[0]['acceptanceCriteria'],
+      verificationTier: tier,
+      worktreePath: input.worktree?.trim() || null,
+    });
+  }
+
+  return workItem;
 }
 
 /** Allowed keys per `ExpectedOutput.kind`. `kind` itself is always allowed.

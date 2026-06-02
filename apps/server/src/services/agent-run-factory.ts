@@ -38,13 +38,16 @@ import {
   resolveAgentForDispatch,
   getWorkItem,
   insertAgentRunRow,
+  listContractsForWorkItem,
   markAgentRunTerminal,
   newId,
+  setAgentRunContractId,
   setAssignedAgentRunId,
   touchAgentRunActivity,
   updateAgentRunPid,
   updateAgentRunStatus,
 } from '@pc/db';
+import { ContractService } from '@pc/app-services';
 import type {
   AgentInboxEventKind,
   ExpectedOutput,
@@ -170,6 +173,11 @@ export interface DispatchAgentDeps {
   verificationDeps?: VerificationDeps;
   /** Test seam: AgentRun factory. Production = `new AgentRun(...)`. */
   agentRunFactory?: typeof defaultAgentRunFactory;
+  /** Slice 013 — first-class contract write door. Used to resolve/create the
+   *  contract for a contract dispatch + link the run to it. Defaults to a fresh
+   *  `ContractService` (live DB); tests may inject one or leave it to skip the
+   *  contract link (no-op when no contract WI is dispatched). */
+  contractService?: ContractService;
   /** Phase C host-mode seam. When supplied, dispatches are sent to the
    *  out-of-process host; when omitted, production stays in-process. */
   hostClient?: AgentHostReattachClient;
@@ -377,6 +385,18 @@ export async function dispatchFreshAgent(
     setAssignedAgentRunId(workItem.workItemId, agentRunId);
   }
 
+  // Slice 013 — resolve (or create) the first-class contract for this dispatch
+  // + link the run to it. Read-through shim: prefer an existing agent_contracts
+  // row for the WI (backfilled or created at pc_create_agent_work_item time),
+  // else create one from the WI's legacy contract columns (un-backfilled path).
+  const contractId = resolveContractForDispatch({
+    projectId: input.projectId,
+    workItemId: workItem?.workItemId ?? null,
+    agentRunId,
+    podName: input.agentName,
+    contractService: deps.contractService,
+  });
+
   const started = await startDispatchedRun({
     input: { ...input, parentWorkItemId: parentWorkItemForRow },
     podName: input.agentName,
@@ -389,6 +409,7 @@ export async function dispatchFreshAgent(
     initialInput: input.input,
     continuesParent: null,
     workItemId: workItem?.workItemId ?? null,
+    contractId,
     deps,
   });
   if (!started.ok) return started;
@@ -516,6 +537,17 @@ export async function dispatchContinueAgent(
     setAssignedAgentRunId(continueWorkItemId, plan.plan.agentRunId);
   }
 
+  // Slice 013 — re-link the contract to the continuation run (same resolution as
+  // the fresh path). The contract carries retries on its `attempt` field; this
+  // slice just keeps the run↔contract link pointed at the latest producer.
+  const contractId = resolveContractForDispatch({
+    projectId: input.projectId,
+    workItemId: continueWorkItemId,
+    agentRunId: plan.plan.agentRunId,
+    podName: plan.plan.podName,
+    contractService: deps.contractService,
+  });
+
   const started = await startDispatchedRun({
     input: {
       projectId: input.projectId,
@@ -537,6 +569,7 @@ export async function dispatchContinueAgent(
     initialInput: input.input,
     continuesParent: input.parentAgentRunId,
     workItemId: continueWorkItemId,
+    contractId,
     deps,
   });
   if (!started.ok) return started;
@@ -569,6 +602,10 @@ interface ConstructAndStartArgs {
    *  `pc_attach_to_work_item`, eventual body/status updaters) can resolve
    *  the assignment without re-parsing the materialised .md. */
   workItemId: ULID | null;
+  /** Slice 013 — the first-class contract this run produces (resolved at
+   *  dispatch). NULL for non-contract dispatches. Threaded to terminal-effects
+   *  so the deliverable lands on the contract. */
+  contractId: ULID | null;
   deps: DispatchAgentDeps;
 }
 
@@ -1086,11 +1123,13 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
           completedAt: Date.now(),
           startedAt,
           workItemId: args.workItemId,
+          contractId: args.contractId,
           slug: args.input.slug,
           cleanup: () => args.podPrep.cleanup(),
         },
         {
           activeRunRegistry: activeReg,
+          contractService: args.deps.contractService,
           mailboxEnqueue: args.deps.mailboxEnqueue ?? null,
           broadcast: (_projectId, msg) => {
             args.deps.broadcast?.(msg as { type: string; [key: string]: unknown });
@@ -1126,6 +1165,64 @@ function defaultAgentRunFactory(
 function defaultScratchDirFor(projectId: ULID, agentRunId: ULID): string {
   const root = process.env.PC_DATA_DIR ?? 'data';
   return resolve(root, 'projects', projectId, 'agent-runs-v2', agentRunId);
+}
+
+/** Slice 013 — resolve (or create) the first-class contract for a dispatch +
+ *  link the run to it. Read-through shim:
+ *   1. No contract WI → no contract (returns null).
+ *   2. An `agent_contracts` row already exists for the WI (backfilled, or
+ *      created at `pc_create_agent_work_item` time) → reuse the latest one.
+ *   3. Otherwise (un-backfilled legacy WI) → create one from the WI's legacy
+ *      contract columns so the run still has a contract home.
+ *  Then point the contract at the run (`dispatched`) AND stamp
+ *  `agent_runs.contract_id`. Best-effort: never blocks the dispatch — a failure
+ *  here leaves the legacy WI path (verification) untouched. */
+function resolveContractForDispatch(args: {
+  projectId: ULID;
+  workItemId: ULID | null;
+  agentRunId: ULID;
+  podName: string;
+  contractService?: ContractService;
+}): ULID | null {
+  if (!args.workItemId) return null;
+  const service = args.contractService ?? new ContractService();
+  try {
+    let contractId: ULID | null = null;
+    const existing = listContractsForWorkItem(args.workItemId);
+    if (existing.length > 0) {
+      // Prefer an un-dispatched contract; else the most recently created.
+      const open = existing.find((c) => c.agentRunId === null);
+      contractId = (open ?? existing[existing.length - 1]!).id;
+    } else {
+      const wi = getWorkItem(args.workItemId);
+      const created = service.create({
+        projectId: args.projectId,
+        workItemId: args.workItemId,
+        podName: args.podName,
+        // v1 JSON stored opaquely on the v2-typed columns this slice.
+        expectedOutput: (wi?.expectedOutput ?? null) as Parameters<
+          ContractService['create']
+        >[0]['expectedOutput'],
+        acceptanceCriteria: (wi?.acceptanceCriteria ?? null) as Parameters<
+          ContractService['create']
+        >[0]['acceptanceCriteria'],
+        verificationTier: wi?.verificationTier ?? null,
+        worktreePath: wi?.worktreePath ?? null,
+      });
+      contractId = created.id as ULID;
+    }
+    if (contractId) {
+      service.setRun(contractId, args.agentRunId);
+      setAgentRunContractId(args.agentRunId, contractId);
+    }
+    return contractId;
+  } catch (err) {
+    console.error(
+      `[agent-run-factory] contract resolution failed for run ${args.agentRunId}:`,
+      err,
+    );
+    return null;
+  }
 }
 
 // Tiny export shim so callers can construct a `Record` of the run's current
