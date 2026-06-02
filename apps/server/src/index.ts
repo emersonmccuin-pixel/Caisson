@@ -60,6 +60,7 @@ import { ProjectRegistry } from './services/project-registry.ts';
 import type { ProjectRuntime } from './services/project-runtime.ts';
 import { ProjectScaffold } from './services/project-scaffold.ts';
 import { registerFileRoutes } from './features/files/routes.ts';
+import { setBundledClaudeExe } from '@pc/runtime';
 import {
   applyClaudeRuntimeSettings,
   readSettings,
@@ -129,6 +130,14 @@ const CHANNEL_PORT = Number(process.env.CHANNEL_PORT ?? 8788);
 // ROOT-relative so the staged `drizzle/` is found in a packaged build (where
 // migrate.ts's __dirname points inside the bundle). Dev resolves to the trunk.
 runMigrations(resolve(ROOT, 'packages', 'db', 'drizzle'));
+
+// Section 10 — register the pinned, app-bundled claude (if this is a packaged
+// build that shipped one). The desktop main process sets PC_BUNDLED_CLAUDE_EXE
+// to the binary inside the app's resources dir before booting the server. The
+// resolver uses it below explicit override/setting/CLAUDE_EXE but above PATH,
+// so the app runs its pinned CLI by default while a power user can still point
+// elsewhere. Dev (no bundle) leaves it null and falls through to PATH.
+setBundledClaudeExe(process.env.PC_BUNDLED_CLAUDE_EXE ?? null);
 
 // Section 10 / 33 — push stored Claude binary/profile overrides into runtime
 // resolvers before any project PTY starts. The settings module captures the

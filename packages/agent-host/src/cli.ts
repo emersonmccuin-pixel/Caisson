@@ -1,9 +1,17 @@
 import { createInterface } from 'node:readline';
 
 import type { AgentHostCommand } from '@pc/runtime';
+import { setBundledClaudeExe } from '@pc/runtime';
 
 import { AgentHostService } from './agent-host-service.ts';
 import { startHttpAgentHostServer } from './http-server.ts';
+
+// Section 10 — the host is a separate process; register the same pinned,
+// app-bundled CLI the server uses (the desktop main process forwards
+// PC_BUNDLED_CLAUDE_EXE via the host's env). Below an explicit per-run
+// claudeExe / setting / CLAUDE_EXE, above PATH — so dispatched agents run the
+// pinned CLI too, not whatever global `claude` the host happens to find.
+setBundledClaudeExe(process.env.PC_BUNDLED_CLAUDE_EXE ?? null);
 
 type WireId = string | number;
 

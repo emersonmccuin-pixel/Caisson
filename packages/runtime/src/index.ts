@@ -72,6 +72,7 @@ export {
   clearClaudeProbeCache,
   requireClaudeBinary,
   resolveClaudeBinary,
+  setBundledClaudeExe,
   setConfiguredClaudeExe,
 } from './claude-resolver.ts';
 export type { ClaudeBinarySource, ClaudeResolution, ResolveOptions } from './claude-resolver.ts';

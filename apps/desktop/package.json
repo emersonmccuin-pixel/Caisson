@@ -9,8 +9,9 @@
     "dev": "pnpm build:main && pnpm build:icon && cross-env PC_DESKTOP_DEV=1 electron .",
     "build:icon": "node scripts/gen-icon.mjs",
     "stage": "node scripts/stage-resources.mjs",
+    "stage:claude": "node scripts/stage-claude.mjs",
     "rebuild:native": "node scripts/rebuild-native.mjs",
-    "prepackage": "pnpm build:main && pnpm build:icon && pnpm --filter @pc/web build && pnpm --filter @pc/server build && pnpm --filter @pc/agent-host build && pnpm stage && pnpm rebuild:native",
+    "prepackage": "pnpm build:main && pnpm build:icon && pnpm --filter @pc/web build && pnpm --filter @pc/server build && pnpm --filter @pc/agent-host build && pnpm stage && pnpm stage:claude && pnpm rebuild:native",
     "dist:dir": "pnpm prepackage && electron-builder --dir",
     "dist": "pnpm prepackage && electron-builder",
     "dist:win": "pnpm prepackage && electron-builder --win nsis",
@@ -43,6 +44,10 @@
       {
         "from": "staging/pcserver",
         "to": "pcserver"
+      },
+      {
+        "from": "staging/claude",
+        "to": "claude"
       }
     ],
     "asar": true,

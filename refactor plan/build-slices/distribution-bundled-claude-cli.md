@@ -1,7 +1,7 @@
 # Slice (distribution) — Bundled, pinned, isolated Claude Code CLI
 
-> Status: **backlog — captured, not yet planned.** This is a requirement-capture stub, not a gated code-grounded slice plan. A full plan/build needs its own planning session per `AGENTS.md`.
-> Track: **distribution / onboarding (Section 10)** — OUTSIDE the refactor's numbered switchover sequence. Deliberately not numbered 020–023 (those are reserved by slice 019 for the contract-first arc). Sequence with the onboarding/desktop-shell work, not the contract slices.
+> Status: **BUILT (Windows), 2026-06-02 — pending packaged-app verification.** Code + packaging wiring + tests landed and all automated gates are green (resolver tests, full `pnpm typecheck`, agent-host build, staging script verified against the real 2.1.160 binary). NOT yet confirmed inside an installed packaged build (the one remaining check — see "Verification boundary").
+> Track: **distribution / onboarding (Section 10)** — OUTSIDE the refactor's numbered switchover sequence. Deliberately not numbered 020–023 (those are reserved by slice 019 for the contract-first arc).
 > Created 2026-06-02.
 
 ## Problem
@@ -33,14 +33,30 @@ Ship a **pinned** Claude Code CLI **inside the Caisson app**, used by default, *
 - **Pin version: 2.1.160 — LOCKED.** Confirmed by the user as a good version. (Must stay the version PC's boot/queue/JSONL parsers are verified against; bumping is a deliberate, tested step.)
 - **Auth/config: SHARE the user's `~/.claude` — LOCKED.** Reuse their existing login; isolate only the binary/version, NOT auth. No isolated `CLAUDE_CONFIG_DIR` and no forced re-auth.
 
-## Open decisions (STOP-and-confirm at planning)
-- **Vendoring mechanism — OPEN.** Vendor the npm package `@anthropic-ai/claude-code@2.1.160` into the build vs. ship the native-installer binary artifact. Cross-platform reach (Windows-first, but don't paint macOS/Linux into a corner). User undecided; resolve during planning.
-- **Resolver precedence vs config/env** — confirm explicit override/`claudeExe`/`CLAUDE_EXE` still win over bundled (escape hatch), with bundled beating PATH/homedir. (Lean: yes.)
+## Resolved decisions (now settled by evidence + build)
+- **Vendoring mechanism = ship the native single-file binary.** Investigation showed 2.1.160 installs as a native ~238 MB `claude.exe` (at `~/.local/bin/`, with the installer's `.old.1` self-update backup) — it is NOT an npm package. So we vendor that binary as an electron-builder `extraResources` drop-in: one self-contained file, no Node-runtime dependency.
+- **Resolver precedence = explicit override/`claudeExe`/`CLAUDE_EXE` win; bundled beats PATH/homedir.** Implemented exactly so.
+
+## What landed
+- **Resolver** (`packages/runtime/src/claude-resolver.ts`): new `bundled` candidate at priority #4 (after the 3 explicit hatches, before PATH/`~/.local/bin`), existence-gated so a missing/dev bundle falls through. New `setBundledClaudeExe()` setter (exported from `@pc/runtime`).
+- **Server boot** (`apps/server/src/index.ts`): reads `PC_BUNDLED_CLAUDE_EXE` env and registers it before any PTY starts.
+- **Agent host** (`packages/agent-host/src/cli.ts`): same registration — dispatched agents run the pinned CLI too (the desktop forwards the env to the host process).
+- **Desktop** (`apps/desktop/src/main.ts`): sets `PC_BUNDLED_CLAUDE_EXE = <resources>/claude/claude(.exe)` before booting the in-process server.
+- **Packaging** (`apps/desktop/scripts/stage-claude.mjs` + `package.json`): a `stage:claude` step (chained into `prepackage` after `stage`) copies the pinned binary from `~/.local/bin` (or `PC_CLAUDE_SRC`) into `staging/claude/`, **asserts the version == 2.1.160** (build fails on mismatch), writes a `VERSION` provenance marker; new `extraResources` entry ships it as `<resources>/claude/`.
+- **Tests** (`packages/runtime/test/claude-resolver.test.ts`): 8 cases covering precedence + existence-gating + trim/clear.
+
+## Auth (per locked decision)
+No `CLAUDE_CONFIG_DIR` is set for the bundled CLI — it inherits the user's `~/.claude`, so their existing login is reused. Only the binary/version is isolated. The existing `claudeConfigDir` setting still works if true config isolation is ever wanted.
+
+## Verification boundary (what's left)
+- **Packaged-app launch check (human/product):** build `pnpm --filter @pc/desktop dist:dir`, install/run, start a chat + dispatch an agent, confirm both use the bundled `<resources>/claude/claude.exe` (not a global install). Can't be done from this session (no packaged run + no app restart per `AGENTS.md`).
+- **Cross-platform:** only the Windows binary is wired/tested. `dist:mac`/Linux need their platform's pinned `claude` provided via `PC_CLAUDE_SRC` (the stage step hard-fails without it — intentional, so an unpinned app can't ship).
 
 ## Non-goals
 - Auto-updating the bundled CLI (the point is a deliberate pin).
-- Supporting arbitrary user-chosen CC versions inside the app beyond the override escape hatch.
+- Supporting arbitrary user-chosen versions beyond the override escape hatch.
 - The broader first-run onboarding wizard (separate Section 10 phase).
+- Surfacing the bundled version in the settings UI (nice-to-have follow-up; `VERSION` marker + provenance exist on disk).
 
 ## Tracker
-Registered in `refactor plan/refactor-tracker.md` (Planning Artifact Tracker + Change Log) as backlog. Promote to a real slice plan when distribution/onboarding work is prioritized.
+Registered in `refactor plan/refactor-tracker.md` (Planning Artifact Tracker + Change Log).

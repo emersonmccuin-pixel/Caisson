@@ -36,6 +36,15 @@ const PORT = Number(process.env.PORT ?? 4040);
 // Mirrors the repo's sub-paths so the server's ROOT-relative resolution
 // (apps/web/dist, templates, packages/mcp/dist, channel-server) just works.
 const PC_ROOT = join(process.resourcesPath, 'pcserver');
+// Section 10 — the pinned Claude Code CLI shipped with the app (electron-builder
+// `extraResources` → `<resources>/claude/`). The server pushes this into the
+// runtime resolver so the app runs its pinned CLI by default, isolated from any
+// global `claude` install. Staged from `staging/claude` at package time.
+const PC_BUNDLED_CLAUDE_EXE = join(
+  process.resourcesPath,
+  'claude',
+  process.platform === 'win32' ? 'claude.exe' : 'claude',
+);
 // Dev-run target: default to Vite (:5173 — the live UI the user develops
 // against; it proxies /api + /ws to :4040). Override with PC_DESKTOP_URL to
 // hit the server's own static fallback on :4040 directly.
@@ -165,6 +174,7 @@ async function startInProcessServer(): Promise<void> {
   // The server reads all its paths from env + ROOT (PC_ROOT). Set them before
   // importing the bundle — index.ts captures them at module-eval time.
   process.env.PC_ROOT = PC_ROOT;
+  process.env.PC_BUNDLED_CLAUDE_EXE = PC_BUNDLED_CLAUDE_EXE; // Section 10 — pinned CLI
   process.env.PC_DATA_DIR ??= app.getPath('userData'); // 1.3 — per-user data dir
   process.env.PORT ??= String(PORT);
   process.env.CHANNEL_PORT ??= '8788';
