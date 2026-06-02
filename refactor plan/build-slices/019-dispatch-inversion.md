@@ -1,7 +1,19 @@
 # Slice 019 — Dispatch inversion (contract-first)
 
-> Status: planned (building). Sequenced in `contract-first-build-plan.md`; trace in `refactor plan docs/contract-first-switchover-trace.md`; design Decision 1 + Decision 4 in `agent-contracts-and-deliverables.md`.
-> Absorbs the 014a server-side verification wiring (it's only exercised once dispatch authors v2 contracts — landed here so the full author→verify path is live-verified together).
+> Status: **DONE (dispatch inversion live-verified 2026-06-02).** Sequenced in `contract-first-build-plan.md`; trace in `refactor plan docs/contract-first-switchover-trace.md`; design Decision 1 + Decision 4 in `agent-contracts-and-deliverables.md`.
+>
+> **Delivered (committed `97f9fec3`, `0fe63879`, `bc5726b4`, `d17811e0`):**
+> - WI-requirement policy `expectedOutputRequiresWorkItem` (domain).
+> - `resolveContractForDispatch` ALWAYS creates a contract (the `!workItemId → null` gate removed); WI link optional; explicit `expectedOutput` wins over WI columns.
+> - Inline `expected_output` on `pc_invoke_agent` + Decision-4 reject guard (cause `work-item-required` → HTTP 422).
+> - 014a verification engine folded into `agent-verification.ts` (wider context, `hasGitDiff`, fail-closed) — committed but INERT (see hand-offs).
+>
+> **Live-verified on dogfood (Playwright + direct API):** no-WI `researcher` dispatch → contract `01KT3AQHA66…` with `work_item_id=NULL` + `agent_runs.contract_id` set + fresh ULID; `repo` spec + no WI → 422 `work-item-required`; `answer` spec + no WI → accepted; unknown-agent guard intact.
+>
+> **Hand-offs (NOT 019 — moved so nothing is lost):**
+> - → **021**: wire the production `loadToolCalls` (read the run's session checkpoint) + `loadPendingAskCreated` (DB), then live-verify the verification path. Can only be exercised by an `action` contract, which 021 teaches the orchestrator to author. **Do NOT let 021 author action contracts before these loaders are wired** (else they'd fail on empty evidence).
+> - → **020**: drop the `parent_work_item_id`-as-contract-home overload + `setAssignedAgentRunId` (the 1:1 WI↔run link). Entangled with the reject path going contract-authoritative, which is 020's job.
+> - Optional (any time): a "create-a-WI-during-dispatch" directive. Today the 422 reject tells the orchestrator to create+attach a WI via existing tools — sufficient.
 
 ## Roadmap Alignment
 - Depends on 013 (contract entity, done) + 014a (v2 engine + derivation, done).
