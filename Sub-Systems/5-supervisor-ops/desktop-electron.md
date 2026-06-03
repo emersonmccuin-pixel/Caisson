@@ -2,176 +2,160 @@
 
 > **Role:** UI (packaged wrapper) + interim Supervisor (packaged mode only)
 > **Status:** as-built snapshot — 2026-06-03
-> **Code anchors:** `apps/desktop/src/main.ts`, `apps/desktop/src/agent-host-process.ts`,
-> `apps/desktop/src/preload.ts`, `apps/desktop/src/port-conflict.ts`,
-> `apps/desktop/package.json`
+> **Code anchors:** `apps/desktop/src/main.ts` · `apps/desktop/src/agent-host-process.ts` · `apps/desktop/src/preload.ts` · `apps/desktop/src/port-conflict.ts` · `apps/desktop/package.json`
+
+---
 
 ## What it is (plain English)
 
-The packaged Windows app (.exe installer) that non-dev users actually run. It is an Electron
-application — a stripped-down Chromium browser bundled with Node — that serves as both the window
-frame for the web UI and, in packaged mode, the process that boots the API server and the agent
-host. In the dev stack none of this exists: the server, agent host, and Vite frontend are all
-separate processes managed by `dev-supervisor.mjs`.
+**The installed Windows app is one program currently doing three jobs at once: it is the window, the server host, and the parent of the agent host child process.** When a packaged user launches Caisson, that single EXE starts everything — it boots the API server inside itself, spawns the agent host as a child process, and opens the browser window, all in one.
+
+The dev stack is completely different: window, server, and frontend are three separate programs that a supervisor script manages independently. That structural disagreement is the root cause of the biggest gap (the packaged host never respawns). Step 7 of the rebuild splits the jobs apart.
+
+---
 
 ## What it's supposed to do (intent)
 
-Turn Caisson into a self-contained Windows app: one installer, one EXE, no separate Node or server
-setup required. The shell starts everything a packaged user needs (API + agent host), handles
-port conflicts at launch, and provides auto-update delivery from GitHub Releases.
+Turn Caisson into a self-contained Windows app — one installer, one EXE, no separate Node or server setup required. The shell starts everything a packaged user needs, handles port conflicts at launch, and delivers auto-updates from GitHub Releases.
 
-## How it works today (as-built)
+---
 
-**Two modes — deliberately different:**
+## The parts (every component, plain English)
 
-- **DEV mode** (`PC_DESKTOP_DEV=1`, `pnpm dev` in `apps/desktop`): Electron opens a window pointed
-  at the already-running Vite dev server (`:5173`). The shell does NOT host the API or spawn the
-  agent host — those run independently via `dev-supervisor.mjs`. Exists so you can iterate on the
-  Electron shell itself without touching the dev stack.
-- **Packaged mode** (`app.isPackaged`): Electron IS the host. It boots the API server in-process
-  and spawns the agent host as a child process.
+### 1. Two modes — packaged vs. dev
 
-**Boot sequence (packaged):**
+The shell behaves very differently depending on how it is launched:
 
-1. `app.whenReady()` — calls `bootPackagedServerWithGuard()` (`main.ts:206`).
-2. Port-conflict check (`port-conflict.ts`) — probes ports 4040 and 8788 via
-   `Get-NetTCPConnection` (Windows) or a bind test (other platforms). If occupied:
-   - Caisson-owned processes: dialog offers "Free ports & retry" — walks up to the
-     dev-supervisor parent and `taskkill /F /T` it, waits 1.5 s, retries (`main.ts:237–252`).
+| Mode | How it starts | What Electron owns |
+|---|---|---|
+| **Packaged** (`app.isPackaged`) | User runs the installed EXE | Boots API server in-process, spawns agent host as child, opens window |
+| **Dev** (`PC_DESKTOP_DEV=1`, `pnpm dev` in `apps/desktop`) | Developer runs from source | Opens a window pointed at the already-running Vite dev server (`:5173`). Does NOT host the API or spawn the agent host — those are managed by `dev-supervisor.mjs` |
+
+The dev mode exists so you can work on the Electron shell itself without disturbing the rest of the dev stack.
+
+### 2. Boot sequence (packaged mode)
+
+When a packaged user launches the app, this happens in order (`main.ts:206`):
+
+1. **Port conflict check** — probes ports 4040 and 8788. If occupied:
+   - Caisson-owned processes: dialog offers "Free ports & retry" — walks up to the dev-supervisor parent and `taskkill /F /T` it, waits 1.5 s, retries (`main.ts:237–252`).
    - Non-Caisson processes: dialog offers "Retry" only.
    - Two failed attempts → error dialog → quit.
-3. `startInProcessServer()` (`main.ts:174`) — sets all env vars (`PC_ROOT`, `PC_BUNDLED_CLAUDE_EXE`,
-   `PC_DATA_DIR`, ports), then:
-   a. `startPackagedAgentHost()` — spawns the agent host as a child (`agent-host-process.ts:87`).
-      Polls for the lock file (`agent-host/<hostId>/host.lock.json`) for up to 5 s.
-      If the lock never appears, kills the child and throws (aborts boot).
-   b. `import(serverEntry)` — dynamically imports the esbuild server bundle (`server.mjs`)
-      inside the Electron process. This runs the full Hono API + SQLite migrations + channel
-      listener in-process. Because the bundle has top-level `await`, the import resolves only
-      after the server is actually listening (`main.ts:186–188`).
-4. `createWindow()` — opens the `BrowserWindow` pointed at `http://127.0.0.1:4040`.
+2. **Start the agent host child** — spawns `agent-host.mjs` as a child process, then polls for the lock file for up to 5 seconds. If the lock never appears, kills the child and aborts boot. (`agent-host-process.ts:87`)
+3. **Import the API server** — dynamically imports the esbuild server bundle (`server.mjs`) inside the Electron process itself. Because the bundle uses top-level `await`, this import only resolves after the server is fully listening. This runs the full API + database migrations + channel listener in-process. *(☠ the channel listener is removed by FD-3)* (`main.ts:186–188`)
+4. **Open the window** — creates a `BrowserWindow` pointed at `http://127.0.0.1:4040`. (`main.ts:174`)
 
-**Agent host child process:**
+### 3. The agent host child process — and the never-respawns gap
 
-- Spawned via `spawnPackagedAgentHostProcess` (`agent-host-process.ts:87`), which runs
-  `agent-host.mjs` inside the Electron binary itself (`ELECTRON_RUN_AS_NODE=1`,
-  `process.execPath` as the command).
-- stdout/stderr piped back to the main process's own stdio (`main.ts:273–278`).
-- On unexpected exit: **only a `console.error` is emitted** — no respawn (`main.ts:279–285`).
-  This is the known gap (see Known issues).
-- On app quit: `stopPackagedAgentHost()` sends a graceful HTTP shutdown request to the host's
-  command port (read from the lock file), waits 2 s, then `SIGTERM` if still alive (`main.ts:298–309`).
+The agent host is the process that manages all running Claude sessions. It is spawned via `spawnPackagedAgentHostProcess` using the Electron binary itself as the Node runtime (`ELECTRON_RUN_AS_NODE=1`). (`agent-host-process.ts:87`)
 
-**Lock file handshake (`agent-host-process.ts`):**
+**📌 The critical gap:** if the agent host crashes, Electron only logs an error — there is no restart, no backoff, no user notification. Dispatched agents silently stop completing until the user relaunches the entire app. (`main.ts:279–285`)
 
-- Old lock file deleted before spawn (`removePackagedAgentHostLockFile`).
-- Main polls `statSync` every 100 ms until the file's `mtimeMs ≥ startedAt`, up to 5 s.
-- Lock file contains: `{ pid, hostId, port, startedAt, protocolVersion: 1 }`.
-- ⚠️ DRIFT TWIN: the lock file shape is hand-copied in `agent-host-process.ts:1–7` because
-  importing `@pc/runtime` would pull `node-pty` into the desktop bundle (ABI conflict with
-  Electron's Node version). Any lock file schema change must be mirrored by hand.
+This is the primary problem Step 7 (the Supervisor) exists to fix.
 
-**Preload (`preload.ts`):**
+**Shutdown:** on app quit, `stopPackagedAgentHost()` sends a graceful HTTP shutdown request to the host, waits 2 seconds, then sends `SIGTERM` if it is still alive. (`main.ts:298–309`)
 
-- Minimal surface exposed via `contextBridge` as `window.pcDesktop`.
-- Exposes: `isDesktop: true`, `platform`, and `updates` (get/check/download/install/subscribe).
-- Update state is owned by the main process and pushed to the renderer over IPC channel
-  `pc:update-state`. The renderer never touches `autoUpdater` directly.
-- No Node bridge for general use — the web UI talks to the server over HTTP/WS as normal.
+### 4. Lock file handshake
 
-**Auto-update:**
+The only signal the main process has that the agent host is ready is a small JSON file the host writes to disk after it starts:
 
-- `electron-updater` reads from the public GitHub Releases feed
-  (`emersonmccuin-pixel/Caisson`, `main.ts:31–33` in `package.json` build config).
-- User-driven: `autoDownload: false`. Auto-installs a downloaded update on quit
-  (`autoInstallOnAppQuit: true`).
-- In DEV mode the updater is disabled; `updateState.status` stays `'unsupported'`.
+```
+{ pid, hostId, port, startedAt, protocolVersion: 1 }
+```
 
-**Electron version pin:**
+- Old lock file is deleted before spawn so there is no stale signal.
+- Main polls for the file every 100 ms, up to 5 seconds. (`agent-host-process.ts`)
 
-- `"electron": "^35.0.0"` (`package.json:83`). Electron 35 ships Node ~20.
-  Electron 42 would use a newer V8/Node ABI that breaks `better-sqlite3 11.10.0`'s
-  pre-built native bindings, requiring a full native rebuild that has not been validated.
-  Pin stays until that rebuild is confirmed safe.
+⚠️ **Drift twin risk:** the lock file shape is hand-copied inside `agent-host-process.ts:1–7` because importing the `@pc/runtime` package (which owns the real definition) would pull `node-pty` into the desktop bundle, causing an ABI conflict with Electron's Node version. If the lock file schema changes in `packages/runtime/src/agent-host-lock-file.ts` and this file is not updated by hand, the desktop shell will silently time out at boot and never open.
 
-**Build / packaging:**
+### 5. Preload bridge (what the window can do)
 
-- `prepackage` script: builds main bundle (esbuild), web bundle (Vite), server bundle,
-  agent-host bundle, stages all resources under `staging/pcserver/`, stages the pinned
-  `claude.exe` under `staging/claude/`, rebuilds native modules against Electron's ABI
-  via `@electron/rebuild`.
-- `extraResources` in electron-builder config copies `staging/pcserver → resources/pcserver`
-  and `staging/claude → resources/claude` into the installed app (`package.json:43–52`).
-- Output: NSIS installer (`Caisson Setup.exe`) for Windows; DMG + ZIP for macOS.
+The preload script (`preload.ts`) is a thin layer — the only thing it hands to the browser window through `window.pcDesktop` is:
 
-## Integrations (how it connects)
+- `isDesktop: true` — so the UI knows it is running as the installed app.
+- `platform` — the OS name.
+- `updates` — check, download, install, and subscribe to update state.
 
-- **Depends on:** `@pc/server` (the bundled API, imported in-process in packaged mode);
-  `@pc/agent-host` (spawned as a child); `packages/runtime` lock file shape (via drift twin).
-- **Used by:** end users (the packaged installer); `pnpm dev` in `apps/desktop` for shell
-  iteration (DEV mode only).
-- **Contracts / events crossed:**
-  - Lock file (`agent-host/host.lock.json`) — the only handshake between main and the agent
-    host at boot.
-  - IPC channels `pc:update-state`, `pc:update:get-state`, `pc:update:check`,
-    `pc:update:download`, `pc:update:install` — between main process and renderer.
-  - HTTP/WS on `:4040` / `:8788` — renderer talks to the in-process server the same way as
-    the browser-based dev user.
+The window talks to the API the normal way (HTTP/WS on `:4040`); there is no general Node bridge.
 
-## Target shape (per north star)
+### 6. Auto-update
 
-Per `unified-process-supervision-2026-06-02.md §3` and the ledger (§0, §2 "Spawning"):
+- Uses `electron-updater`, reading from the public GitHub Releases feed (`emersonmccuin-pixel/Caisson`). (`main.ts:31–33` in `package.json` build config)
+- **User-driven:** `autoDownload: false` — the update is only downloaded when the user asks.
+- **Installs on quit:** once downloaded, the update installs the next time the user closes the app (`autoInstallOnAppQuit: true`).
+- **Disabled in dev mode:** update state stays `'unsupported'`.
 
-- **Electron becomes a thin UI shell only.** It owns nothing — no API hosting, no child
-  spawning, no supervision. It opens a window and talks to the Brain over HTTP/WS.
-- **One Supervisor module** (`dev-supervisor.mjs` + `spawnPackagedAgentHostProcess` folded
-  together — Step 7 in the migration) runs identically in dev and packaged, outside Electron,
-  and is the only thing that spawns and respawns the Brain, Engine, and any other service.
-- Ledger verdict for `spawnPackagedAgentHostProcess` (`agent-host-process.ts`):
-  **KEEP → fold into Supervisor** (HIGH confidence). It becomes the packaged half of the one
-  supervisor.
-- What changes from today:
-  - The in-process `import(serverEntry)` call is deleted; the server runs in its own process
-    managed by the Supervisor.
-  - `startPackagedAgentHost` moves out of `main.ts` into the Supervisor module.
-  - `main.ts` shrinks to: check ports (or defer to Supervisor), open window, done.
-  - Port-conflict handling may stay in the desktop shell (it is UI-facing) or move into
-    the Supervisor's boot path — TBD at Step 7 scope.
+Update state is owned by the main process and pushed to the window over IPC (`pc:update-state`). The window never touches the updater directly.
+
+### 7. Electron 35 pin — why it is frozen
+
+`"electron": "^35.0.0"` (`package.json:83`). Electron 35 ships with Node ~20.
+
+Upgrading to Electron 42+ would use a newer V8/Node ABI (the low-level interface between native code and Node) that breaks `better-sqlite3 11.10.0`'s pre-built native database bindings. Rebuilding those bindings against the new ABI has not been validated. The pin stays frozen until that rebuild is confirmed safe.
+
+### 8. Build and packaging
+
+The `prepackage` script:
+- Builds four bundles: main, web (Vite), server, agent-host (all via esbuild).
+- Stages the pinned `claude.exe`, server resources, and rebuilt native modules under `staging/`.
+- `@electron/rebuild` rebuilds native modules against Electron's ABI.
+
+Output: an NSIS installer (`Caisson Setup.exe`) for Windows, plus DMG + ZIP for macOS. The macOS boot sequence (lock file, in-process server) has not been verified end-to-end. (unverified)
+
+---
+
+## How it connects
+
+- **Depends on:** `@pc/server` (bundled API, imported in-process in packaged mode) · `@pc/agent-host` (spawned as child process) · `packages/runtime` lock file shape (via drift twin).
+- **Used by:** end users (the packaged installer) · developers iterating on the Electron shell (DEV mode only).
+- **Boundary contracts:**
+  - Lock file (`agent-host/host.lock.json`) — the only boot handshake between main and the agent host.
+  - IPC channels `pc:update-state`, `pc:update:get-state`, `pc:update:check`, `pc:update:download`, `pc:update:install` — between main process and window.
+  - HTTP/WS on `:4040` / `:8788` — the window talks to the in-process server the same way as the browser-based dev user.
+
+---
+
+## Target shape (per north star + Foundation Decisions)
+
+Per `unified-process-supervision-2026-06-02.md §3` and the consolidation ledger (§0, §2 "Spawning"):
+
+**Electron becomes a thin UI shell only.** It owns nothing — no API hosting, no child spawning, no supervision. It opens a window and talks to the server over HTTP/WS.
+
+**One Supervisor module** (Step 7) — `dev-supervisor.mjs` and `spawnPackagedAgentHostProcess` folded together — runs identically in dev and packaged, outside Electron, and is the only thing that spawns and respawns the server, Engine, and any other service.
+
+Ledger verdict for `spawnPackagedAgentHostProcess` (`agent-host-process.ts`): **KEEP → fold into Supervisor** (HIGH confidence). It becomes the packaged half of the one supervisor.
+
+What changes from today:
+- The in-process `import(serverEntry)` call is deleted; the server runs in its own process managed by the Supervisor.
+- `startPackagedAgentHost` moves out of `main.ts` into the Supervisor module.
+- `main.ts` shrinks to: check ports (or defer to Supervisor), open window, done.
+- Port-conflict handling may stay in the desktop shell (it is UI-facing) or move into the Supervisor's boot path — TBD at Step 7 scope.
+
+☠ **FD-3 (sentenced):** the channel listener that runs inside the in-process server bundle is deleted. The Supervisor will own that responsibility directly.
+
+---
 
 ## Known issues / scar tissue
 
-- **Packaged host never respawns.** The `child.once('exit', ...)` handler at `main.ts:279`
-  only logs `console.error` — no restart, no backoff, no user notification. If the agent host
-  crashes mid-session, dispatched agents silently stop completing until the user relaunches the
-  app. This is the primary gap Step 7 (Supervisor) fixes.
-  (`main.ts:279–285`)
+- **Packaged host never respawns.** (`main.ts:279–285`) `child.once('exit', ...)` only logs an error — no restart, no backoff, no user notification. If the agent host crashes mid-session, agents silently stop completing until the user relaunches the app. Step 7 fixes this.
 
-- **In-process API couples Brain crash to UI.** Because the server bundle runs inside the
-  Electron main process, a fatal server error or a top-level `process.exit` in the server
-  bundle takes the Electron window with it — violating the crash-isolation principle
-  (`unified-process-supervision §1`). In the target shape the server is a separate process.
+- **In-process API couples a server crash to the UI.** Because the server bundle runs inside the Electron main process, a fatal server error or `process.exit` in the server takes the window with it — violating the crash-isolation principle (`unified-process-supervision §1`). In the target shape the server is a separate process.
 
-- **Electron 35 pin.** `"electron": "^35.0.0"` (`package.json:83`). Upgrading to Electron 42+
-  requires validating `@electron/rebuild` for `better-sqlite3 11.10.0` and `node-pty` against
-  the new ABI. Not scheduled; treat as a frozen constraint until explicitly revisited.
+- **Electron 35 pin.** Upgrading requires validating `@electron/rebuild` for `better-sqlite3 11.10.0` and `node-pty` against the new ABI. Not scheduled; treat as frozen until explicitly revisited. (`package.json:83`)
 
-- **Lock-file drift twin.** `agent-host-process.ts:1–7` documents the hand-copy risk. If the
-  lock file shape changes in `packages/runtime/src/agent-host-lock-file.ts` and this file is
-  not updated, the desktop shell will fail to discover the host at boot (silent timeout).
+- **Lock-file drift twin.** `agent-host-process.ts:1–7` is a hand-copy of the lock file shape. If `packages/runtime/src/agent-host-lock-file.ts` changes and this file is not updated, boot silently times out.
 
-- **Dev mode is structurally different.** Dev stack = three separate processes
-  (`dev-supervisor.mjs` + `pnpm dev` server + `pnpm --filter @pc/web dev` Vite); packaged =
-  all in-process inside Electron. This structural disagreement is the root of why supervision
-  works in dev but not packaged (dev-supervisor respawns; Electron does not).
+- **Dev vs. packaged structural disagreement.** Dev = three separate processes managed by `dev-supervisor.mjs`; packaged = all in-process inside Electron. This disagreement is the root cause of why supervision works in dev but not packaged.
 
-## Open questions
+---
 
-- At Step 7: should port-conflict detection live in the Supervisor (process-level) or stay in
-  the Electron shell (UI-level)? Both have merit; decide at Step 7 scope.
-- After Step 7: does `main.ts` need ANY direct knowledge of service processes, or does it
-  discover the server URL from the Supervisor and just `loadURL`?
-- Is the `ELECTRON_RUN_AS_NODE=1` + `process.execPath` pattern for the agent host still the
-  right mechanism once the Supervisor owns the spawn, or does it become a plain Node child?
-- macOS packaging is defined in `package.json` but not verified end-to-end. Notarization
-  and hardened-runtime entitlements are configured — unknown if the packaged boot sequence
-  (lock file, in-process server) has been tested on macOS. (unverified)
+## Decisions & open questions
+
+**For Emerson (product calls):**
+1. **What does the update experience feel like?** Today it downloads on request and installs silently on the next quit. Is that the right flow, or should there be a more visible "restart now to update" prompt?
+2. **macOS: is it a real target?** DMG packaging is defined but the boot sequence has never been verified on macOS. Worth confirming before anyone tries to run it.
+
+**Technical:**
+- At Step 7: should port-conflict detection live in the Supervisor (process-level) or stay in the Electron shell (UI-level)? Both have merit; decide at Step 7 scope.
+- After Step 7: does `main.ts` need ANY direct knowledge of service processes, or does it discover the server URL from the Supervisor and just call `loadURL`?
+- Is the `ELECTRON_RUN_AS_NODE=1` + `process.execPath` pattern for the agent host still the right mechanism once the Supervisor owns the spawn, or does it become a plain Node child?

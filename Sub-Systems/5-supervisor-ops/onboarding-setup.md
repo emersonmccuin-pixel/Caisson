@@ -3,208 +3,220 @@
 > **Role:** cross-cutting (UI + server services; no runtime ownership)
 > **Status:** as-built snapshot — 2026-06-03
 > **Code anchors:**
-> - `apps/server/src/services/preflight.ts`
-> - `apps/server/src/services/onboarding-auth.ts`
-> - `apps/server/src/services/onboarding-install.ts`
-> - `apps/server/src/services/project-create.ts`
-> - `apps/server/src/services/project-scaffold.ts`
-> - `apps/server/src/services/project-registry.ts`
-> - `apps/server/src/services/claude-runtime-bundle.ts`
-> - `apps/server/src/features/settings-onboarding/routes.ts`
-> - `apps/web/src/components/onboarding/OnboardingWizard.tsx`
-> - `apps/web/src/components/SetupWizardModal.tsx`
-> - `apps/web/src/components/CreateProjectModal.tsx`
-> - `templates/` (hook scripts, settings, MCP config, prompts)
+> `apps/server/src/services/preflight.ts` · `onboarding-auth.ts` · `onboarding-install.ts` · `project-create.ts` · `project-scaffold.ts` · `project-registry.ts` · `claude-runtime-bundle.ts`
+> `apps/server/src/features/settings-onboarding/routes.ts`
+> `apps/web/src/components/onboarding/OnboardingWizard.tsx` · `SetupWizardModal.tsx` · `CreateProjectModal.tsx`
+> `templates/` (hook scripts, settings template, MCP config, prompts)
 
 ---
 
 ## What it is (plain English)
 
-Two separate flows that happen once each per install or per project.
-
-**First-run wizard** (`OnboardingWizard`): a full-screen gate shown before the main app on first launch. It walks a non-technical user from a bare machine through installing Claude Code, installing git, signing in to Claude (via Claude's own OAuth), picking a projects folder, and landing at "Create your first project."
-
-**Project-creation + setup wizard** (`CreateProjectModal` → `SetupWizardModal`): creates a folder on disk, runs `git init`, writes the Caisson scaffold files, inserts a DB row, and then optionally opens an AI-driven interview that produces the project's `CLAUDE.md`.
+Two one-time flows — one per install, one per project — that get a new user from a bare machine to a working project without opening a terminal. The **first-run wizard** is a full-screen walkthrough that installs the software, signs you in, and hands you off to create your first project. The **project setup wizard** turns a folder into a git-tracked Caisson project with the right files, and then (optionally) interviews you to write that project's instruction file.
 
 ---
 
 ## What it's supposed to do (intent)
 
-Get a fresh install from zero to a working project with zero terminal use — click-through only. Also gate re-entry: if the user skips or the machine already has everything, neither wizard shows again.
+Zero-to-working-project by click-through only. Gate re-entry: once the machine is set up and a project exists, neither wizard appears again. Every install action is user-initiated — nothing runs silently in the background.
 
 ---
 
-## How it works today (as-built)
+## The parts (every component, plain English)
 
-### Gate logic (App.tsx:343–351)
+### 1. The show/hide gate
 
-The first-run wizard shows when ALL of:
-- `settings.onboardingCompletedAt === null` (never finished or skipped)
-- `projects.length === 0` (no projects yet)
-- `?onboarding=force` or `?onboarding=sim` overrides the condition for dev testing
+The first-run wizard appears when **all three** of these are true (`App.tsx:343–351`):
+- Onboarding has never been completed or skipped (`settings.onboardingCompletedAt === null`).
+- No projects exist yet (`projects.length === 0`).
+- No URL override is set.
 
-`?onboarding=sim` replaces every real action with a fake delayed version — the full wizard is walkable on a machine that already has everything. `?onboarding=force` uses real preflight + real installs.
+Two dev-only URL overrides exist for testing:
+- `?onboarding=sim` — runs the whole wizard with fake delays; every action is pretend. Safe to walk through on a machine that's already set up.
+- `?onboarding=force` — runs real preflight and real installers.
 
-### Preflight (`preflight.ts`)
+Once the user finishes or skips, a timestamp is written (`PATCH /api/settings { onboardingCompletedAt: <ISO> }`). That timestamp is the permanent gate flag.
 
-`runPreflight()` probes the machine and returns a typed `PreflightReport`:
-- **claude:** resolves the binary via `@pc/runtime`'s `resolveClaudeBinary`, runs `--version`, compares against `MIN_CLAUDE_VERSION = '2.0.0'`. Status: `ok | not-found | version-too-old | unverified`.
-- **auth:** calls `claude auth status --json` (a LOCAL token read — no network, no billing). Parses `{ loggedIn }`. Status: `authed | login-required | unknown`.
-- **git:** probes `git --version`. Hard dependency.
-- **soft:** node, bash, python. Soft — only needed for workflow code-nodes.
-- `ok = claude.status === 'ok' && git.present`.
+There is no "re-run setup" button in the app once the flag is set — getting back to the wizard requires manually clearing `onboardingCompletedAt` in settings. See open questions.
 
-Exposed at `GET /api/preflight`.
+---
 
-### Install actions (`onboarding-install.ts`)
+### 2. Preflight checks
 
-Triggered only by explicit user click; never auto-runs.
+Before asking you to install anything, the app checks what's already on the machine. These checks run at `GET /api/preflight` and return a typed report (`preflight.ts`):
 
-- **Claude Code (Windows):** `powershell -Command 'irm https://claude.ai/install.ps1 | iex'`. macOS: `curl … | bash`. Clears the binary probe cache after, re-runs preflight.
-- **git (Windows):** `winget install Git.Git --silent` first; falls back to fetching the latest 64-bit installer from GitHub releases and running `/VERYSILENT`. macOS: Homebrew first, then `xcode-select --install`.
-- Both return `InstallResult { preflight, log }` so the wizard can update state in one round-trip.
-
-### Auth flow (`onboarding-auth.ts`)
-
-- `startLogin()` spawns `claude auth login --claudeai` as a detached child process. Scrapes its stdout/stderr for a `visit: <url>` line as a fallback button.
-- The wizard polls `GET /api/onboarding/auth/state` every 2.5 s. The endpoint calls `probeAuth()` (re-runs `claude auth status --json`) and merges in the live process state.
-- On sign-in success (CC writes its own `~/.claude/.credentials.json`) the poll sees `authed: true` and stops. On process exit with non-zero code, the poll surfaces an error.
-- `cancelLogin()` kills the child (called on wizard unmount).
-
-### API routes (`settings-onboarding/routes.ts`)
-
-All registered under the same Hono app as global settings:
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/preflight` | Run preflight, return report |
-| `POST /api/onboarding/install/claude` | Run Claude Code installer |
-| `POST /api/onboarding/install/git` | Run git installer |
-| `POST /api/onboarding/auth/login` | Start `claude auth login` |
-| `GET /api/onboarding/auth/state` | Poll login + auth state |
-| `POST /api/onboarding/auth/cancel` | Kill in-flight login |
-| `GET /api/settings` | Read global settings |
-| `PATCH /api/settings` | Write global settings (incl. `onboardingCompletedAt`) |
-
-Completion is stamped by `PATCH /api/settings { onboardingCompletedAt: <ISO> }` at `onComplete` and `onSkip`.
-
-### Project creation (`project-create.ts`)
-
-Three modes — chosen by probing the folder at `POST /api/fs/probe` before the form is submitted:
-
-| Mode | Trigger | What happens |
+| Check | What it looks for | Possible results |
 |---|---|---|
-| `init-empty` | Folder exists, empty | `git init -b main`, scaffold, commit `Initial commit` |
-| `init-in-place` | Folder has files, no `.git` | `git init`, commit existing as `Initial import`, scaffold, commit `Add Caisson scaffold` |
-| `attach-to-git` | Already a git repo | Skip `git init`; scaffold (no README); stage only `.project-companion/`; commit `Add Caisson scaffold` |
+| **Claude Code** | Finds the binary, runs `--version`, checks it's ≥ 2.0.0 | `ok` · `not-found` · `version-too-old` · `unverified` |
+| **Auth (sign-in)** | Runs `claude auth status --json` — reads a local token file, no network call | `authed` · `login-required` · `unknown` |
+| **git** | Probes `git --version` | `present` / not present |
+| **Node / Bash / Python** | Soft checks — only needed for workflow code steps | present / not present |
 
-Steps (project-create.ts:79–175):
+The gate clears (`ok = true`) when Claude Code status is `ok` **and** git is present. The soft deps don't block.
+
+---
+
+### 3. Install actions
+
+Triggered only by an explicit button click — never automatic (`onboarding-install.ts`).
+
+**Claude Code:**
+- Windows: runs `powershell -Command 'irm https://claude.ai/install.ps1 | iex'`.
+- macOS: runs the equivalent `curl … | bash`.
+- After install: clears the binary-probe cache, re-runs preflight.
+
+**git:**
+- Windows: tries `winget install Git.Git --silent` first; if that fails, fetches the latest 64-bit installer from GitHub and runs it silently (`/VERYSILENT`).
+- macOS: tries Homebrew first, then `xcode-select --install`.
+
+Both return the updated preflight report in the same response, so the wizard reflects current state immediately.
+
+---
+
+### 4. Sign-in flow
+
+Claude Code manages its own sign-in process; Caisson just drives it (`onboarding-auth.ts`).
+
+1. **Start:** `POST /api/onboarding/auth/login` spawns `claude auth login --claudeai` as a background child process. If it prints a `visit: <url>` line to stdout, that URL is surfaced as a fallback button.
+2. **Poll:** The wizard calls `GET /api/onboarding/auth/state` every 2.5 seconds. Each call re-checks `claude auth status --json` and merges in the live process state.
+3. **Success:** Claude Code writes its own `~/.claude/.credentials.json` when you sign in. The next poll sees `authed: true` and stops.
+4. **Failure:** If the child process exits with a non-zero code, the poll surfaces an error.
+5. **Cancel:** `POST /api/onboarding/auth/cancel` kills the child process. Also called on wizard unmount.
+
+---
+
+### 5. The setup wizard (interview)
+
+After a project is created, the user can open the setup wizard — a transient Claude session that interviews them about their project and calls `pc_write_claude_md` to write `CLAUDE.md` into the project root (`SetupWizardModal.tsx`).
+
+The interview script is in `templates/.project-companion/setup-wizard-prompt.md` — it's appended to Claude's system prompt at spawn time. The modal watches the `project-claude-md` live-store signature and auto-closes when the file is written.
+
+The setup wizard is a transient `PtySession`-owned modal (confirmed: `project-runtime.ts:117`). Per the migration plan (Steps 5–6), all transient modals eventually move to the Engine — when that happens the WS envelope handling (`setup-wizard-state`, `setup-wizard-exit`) migrates with it, but the interview content, scaffold logic, and preflight are unaffected.
+
+---
+
+### 6. Creating a project
+
+`POST /api/projects` accepts a folder path and project name, probes the folder first (`POST /api/fs/probe`), and picks one of three modes (`project-create.ts:79–175`):
+
+| Mode | When it applies | What happens |
+|---|---|---|
+| `init-empty` | Folder exists but is empty | `git init -b main`, scaffold, commit `Initial commit` |
+| `init-in-place` | Folder has files but no `.git` | `git init`, commit existing as `Initial import`, scaffold, commit `Add Caisson scaffold` |
+| `attach-to-git` | Folder is already a git repo | Skip `git init`; scaffold (no README); stage only `.project-companion/`; commit `Add Caisson scaffold` |
+
+Steps in order:
 1. Validate name + mode + folder.
-2. `mkdirSync(folderPath, { recursive: true })`.
-3. Mint a ULID (`id = newId()`).
-4. Derive a unique slug — kebab-case the name; append `-2`, `-3`, … until not in DB.
-5. For attach-to-git: if `.project-companion/` exists and `replaceExisting` is set, `rmSync` it first.
+2. Create the folder if it doesn't exist.
+3. Mint a ULID for the project ID.
+4. Derive a slug — kebab-case the name; append `-2`, `-3`, … to avoid DB collisions.
+5. For `attach-to-git`: if `.project-companion/` already exists and `replaceExisting` is set, delete it first.
 6. `git init -b main` (non-attach modes).
-7. `git add . && git commit -m 'Initial import'` (init-in-place with pre-existing files).
+7. Commit pre-existing files (init-in-place only).
 8. Write scaffold files (see below).
 9. `git add` + `git commit`.
-10. `persistCreatedProjectWithLiveEvent(...)` — inserts DB row + emits live event.
-11. `registry.register(result.project)` — adds a `ProjectRuntime` to the in-memory registry.
+10. Insert the DB row + emit a live event.
+11. Register the project in the in-memory registry so it's live immediately without a restart.
 
-Default stages: `Draft (isNew) → Review → Done (isDone) → Cancelled (isCancelled)` (project-create.ts:61–65).
+Default stages created: `Draft (isNew) → Review → Done (isDone) → Cancelled (isCancelled)` (`project-create.ts:61–65`).
 
-### Scaffold writer (`project-scaffold.ts`)
+⚠️ **Known gap:** if a `git commit` fails mid-create, the folder is left with partial files. No rollback path exists. (`project-create.ts:30`)
 
-Writes to `<folder>/`:
+---
 
-| Path | Source | Template? |
+### 7. What gets scaffolded into the project folder
+
+`project-scaffold.ts` writes exactly these files — no more (`project-scaffold.ts`):
+
+| Path | Source | Template tokens? |
 |---|---|---|
-| `.project-companion/setup-wizard-prompt.md` | `templates/.project-companion/setup-wizard-prompt.md` | Yes — `{{PROJECT_NAME}}`, `{{PROJECT_SLUG}}` |
+| `.project-companion/setup-wizard-prompt.md` | `templates/.project-companion/setup-wizard-prompt.md` | `{{PROJECT_NAME}}`, `{{PROJECT_SLUG}}` |
 | `.project-companion/workflows/*.yaml` | `templates/.project-companion/workflows/` | No — plain copy |
-| `README.md` | `templates/README.template.md` | Yes — `{{PROJECT_NAME}}`, `{{PC_TRUNK_PATH}}` |
+| `README.md` | `templates/README.template.md` | `{{PROJECT_NAME}}`, `{{PC_TRUNK_PATH}}` |
 
-Attach-to-git mode skips `README.md` to preserve the existing repo's readme.
+`README.md` is skipped in `attach-to-git` mode to preserve the existing repo's readme.
 
-Token map (project-scaffold.ts:110–122): `PC_TRUNK_PATH`, `PC_SERVER_PORT`, `PC_CHANNEL_PORT`, `PC_DB_PATH`, `PROJECT_ID`, `PROJECT_SLUG`, `PROJECT_FOLDER`, `PROJECT_NAME`, `PROJECT_DATA_DIR`.
+Token map (`project-scaffold.ts:110–122`): `PC_TRUNK_PATH`, `PC_SERVER_PORT`, `PC_CHANNEL_PORT` *(☠ FD-3 — goes away with the port-consolidation Foundation Decision)*, `PC_DB_PATH`, `PROJECT_ID`, `PROJECT_SLUG`, `PROJECT_FOLDER`, `PROJECT_NAME`, `PROJECT_DATA_DIR`.
 
-**What is NOT scaffolded into the project folder:** `.claude/hooks/`, `.claude/settings.json`, `.mcp.json`. These used to land in project roots (see legacy-runtime-cleanup.ts) but were moved to per-session scratch dirs. They now come from `claude-runtime-bundle.ts` at spawn time.
+**What does NOT land in the project folder** (and why this matters):
+- `.claude/hooks/` — not here.
+- `.claude/settings.json` — not here.
+- `.mcp.json` — not here.
 
-### Runtime bundle (not scaffold — per session) (`claude-runtime-bundle.ts`)
+These used to be written into project roots. They were moved to **per-session scratch dirs** (see §8). Old projects created before that move still have them; a cleanup service (`legacy-runtime-cleanup.ts`) backs them up and removes them on boot.
 
-At every `claude.exe` spawn, `prepareClaudeRuntimeFiles(input)` renders the template files into a per-session scratch dir (`<scratchDir>/claude-runtime/`):
-- `.claude/hooks/*.cjs` — all `.cjs` files from `templates/.claude/hooks/` with token substitution. **Hook token `PROJECT_FOLDER` points at the worktree dir**; settings token `PROJECT_FOLDER` points at the session scratch `claude-runtime/` dir (so hooks reference themselves correctly).
+⚠️ **Known stale doc:** `README.template.md:8–11` still lists `.claude/` and `.mcp.json` as if they live in the project root. They don't. The README is misleading for anyone who reads it.
+
+---
+
+### 8. Runtime bundle (per session, not scaffold)
+
+Every time Claude is launched — for any session type — `prepareClaudeRuntimeFiles(input)` renders a fresh set of config files into a **per-session scratch dir** (`<scratchDir>/claude-runtime/`) (`claude-runtime-bundle.ts`). These are ephemeral: created at spawn, deleted at session end.
+
+Files written each time:
+- `.claude/hooks/*.cjs` — every `.cjs` from `templates/.claude/hooks/` with token substitution. Hook token `PROJECT_FOLDER` points at the worktree dir; settings token `PROJECT_FOLDER` points at the scratch dir so hooks reference themselves correctly.
 - `.claude/settings.json` — rendered from `templates/.claude/settings.template.json`.
-- `mcp.json` — `pc-rig` + `webhook` MCP servers, with token-substituted paths + env.
-- Cleaned up on session end via `cleanup()`.
+- `mcp.json` — `pc-rig` + `webhook` MCP servers with token-substituted paths and env.
 
-Hook scripts registered in `settings.json`:
-- `inbox-drain.cjs` — UserPromptSubmit; drains `agent_inbox` table rows into the conversation.
-- `event-capture.cjs` — all CC lifecycle events (UserPromptSubmit, PreToolUse, PostToolUse, Stop, SubagentStop, SessionEnd, StopFailure, Notification).
-- `ask-intercept.cjs` — PreToolUse on `AskUserQuestion|ExitPlanMode|EnterPlanMode`.
-- `path-guard.cjs` — PreToolUse/PostToolUse on Agent/Task + file tools (gate-workflow, bind/unbind, enforce).
-- `pc-statusline.cjs` — statusLine command.
+**Hook scripts registered in `settings.json`:**
 
-### Project registry (`project-registry.ts`)
+| Script | Trigger | Job |
+|---|---|---|
+| `inbox-drain.cjs` | UserPromptSubmit | Drains `agent_inbox` table rows into the conversation. ⚠️ Reads legacy DB tables directly — see Known issues. |
+| `event-capture.cjs` | UserPromptSubmit, PreToolUse, PostToolUse, Stop, SubagentStop, SessionEnd, StopFailure, Notification | Captures all CC lifecycle events. |
+| `ask-intercept.cjs` | PreToolUse on `AskUserQuestion`, `ExitPlanMode`, `EnterPlanMode` | Intercepts ask/plan tool calls. |
+| `path-guard.cjs` | PreToolUse/PostToolUse on Agent/Task + file tools | Enforces path boundaries (gate-workflow, bind/unbind, enforce). |
+| `pc-statusline.cjs` | statusLine command | Renders the status line. |
 
-In-memory map of `ULID → ProjectRuntime`. Loaded from DB at server boot (`loadAll()`). `register()` is called by `ProjectCreate.create()` immediately after the DB insert, so the new project is live without a restart. `ensure()` lazily hydrates a runtime on first access.
+> ☠ **Hook template trap (burned once):** The hook `.cjs` files live in `templates/.claude/hooks/` — that is the only real location. `packages/runtime/src/hook-scripts/` does **not** exist. Always edit `templates/.claude/hooks/`.
 
-### Setup wizard modal (`SetupWizardModal.tsx` + `setup-wizard-prompt.md`)
-
-After project creation, the user can open the setup wizard — a transient Claude session that interviews them and calls `pc_write_claude_md` to write `CLAUDE.md` to the project root. The interview script is `templates/.project-companion/setup-wizard-prompt.md` (appended to CC's system prompt at spawn via `--append-system-prompt-file` or equivalent). The modal auto-closes when the `project-claude-md` live-store signature changes (T3.2b: `useLiveEntitySignature`).
+> ☠ **`inbox-drain.cjs` blocker:** This hook still reads/writes `agent_inbox` DB tables via raw SQL (`inbox-drain.cjs:66/74/77`). The `agent_inbox` tables are targeted for deletion. They **cannot be dropped** until this hook is refactored to use the mailbox. Blocked on: mailbox stable + hook refactor (ledger row 9).
 
 ---
 
-## Integrations (how it connects)
+### 9. The project registry
 
-- **Depends on:**
-  - `@pc/runtime` — `resolveClaudeBinary`, `requireClaudeBinary`, `claudeConfigDir`, `setConfiguredClaudeExe`.
-  - `@pc/db` — `getGlobalSettings`, `setGlobalSettings`, `getProjectBySlug`, `getProjectById`, `listProjects`, `persistCreatedProjectWithLiveEvent`.
-  - `@pc/domain` — `Stage`, `GlobalSettings`, `withSettingsDefaults`.
-  - `project-scaffold.ts` — called by `project-create.ts`.
-  - `claude-runtime-bundle.ts` — called by the spawn path (not by project-create directly).
-  - `project-runtime.ts` + `ProjectRegistry` — runtime registered on project create.
-
-- **Used by:**
-  - `App.tsx` — mounts `OnboardingWizard` as a full-screen gate.
-  - `POST /api/projects` — thin wrapper around `ProjectCreate.create`.
-  - Every `claude.exe` spawn path (`LowLevelSpawn`, `InteractiveSession`, `AgentRun`) calls `prepareClaudeRuntimeFiles`.
-
-- **Contracts / events crossed:**
-  - `GlobalSettings.onboardingCompletedAt` (DB, `global_settings` table) — the gate flag.
-  - `Project` row + `persistCreatedProjectWithLiveEvent` — DB insert + live WS event.
-  - `setup-wizard-state` / `setup-wizard-exit` WS envelopes — consumed by `SetupWizardModal`.
-  - `project-claude-md` live-store signature — triggers modal auto-close.
+An in-memory map of `project ULID → ProjectRuntime` (`project-registry.ts`). Loaded from the DB at server boot (`loadAll()`). When a project is created, `register()` is called immediately after the DB insert, so the project is live in memory without a restart. `ensure()` lazily hydrates any project not yet loaded.
 
 ---
 
-## Target shape (per north star)
+## How it connects
 
-The ledger (`consolidation-ledger-2026-06-02.md`) has no explicit row for this subsystem because it has no lifecycle ownership or process concerns — it is not in the five-role migration path.
+- **Depends on:** `@pc/runtime` (binary resolution) · `@pc/db` (settings, project rows, live events) · `@pc/domain` (Stage, GlobalSettings types) · `project-scaffold.ts` · `claude-runtime-bundle.ts` (called by spawn path) · `project-runtime.ts` + `ProjectRegistry`.
+- **Used by:** `App.tsx` (mounts the first-run gate) · `POST /api/projects` (wraps `ProjectCreate.create`) · every `claude.exe` spawn path (`LowLevelSpawn`, `InteractiveSession`, `AgentRun`) calls `prepareClaudeRuntimeFiles`.
+- **Events crossed:** `GlobalSettings.onboardingCompletedAt` (the gate flag) · `Project` row + `persistCreatedProjectWithLiveEvent` (DB insert + live WS event) · `setup-wizard-state` / `setup-wizard-exit` WS envelopes · `project-claude-md` live-store signature (triggers modal auto-close).
 
-The one structural note: the setup wizard modal (`SetupWizardModal`) is a transient `PtySession`-owned modal (V1 confirmed: `project-runtime.ts:117`). Per Steps 5–6 of the migration, all transient modals eventually move to the Engine. When that happens, `SetupWizardModal`'s WS envelope handling (`setup-wizard-state`, `setup-wizard-exit`) migrates with it — but the wizard's interview content, scaffold logic, and preflight are unaffected.
+---
 
-Everything else (preflight, install, auth, project-create, scaffold, registry) is self-contained and maps cleanly to the target: the DB is the source of truth for projects; the scaffold produces durable files; the session bundle produces ephemeral runtime config per spawn. No changes needed beyond the modal migration.
+## Target shape (per north star + Foundation Decisions)
+
+The consolidation ledger has no explicit row for this subsystem — it has no lifecycle ownership or process concerns and is not in the five-role migration path.
+
+One structural change pending: the setup wizard modal moves to the Engine (Steps 5–6) along with all other transient modals. WS envelope handling migrates with it; interview content, scaffold logic, and preflight are unaffected.
+
+Everything else — preflight, install, auth, project-create, scaffold, registry — maps cleanly to the target. DB is the source of truth for projects; scaffold produces durable files; session bundle produces ephemeral runtime config per spawn.
 
 ---
 
 ## Known issues / scar tissue
 
-- **Hook template trap** (CLAUDE.md memory note). The hook `.cjs` files live in `templates/.claude/hooks/` — that is the only real location (verified: `packages/runtime/src/hook-scripts/` does not exist). A prior session burned time editing the wrong path. **Always edit `templates/.claude/hooks/`.**
-
-- **`inbox-drain.cjs` reads `agent_inbox` tables directly** (ledger §0, item 1). The `agent_inbox` DB tables are targeted for deletion, but the hook still reads/writes them via raw SQL (lines 66/74/77 of the hook). The tables cannot be dropped until this hook is refactored to use the mailbox. This is a known pending item (ledger row 9, prereq: mailbox-stable + hook refactor).
-
-- **`.mcp.json` and `.claude/*` no longer live in the project folder.** The `README.template.md` scaffold still lists them as if they do (templates/README.template.md:8–11). The README is stale on this point; the actual files land in the session scratch dir, not the project root. This is cosmetic but misleading for users who look at the committed README.
-
-- **Legacy runtime cleanup** (`legacy-runtime-cleanup.ts`). Projects created before the session-bundle move still have `.mcp.json`, `.claude/settings.json`, and `.claude/hooks/*.cjs` in their project roots. There is a cleanup service that detects and backs them up/removes them on boot. This is defense-in-depth against old installs, not a live concern for new projects.
-
-- **Partial-scaffold failure is unrecovered.** If a `git commit` fails mid-create, the folder is left with partial files. The comment in `project-create.ts:30` notes that atomic rollback is a followup. No rollback path exists today.
-
-- **`attach-to-git` re-adopt path** deletes `.project-companion/` before scaffolding a fresh copy, but this is a working-tree-only delete; the git history retains the old scaffold. If the user commits in the same repo after re-adoption they'll see the old scaffold in log history. Cosmetic, not a bug.
+- **Hook template trap.** Hook `.cjs` files live in `templates/.claude/hooks/` only. `packages/runtime/src/hook-scripts/` does not exist. Burned once editing the wrong path.
+- **`inbox-drain.cjs` blocks legacy table deletion.** Reads/writes `agent_inbox` tables via raw SQL (`inbox-drain.cjs:66/74/77`). Tables can't be dropped until this hook is refactored (ledger row 9).
+- **`README.template.md` is stale.** Lines 8–11 list `.claude/` and `.mcp.json` as project-root files. They're not — they live in the session scratch dir. Misleading for users who read the committed README.
+- **No rollback on partial scaffold.** If a `git commit` fails mid-project-create, the folder is left with partial files. `project-create.ts:30` notes atomic rollback as a followup.
+- **`attach-to-git` history note.** Deleting `.project-companion/` before re-adopting is a working-tree-only delete; git history retains the old scaffold. Cosmetic only.
+- **No re-entry to the wizard.** Once `onboardingCompletedAt` is set, there is no in-app way to re-run setup.
 
 ---
 
-## Open questions
+## Decisions & open questions
 
-- Should `README.template.md` be updated to match the current reality (no `.claude/` or `.mcp.json` in the project root)?
-- When the setup wizard modal migrates to the Engine (Step 5), does `SetupWizardModal`'s auto-close via `useLiveEntitySignature` still work, or does the event path change?
-- The onboarding wizard has no re-entry mechanism once `onboardingCompletedAt` is set. There is no "re-run setup" button in app settings. Intentional?
+**For Emerson (product calls):**
+1. **Re-run setup button?** Once onboarding is stamped complete, there's no way back in through the UI. Should there be a "Re-run setup wizard" option in global settings? If yes, does it re-check preflight only, or walk the whole flow again?
+2. **Stale README in every project.** The `README.template.md` tells users `.claude/` and `.mcp.json` live in the project root — they don't anymore. Fix the template (removes confusion) or drop it from scaffold entirely (most users don't read it)?
+3. **Partial-scaffold rollback.** If project creation fails mid-way, the folder is left in a broken state. Is a cleanup / retry flow worth building, or is a clear error message + manual delete good enough?
+
+**Technical:**
+- When `SetupWizardModal` migrates to the Engine (Steps 5–6), does auto-close via `useLiveEntitySignature` still work, or does the event path change?
+- `inbox-drain.cjs` refactor timeline — prerequisite for dropping `agent_inbox` tables (ledger row 9). Blocked on mailbox-stable.
+- `GET /api/preflight` has no caching contract beyond the binary-probe cache that install clears. Should preflight results have a TTL so repeated calls don't re-exec `claude --version` on every wizard render?

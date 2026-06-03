@@ -5,6 +5,10 @@
 > **Snapshot date:** 2026-06-03. **Source branch:** `refactor/auto-pathway`.
 > Each row links to a full doc in this folder. Format defined in `_TEMPLATE.md`.
 
+> **Decisions live in [`_Foundation-Decisions.md`](_Foundation-Decisions.md)** — the agreed conceptual
+> calls for the rebuild (proposals until we lock them). That's the spec; these subsystem docs are the
+> as-built facts.
+
 ## How to read this
 
 - **Role** = which of the five north-star roles it belongs to (Supervisor · Engine · Brain · Store · UI),
@@ -25,7 +29,7 @@ path"). The unified design says **one job, one owner, one path**. Most issues be
 |---|---|---|---|
 | [Store / Database](0-store/store-db.md) | SQLite: all tables, migrations, ULID ids, the repo layer | **keep + evolve** | Mostly *row-state*, not the append-only *event log* the north star wants. Only `live_outbox`, `*_audit`, `work_items.history` are truly append-only. Closing this gap is the biggest single rebuild decision. |
 | [App-services layer](0-store/app-services-layer.md) | Portable write layer (gateway+adapter) between raw DB and HTTP | **keep + finish extraction** | Two "announce" forms coexist; the old `work-item-writer` writes the row and the live-event in *separate* transactions (can drop a notification). The newer gateway does both atomically — finish moving to it. |
-| [Contracts (typed boundary)](0-store/contracts-system.md) | Shared TS types/schemas at every seam (also the product "Contract" entity) | **keep** | The v2 deliverable type union is duplicated (browser-safe mirror) with **no drift guard** — change one, the other silently diverges. |
+| [Contracts (typed boundary)](0-store/contracts-system.md) | Shared TS types/schemas at every seam (also the "Work Contract" entity) | **keep** | The v2 deliverable type union is duplicated (browser-safe mirror) with **no drift guard** — change one, the other silently diverges. |
 
 ### Engine — the single owner of every `claude.exe`
 
@@ -42,6 +46,7 @@ path"). The unified design says **one job, one owner, one path**. Most issues be
 |---|---|---|---|
 | [MCP (tools bridge)](2-brain/mcp.md) | Per-session "hands": typed tools that call back into the app | **keep** | `pc_node_failed` is a no-op stub — the only tool that still leans on inference (JSONL scrape) instead of a positive receipt. |
 | [Agents & Pods](2-brain/agents-pods.md) | Stored agent definitions (prompt, tools, MCP scope, secrets, scope) | **keep + dedupe sources** | Tool catalog has multiple sources of truth (`TOOLS` vs `PC_RIG_TOOL_NAMES` vs a web mirror) that silently drift. Secrets are plaintext. |
+| ↳ [Built-in Agents (catalog)](2-brain/built-in-agents.md) | The ten agents Caisson ships with: orchestrator + 9 specialists — who they are, what each is for | *(companion)* | Catalog, not a subsystem. See the agents-pods doc above for the system. |
 | [Orchestrator](2-brain/orchestrator.md) | The persistent conversational Claude that is the user's chat | **rebuild → Engine-owned** | A separate lifecycle/ready-detector/reader from agents (the dual path the whole effort targets). Moves to the Engine in Step 4. |
 | [Asks, deliverables & review](2-brain/asks-deliverables-review.md) | The explicit positive signals: ask-and-pause, submit-deliverable, human review | **keep — this is the backbone** | The deliverable fix once landed on the wrong path (in-process while host-backed stalled). Any "done" handling added outside the one terminal authority re-strands host runs. |
 | [Mailbox & notifications](2-brain/mailbox-notifications.md) | Durable queue to notify a human/orchestrator even when offline | **keep** | A legacy hook (`inbox-drain.cjs`) still drains old `agent_inbox` tables via raw SQL — a parallel delivery path inside the orchestrator process. Blocks dropping those tables. |

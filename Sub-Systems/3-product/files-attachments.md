@@ -3,248 +3,132 @@
 > **Role:** UI / Store / cross-cutting
 > **Status:** as-built snapshot — 2026-06-03
 > **Code anchors:**
-> `apps/server/src/services/files-tree.ts`,
-> `apps/server/src/services/fs-browse.ts`,
-> `apps/server/src/services/fs-probe.ts`,
-> `apps/server/src/services/memory-files.ts`,
-> `apps/server/src/services/attachment.ts`,
-> `apps/server/src/features/files/routes.ts`,
-> `apps/server/src/features/work-items/routes.ts` (attachment CRUD),
-> `packages/db/src/repos/attachments.ts`,
-> `packages/db/src/schema.ts` (`attachments` table),
-> `packages/domain/src/attachment.ts`,
-> `packages/contracts/src/attachments.ts`,
-> `apps/web/src/features/files/client.ts`,
-> `apps/web/src/components/FilesRail.tsx`,
-> `apps/web/src/components/FilesViewer.tsx`,
-> `apps/web/src/components/AttachmentLightbox.tsx`,
-> `apps/web/src/components/FolderBrowserModal.tsx`,
-> `apps/server/src/services/memory-files.ts`
+> `apps/server/src/features/files/routes.ts` · `apps/server/src/services/files-tree.ts` · `fs-browse.ts` · `fs-probe.ts` · `memory-files.ts` · `attachment.ts`
+> `packages/db/src/repos/attachments.ts` · `schema.ts` (`attachments` table) · `packages/domain/src/attachment.ts`
+> `apps/web/src/components/FilesRail.tsx` · `FilesViewer.tsx` · `AttachmentLightbox.tsx` · `FolderBrowserModal.tsx`
+
+---
 
 ## What it is (plain English)
 
-Two related but distinct surfaces. **Project file browsing** lets the user
-navigate the project folder on disk — the same folder their code lives in —
-and preview files in the UI. **Attachments** are text or binary payloads
-produced by agents or typed by the user and stored inside the app's database,
-tied to a work item. A third surface, **memory files**, is a thin read/write
-wrapper for Claude Code's `CLAUDE.md` instruction files at user, project, and
-workspace scope.
+Four related surfaces that all live under the "files" umbrella, doing different jobs:
+
+1. **File browsing** — a read-only window into the project folder on disk so the user can see and preview their files without leaving the app.
+2. **Attachments** — documents, images, or text snippets produced by agents or typed by the user, stored permanently inside the app's database and tied to a work item.
+3. **Memory files** — a thin edit surface for the `CLAUDE.md` instruction files that control how Claude Code behaves (at user, project, and workspace scope).
+4. **Folder picker** — the directory browser used when creating a project or changing the app's root folder.
+
+---
 
 ## What it's supposed to do (intent)
 
-- **File browsing / tree:** give the user (and eventually agents) a read-only
-  view of what's inside their project folder without leaving the app.
-- **Attachments:** durably store artifacts produced during workflow runs or
-  conversations. Content must survive a process restart, cross-session, and be
-  surfaced back to agents via MCP. Inline DB storage (never a filesystem path)
-  is a locked architectural decision.
-- **Memory files:** let the user read and edit `CLAUDE.md` instruction files
-  that control Claude Code's behaviour in each scope, via the app's UI.
+- **File browsing:** give the user a read-only view of their project folder without leaving the app. Eventually useful for agents too.
+- **Attachments:** store artifacts durably — they survive restarts, persist across sessions, and can be handed back to agents. **Content always lives inline in the database; there is no filesystem path variant.** This is a locked architectural decision.
+- **Memory files:** let the user read and edit `CLAUDE.md` instruction files from the app's UI.
+- **Folder picker:** let the user navigate to and select a directory on their machine when setting up a project.
 
-## How it works today (as-built)
+---
 
-### File tree & preview
+## The parts (every component, plain English)
 
-- `getFilesTree(folderPath)` (`files-tree.ts:79`) recursively walks the
-  project's root folder, applying two filter layers:
-  1. Hard-skip a fixed set of noisy dirs (`HARD_SKIP_DIRS` at line 11:
-     `node_modules`, `dist`, `.git`, `data`, etc.).
-  2. Load the root `.gitignore` via the `ignore` package and skip matching
-     paths.
-- Result is sorted dirs-first, then alpha within each group. Each node carries
-  `name`, Posix-relative `path`, `kind`, and file `size`.
-- `previewFile(folderPath, relPath)` (`files-tree.ts:147`) reads a single file
-  and classifies it as `markdown | html | image | text | binary | oversized`.
-  - Hard cap: 1 MB (`PREVIEW_BYTE_CAP = 1_000_000`, line 27). Larger files
-    return `kind: 'oversized'`.
-  - Images are returned as a base64 data URI.
-  - Binary detection: sniffs the first 8 KB for a NUL byte (`looksBinary`,
-    line 230).
-- **Path containment check** (`files-tree.ts:156`): uses `resolve()` +
-  `startsWith(folderAbs + sep)` — not `path.relative`. This is the **known
-  scar tissue site** (see Known Issues below). The `+ sep` guard blocks
-  sibling-prefix attacks (`/foo` escaping to `/foobar/...`), but the code
-  still uses `startsWith` rather than the safer `path.relative` + reject-`..`
-  pattern.
-- Routes are registered in `apps/server/src/features/files/routes.ts`:
-  - `GET /api/projects/:projectId/files/tree` → `getFilesTree`
-  - `GET /api/projects/:projectId/files/preview?path=` → `previewFile`
+### 1. Browsing the project's files
 
-### Folder browser (create-project picker)
+The file tree walks the project's root folder on disk and shows a sorted directory listing in the left rail.
 
-- `browseFolder(input, opts)` (`fs-browse.ts:49`) lists one directory at a
-  time. Two modes controlled by the `roots` option:
-  - No `roots` → unrestricted roaming (used by the App Settings folder
-    picker).
-  - `roots` provided → any path outside those roots is 403'd (used by
-    Create Project modal, gated to `projectsFolder`).
-- Containment check in `isInsideAnyRoot` (`fs-browse.ts:149`) uses
-  `normalize(path).startsWith(rNorm + sep)` — same `startsWith + sep` pattern
-  as `files-tree.ts`. On Windows, paths are lowercased before comparison.
-- `createChildFolder` (`fs-browse.ts:92`) validates the new folder name
-  (single path segment, no `/`, `\`, `..`) and calls `mkdirSync`.
-- `probeFolder(input)` (`fs-probe.ts:32`) is a one-shot stat call: returns
-  `exists`, `isDirectory`, `hasFiles`, `isGitRepo`, `hasPcScaffold`,
-  `hasMcpJson`. Used by the Create Project modal to classify the chosen dir
-  before committing.
-- Routes: `GET /api/fs/browse`, `GET /api/fs/drives`, `POST /api/fs/mkdir`,
-  `POST /api/fs/probe` (all in `files/routes.ts`).
+Two layers of filtering keep noise out:
+- A hardcoded skip list (`HARD_SKIP_DIRS` — `node_modules`, `dist`, `.git`, `data`, etc.) drops directories that are never useful to browse. (`files-tree.ts:11`)
+- The project's own `.gitignore` rules are applied via the `ignore` npm package, so anything git ignores is hidden here too.
 
-### Attachments
+The result is sorted: folders before files, then alphabetically within each group. Each entry carries its name, path, kind, and file size.
 
-- **DB schema** (`packages/db/src/schema.ts:499`): `attachments` table.
-  The `content` column is `text().notNull()` with a comment: *"Inline payload.
-  No filesystem-path variant — content always lives in the DB."* Confirmed
-  — there is no `path` column, no file-system write anywhere in the create
-  path.
-- **Domain type** (`packages/domain/src/attachment.ts`): `content: string`
-  field with note: *"Future binary support stores base64 here with contentType
-  set."*
-- **Repo** (`packages/db/src/repos/attachments.ts`): four functions —
-  `createAttachment`, `listAttachmentsForWorkItem`, `getAttachment`,
-  `deleteAttachment`. Hard-delete only (no soft-delete/restore).
-- **Service** (`apps/server/src/services/attachment.ts`): project-scoped
-  facade. Verifies every operation's work item belongs to the current project
-  (`assertWorkItemInProject`, line 136) before passing through to the repo.
-  On create and delete, writes a `live_outbox` event via `insertLiveEvent` +
-  fires a legacy `broadcast` in parallel (Phase A dual-write; bare broadcast
-  will be dropped in Phase C once the relay-first path is stable).
-- **Routes** (in `apps/server/src/features/work-items/routes.ts`):
-  - `GET /api/projects/:pId/work-items/:wiId/attachments` — list
-  - `GET /api/projects/:pId/work-items/:wiId/attachments/:aId` — get by id
-  - `GET /api/projects/:pId/attachments/:aId` — get by id (project-scoped,
-    no wiId needed — used by the lightbox)
-  - `POST /api/projects/:pId/work-items/:wiId/attachments` — create
-  - `DELETE /api/projects/:pId/work-items/:wiId/attachments/:aId` — delete
-- **Live event contract** (`packages/contracts/src/attachments.ts`):
-  `AttachmentChangedLiveEvent` (type `attachment.changed`, entity
-  `attachment`, scope `project`). Carries the full `AttachmentDto` (which
-  includes `content` inline) on create; omits it on delete.
-- **MCP surface**: agents create attachments via the `pc_attach_to_work_item`
-  MCP tool (not in scope of this doc), which calls through `AttachmentService`
-  with `source: 'agent'`.
+**Previewing a file** reads its content and classifies it into one of six kinds: `markdown`, `html`, `image`, `text`, `binary`, or `oversized`. Hard cap is 1 MB — files above that return `kind: 'oversized'` without reading their content. (`files-tree.ts:27, 147`) Images come back as base64 data URIs. Binary detection sniffs the first 8 KB for a NUL byte.
 
-### Memory files
+The UI for this is **`FilesRail.tsx`** (the left-rail tree) and **`FilesViewer.tsx`** (the center panel). The viewer renders each kind differently — Markdown gets rendered, HTML goes in a sandboxed iframe, images as `<img>`, text as `<pre>`. Expand state in the tree is local and resets on project switch. A "Show hidden" toggle reveals dot-prefixed entries.
 
-- `memory-files.ts` handles three scopes: `user` (`~/.claude/CLAUDE.md`),
-  `project` (`<folderPath>/CLAUDE.md`), `workspace`
-  (`dirname(folderPath)/CLAUDE.md`).
-- `readMemoryFile` / `writeMemoryFile` are simple `readFileSync` /
-  `writeFileSync` wrappers. Write creates the directory if missing
-  (`mkdirSync({ recursive: true })`).
-- No route registration is visible in this file — the server endpoint that
-  exposes these functions is elsewhere (unverified in this pass).
+### 2. Previewing an attachment (the lightbox)
 
-### UI components
+Attachments tied to work items can be opened full-screen via **`AttachmentLightbox.tsx`**, which mounts at the Shell level so it can open from anywhere in the app (including clicking a `pc://attachment/<id>` rich link in chat). It fetches the attachment by ID and renders images as `<img>` or everything else as `<pre>`. Provides Download (constructs a Blob from the content) and "View parent work item" actions.
 
-- **`FilesRail.tsx`**: left-rail file tree. On project-switch, fetches the
-  whole tree via `filesApi.getFilesTree(project.id)`. Expand state is in
-  local React state (resets on project switch). "Show hidden" toggle filters
-  leading-dot entries client-side. Clicking a file calls
-  `useViewingFile.setViewing(project.slug, path)`.
-- **`FilesViewer.tsx`**: center-column. Reads `useViewingFile` store; on path
-  change fetches `filesApi.previewFile` and dispatches to the matching render
-  branch (`ReactMarkdown` / sandboxed `<iframe>` / `<img>` / `<pre>` /
-  binary placeholder / oversized placeholder).
-- **`useViewingFile` store** (`apps/web/src/store/viewing-file.ts`): keyed by
-  project slug; in-memory only (not persisted across reloads).
-- **`AttachmentLightbox.tsx`**: full-screen modal mounted at Shell level.
-  Opens when the `useAttachmentLightbox` store fires an `attachmentId`. Fetches
-  the attachment by id from `workItemsApi.getAttachmentById`. Renders
-  `image/...` content as `<img>` (data-URI if the content starts with
-  `data:`; otherwise wraps in base64), and all other content types as
-  `<pre>`. Provides Download (constructs a `Blob` from `attachment.content`)
-  and "View parent" (opens the work-item modal) actions.
-- **`FolderBrowserModal.tsx`**: used by Create Project and App Settings
-  pickers. Drills one directory at a time via `filesApi.browseFolder`. In
-  ungated mode shows drive jump buttons (Windows only). Persists last-browsed
-  path in `localStorage` under key `pc.last-browse-dir`. Supports inline
-  folder creation.
+### 3. Attachments (stored inside the database, never as file paths)
 
-## Integrations (how it connects)
+An attachment is any text or binary payload — a draft, an image, a report — produced by an agent or added by the user, permanently tied to a work item.
 
-- **Depends on:**
-  - SQLite / `@pc/db` — attachment storage and live-outbox writes.
-  - Node `fs` / `path` — all disk reads for file tree and memory files.
-  - `ignore` npm package — `.gitignore` parsing in `files-tree.ts`.
-  - `live_outbox` table + relay — attachment change events pushed to the UI.
-- **Used by:**
-  - Work Items feature — attachments bound to work items; lightbox opened via
-    `pc://attachment/<id>` rich-link clicks in chat.
-  - Workflow engine / MCP — `pc_attach_to_work_item` tool writes through
-    `AttachmentService`.
-  - Create Project modal — `FolderBrowserModal` + `probeFolder` for folder
-    selection.
-  - App Settings modal — `FolderBrowserModal` for `projectsFolder` setting.
-  - Memory drawer (UI) — reads/writes `CLAUDE.md` files via the memory-files
-    service.
-- **Contracts / events crossed:**
-  - `AttachmentChangedLiveEvent` / `AttachmentChangedRefetchEnvelope`
-    (`packages/contracts/src/attachments.ts`) — the WS live event the UI
-    subscribes to for attachment list refresh.
-  - `AttachmentDto` — the over-the-wire shape; mirrors `Attachment` domain
-    type field-for-field including inline `content`.
+**How they're stored:** the `attachments` table in SQLite has a `content` column that holds the payload inline as text. The schema comment explicitly says: *"No filesystem-path variant — content always lives in the DB."* (`schema.ts:499`) There is no `path` column and no file-system write anywhere in the create path. Binary content is stored as base64 with a `contentType` field. This is a locked decision — keep it stated.
 
-## Target shape (per north star)
+**CRUD:** four operations — list, get, create, delete. Delete is permanent (hard-delete only; no soft-delete/restore). (`repos/attachments.ts`)
 
-The ledger (`consolidation-ledger-2026-06-02.md`) has no explicit verdict row
-for file-browsing or memory-files. Both are UI-support services with no
-process-ownership concerns — they are already in the right place (Brain / UI
-shell) and require no migration.
+**Project scope guard:** every operation checks that the work item belongs to the current project before touching the attachment. (`attachment.ts:136`)
 
-For attachments, the relevant ledger entries are:
+**Live updates:** when an attachment is created or deleted, a `AttachmentChangedLiveEvent` is written to `live_outbox` and fanned out to the UI. The full `AttachmentDto` (including content) is carried on create; the delete event omits content. (`packages/contracts/src/attachments.ts`)
 
-- **`live_outbox` as the one notify door:** `AttachmentService` already
-  writes to `live_outbox` via `insertLiveEvent` + the relay fans it to the UI.
-  The legacy bare `broadcast` call alongside it is explicitly Phase A
-  dual-write (`attachment.ts:113`). Phase C removes the bare broadcast,
-  leaving `live_outbox` → relay as the sole fanout.
-- **DB is the source of truth:** already true — content is inline, no
-  filesystem variant.
-- **`announcement → outbox → relay`** pattern: already wired for attachments.
-  No structural change required.
+**Agents create attachments** via the `pc_attach_to_work_item` MCP tool, which routes through the same `AttachmentService`.
 
-No rename, merge, or rebuild is needed for this subsystem. The only pending
-cleanup is the Phase C removal of the `broadcast` call in `AttachmentService`.
+### 4. Memory files (the CLAUDE.md surface)
+
+The memory-file service reads and writes the `CLAUDE.md` instruction files that tell Claude Code how to behave. Three scopes:
+
+| Scope | File location |
+|---|---|
+| `user` | `~/.claude/CLAUDE.md` |
+| `project` | `<projectFolder>/CLAUDE.md` |
+| `workspace` | `<parentOfProjectFolder>/CLAUDE.md` |
+
+Reads and writes are simple synchronous file operations. Write creates the directory if it doesn't exist yet. (`memory-files.ts`)
+
+Where the HTTP routes for this surface are registered is **not confirmed** — the route wiring was not found in this pass. (unverified)
+
+### 5. The folder picker
+
+**`FolderBrowserModal.tsx`** is the directory browser used in Create Project and App Settings. It drills one directory at a time, persisting the last-browsed path in `localStorage` under key `pc.last-browse-dir`. On Windows it shows drive-letter jump buttons. Supports creating a new subfolder inline.
+
+Two access modes:
+- **Unrestricted** (App Settings root folder) — can roam anywhere on disk.
+- **Gated** (Create Project) — restricted to paths inside the configured `projectsFolder`; requests outside that root are 403'd.
+
+Before the user commits to a folder, **`probeFolder`** (`fs-probe.ts:32`) does a one-shot stat: returns whether the path exists, is a directory, has files, is a git repo, has a Caisson scaffold, and has an `mcp.json`. The Create Project modal uses this to classify the chosen location before proceeding.
+
+---
+
+## How it connects
+
+- **Depends on:** SQLite / `@pc/db` (attachment storage + live-outbox writes) · Node `fs`/`path` (disk reads for file tree + memory files) · `ignore` npm package (`.gitignore` parsing) · `live_outbox` relay (attachment change events).
+- **Used by:** Work Items feature (attachments on items; lightbox from chat rich links) · Workflow engine / MCP (`pc_attach_to_work_item` writes through `AttachmentService`) · Create Project modal (folder picker + probe) · App Settings modal (folder picker for `projectsFolder`) · Memory drawer in the UI (reads/writes `CLAUDE.md` files).
+- **Contracts / events crossed:** `AttachmentChangedLiveEvent` (`packages/contracts/src/attachments.ts`) — the live WebSocket event the UI subscribes to for list refresh. `AttachmentDto` — the over-the-wire shape; carries inline `content`.
+
+---
+
+## Target shape (per north star + Foundation Decisions)
+
+The consolidation ledger has no verdict row for file-browsing or memory files — both are UI-support services with no process-ownership concerns, already in the right place, and require no migration.
+
+For attachments, two ledger items apply:
+
+- **`live_outbox` as the one notify door:** `AttachmentService` already writes to `live_outbox` + the relay fans it to the UI. The legacy bare `broadcast` call alongside it is an explicit Phase A dual-write. Phase C removes the bare broadcast, leaving `live_outbox` → relay as the sole fanout. (`attachment.ts:112–113, 125`)
+- **DB is the source of truth:** already true — content is inline, no filesystem variant.
+
+No rename, merge, or rebuild is needed for this subsystem. Only pending work is the Phase C removal of the bare `broadcast` in `AttachmentService`.
+
+---
 
 ## Known issues / scar tissue
 
-- **`startsWith` path containment (scar tissue — project memory):** Both
-  `previewFile` (`files-tree.ts:156`) and `isInsideAnyRoot` (`fs-browse.ts:149`)
-  use `startsWith(root + sep)` for path containment rather than
-  `path.relative(root, candidate)` + reject-`..`. The `+ sep` suffix
-  prevents the classic sibling-prefix bypass (`/foo` → `/foobar`), so the
-  current code is not exploitable in practice, but it diverges from the safer
-  pattern documented in project memory. A future change that removes the `sep`
-  suffix would reopen the sibling-prefix hole.
-  - The correct pattern: `const rel = path.relative(root, candidate); return !rel.startsWith('..') && !path.isAbsolute(rel)`.
+- **`startsWith` path containment — the documented safe pattern isn't used.** Both `previewFile` (`files-tree.ts:156`) and the folder-browser's `isInsideAnyRoot` (`fs-browse.ts:149`) use `startsWith(root + sep)` to check that a requested path stays inside the allowed root. The `+ sep` suffix blocks the classic sibling-prefix bypass (`/foo` escaping to `/foobar/…`), so the current code isn't exploitable in practice — but it diverges from the safer pattern recorded in project memory. A future edit that drops the `sep` suffix would reopen the hole. The correct pattern: `const rel = path.relative(root, candidate); return !rel.startsWith('..') && !path.isAbsolute(rel)`.
 
-- **Dual broadcast in `AttachmentService`:** Create and delete both call
-  `announceAttachment` (durable `live_outbox` write) AND
-  `this.opts.broadcast(...)` (legacy bare WS broadcast) — explicitly
-  acknowledged as Phase A dual-write (`attachment.ts:112–113,125`). The bare
-  broadcast is a second path doing the same job and will cause duplicate UI
-  updates until Phase C removes it.
+- **Dual broadcast in `AttachmentService` (Phase A debt).** Create and delete both fire `announceAttachment` (the durable `live_outbox` write) AND `this.opts.broadcast(...)` (legacy bare WebSocket broadcast). Two paths doing the same job; causes duplicate UI updates until Phase C removes the bare broadcast. (`attachment.ts:112–113, 125`)
 
-- **Lightbox backdrop-click dismisses on the `AttachmentLightbox`:**
-  (`AttachmentLightbox.tsx:79`) the backdrop has an `onClick` that calls
-  `close()`. Per project memory (`reference_modals_explicit_close_only`),
-  implicit-close via backdrop click is considered destructive on modals that
-  hold hard-to-redo work. The lightbox is read-only, so the risk is low here,
-  but it contradicts the stated modal rule.
+- **Lightbox backdrop-click closes the modal.** `AttachmentLightbox.tsx:79` has an `onClick` on the backdrop that calls `close()`. Project memory (`reference_modals_explicit_close_only`) says implicit-close via backdrop is considered destructive. The lightbox is read-only so actual data loss is low — but it contradicts the stated rule.
 
-- **Memory-file write is synchronous and unbounded:** `writeFileSync` in
-  `memory-files.ts:47` runs synchronously on the API thread. For typical
-  `CLAUDE.md` sizes this is fine; if the UI were to write large content it
-  would block the server event loop.
+- **Memory-file write is synchronous and blocks the server.** `writeFileSync` in `memory-files.ts:47` runs on the API thread. For normal `CLAUDE.md` sizes this is fine; a large write would stall the server event loop.
 
-## Open questions
+---
 
-- Where are the memory-file HTTP routes registered? `memory-files.ts` has no
-  route wiring visible — the server endpoint surfacing read/write to the UI
-  was not found in this pass. (Unverified.)
-- Should `previewFile` migrate to `path.relative` containment to match the
-  documented safe pattern, and should that be a near-term guard test?
-- Phase C timing for removing the bare `broadcast` from `AttachmentService` —
-  no scheduled slot in the current ledger Phase-0 plan.
+## Decisions & open questions
+
+**For Emerson (product calls):**
+1. **Can an attachment be edited after it's created?** Today delete is the only mutation — there's no update operation. Is that right for the product?
+2. **Should the lightbox close on backdrop click?** It contradicts the "explicit close only" rule. Low stakes because it's read-only, but worth confirming either way.
+
+**Technical:**
+- Where are the memory-file HTTP routes registered? Not located in this pass. (unverified)
+- Should `previewFile` and `isInsideAnyRoot` migrate to `path.relative` containment? Low urgency but would eliminate the documented divergence.
+- Phase C timing for removing the bare `broadcast` from `AttachmentService` — no scheduled slot in the current ledger Phase-0 plan.

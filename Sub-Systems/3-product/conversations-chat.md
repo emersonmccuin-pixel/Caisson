@@ -3,186 +3,168 @@
 > **Role:** Store (conversation persistence) · UI (chat rendering) · cross-cutting (send, replay, dual-stream dedup)
 > **Status:** as-built snapshot — 2026-06-03
 > **Code anchors:**
-> - `apps/server/src/services/conversation-replay.ts`
-> - `apps/server/src/services/conversation-send.ts`
-> - `apps/server/src/services/session-replay.ts`
-> - `apps/server/src/services/session-title-writer.ts`
-> - `apps/server/src/services/ask-shadow.ts`
-> - `apps/server/src/features/chat-bridges/routes.ts`
-> - `packages/runtime/src/chat-policy.ts`
-> - `packages/contracts/src/conversations.ts`
-> - `packages/contracts/src/runtime-transcript.ts`
-> - `packages/db/src/repos/orchestrator-sessions.ts`
-> - `packages/db/src/repos/post-turn-summaries.ts`
-> - `apps/web/src/hooks/chat-session-reducer.ts`
-> - `apps/web/src/features/chat/useChatRenderItems.ts`
-> - `apps/web/src/features/chat/normalizeJsonlEnvelope.ts`
-> - `apps/web/src/features/chat/toolGrouping.ts`
-> - `apps/web/src/features/chat/ChatSurface.tsx`
-> - `apps/web/src/features/chat/chatRendererFlag.ts`
+> `apps/server/src/services/conversation-send.ts` · `conversation-replay.ts` · `session-replay.ts` · `session-title-writer.ts` · `ask-shadow.ts`
+> `apps/server/src/features/chat-bridges/routes.ts`
+> `packages/runtime/src/chat-policy.ts` · `packages/contracts/src/conversations.ts` · `runtime-transcript.ts`
+> `packages/db/src/repos/orchestrator-sessions.ts` · `post-turn-summaries.ts`
+> `apps/web/src/hooks/chat-session-reducer.ts` · `apps/web/src/features/chat/useChatRenderItems.ts` · `normalizeJsonlEnvelope.ts` · `toolGrouping.ts` · `ChatSurface.tsx` · `chatRendererFlag.ts`
 
 ---
 
 ## What it is (plain English)
 
-Every conversation between the user and the orchestrator is stored in SQLite as an `orchestrator_sessions` row, with the full transcript living in a CC-written JSONL file on disk. The chat panel the user sees is a live projection of that transcript — events stream in over WebSocket as the orchestrator types, and on page load the whole session replays from disk so nothing is lost between refreshes. A separate "chat about a work item" bridge lets the orchestrator open a work-item detail modal inline when it mentions one.
+**The chat panel is just a window onto a file.** Every conversation is written to disk by Claude Code as a JSONL file (a text log, one event per line). The database records where that file lives and how far through it we've read. The screen renders whatever is in that file — nothing more.
+
+When you reload the page, the whole conversation replays from the file. When the orchestrator is typing, new lines stream in live over WebSocket. Either way, the screen is showing the same thing: the contents of the log file, rendered as a chat.
 
 ---
 
 ## What it's supposed to do (intent)
 
-Own the **durable conversation record** (the session row + the on-disk JSONL) and render it as a chat UI that is a pure view over those stored events. The chat panel must show the same history after a reload as it did live — no events disappear, no duplicates appear, no ordering changes.
+Own the **durable conversation record** (a database row pointing to the JSONL file) and render it as a faithful chat view. The chat panel must show the same history after a reload as it did live — no events disappear, no duplicates appear, no ordering changes. The screen owns nothing; the log file is the truth.
 
 ---
 
-## How it works today (as-built)
+## The parts (every component, plain English)
 
-### Storage
+### 1. Where conversations live (the database row)
 
-- `orchestrator_sessions` table (SQLite, `packages/db/src/repos/orchestrator-sessions.ts`):
-  - One active row per project (DB-enforced unique index).
-  - Key fields: `providerSessionId` (the CC session UUID, minted by PC and passed via `--session-id`), `jsonlPath` (the CC JSONL file once discovered), `jsonlLineCursor` (line offset written debounced ~1s, so restart + `--resume` skips already-processed lines), `title`, `status` (`active`/`ended`), `endedReason`.
-  - `reactivateOrchestratorSession` flips an ended session back to active so clicking a past session in the left rail resumes it without minting a new row (preserving CC history).
-  - `providerSessionId` is minted by PC before spawn (`createOrchestratorSession`) so the row exists before any hook fires.
+Every conversation has one row in the `orchestrator_sessions` table (`packages/db/src/repos/orchestrator-sessions.ts`). One row per project, always.
 
-- `post_turn_summaries` table (`packages/db/src/repos/post-turn-summaries.ts`):
-  - Append-only rows keyed by `summarizesUuid` (idempotent — CC replay won't create duplicates).
-  - Written on every `jsonl-post-turn-summary` event; read surface is deferred (no UI yet).
+| Field | Plain English | Notes |
+|---|---|---|
+| `providerSessionId` | The unique ID of the Claude session — minted by PC before the process starts | So the row exists before the first event fires |
+| `jsonlPath` | Where the JSONL log file lives on disk | Discovered by the tailer and written here |
+| `jsonlLineCursor` | How far through the file we've read | Saved every ~1 second; on restart, replay picks up from here |
+| `title` | The name shown in the left sidebar | Written via `session-title-writer.ts` |
+| `status` | Whether the session is active or ended | `active` / `ended` |
+| `endedReason` | Why it ended | Set when the session closes |
 
-### Send flow
+When you click a past session in the sidebar, `reactivateOrchestratorSession` flips it back to `active` — the same row is reused, so the full Claude history is preserved.
 
-`apps/server/src/services/conversation-send.ts` builds a `ConversationSendService` (from `@pc/app-services`) per call, injecting the project runtime's `RuntimeTurnPort` (the PTY's `getState`/`send` surface). The service owns: validation that a session is active, queueing when the PTY is busy, broadcasting queue snapshots over WS, and the `send-ack` response. No PTY class crosses the package boundary — the service only sees the port interface.
+### 2. Sending a message
 
-- Route: `POST /api/projects/:id/sessions/send`
-- The composer calls `onSend`, which calls `runtimeApi.send`, which hits this route.
-- The PTY's send queue (`orchestrator-send-queue-delivery.ts`, not detailed here) delivers to the live PTY and emits `send-queue-snapshot` WS frames the reducer tracks.
+Sending a message goes through `conversation-send.ts`, which builds a `ConversationSendService`. The service:
+- checks that a session is actually running
+- queues the message if the PTY (the Claude process's terminal) is currently busy
+- broadcasts queue snapshots to the browser over WebSocket, so you see the "waiting" state
+- returns a `send-ack` to confirm the message was accepted
 
-### Replay (loading history)
+Route: `POST /api/projects/:id/sessions/send`
 
-Two layers:
+The service only ever sees a narrow port interface into the PTY — no internals cross the package boundary.
 
-1. **Server side** — `apps/server/src/services/session-replay.ts:loadSessionReplayCheckpoint()`:
-   - Reads `<sessionDataPath>/jsonl-events.jsonl` (the PC-written normalized event log from the JSONL tailer). Primary source since Section 23.
-   - Falls back to `events.jsonl` (legacy hook-written file) for sessions predating Section 23.
-   - Returns a `SessionReplayCheckpoint`: seq-sorted `ReplayEnvelope[]` + `highWaterSeq`.
-   - The route wrapping this (`GET /api/projects/:id/sessions/:sessionId/events`) also supports an `?afterSeq=` cursor (`packages/contracts/src/runtime-transcript.ts:parseTranscriptAfterSeqQuery`) for additive catch-up without re-fetching the full checkpoint.
+### 3. Replaying history (loading a conversation)
 
-2. **Client side** — `apps/web/src/hooks/chat-session-reducer.ts:applySnapshot()`:
-   - A `session-replay` WS envelope (or the `session-transition` HTTP response) triggers a full re-seed of the `sequenced` entries (ordered by `seq`) and rebuilds the timeline.
-   - Live `jsonl` deltas arriving after replay are inserted into the timeline at their correct `seq` position, never appended blindly by arrival order.
-   - Dedup: if a seq-keyed entry already exists, the reducer updates the envelope in-place without re-folding it into aggregates (prevents double-counting `jsonl-usage` tokens).
-   - `highWaterSeq` tracks the frontier; additive reconnects fetch only `seq > highWaterSeq`.
+When you open a chat — or reconnect after losing the browser tab — the full history loads in two steps:
 
-### Chat rendering pipeline
+1. **Server side** (`session-replay.ts:loadSessionReplayCheckpoint()`): reads the normalized event log (`jsonl-events.jsonl`) and returns all events in sequence order, plus a "high water mark" (the latest sequence number seen). Falls back to the older `events.jsonl` format for conversations that predate Section 23.
 
-The event array flows through a five-stage pipeline in the client:
+2. **Client side** (`chat-session-reducer.ts:applySnapshot()`): receives the events and rebuilds the timeline in sequence order. Live events arriving after the replay are inserted at their correct position in that sequence — never blindly appended. If a reconnect happens mid-session, only the events since the high water mark are fetched (`?afterSeq=` cursor), not the whole history again.
 
-1. **Reducer** (`chat-session-reducer.ts`) — owns ordering. Splits events into `sequenced` (have a `seq` + `sessionId`) and `unsequenced` (ask prompts, runtime-state, send-ack). Materialises them into a flat `WsEnvelope[]` via `materializeChatSessionEvents`, sequenced entries first in seq order, terminal-raw appended last.
+> ⚠️ **Gap:** the replay reads a file on disk (`readFileSync` on `jsonl-events.jsonl`). This works today but there's a race window between the tailer writing the file and the replay reading it. The target is to move to a DB query instead — see Target shape.
 
-2. **`buildCanonicalChatEnvelopes`** (`useChatRenderItems.ts`) — the canonical path (on by default as of 2026-06-03, flag `isJsonlCanonicalChat()` in `chatRendererFlag.ts`). Keeps only `type:'jsonl'` and `type:'ask'` envelopes from the flat array. Filters hidden rows via `rowPolicy()` (`packages/runtime/src/chat-policy.ts`). Converts surviving `jsonl` envelopes to hook-shape via `normalizeJsonlEnvelope()`. Appends pending-prompt placeholders.
-   - The legacy path (frozen as A/B baseline) passes all `type:'event'` envelopes through too — the dual-source that caused duplicates.
+### 4. The dual-stream merge (why two streams exist, and how they're deduplicated)
 
-3. **`rowPolicy()`** (`packages/runtime/src/chat-policy.ts`) — pure function, classifies every `JsonlEvent` kind as `shown`/`collapsed`/`hidden` and assigns a `lane`. Suppression happens at the view; hidden rows are never discarded (a debug toggle in `ChatSurface` reveals them). Internal tools (`Agent`, `Task`, `TodoWrite`, etc.) are `hidden`. `INTERNAL_TOOLS` set here mirrors `SUPPRESSED_TOOLS` in `toolGrouping.ts` (Stage 3 will delete `toolGrouping`'s copy).
+There are two sources of chat events arriving at the browser:
 
-4. **`synthesizeRenderItems`** (`toolGrouping.ts`) — groups consecutive `tool-start`/`tool-end` pairs into `tool-group` items; promotes `Edit`/`Write`/`NotebookEdit` calls to standalone `edit` items; coalesces consecutive `sidechain` (sub-agent) steps into `sidechain-group` items; hoists workflow and agent-dispatch events from user-turn text into dedicated `workflow-run-group` / `agent-dispatch-group` items.
+- **The JSONL tailer** — reads Claude Code's log file line-by-line and streams those events over WebSocket as `type:'jsonl'` frames. This is the canonical, rich source: it contains every tool call, every assistant message, every token usage stat.
+- **Hook scripts** — small scripts that fire at specific moments (before a tool runs, after a turn) and POST events to the server. These arrive as `type:'event'` frames.
 
-5. **`useChatTimelineRenderer`** (`useChatTimelineRenderer.tsx`) — renders each `RenderItem` to a React node. Handles `ask` envelopes (inline `AskCard`), tool groups, edit bubbles, agent-dispatch and workflow cards, sidechain groups, and standard `EventBubble` rows.
+**Why both exist:** the hooks arrive faster (sub-second) while the JSONL tailer has to discover and read the file. Historically the legacy render path used both sources together, which caused duplicate messages and a "remount flicker" bug where the whole chat would re-render mid-conversation. (This burned us twice — see Known issues.)
 
-### Session title
+**The fix:** the canonical render path (`buildCanonicalChatEnvelopes`, on by default since 2026-06-03) **only accepts `jsonl` and `ask` envelopes** — it ignores hook events entirely. No two sources, no dedup problem. The legacy path is frozen as a fallback/baseline but is otherwise dead weight waiting to be deleted.
 
-`apps/server/src/services/session-title-writer.ts:announceSessionTitle()` writes a `session.title.changed` row to `live_outbox` inside a transaction. The live relay drains it post-commit and fans the frame to the project's WS subscribers — the chat title bar updates without a refetch.
+The sequence number (`seq`) on each event is what keeps everything in order. The reducer slots each event into its correct position by `seq`, never by arrival time.
 
-### Ask / ask-shadow (`/api/ask`)
+### 5. The chat rendering pipeline (how events become bubbles on screen)
 
-`apps/server/src/features/chat-bridges/routes.ts:registerChatBridgeRoutes()` registers:
+Events flow through five stages to become the chat you see:
 
-- `POST /api/ask` — hook scripts POST here when the orchestrator calls an ask tool. The server broadcasts `{ type:'ask', toolUseId, ... }` to the project's WS subscribers, then blocks on an in-memory `InMemoryPendingAskStore` resolver until the user answers or a 10-minute timeout fires.
-- The `AskShadow` service (`apps/server/src/services/ask-shadow.ts`) is a best-effort side-write: on ask it creates an `open` `pending_interactions` row (writing a `live_outbox` row inside the transaction so the relay fans it); on resolve/timeout it terminalises the row. The in-memory resolver is still the authoritative blocking path — the shadow is only inspectable.
-- `GET /api/subagent-transcript` — reads a CC JSONL file from under `~/.claude/projects/` (path-containment checked) and returns parsed events for the inline agent-card transcript view.
-- `POST /api/projects/:projectId/channel-send` — proxies a test message to the channel server at `/channel/<slug>/test`.
+1. **Reducer** (`chat-session-reducer.ts`) — sorts everything by sequence number. Splits into "sequenced" events (have a seq and a session ID) and "unsequenced" (ask prompts, send confirmations). Deduplicates: if a seq already exists, the existing entry is updated in place — no double-counting of token usage.
 
-### Chat-about-work-item bridge
+2. **`buildCanonicalChatEnvelopes`** (`useChatRenderItems.ts`) — the canonical path. Keeps only `jsonl` and `ask` envelopes. Filters hidden rows via `rowPolicy()`. Adds pending-prompt placeholders while the orchestrator is typing.
 
-`apps/web/src/components/ChatWorkItemModalMount.tsx`: a shell-level mount driven by the `useChatWorkItemModal` store. When the store transitions to a non-null `workItemId` (set by clicking a rich-link in the chat timeline), it lazily fetches the project's work-item list and opens `WorkItemDetailModal`. Supports callsign-based references (`example-project-4`) as well as ULID matches. Live-refreshes the open item off the identity-keyed `useLiveEntitySignature` signature.
+3. **`rowPolicy()`** (`chat-policy.ts`) — a pure function (no side effects) that classifies every event as `shown`, `collapsed`, or `hidden`, and assigns it a display lane. Internal tool calls (`Agent`, `Task`, `TodoWrite`, etc.) are hidden by default. Hidden rows are never discarded — a debug toggle in `ChatSurface.tsx` reveals them.
 
----
+4. **`synthesizeRenderItems`** (`toolGrouping.ts`) — groups related events into richer display items: consecutive tool-start/tool-end pairs become a single tool group; file edits become standalone edit items; sub-agent steps collapse into a sidechain group; workflow and agent-dispatch events are hoisted out of the message text into dedicated cards.
 
-## Integrations (how it connects)
+5. **`useChatTimelineRenderer`** — renders each item to a React node. Handles ask prompts inline, tool groups, edit bubbles, agent-dispatch cards, workflow run cards, sidechain groups, and standard message bubbles.
 
-- **Depends on:**
-  - `ProjectRuntime` / `InteractiveSession` — provides the `RuntimeTurnPort` the send service writes to; also the source of the JSONL tailer that writes `jsonl-events.jsonl` (see `transcript-tailers.md`).
-  - `live_outbox` / live-relay — session title changes and ask-shadow state changes flow through the outbox drain, not direct broadcast.
-  - `@pc/app-services` — `ConversationReplayService`, `ConversationSendService`, `PendingInteractionService` (the domain-layer wrappers the server adapters bind).
-  - `pending_interactions` table — the ask-shadow's durable record.
-  - `post_turn_summaries` table — written from the JSONL tailer when CC emits a `jsonl-post-turn-summary`.
+### 6. Session titles
 
-- **Used by:**
-  - `Orchestrator.tsx` / `ChatSurface.tsx` — the primary consumer of the chat event array.
-  - `AgentDesignerChat` — transient modal sessions also render through `ChatSurface`.
-  - Agent cards / inline JSONL transcript — `GET /api/subagent-transcript` feeds agent-run transcript cards in the workflow card view.
-  - WS reconnect path — `use-project-ws.ts` issues an after-seq fetch on reconnect using `getSessionEventsAfter`.
+`session-title-writer.ts:announceSessionTitle()` writes a title-changed record to the `live_outbox` table inside a database transaction. The live relay picks it up after the transaction commits and pushes it to every browser watching that project. The title bar updates without any refetch.
 
-- **Contracts / events crossed:**
-  - `ConversationSessionDto`, `TranscriptEventDto`, `TranscriptReplayResponse` (`packages/contracts/src/conversations.ts`, `runtime-transcript.ts`) — browser-safe wire shapes.
-  - `WsEnvelope` (type: `session-replay`, `session-changed`, `ask`, `jsonl`, `event`, `send-ack`, `send-queue-snapshot`) — the WS message shapes the reducer and chat pipeline consume.
-  - `live_outbox` rows typed `session.title.changed` and `pending-interaction.changed` — relay-fanned to subscribers.
+### 7. Chat-about-a-card bridge
+
+When the orchestrator mentions a work item as a rich link, clicking it opens the full card inline without leaving the chat. This is wired through `ChatWorkItemModalMount.tsx`, which listens to the `useChatWorkItemModal` store. When the store gets a non-null `workItemId`, it lazily fetches the project's card list and opens the detail modal. Supports both callsign references (like `example-project-4`) and full ID matches. The open card live-refreshes via `useLiveEntitySignature`.
+
+### 8. Ask prompts (when the orchestrator needs your answer)
+
+When the orchestrator calls an ask tool, a hook script POSTs to `POST /api/ask`. The server broadcasts an `ask` frame to the browser (you see an inline prompt card) and then **blocks** on an in-memory resolver waiting for your answer or a 10-minute timeout.
+
+`AskShadow` (`ask-shadow.ts`) is a side-write for durability: it creates an `open` row in `pending_interactions` (via the live outbox, so it fans correctly), and closes it when you answer or the timeout fires. The in-memory resolver is still the authority for unblocking the orchestrator — the shadow is only for inspection.
+
+### 9. Post-turn summaries
+
+After every completed turn, a `jsonl-post-turn-summary` event causes a row to be appended to `post_turn_summaries` (`post-turn-summaries.ts`). Rows are keyed by `summarizesUuid` so replaying a session never creates duplicates. **No UI reads these yet** — useful metadata is accumulating invisibly.
+
+> 📌 **Gap:** the post-turn summary read surface is deferred. What it should show (in-session context window usage? a collapsible summary?) is an open product question.
 
 ---
 
-## Target shape (per north star)
+## How it connects
 
-Per `unified-process-supervision-2026-06-02.md §2` and the system thesis in `AGENTS.md`:
+- **Depends on:** `ProjectRuntime` / `InteractiveSession` (the PTY's send surface) · the JSONL tailer in `transcript-tailers.md` (writes `jsonl-events.jsonl`) · `live_outbox` / live-relay (for title and ask-shadow state changes) · `@pc/app-services` (`ConversationReplayService`, `ConversationSendService`, `PendingInteractionService`) · `pending_interactions` table · `post_turn_summaries` table.
+- **Used by:** `Orchestrator.tsx` / `ChatSurface.tsx` (primary consumer) · `AgentDesignerChat` (transient modal sessions also render through `ChatSurface`) · agent run cards (inline JSONL transcript via `GET /api/subagent-transcript`) · WS reconnect path (`use-project-ws.ts` uses the after-seq cursor).
+- **Contracts / events crossed:** `ConversationSessionDto`, `TranscriptEventDto`, `TranscriptReplayResponse` (`contracts/conversations.ts`, `runtime-transcript.ts`) · WS envelope types: `session-replay`, `session-changed`, `ask`, `jsonl`, `event`, `send-ack`, `send-queue-snapshot` · `live_outbox` rows: `session.title.changed`, `pending-interaction.changed`.
 
-> Chat is a **pure view** over a durable **Store** (append-only event log). The UI shell owns nothing — it reattaches to the Brain.
+---
 
-**What stays:**
-- The `orchestrator_sessions` table (KEEP — source of truth for conversation identity and the JSONL path cursor).
-- The `live_outbox`-driven title and ask-shadow flow (already correct: write in txn, relay drains).
-- `rowPolicy` / `chat-policy.ts` as the single suppression table (Stage 3 deletes `toolGrouping.ts`'s duplicate `SUPPRESSED_TOOLS` set).
-- The canonical JSONL-only renderer path (`buildCanonicalChatEnvelopes`) — this is the target.
-- The `chat-session-reducer` seq-ordered timeline — directly maps to the "event log projection" principle.
+## Target shape (per north star + Foundation Decisions)
+
+The north star (`unified-process-supervision-2026-06-02.md §2`): **chat is a pure view over a durable append-only event log; the UI shell owns nothing and reattaches to the Brain.**
+
+**What stays:** the `orchestrator_sessions` table (source of truth for conversation identity and JSONL cursor) · the `live_outbox`-driven title and ask-shadow flow (already correct) · `rowPolicy` / `chat-policy.ts` as the single suppression table · the canonical JSONL-only renderer path (`buildCanonicalChatEnvelopes`) · the seq-ordered timeline in `chat-session-reducer`.
 
 **What changes:**
-- Today the replay source is an on-disk `jsonl-events.jsonl` file written by `PtySession`'s tailer (Brain-side, file-based). In the target, the **Store** is the append-only event log in SQLite; replay becomes a query over that log, not a file read. The `session-replay` WS envelope becomes a query result rather than a file scan.
-- The `ConversationSendService`'s `RuntimeTurnPort` today reaches into `ProjectRuntime`→`InteractiveSession`. After Steps 4–5 (`unified-process-supervision §9`), the orchestrator session moves to the Engine, so the send path adapts: the Brain routes the send to the Engine rather than calling into a Brain-owned `PtySession` directly.
-- `post_turn_summaries` — write path stays; the missing read surface (no UI) gets built as part of the slow migration.
-- The legacy render path (frozen `type:'event'` dual-source) gets deleted once Stage 5/6 of the chat-canonical redesign validates the canonical path. No behavioral change — the canonical path is default-on.
+- **Replay source moves to the DB.** Today `session-replay.ts` reads a file (`jsonl-events.jsonl`) written by the Brain's tailer. In the target, events are the append-only event log in SQLite; replay is a DB query. Slice-3 work (same ledger row as `workflow_run_events`).
+- **Send path re-routes.** `ConversationSendService` today reaches into `ProjectRuntime` → `InteractiveSession`. After Steps 4–5, the orchestrator session moves to the Engine, and the send path adapts: the Brain routes the send to the Engine rather than into its own PTY.
+- **Post-turn summaries get a read surface.** Write path stays; UI to be built in the slow migration.
+- **Legacy render path deleted.** The `type:'event'` dual-source path in `useChatRenderItems.ts` is frozen as A/B baseline. Once the canonical path has enough production time, the legacy branch is deleted (one-path rule).
 
-**Consolidation-ledger verdict (`consolidation-ledger-2026-06-02.md`):**
-- No explicit row for conversation/chat in the ledger's "Sources of truth" section, but `orchestrator_sessions` is listed as KEEP-as-truth (§ Sources of truth, V7). The chat rendering subsystem itself is UI-layer and falls under "pure view" — nothing to consolidate, only the file-based replay source to migrate to the DB event log (Slice-3 work, same row as `workflow_run_events`).
+☠ `POST /api/projects/:projectId/channel-send` — proxies a test message to the channel server. **Sentenced FD-3** (removed along with the channel server).
 
 ---
 
 ## Known issues / scar tissue
 
-### Dual-stream render identity (legacy path — historical)
-The legacy path accumulated both `type:'event'` hook envelopes AND `type:'jsonl'` JSONL envelopes for the same turn. To avoid remount flicker, the surviving JSONL envelope had to inherit the hook envelope's array index via a `replacedBy` map. Getting the keying wrong caused the chat to "eat up" (remount flicker / lost messages). Burned twice (memory: `[PC-PTY dual-stream render identity]`). The canonical path (`buildCanonicalChatEnvelopes`) eliminates this entirely by accepting only `jsonl` and `ask` — no hook `event` content, no dedup problem. `replacedBy` is deleted from the live code.
+**Dual-stream render identity (the "chat eaten up" bug — legacy path, historical).** The legacy render path combined hook `event` envelopes AND JSONL envelopes for the same turn. To avoid remount flicker, JSONL envelopes had to inherit the hook's array index via a `replacedBy` map. Getting the keying wrong caused the whole chat to visually swallow itself mid-render. Burned twice. The canonical path eliminates this entirely by accepting only `jsonl` and `ask` — no hook content, no dedup problem. `replacedBy` is deleted from live code. (Memory: `[PC-PTY dual-stream render identity]`.)
 
-### CC queue protocol shift (tailer)
-CC ≥2.1 uses `remove` (not just `dequeue`) on queue-consume; queued commands persist as `type:"attachment"` with `attachment.type === "queued_command"`, not as plain user rows. The JSONL tailer must handle both halves or the send-queue UX silently breaks (memory: `[CC ≥2.1 queue protocol shift]`). The `normalizeJsonlEnvelope` already routes `jsonl-queue-enqueue` / `jsonl-queue-dequeue` kinds — confirm the tailer's parsing matches CC's current emit shape.
+**Legacy render path is a one-path violation.** The canonical path is the one path. The legacy `type:'event'` branch is frozen in `useChatRenderItems.ts` as an A/B baseline but has not been deleted yet. Every day it stays is a day the two paths can diverge. Delete when the acceptance gate is decided (see Decisions below).
 
-### Replay source is a file, not a DB query
-`session-replay.ts` does synchronous `readFileSync` on `jsonl-events.jsonl`. This works today but is fragile: path discovery happens in the brain, the file is written by the Engine's tailer, and the coupling relies on the file being present and complete. Any race between the tailer write and the replay read can yield a partial checkpoint. The target (DB event log as truth) removes this.
+**Replay source is a file, not a DB query.** `session-replay.ts` does `readFileSync` on `jsonl-events.jsonl`. There's a race window between the tailer writing the file and the replay reading it — a partial checkpoint is possible. Target: DB query removes this. (Slice-3.)
 
-### Legacy `events.jsonl` fallback
-For sessions created before Section 23, replay falls back to `events.jsonl` (the hook-written file). These sessions render in "some shape" but not with the full canonical JSONL types. There is no migration path — once a session predates 23.1, it stays on the legacy format.
+**CC ≥2.1 queue protocol shift.** CC uses `remove` (not `dequeue`) on queue consume; queued commands appear as `type:"attachment"` with `attachment.type === "queued_command"`, not plain user rows. `normalizeJsonlEnvelope` routes `jsonl-queue-enqueue` / `jsonl-queue-dequeue` kinds — confirm the tailer's parsing matches CC's current emit shape. (Memory: `[CC ≥2.1 queue protocol shift]`.)
 
-### Session title announced outside txn (historical — fixed)
-The old path called a direct WS broadcast for `session-title-updated` inside or adjacent to the DB write. The current `session-title-writer.ts` correctly writes to `live_outbox` inside the transaction and relies on the relay to fan it post-commit. The comment in the file notes the prior anti-pattern explicitly.
+**`post_turn_summaries` is write-only.** Useful per-turn metadata accumulates invisibly — no UI reads it.
 
-### `post_turn_summaries` — write-only today
-The table is populated on every `jsonl-post-turn-summary` event. No UI surface reads it yet (deferred per buildout note in `post-turn-summaries.ts:1`). Useful metadata is accumulating invisibly.
+**Pre-Section-23 sessions render in degraded form.** The `events.jsonl` fallback for old sessions lacks the full canonical JSONL types. No migration path exists.
+
+**`SUPPRESSED_TOOLS` duplicated in two places.** `toolGrouping.ts:20` and `chat-policy.ts:36` both define the same set. Stage 3 of the redesign deletes `toolGrouping`'s copy. Until then, they can silently diverge.
 
 ---
 
-## Open questions
+## Decisions & open questions
 
-1. **When does the canonical render path become the only path?** The legacy path is "frozen as A/B baseline" in `useChatRenderItems.ts:126`. Once the canonical path has enough production time, the legacy branch should be deleted (one-path rule). What is the acceptance gate?
+**For Emerson (product calls):**
 
-2. **After-seq fetch on reconnect** — the WS handler issues `getSessionEventsAfter(projectId, sessionId, highWaterSeq)`. What happens if `highWaterSeq` is stale from a prior session that was resumed? The reducer resets `highWaterSeq` to 0 on `new-session` but not on `resume`. Potential for a missed-events window if the reconnect fires before the replay lands. (Unverified — inspect `use-project-ws.ts` reconnect sequence.)
+1. **What should post-turn summaries show?** The data is there after every turn — context window usage, a short summary, something else? Needs a product decision before the read surface is built.
+2. **What is the acceptance gate for deleting the legacy render path?** The canonical path is on by default. Once we're confident there are no regressions (how long? which sessions?), the old branch should be removed. The one-path rule demands it.
+3. **Should old sessions (pre-Section 23) ever be migrated to the canonical format?** Today they render in degraded shape forever.
 
-3. **`rowPolicy` vs `normalizeJsonlEnvelope` sync** — the comment in `useChatRenderItems.ts:78` says their hidden sets are "proven equal" by `chat-policy.test.ts`. That test is the guard; confirm it runs in CI.
+**Technical:**
 
-4. **`SUPPRESSED_TOOLS` duplication** — `toolGrouping.ts:20` and `chat-policy.ts:36` both define the same set. Stage 3 of the redesign deletes `toolGrouping`'s copy. Track so it doesn't silently diverge first.
-
-5. **Replay source migration** — moving from file-based `jsonl-events.jsonl` to a DB query is Slice-3 work (`workflow_run_events` row in the ledger). What is the sequencing relative to Step 6 (converge lifecycle primitive) and the Engine absorbing the tailer? The tailer writes the file; once the Engine owns it, the write path changes, and the Brain's replay route must follow.
+- After-seq fetch on reconnect: `use-project-ws.ts` fetches `seq > highWaterSeq` on reconnect. If `highWaterSeq` is stale from a prior session that was then resumed, there may be a missed-events window before the replay lands. (Unverified — inspect the reconnect sequence.)
+- `rowPolicy` vs `normalizeJsonlEnvelope` sync: `useChatRenderItems.ts` notes their hidden sets are "proven equal" by `chat-policy.test.ts`. Confirm that test runs in CI.
+- Replay source migration (file → DB query) sequencing: the tailer writes the file; once the Engine owns the tailer (Steps 4–6), the write path changes and the Brain's replay route must follow. What order?

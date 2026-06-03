@@ -2,346 +2,220 @@
 
 > **Role:** Brain (control plane) — cross-cutting
 > **Status:** as-built snapshot — 2026-06-03
-> **Code anchors:**
-> `apps/server/src/services/pause-resume.ts`,
-> `apps/server/src/services/agent-delivery.ts`,
-> `apps/server/src/services/apply-deliverable-store.ts`,
-> `apps/server/src/services/agent-verification.ts`,
-> `apps/server/src/services/agent-verification-review.ts`,
-> `apps/server/src/services/auto-advance-done.ts`,
-> `apps/server/src/services/ask-shadow.ts`,
-> `apps/server/src/services/failure-policy.ts`,
-> `packages/db/src/repos/pending-asks.ts`,
-> `packages/db/src/repos/pending-interactions.ts`,
-> `packages/db/src/repos/agent-inbox.ts`,
-> `packages/db/src/repos/failed-run-dismissals.ts`,
-> `packages/contracts/src/pending-asks.ts`,
-> `packages/contracts/src/pending-interactions.ts`,
-> `packages/contracts/src/runtime-hook-ask.ts`,
-> `packages/domain/src/subagent-failure.ts`
+> **Code anchors:** `apps/server/src/services/pause-resume.ts` · `agent-delivery.ts` · `apply-deliverable-store.ts` · `agent-verification.ts` · `agent-verification-review.ts` · `auto-advance-done.ts` · `ask-shadow.ts` · `failure-policy.ts` · `packages/db/src/repos/pending-asks.ts` · `pending-interactions.ts` · `agent-inbox.ts` · `failed-run-dismissals.ts` · `packages/contracts/src/pending-asks.ts` · `pending-interactions.ts` · `runtime-hook-ask.ts` · `packages/domain/src/subagent-failure.ts`
+
+---
 
 ## What it is (plain English)
 
-This subsystem is how an agent asks a question and waits for an answer, how it signals "I'm done"
-by handing over a result, and how that result gets approved or rejected before the work item
-advances. It is the explicit-signal layer — the three edges where the agent pauses (waiting on a
-human or orchestrator), completes (by delivering something), or gets reviewed (approved/rejected
-with an optional retry loop).
+An agent's work life has exactly three explicit moments where something decisive happens: it **asks a question and waits**, it **hands in its finished work**, or someone **reviews that work and approves or sends it back**. This subsystem owns all three. Nothing else is allowed to declare an agent "done" — any run that ends without a hand-in is a typed failure with a stated reason, not a silent disappearance.
+
+---
 
 ## What it's supposed to do (intent)
 
-Own every **positive receipt** in the agent lifecycle. Specifically:
+Own every **positive receipt** in the agent lifecycle. Three laws:
 
-1. **Pending asks** — when an agent calls `pc_ask_user` / `pc_ask_orchestrator` / `pc_request_approval`,
-   pause the run durably, write the question, and resume (same run ID) exactly once when an answer
-   arrives.
-2. **Deliverable submission** — when an agent calls `pc_submit_deliverable`, accept the output, write
-   it to the declared store, and mark that run as the sole "good done" signal.
-3. **Verification & review** — run acceptance criteria (tier-1 auto-pass/fail) or park the contract
-   for a human/orchestrator to approve or reject; on approve, advance the work item to complete; on
-   reject, spawn a continuation with the feedback.
+1. **Pause on ask** — when an agent asks a question (to a human or the orchestrator), the system durably parks the run and waits; it resumes exactly once when an answer arrives, on the same run.
+2. **Deliver to complete** — calling `pc_submit_deliverable` is the **only** good "done." The result is stored where the contract says it should go, then verification runs.
+3. **Review gates completion** — if the work needs a human or orchestrator sign-off, it parks at a review. Approve → the card moves; reject → the feedback goes back to the agent for a retry.
 
-Nothing else in the system is allowed to declare an agent "done." Any ending that isn't
-`pc_submit_deliverable` is a typed failure with a reason.
+Nothing else can end a run as "complete."
 
-## How it works today (as-built)
+---
 
-### 1. Pending-ask flow
+## The parts (every component, plain English)
 
-**Entry point:** MCP tool `pc_ask_user` / `pc_ask_orchestrator` / `pc_request_approval` fires on the
-agent's MCP child process → routes to `recordExplicitPause` in `pause-resume.ts`.
+### 1. Asking a question and waiting (pending asks)
 
-**Steps:**
+When an agent calls `pc_ask_user`, `pc_ask_orchestrator`, or `pc_request_approval`, the system:
 
-- Looks up the agent run in `ActiveRunRegistry` (identity + metadata only).
-  `pause-resume.ts:133`
-- State decision uses the **reconciled DB row** (`agent_runs_v2.status`), not the in-memory handle,
-  to avoid the early-ask race where the row still reads `queued/spawning`.
-  `pause-resume.ts:147–160`
-- If the DB row is still pre-running and a `hostRunState` reader is wired, does an on-demand host
-  round-trip to get a fresh state before rejecting.
-  `pause-resume.ts:152–158`
-- Calls `pauseAgentRun` (gateway transaction): writes the `pending_asks_v2` row (status=`open`),
-  flips `agent_runs_v2` to `paused`, and writes the durable `agent.run.changed (reason:'paused')`
-  fact to `live_outbox` — all in one transaction.
-  `pause-resume.ts:174–192`
-- **Awaits** `entry.run.markPaused(pendingAskId)` on the runtime handle. The await is critical:
-  for host-backed runs it blocks until the host applies `paused` before the MCP tool call returns.
-  Without it, the host could tail the turn-end and close the run before the pause landed.
-  `pause-resume.ts:198`
-- Delivers the `agent-asks-*` envelope to the dispatcher's orchestrator session via the mailbox
-  (`deliverAgentEnvelope`). The mailbox is the durable, single delivery door — there is no Channel
-  fallback.
-  `pause-resume.ts:218–235`, `agent-delivery.ts:86–117`
+- Looks up the run in the **ActiveRunRegistry** (the in-memory list of live runs). (`pause-resume.ts:133`)
+- Reads the run's real status from the **database row**, not from memory — this prevents a race where the row still shows `queued` on an agent that asks a question the instant it spawns. If the row is behind, the system does a live read from the host to catch up before deciding. (`pause-resume.ts:147–160`, `152–158`)
+- Writes the question durably and flips the run to `paused` — all in one atomic write. The run's "paused" fact is also written to the live-event log, so the UI and orchestrator hear about it immediately. (`pause-resume.ts:174–192`)
+- Waits for the host to acknowledge the pause before the MCP tool call returns. This prevents the host from reading a "run ended" signal before the pause has landed. (`pause-resume.ts:198`)
+- Delivers the question to the orchestrator's mailbox (the durable inbox) — one door, no fallback. (`pause-resume.ts:218–235`, `agent-delivery.ts:86–117`)
 
-**State stored:** `pending_asks_v2` row (status=`open`), `pending-asks.ts:35–55`.
-Kinds: `orchestrator` | `user` | `approval`. The ask row carries `agentRunId`, `ccSessionId`,
-`promptBody`, optional `options[]`.
+**The stored question** (`pending_asks_v2` table, `pending-asks.ts:35–55`) has a kind (`orchestrator`, `user`, or `approval`), the run it belongs to, the CC session ID, the question text, and an optional list of choices.
 
-**Resume path** (`answerPendingAsk`, `pause-resume.ts:280`):
+**Answering** (`pause-resume.ts:280`):
+- Rejects if the question is already answered or cancelled. (`pause-resume.ts:295–308`)
+- Checks the DB row is still `paused` before doing anything. (`pause-resume.ts:326–333`)
+- Flips `open → answered`, records the answer, and marks the run `spawning` (about to resume) — one atomic write. (`pause-resume.ts:345–356`)
+- The `WHERE status='open'` guard makes re-delivered events (JSONL replay) a no-op — the same answer can arrive twice safely. (`pending-asks.ts:125–137`)
+- Tells the runtime handle to resume with the answer. If the host says "I don't have this run paused," the run is failed rather than left stranded. (`pause-resume.ts:376–414`)
 
-- Reads the ask row; rejects if already `answered` or `cancelled`. `pause-resume.ts:295–308`
-- Gates on the DB row being `paused` (same reconciled-row pattern).
-  `pause-resume.ts:326–333`
-- Calls `answerAndResumeAgentRun` (gateway tx): atomic `open→answered` flip + persist `spawning` +
-  pod-revision drift fields + `agent.run.changed (reason:'resumed')` fact, in one transaction.
-  `pause-resume.ts:345–356`
-- The `WHERE status='open'` guard makes replayed JSONL re-delivery a no-op.
-  `pending-asks.ts:125–137`
-- Calls `entry.run.resumeWithAnswer(answer)` on the runtime handle. A `not-resumable` reply
-  (host didn't have the run paused) finalises the run as `failed` rather than leaving it stranded.
-  `pause-resume.ts:376–414`
+**Cancelling** (`pause-resume.ts:443`): flips `open → cancelled` and fails the run in one write — works even if no registry handle exists (e.g. a run that was paused before a restart). (`pause-resume.ts:469–479`)
 
-**Cancel path** (`cancelPendingAsk`, `pause-resume.ts:443`): atomic `open→cancelled` + finalises
-the run `cancelled` in one gateway transaction, even when no registry handle exists (phantom
-paused run). `pause-resume.ts:469–479`
+**Continuation** (`pause-resume.ts:547`): a distinct concept called by `pc_continue_agent`. When a parent run has *finished* and you want to re-engage the same agent with follow-up, this mints a new run (with a `continues:<parentRunId>` link) after confirming the parent is terminal, its on-disk conversation file still exists, and no sibling continuation is already running. (`pause-resume.ts:551–635`)
 
-**Continuation path** (`continueAgent`, `pause-resume.ts:547`): a distinct primitive (called by
-`pc_continue_agent`). Validates the parent run is terminal, that its on-disk JSONL still exists
-(session-expiry guard), that no sibling continuation is already in flight, then mints a new
-`agent_runs_v2` row with `continues:<parentId>`. The caller constructs and registers the new
-`AgentRun`. `pause-resume.ts:551–635`
+---
 
-### 2. Ask-shadow (runtime-hook asks, separate path)
+### 2. The orchestrator's own questions (ask-shadow, separate path)
 
-`AskShadow` in `ask-shadow.ts` is a **side-write** around the unmodified `/api/ask` blocking route
-(orchestrator hook). It writes `pending_interactions` rows (kind=`runtime-hook-ask`) as durable
-inspection records. This is NOT the agent `pending_asks` path — it tracks the orchestrator's own
-blocking hook asks. The in-memory resolver in `chat-bridges/routes.ts` remains the authority; the
-shadow is best-effort and never breaks the blocking path. `ask-shadow.ts:35–92`
+The orchestrator has its own blocking "ask" mechanism — the `/api/ask` route — that is completely separate from the agent pending-asks above. `AskShadow` (`ask-shadow.ts`) writes a mirrored record to `pending_interactions` (kind = `runtime-hook-ask`) as a durable inspection trail. The in-memory resolver remains the authority; this shadow is best-effort and never interrupts the blocking path. (`ask-shadow.ts:35–92`)
 
-Boot sweep: `sweepOrphanedPendingInteractions` expires any `open` interaction rows that survived a
-process restart. `ask-shadow.ts:89–91`
+On boot, any `open` interaction rows from a previous process are expired. (`ask-shadow.ts:89–91`)
 
-### 3. Deliverable submission
+---
 
-**Entry point:** agent calls `pc_submit_deliverable` → MCP child → server. The terminal-effects
-pipeline (`agent-run-terminal-effects.ts`) is the authoritative one-stop handler; deliverable
-application runs inside it before verification.
+### 3. Handing in finished work (deliverable submission)
 
-**Store application** (`applyDeliverableStore`, `apply-deliverable-store.ts:56`):
+When an agent calls `pc_submit_deliverable`, the work goes through the **terminal-effects pipeline** (`agent-run-terminal-effects.ts`) — the single authority for anything that happens when a run ends. Store-writing and verification both run inside it.
 
-- Only prose-typed contracts with non-empty `text` trigger a write.
-- `store` directive (from the contract's `expectedOutput.store`) resolves to one of:
-  `contract` (text stays on the contract row), `work_item_body` (writes `work_items.body`),
-  `attachment` (creates an attachment row), `repo_file` (writes to disk inside the worktree).
-- Default: `work_item_body` when a work item is linked, else `attachment`.
-  `apply-deliverable-store.ts:143–148`
-- Path-containment guard on `repo_file`: uses `path.relative` + rejects `..` escapes.
-  `apply-deliverable-store.ts:186–189`
-- Returns a typed `StoreApplyResult` — failures are `store-target-missing`,
-  `store-path-invalid`, `store-write-failed`; all surfaced in-band so the agent gets a real
-  error. `apply-deliverable-store.ts:29–42`
+**Where the result lands** (`apply-deliverable-store.ts:56`) is determined by the contract's `expectedOutput.store` setting:
 
-### 4. Verification (tier-1 auto)
+| Store directive | Where it goes | Notes |
+|---|---|---|
+| `contract` | Stays on the contract row | The result is accessible to anything that reads the contract |
+| `work_item_body` | Written to `work_items.body` | ⚠️ This column is also read by the workflow engine as `$root.output` — don't break this write without a guard test |
+| `attachment` | Creates a new attachment row | Default when a work item is linked |
+| `repo_file` | Written to a file in the agent's worktree | Path-containment guard: no `..` escapes allowed |
 
-`runVerificationOnTerminal` in `agent-verification.ts:124`.
+> **Tie-in:** the `store` directive is part of the **Work Contract** — the record that defines an agent's assignment and expected output. Where deliverables live is tracked as an open decision in the Foundation Decisions backlog (see §"Decisions & open questions").
 
-- No `contractId` → returns null (no-op). `agent-verification.ts:128`
-- `terminalStatus==='failed'` → immediately rejects the contract (no predicate eval).
-  `agent-verification.ts:147–163`
-- `terminalStatus==='cancelled'` → no automatic contract update; orchestrator owns next move.
-  `agent-verification.ts:165–167`
-- Tier `orchestrator-review` or `human-review` → parks contract at `verificationStatus='pending'`
-  (a tier-2/3 hold). `agent-verification.ts:171–187`
-- Tier `auto`, no criteria, evidence-requiring output kind (action/external/repo) → escalates to
-  review instead of passing open (fail-closed). `agent-verification.ts:194–215`
-- Tier `auto`, no criteria, not evidence-requiring → accepts directly.
-  `agent-verification.ts:219–220`
-- Tier `auto` with criteria → evaluates predicates via `evaluateAcceptance`. Pass calls
-  `acceptContract`; fail persists the per-predicate failure list as JSON.
-  `agent-verification.ts:257–290`
+Only prose-typed contracts with non-empty text trigger a write. Failures come back as typed errors (`store-target-missing`, `store-path-invalid`, `store-write-failed`) — the agent gets a real error, not a silent drop. (`apply-deliverable-store.ts:29–42`, `143–148`, `186–189`)
 
-**On accept** (`acceptContract`, `agent-verification.ts:296`): flips contract to `passed`, then (if
-a work item is linked) calls `applyRunOutcome(wiId, 'complete', ...)` and
-`autoAdvanceToDoneStage`. Auto-advance moves the card to the project's `isDone` stage if one
-exists and the card isn't already there. `auto-advance-done.ts:22–35`
+---
 
-**Predicate executors** (`createWorktreeExecutors`, `agent-verification.ts:347`): `fileSize`
-(worktree-scoped, same path-containment guard), `runBash` (30s SIGKILL cap, exit 124 on timeout,
-127 on error), `hasGitDiff` (porcelain status). All sandboxed to the worktree.
+### 4. Automatic acceptance check (tier-1 verification)
 
-### 5. Verification review (tier-2/3 approve/reject)
+After the deliverable is stored, `runVerificationOnTerminal` (`agent-verification.ts:124`) runs acceptance criteria against it. Think of it as a quality gate that runs automatically before a human ever sees the work.
 
-`approveAgentWorkItem` and `rejectAgentWorkItem` in `agent-verification-review.ts`.
+Rules:
+- No contract linked → skip. (`agent-verification.ts:128`)
+- Run failed → reject the contract immediately, no criteria eval. (`agent-verification.ts:147–163`)
+- Run cancelled → no automatic update; the orchestrator decides next. (`agent-verification.ts:165–167`)
+- Review tier (`orchestrator-review` or `human-review`) → park the contract at `pending`, wait for a human/orchestrator decision (tier 2/3 below). (`agent-verification.ts:171–187`)
+- Auto tier, no criteria, but the output kind requires proof (e.g. "wrote a file", "external action") → escalate to review rather than auto-pass. Fail-closed: evidence-requiring work can't pass with no evidence. (`agent-verification.ts:194–215`)
+- Auto tier, no criteria, no evidence required → accept directly. (`agent-verification.ts:219–220`)
+- Auto tier with criteria → evaluate the predicates. Pass → accept; fail → persist which predicates failed. (`agent-verification.ts:257–290`)
 
-**Shared guard** (`loadVerifyingContract`): reads the work item, finds the newest contract with
-`status='verifying'`, throws `VerificationReviewError` on any miss.
-`agent-verification-review.ts:225–241`
+**When accepted** (`acceptContract`, `agent-verification.ts:296`): the contract flips to `passed`, the work item moves to `complete`, and `autoAdvanceToDoneStage` moves the card to the project's "done" column if one exists and the card isn't already there. (`auto-advance-done.ts:22–35`)
+
+**Predicate kinds** (all sandboxed to the agent's worktree): `fileSize` check, `runBash` (30-second hard kill), `hasGitDiff`. (`agent-verification.ts:347`)
+
+---
+
+### 5. Human / orchestrator review (tier-2 and tier-3)
+
+When the automatic check parks the contract for review, a human or the orchestrator sees it in their inbox and makes a decision.
+
+**Shared guard:** before approve or reject, the system reads the work item and finds the newest contract with `status='verifying'`. If it can't find one, it refuses the operation. (`agent-verification-review.ts:225–241`)
 
 **Approve** (`agent-verification-review.ts:78`):
-- Flips contract to `verificationStatus='passed'`.
-- Roll-up: `applyRunOutcome(wiId, 'complete')` + `autoAdvanceToDoneStage`.
-- No new dispatch; the producer run is already terminal.
+- Flips the contract to `passed`.
+- Marks the work item `complete` and moves the card.
+- No new agent is dispatched — the original run already finished.
 
 **Reject** (`agent-verification-review.ts:157`):
-- Requires non-empty `feedback`; throws `feedback-required` otherwise.
-- Requires `contract.agentRunId`; throws `no-assigned-run` if absent.
-- Flips contract to `verificationStatus='failed'`, notes=feedback.
+- Requires non-empty feedback text — refuses with `feedback-required` if absent.
+- Requires the contract to have a linked agent run — refuses with `no-assigned-run` if absent.
+- Flips the contract to `failed`, records the feedback.
 - Rolls the work item back to `in-progress`.
-- Builds a continuation input: `"Reviewer rejected … Address the feedback, then re-submit via
-  pc_submit_deliverable"`. `agent-verification-review.ts:199`
-- Calls `dispatchContinueAgent` to spawn a `--resume` continuation with the feedback as the
-  first user turn.
+- Builds a continuation prompt: "Reviewer rejected. Address the feedback, then re-submit via `pc_submit_deliverable`." (`agent-verification-review.ts:199`)
+- Dispatches a `--resume` continuation with the feedback as the first message in the conversation.
 
-### 6. Failed-run dismissals
+---
 
-`failed-run-dismissals.ts`: tiny table (`run_id` PK + `dismissed_at`), keyed by `workflow_runs_v2`
-ID. Drives the Activity Panel's "Failed recently" region — user can dismiss a row and it won't
-re-appear. Idempotent insert (existing rows are not updated).
-`failed-run-dismissals.ts:38–50`
+### 6. Dismissing failed-run notices
 
-The table FK was re-pointed from the v1 workflow runs table to `workflow_runs_v2` in migration
-0025.
+A small table (`run_id` PK + `dismissed_at`) keyed by workflow run ID. Drives the Activity Panel's "Failed recently" region — when a user dismisses a row it disappears and won't come back. Writes are idempotent. (`failed-run-dismissals.ts:38–50`)
 
-### 7. Failure policy
+The table's foreign key was updated from the old v1 workflow runs table to `workflow_runs_v2` in migration 0025.
 
-`failure-policy.ts`: classifies thrown errors as `transient` (db-busy, host-blip, network) or
-`terminal`. Used by cold-load routes to answer `503 + Retry-After` instead of a blanket 500.
-Not the agent-run failure taxonomy — that lives in `packages/domain/src/subagent-failure.ts`
-(`SubagentFailureCause`: `agent-self-failed`, `agent-returned-without-closing`, `dispatch-error`,
-`timeout`).
+---
 
-### 8. Agent-inbox (legacy path — gated for deletion)
+### 7. Error classification (failure policy)
 
-`packages/db/src/repos/agent-inbox.ts` and the `agent_inbox` / `agent_delivery_audit` tables are
-the **pre-mailbox** delivery system. The TS repo has zero live callers in the server. The legacy
-Channel transport was deleted in slice 017 Phase C; `deliverAgentEnvelope` now writes only to the
-mailbox. `agent-delivery.ts:1–11`
+`failure-policy.ts` classifies thrown errors as `transient` (database busy, host blip, network) or `terminal`. Cold-load routes use this to reply `503 + Retry-After` instead of a blanket 500.
 
-The tables are NOT yet deleted because `templates/.claude/hooks/inbox-drain.cjs` still reads/writes
-them via raw SQL on `UserPromptSubmit` (lines 66/74/77). Ledger verdict: refactor that hook to the
-mailbox, archive rows, then drop the tables.
-`consolidation-ledger-2026-06-02.md §2 Dead/legacy`
+This is **not** the agent-run failure taxonomy. That lives in `packages/domain/src/subagent-failure.ts` and names the specific causes: `agent-self-failed`, `agent-returned-without-closing`, `dispatch-error`, `timeout`.
 
-## Integrations (how it connects)
+---
+
+### 8. Legacy ask path — gated for deletion ☠
+
+`packages/db/src/repos/agent-inbox.ts` and the `agent_inbox` / `agent_delivery_audit` tables are the pre-mailbox delivery system. The TypeScript code has zero live callers. The old Channel transport was deleted in slice 017 Phase C; the mailbox is now the one delivery door. (`agent-delivery.ts:1–11`)
+
+These tables cannot be dropped yet because `templates/.claude/hooks/inbox-drain.cjs` still reads and writes them via raw SQL on every `UserPromptSubmit` (`lines 66/74/77`). Deleting the tables without migrating that hook will break orchestrator delivery.
+
+Ledger verdict: migrate hook → mailbox first, then archive rows, then drop tables. (`consolidation-ledger-2026-06-02.md §2 Dead/legacy`)
+
+---
+
+## How it connects
 
 **Depends on:**
-- `agent-run-terminal-effects.ts` — the one terminal authority; calls `applyDeliverableStore`,
-  `runVerificationOnTerminal`, and the mailbox delivery inside the terminal pipeline.
-- `ActiveRunRegistry` (`agent-active-runs.ts`) — run identity lookup + the run-keyed waiter
-  that fires on deliverable submit.
-- `MailboxService` (`@pc/app-services`) — the durable delivery door for all agent→orchestrator
-  envelopes (asks, completions, failures).
-- `ContractService` (`@pc/app-services`) — reads + writes the contract row for verification
-  status/notes.
-- `@pc/db` — `pending_asks_v2`, `pending_interactions`, `agent_inbox` (legacy), `agent_runs_v2`,
-  `agent_contracts`, `work_items`, `live_outbox`.
+- `agent-run-terminal-effects.ts` — the one terminal authority; calls `applyDeliverableStore`, `runVerificationOnTerminal`, and mailbox delivery inside the terminal pipeline.
+- `ActiveRunRegistry` (`agent-active-runs.ts`) — run identity lookup + the run-keyed settlement waiter that fires on deliverable submit.
+- `MailboxService` (`@pc/app-services`) — the durable delivery door for all agent→orchestrator envelopes (asks, completions, failures). No fallback.
+- `ContractService` (`@pc/app-services`) — reads and writes the contract row for verification status and notes.
+- `@pc/db` — `pending_asks_v2`, `pending_interactions`, `agent_inbox` (legacy), `agent_runs_v2`, `agent_contracts`, `work_items`, `live_outbox`.
 
 **Used by:**
-- MCP tool implementations (`pc_ask_user`, `pc_ask_orchestrator`, `pc_request_approval`,
-  `pc_submit_deliverable`, `pc_answer_pending`, `pc_resolve_work_item`) — all route through this
-  subsystem's service functions.
-- HTTP routes (approve/reject/answer endpoints) — call `approveAgentWorkItem`,
-  `rejectAgentWorkItem`, `answerPendingAsk`.
-- `agent-run-terminal-effects.ts` — calls `applyDeliverableStore` and `runVerificationOnTerminal`
-  from inside the terminal handler.
+- MCP tool implementations (`pc_ask_user`, `pc_ask_orchestrator`, `pc_request_approval`, `pc_submit_deliverable`, `pc_answer_pending`, `pc_resolve_work_item`).
+- HTTP routes (approve / reject / answer endpoints).
+- `agent-run-terminal-effects.ts` — calls `applyDeliverableStore` and `runVerificationOnTerminal` from inside the terminal handler.
 
-**Contracts / events at edges:**
-- `pending_asks_v2` table (kinds: `orchestrator | user | approval`, statuses: `open | answered | cancelled`)
-- `pending_interactions` table (kinds include `runtime-hook-ask`; statuses: `open | answered | cancelled | expired | failed`)
-- `agent.run.changed (reason:'paused' | 'resumed')` live event — written to `live_outbox` in the
-  gateway transaction, drained to WS by the relay.
-- `pending-interaction.changed` live event — written on every status flip.
-- Mailbox messages (kinds: `agent-question`, `agent-approval`, `agent-terminal`) — the durable
-  orchestrator-session inbox.
-- `MailboxMessageKind` / `PendingAskDto` / `PendingInteractionDto` from `@pc/contracts`.
+**Live events at the boundary:**
+- `agent.run.changed (reason:'paused' | 'resumed')` — written to `live_outbox` in the gateway transaction.
+- `pending-interaction.changed` — written on every status flip.
+- Mailbox messages (kinds: `agent-question`, `agent-approval`, `agent-terminal`) — durable orchestrator inbox.
+- Contracts: `PendingAskDto` / `PendingInteractionDto` / `MailboxMessageKind` from `@pc/contracts`.
 
-## Target shape (per north star)
+---
 
-The positive-signal model here **is** the north star. The three transitions in §4 of
-`unified-process-supervision-2026-06-02.md` map exactly onto this subsystem:
+## Target shape (per north star + Foundation Decisions)
 
-| Transition | Driver | This subsystem's role |
+The positive-signal model here **is** the north star. The three state transitions in §4 of `unified-process-supervision-2026-06-02.md` map exactly onto this subsystem:
+
+| Transition | What triggers it | This subsystem's role |
 |---|---|---|
 | `working → waiting` | `pc_ask_*` | `recordExplicitPause` — KEEP |
 | `working → done(completed)` | `pc_submit_deliverable` | deliverable receipt → verification → advance — KEEP |
-| `* → done(failed: reason)` | process exit / timeout | typed-failure path already in `agent-run-terminal-effects`; this subsystem handles the `failed` verification branch |
+| `* → done(failed: reason)` | process exit / timeout | typed-failure path in `agent-run-terminal-effects`; the `failed` verification branch lives here |
 
-**Keep as-is:**
-- `pause-resume.ts`, `apply-deliverable-store.ts`, `agent-verification.ts`,
-  `agent-verification-review.ts`, `auto-advance-done.ts` — these ARE the positive signals.
-- `pending_asks_v2` table + repo — the pause/resume state is correctly DB-authoritative.
-- Mailbox-only delivery in `agent-delivery.ts` — the old Channel fallback was correctly deleted.
+**Keep as-is:** `pause-resume.ts`, `apply-deliverable-store.ts`, `agent-verification.ts`, `agent-verification-review.ts`, `auto-advance-done.ts` — these are the positive signals. `pending_asks_v2` table + repo — pause/resume state is correctly DB-authoritative. Mailbox-only delivery in `agent-delivery.ts` — the old Channel fallback was correctly deleted.
 
 **Changes needed:**
-- In the Step 2 / one-reconciler world, `recordExplicitPause`'s early-ask workaround (the
-  on-demand host round-trip at `pause-resume.ts:152–158`) can be retired once the reconciler keeps
-  the DB row in sync continuously.
-- The agent_inbox tables + `inbox-drain.cjs` hook must be migrated to the mailbox and deleted
-  (ledger item 9, `consolidation-ledger §6`). Currently the only blocker is the hook script.
-- Workflow-engine redesign (`workflow-engine-first-principles-redesign-2026-06-02.md §1.1`): the
-  "review step" (human | orchestrator worker) maps onto a durable inbox pause — same contract,
-  same completion=delivery rule. Today's `pending_interactions` table (kind `workflow-orchestrator-review`,
-  `workflow-human-review`) is the home for this when the new engine ships.
-- `SubagentFailureCause` / `SubagentFailureSignal` in `packages/domain/src/subagent-failure.ts`
-  reference the old v1 workflow node vocabulary (`pc_node_failed`, `pc_complete_node`, `subagent:`
-  node field). These are legacy shapes from before the first-principles redesign and should be
-  retired when the new workflow executor lands.
+- Once the Step 2 one-reconciler keeps the DB row continuously current, the early-ask workaround (on-demand host round-trip at `pause-resume.ts:152–158`) can be retired.
+- `agent_inbox` tables + `inbox-drain.cjs` hook must be migrated to the mailbox and deleted (ledger item 9, `consolidation-ledger §6`). Only blocker: the hook script.
+- Workflow review steps (`pending_interactions` rows of kind `workflow-orchestrator-review`, `workflow-human-review`) are the durable inbox for the new engine's review nodes. Same contract, same completion=delivery rule.
+- `SubagentFailureCause` / `SubagentFailureSignal` in `packages/domain/src/subagent-failure.ts` reference old v1 vocabulary (`pc_node_failed`, `pc_complete_node`, `subagent:` node field) from before the first-principles redesign. Retire when the new executor lands.
+
+---
 
 ## Known issues / scar tissue
 
-**1. Deliverable-completion fix landed on the wrong path (2026-06-02).**
-The original stall fix for the AHEAD card (before commit `0022872d`) wired `complete-run` only on
-the in-process dispatch path. The host-backed terminal path went through `applyHostTerminalSnapshot`
-which short-circuited on already-terminal runs and never called the settle callback — so the
-workflow's `done` promise never resolved. The fix: `applyHostTerminalSnapshot` now always routes
-through `applyAgentRunTerminalEffects` (the one terminal authority), which calls the run-keyed
-waiter. Lesson: any new "done" handling must go through the one authority, not a parallel path.
-`consolidation-ledger-2026-06-02.md §2 Terminal application`, commit `0022872d`.
+**1. Deliverable fix landed on the wrong path (2026-06-02) — the lesson is law.**
+The original stall fix wired `complete-run` only on the in-process dispatch path. The host-backed terminal path went through `applyHostTerminalSnapshot`, which short-circuited on already-terminal runs and never called the settlement callback — so the workflow's `done` promise never resolved. Fix: `applyHostTerminalSnapshot` now always routes through `applyAgentRunTerminalEffects` (the one terminal authority). **Any new "done" handling added outside that one authority will strand runs again.** Commit `0022872d`. (`consolidation-ledger-2026-06-02.md §2 Terminal application`)
 
 **2. Double-subscribe race (fixed in `40c2a91f`).**
-Before Step 1, there were two listeners racing to settle the same run: a per-run `onEvent` factory
-listener and the boot-reconcile persistent listener. Whichever won, the other's settle was silently
-dropped. The workflow's waiter wasn't run-keyed so it could only be resolved once. Fix: deleted
-the per-run factory listener (~108 lines), collapsed to one terminal authority + a run-ID-keyed
-`ActiveRunRegistry` settlement waiter (registered before start, fires exactly once).
-`consolidation-ledger-2026-06-02.md §0`, commits `40c2a91f` + `0022872d`.
+Two listeners were racing to settle the same run: a per-run `onEvent` factory listener and the persistent boot-reconcile listener. Whichever won, the other's settle was silently dropped. Fix: deleted the per-run factory listener (~108 lines), collapsed to one terminal authority + a run-ID-keyed settlement waiter in `ActiveRunRegistry` (registered before start, fires exactly once). (`consolidation-ledger-2026-06-02.md §0`)
 
-**3. Early-ask race (active workaround in pause-resume.ts).**
-An agent calling `pc_ask_*` immediately after spawn may find its DB row still at `queued/spawning`
-(the first reconcile sweep hasn't ticked yet). The current fix is an on-demand host round-trip
-(`hostRunState`) to get a fresh state. This is a code smell — the reconciler should keep the DB
-row current continuously (Step 2 work). `pause-resume.ts:152–158`.
+**3. Early-ask race (active workaround).**
+An agent that calls `pc_ask_*` immediately after spawn may find its DB row still at `queued/spawning` — the first reconciler tick hasn't run yet. Current fix: on-demand host round-trip to get a fresh state. This is a workaround; the reconciler should keep the row current continuously (Step 2). (`pause-resume.ts:152–158`)
 
-**4. Agent-inbox tables still alive despite no TS callers.**
-`packages/db/src/repos/agent-inbox.ts` has no live TS callers, but the raw SQL in
-`templates/.claude/hooks/inbox-drain.cjs:66,74,77` still reads/writes `agent_inbox` on every
-`UserPromptSubmit`. Deleting the tables without refactoring that hook will break orchestrator
-delivery. The ledger flags this as a prerequisite: refactor hook → mailbox first.
-`consolidation-ledger-2026-06-02.md §2 Dead/legacy`.
+**4. Agent-inbox tables still alive despite no TypeScript callers.**
+`packages/db/src/repos/agent-inbox.ts` has zero live TS callers, but raw SQL in `templates/.claude/hooks/inbox-drain.cjs:66,74,77` still reads/writes `agent_inbox` on every `UserPromptSubmit`. Dropping the tables without migrating that hook breaks orchestrator delivery. (`consolidation-ledger-2026-06-02.md §2 Dead/legacy`)
 
-**5. `work_items.body` dual-purpose write.**
-`applyDeliverableStore` writes prose deliverables to `work_items.body` when the contract declares
-`store: work_item_body`. The same column is read live by `dag-run-service.ts:173` to resolve
-`$root.output` workflow refs. Deleting or repurposing this write would silently break workflow
-variable resolution. Ledger: KEEP + add round-trip guard.
-`consolidation-ledger-2026-06-02.md §2 Sources of truth`.
+**5. `work_items.body` does double duty.**
+`applyDeliverableStore` writes prose deliverables to `work_items.body` when `store: work_item_body`. That same column is read by `dag-run-service.ts:173` to resolve `$root.output` workflow refs. Deleting or repurposing this write silently breaks workflow variable resolution. Ledger verdict: KEEP + add a round-trip guard test. (`consolidation-ledger-2026-06-02.md §2 Sources of truth`)
 
-**6. SubagentFailureSignal vocabulary is pre-redesign.**
-`packages/domain/src/subagent-failure.ts` references `pc_node_failed`, `pc_complete_node`, and
-the `subagent:` node field — old v1 workflow node concepts deleted in the first-principles
-redesign. The shape is not currently called from any live workflow path (the v2 executor doesn't
-use it), but it sits in the domain package as a potential confusion point (unverified whether any
-live caller remains).
+**6. `SubagentFailureSignal` vocabulary is pre-redesign. (unverified)**
+`packages/domain/src/subagent-failure.ts` references `pc_node_failed`, `pc_complete_node`, and the `subagent:` node field — concepts deleted in the first-principles redesign. The v2 executor doesn't call this shape, but it's unclear whether any live path still emits or consumes it.
 
-## Open questions
+---
 
-- **Step 2 reconciler:** once the one-loop reconciler is keeping DB rows live, can the early-ask
-  workaround (`hostRunState` on-demand round-trip) in `pause-resume.ts:152–158` be removed
-  outright, or is an on-demand read still the right design for the first-ask latency window?
-- **Inbox-drain hook migration:** what is the full replacement shape? The hook currently injects
-  pending inbox messages as the first user turn; the mailbox path delivers via an orchestrator
-  turn. Confirm the orchestrator-turn delivery produces identical timing/ordering before cutting.
-- **`SubagentFailureSignal` live callers:** confirm whether any production code path still emits
-  or consumes this shape before deleting it in the redesign cleanup pass. (The v2 executor uses
-  `pc_submit_deliverable` as the sole done signal; `pc_node_failed` is gone.)
-- **`pending_interactions` vs `pending_asks_v2` consolidation:** two separate tables track
-  open questions. `pending_asks_v2` is the authoritative agent-pause state. `pending_interactions`
-  is a richer general-purpose "open ask" surface. The workflow redesign's review steps will need
-  one of these as the durable inbox. Should they converge, or stay separate with
-  `pending_interactions` becoming the canonical surface?
-- **Verification tier surfacing in the workflow engine:** the new workflow engine's "review step"
-  (human | orchestrator worker) pauses in an inbox. Today's tier-2/3 verification hold (contract
-  parked at `verifying`) is a different mechanism. Decide whether these merge or coexist before
-  the executor ships.
+## Decisions & open questions
+
+**For Emerson (product calls):**
+1. **Where does a deliverable live?** Today the default is `work_items.body`, but the right answer — a dedicated result field on the Work Contract — is an open Foundation Decisions item. This affects what agents, workflows, and humans see when they look up a finished piece of work.
+2. **Two overlapping "open question" tables.** `pending_asks_v2` (agent pauses) and `pending_interactions` (richer general-purpose asks) serve related but slightly different jobs. The workflow engine's review steps will need one of these as their durable inbox. Does this become one surface, or do they stay separate with `pending_interactions` as the canonical home? This is a product-visible question: it affects where human review tasks appear in the UI.
+3. **Verification tiers in the workflow editor.** The review step in a workflow (human or orchestrator sign-off) pauses via the inbox. The contract's `verifying` hold is a different mechanism today. Before the new executor ships, decide: do these merge into one approval flow, or stay as two separate things?
+
+**Technical:**
+- Once the Step 2 reconciler lands, confirm whether the early-ask on-demand round-trip (`pause-resume.ts:152–158`) can be removed outright, or whether a first-ask latency window still needs it.
+- Inbox-drain hook migration: the hook injects pending messages as the first user turn; the mailbox delivers via an orchestrator turn. Confirm ordering and timing are identical before cutting over.
+- `SubagentFailureSignal` live callers: confirm no production path still emits or consumes this shape before deleting it in the redesign cleanup pass.

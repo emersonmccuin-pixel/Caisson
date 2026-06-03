@@ -3,239 +3,191 @@
 > **Role:** cross-cutting (Brain writes, Engine reads, UI views)
 > **Status:** as-built snapshot — 2026-06-03
 > **Code anchors:**
-> - `packages/contracts/src/mailbox.ts`
-> - `packages/db/src/repos/mailbox.ts`
-> - `packages/app-services/src/mailbox/mailbox-service.ts`
-> - `packages/app-services/src/mailbox/pending-interaction-service.ts`
-> - `packages/app-services/src/mailbox/adapters.ts`
-> - `apps/server/src/services/mailbox-worker.ts`
-> - `apps/server/src/services/mailbox-orchestrator-turn-adapter.ts`
-> - `apps/server/src/services/agent-delivery.ts`
-> - `apps/server/src/features/mailbox/routes.ts`
+> `packages/contracts/src/mailbox.ts` · `packages/db/src/repos/mailbox.ts`
+> `packages/app-services/src/mailbox/mailbox-service.ts`
+> `packages/app-services/src/mailbox/pending-interaction-service.ts`
+> `packages/app-services/src/mailbox/adapters.ts`
+> `apps/server/src/services/mailbox-worker.ts`
+> `apps/server/src/services/mailbox-orchestrator-turn-adapter.ts`
+> `apps/server/src/services/agent-delivery.ts`
+> `apps/server/src/features/mailbox/routes.ts`
 
 ---
 
 ## What it is (plain English)
 
-A durable message queue built into the app. When an agent finishes, fails, asks a question, or
-needs approval, it drops a message into the mailbox. That message sits in SQLite until a background
-worker delivers it to whoever is supposed to receive it — the human's inbox in the UI, or the
-orchestrator as a new conversation turn. If the recipient is offline the message waits; it drains
-automatically when the recipient comes back.
+**Think of it as a real mailbox.** When an agent finishes a job, fails, asks a question, or needs a human to approve something, it drops a message into the mailbox. The message sits there safely — in the database — until it gets delivered to whoever is supposed to see it: either the person's inbox in the UI, or the AI orchestrator as its next conversation message. If the recipient is offline, the message waits. When they come back, it delivers automatically. Nothing is lost because someone was away.
 
 ---
 
 ## What it's supposed to do (intent)
 
-The single "notify door" between agents/workflows and their recipients. Nothing else notifies a
-human or the orchestrator of agent events — not a raw WebSocket push, not a direct HTTP call.
-It exists because recipients can be offline (orchestrator restarting, user away), so delivery
-must survive process restarts and not depend on a live connection at the moment of the event.
+Own the **single channel through which agents and workflows notify people and the orchestrator.** Nothing else is allowed to send these notifications — no direct message-pushes, no HTTP shortcuts that bypass this queue. It exists so that a notification survives a server restart, an orchestrator reboot, or a user closing the tab. The message is durable the moment it is written.
+
+> **FD-3 (locked):** The mailbox is the **only** notify door. The old "channel notification system" — a separate process that also pushed notifications — has been sentenced to deletion. See Target shape.
 
 ---
 
-## How it works today (as-built)
+## The parts (every component, plain English)
 
-### Message schema
+### 1. The message
 
-A message has three related rows in SQLite:
+Every notification is a **message** stored in three linked database rows. Together they capture: what the message says, who it's for, and what state the delivery is in.
 
-- **`mailbox_messages`** — the content: `id`, `kind`, `subject`, `body`, `payload` (JSON),
-  `source` (who sent it), optional `interactionId` (links to a `pending_interactions` row for
-  ask/approval flows), `idempotencyKey` (prevents duplicate enqueues on replay), `projectId`
-  (`null` for global user-inbox messages).
-  - `contracts/src/mailbox.ts:43` lists the message kinds:
-    `agent-terminal`, `agent-question`, `agent-approval`, `workflow-review`,
-    `workflow-run-failed`, `runtime-hook-ask`, `system-notice`, `external-webhook`.
+**The message itself** (`mailbox_messages` table) holds:
 
-- **`mailbox_recipients`** — one row per addressee. Holds a typed `MailboxAddress` as JSON
-  (`addressKind` + `addressJson`). Tracks read/actioned/dismissed state for the UI.
-  - Address kinds (`contracts/src/mailbox.ts:22`): `user-inbox`, `project-inbox`,
-    `active-orchestrator`, `orchestrator-session`, `agent-run`, `workflow-review`.
+| Field | Plain meaning | Example |
+|---|---|---|
+| `kind` | What type of event this is | `agent-terminal`, `agent-question`, `agent-approval`, `workflow-review`, `workflow-run-failed`, `runtime-hook-ask`, `system-notice`, `external-webhook` |
+| `subject` | A short summary line | "Agent 'writer' completed" |
+| `body` | The full message text | (the agent's output, a question, etc.) |
+| `payload` | Structured data for the app to act on | JSON with run ID, project ID, etc. |
+| `source` | Who sent it | `agent-run-manager`, `workflow-engine` |
+| `interactionId` | Links to a pending approval or question, if this message requires a reply | (a UUID, or empty) |
+| `idempotencyKey` | Prevents the same message from being written twice if something retries | (a hash of the event) |
+| `projectId` | Which project this belongs to (`null` = global / not project-specific) | a UUID, or null |
 
-- **`mailbox_deliveries`** — one row per (recipient × delivery channel). Tracks the worker
-  state: status (`pending` → `leased` → `accepted`/`retrying`/`dead-lettered`), attempt count,
-  next retry time, lease owner, and a `targetRef` pointing to the created send-queue row or
-  UI-inbox row after acceptance.
-  - Channels: `ui-inbox` (show in the UI), `orchestrator-turn` (inject as a runtime turn),
-    `compat-channel` (reserved, not wired).
+(`contracts/src/mailbox.ts:43`)
 
-### Who writes messages
+### 2. The addressees
 
-1. **Agent terminal effects** (`agent-run-terminal-effects.ts:453`) — calls `deliverAgentEnvelope`
-   when a run completes, fails, asks, or requests approval.
-2. **Agent factory queued-start** (`agent-run-factory.ts:1142`) — delivers a `queued-started`
-   envelope when a run's queue slot opens.
-3. **Pause/resume** (`pause-resume.ts:221`) — delivers the ask envelope when a run pauses with
-   an open question.
-4. **Workflow engine** — enqueues `workflow-run-failed` messages targeting both the human inbox
-   and the active orchestrator.
-5. **HTTP API** — `POST /api/projects/:projectId/mailbox/messages` and
-   `POST /api/mailbox/messages` (`features/mailbox/routes.ts:99,108`) allow external or
-   system callers to enqueue directly.
-6. **`inbox-drain.cjs` hook** (legacy, see Known Issues) — still reads/writes the OLD
-   `agent_inbox` tables directly via raw SQL, not the mailbox. Must be migrated.
+**Who gets the message** is a separate row per recipient (`mailbox_recipients` table). Each row holds a typed address and tracks whether the person has read, acted on, or dismissed the message — so the "unread" badge in the UI stays accurate.
 
-All internal callers go through `deliverAgentEnvelope` (`agent-delivery.ts:86`) which calls the
-injected `MailboxEnqueuePort` (i.e. `MailboxService.enqueue`). The enqueue is idempotent on
-`idempotencyKey` — a repeated call returns the existing rows and emits nothing new.
+Address types the system knows about (`contracts/src/mailbox.ts:22`):
 
-### The service layer
+| Address kind | Plain meaning |
+|---|---|
+| `user-inbox` | Show this in the person's global inbox |
+| `project-inbox` | Show this in a specific project's inbox |
+| `active-orchestrator` | Deliver to whichever orchestrator session is alive right now |
+| `orchestrator-session` | Deliver to one specific named orchestrator session |
+| `agent-run` | Deliver to a specific agent run (reserved / future use) |
+| `workflow-review` | Deliver to a workflow's human-review gate |
 
-`MailboxService` (`app-services/src/mailbox/mailbox-service.ts:79`) is the single write door.
-Every mutation runs in a SQLite transaction that atomically writes the product rows AND inserts
-a `live_outbox` row. The outbox row is what the 250ms relay picks up and fans out to WebSocket
-subscribers — no direct WS broadcast happens here.
+One message can have multiple recipient rows — for example, a failed workflow notifies both the human inbox AND the active orchestrator.
 
-### The worker loop (draining)
+### 3. The delivery attempts
 
-`MailboxWorker.runOnce` (`mailbox-worker.ts:75`) runs on a 1-second interval
-(`apps/server/src/index.ts:775-782`). One pass:
+**How it gets there** is tracked in yet another row per (recipient × delivery method) (`mailbox_deliveries` table). "Delivery method" here means: is this message headed to the UI inbox, or being injected as a conversation turn for the orchestrator? These are called delivery channels in the code — that word means **delivery method only**, and has nothing to do with the old channel-server notification system (which is dead per FD-3).
 
-1. `listDueDeliveries(now, 50)` — fetches up to 50 pending/retrying deliveries whose
-   `nextAttemptAt <= now` and whose lease is free or expired (`db/repos/mailbox.ts:293`).
-2. For each row, `service.lease(...)` does an atomic conditional UPDATE. Only the pass that wins
-   the UPDATE owns the row (others skip). Lease duration: 30 seconds (`mailbox-worker.ts:53`).
-3. **`ui-inbox` channel:** immediately accepted — the recipient row exists from enqueue, no
-   further action needed (`mailbox-worker.ts:126-135`).
-4. **`orchestrator-turn` channel:** resolves the recipient's `MailboxAddress` to a live
-   orchestrator session, then calls `MailboxOrchestratorTurnAdapter.deliver` which calls
-   `ConversationSendService.enqueueRuntimeTurn` with a stable `clientMessageId` of
-   `mb:${deliveryId}` (`mailbox-orchestrator-turn-adapter.ts:33,42`). The stable key makes
-   retries idempotent — the same send-queue row comes back.
-5. On success: `service.acceptDelivery(...)` records `targetRef` (the send-queue row id) and
-   writes the outbox row for the live relay.
-6. On failure: exponential backoff — 1s, 2s, 4s … capped at 60s (`mailbox-worker.ts:57`).
-   After 5 attempts (`DEFAULT_MAX_ATTEMPTS`), the delivery is dead-lettered with reason
-   `max-retries` and a `mailbox_dead_letters` row is written.
+Delivery method kinds:
 
-The worker is unref'd (`index.ts:783`) so it does not block process shutdown.
+| Method (code: "channel") | Plain meaning |
+|---|---|
+| `ui-inbox` | Appears in the inbox panel in the app |
+| `orchestrator-turn` | Injected as the orchestrator's next conversation message |
+| `compat-channel` | Reserved, not wired — dead-letters immediately |
 
-### How the UI reads messages
+The delivery row tracks: status (`pending` → `leased` → `accepted` / `retrying` / `dead-lettered`), how many attempts have been made, when the next attempt is scheduled, and a reference to the created result (the send-queue row or UI-inbox row).
 
-- `GET /api/projects/:projectId/mailbox` — project-scoped inbox.
-- `GET /api/mailbox` — global single-user inbox (project-less messages).
-- Both return `(recipient, message)` pairs filtered by `unreadOnly` / `actionableOnly`.
-- `POST .../recipients/:id/read|action|dismiss` — recipient state changes; each re-emits the
-  message fact via the outbox so the unread/actionable summary updates live.
+### 4. Who writes messages (the senders)
 
-### Live events pushed to the UI
+Five callers can drop a message into the mailbox today:
 
-Two event types flow through the `live_outbox` relay:
-- `mailbox.message.changed` — on enqueue and on recipient state change; carries a
-  `recipientSummary` (total/unread/actionable count).
-- `mailbox.delivery.changed` — on accept/retry/dead-letter; keyed by delivery id (not message
-  id) to avoid colliding with the message frame in the client live store.
-  (`app-services/src/mailbox/mailbox-service.ts:302-309`).
+1. **When an agent finishes, fails, asks, or requests approval** — `agent-run-terminal-effects.ts:453` calls `deliverAgentEnvelope`.
+2. **When a queued agent's turn to run opens up** — `agent-run-factory.ts:1142` sends a `queued-started` envelope.
+3. **When an agent pauses to ask a question** — `pause-resume.ts:221` sends the ask envelope.
+4. **When a workflow run fails** — the workflow engine enqueues a `workflow-run-failed` message targeting both the human inbox and the active orchestrator.
+5. **Via HTTP** — `POST /api/projects/:projectId/mailbox/messages` and `POST /api/mailbox/messages` let the server or an external caller enqueue directly (`features/mailbox/routes.ts:99,108`).
 
-### `PendingInteractionService` (related but separate)
+All internal callers go through `deliverAgentEnvelope` (`agent-delivery.ts:86`), which calls `MailboxService.enqueue`. The enqueue is idempotent on `idempotencyKey` — calling it again with the same key returns the existing rows and emits nothing new.
 
-`PendingInteractionService` (`app-services/src/mailbox/pending-interaction-service.ts`) owns the
-`pending_interactions` lifecycle (create/answer/cancel/expire). A `pending_interactions` row is
-the durable record for an agent ask or approval; the mailbox message carries its `interactionId`
-as a link. Answering an interaction writes the answer to the DB and emits
-`pending-interaction.changed` via the outbox. The HTTP answer route lives at
-`POST /api/projects/:projectId/pending-interactions/:id/answer` and is explicitly a "durable
-shadow" — the in-memory resolver in `/api/ask` is still the authoritative unblock path.
+> ☠ **`inbox-drain.cjs` hook — legacy, must be migrated (FD-3 / ledger row 9).** The hook (`templates/.claude/hooks/inbox-drain.cjs`) still reads and writes the old `agent_inbox` tables via raw SQL on every user message. It is a parallel delivery path that runs inside the orchestrator's Claude process, completely outside this worker. The `agent_inbox` tables cannot be dropped until this is refactored to enqueue a mailbox message instead. This is the one surviving piece of the pre-mailbox world; it must die.
 
----
+### 5. The 1-second postman (the worker loop)
 
-## Integrations (how it connects)
+**`MailboxWorker`** (`mailbox-worker.ts:75`) runs every 1 second (`apps/server/src/index.ts:775–782`). On each pass it:
 
-- **Depends on:**
-  - `@pc/db` — five mailbox tables (`mailbox_messages`, `mailbox_recipients`,
-    `mailbox_deliveries`, `mailbox_dead_letters`, `mailbox_audit`) + `live_outbox` (via
-    `insertLiveEvent`).
-  - `ConversationSendService` — injected into `MailboxOrchestratorTurnAdapter`; the one caller
-    that actually injects a message into an orchestrator session.
-  - `getActiveOrchestratorSession` (`@pc/db`) — resolves an `active-orchestrator` address to
-    the current live session id.
+1. Fetches up to 50 deliveries that are due (`db/repos/mailbox.ts:293`).
+2. **Claims** each one with an atomic database update — only one worker pass can own a row at a time. Lease duration: 30 seconds.
+3. **`ui-inbox` deliveries:** immediately accepted — the recipient row already exists in the DB from enqueue, nothing else needed.
+4. **`orchestrator-turn` deliveries:** looks up the live orchestrator session, then calls the turn adapter (see part 6 below).
+5. **On success:** marks the delivery `accepted` and records the created row reference.
+6. **On failure:** retries with exponential backoff — 1s, 2s, 4s … capped at 60s. After 5 failures, the delivery is dead-lettered and a `mailbox_dead_letters` row is written.
 
-- **Used by:**
-  - `agent-run-terminal-effects.ts` — terminal envelope delivery.
-  - `agent-run-factory.ts` — queued-start envelope delivery.
-  - `pause-resume.ts` — ask/approval envelope delivery.
-  - Workflow engine — `workflow-run-failed` enqueue.
-  - HTTP callers via `POST /api/mailbox/messages`.
+The worker is "unref'd" — it does not prevent the server process from shutting down cleanly.
 
-- **Contracts / events crossed:**
-  - `MailboxAddress` union + `MailboxMessageKind` + `MailboxDeliveryChannel` enums — all in
-    `packages/contracts/src/mailbox.ts`.
-  - `mailbox.message.changed` and `mailbox.delivery.changed` live-event frames (WS → UI).
-  - `pending-interaction.changed` live-event frame.
+### 6. How the orchestrator receives one (injected turn)
+
+When the postman has an `orchestrator-turn` delivery to make, it calls `MailboxOrchestratorTurnAdapter.deliver` (`mailbox-orchestrator-turn-adapter.ts:33`), which calls `ConversationSendService.enqueueRuntimeTurn` with a stable message ID of `mb:<deliveryId>`. The stable ID makes retries safe — the same send-queue row comes back if the worker tries twice.
+
+> **FD-3 requirement (locked):** injected turns must be:
+> 1. **Clearly labeled as system messages** in the injected text — the orchestrator and anyone reading the transcript can always tell a system notification from a human message.
+> 2. **Tagged with a machine-readable source/kind** all the way from the send-queue row through the transcript to the live events, so the frontend can filter them (e.g. a "hide system messages" toggle). The send-queue contract already carries a `source` field; the rebuild must carry that tag through to the chat renderer. *(Partial today.)*
+
+### 7. How the UI inbox reads them
+
+Two HTTP endpoints serve the inbox panels:
+
+- `GET /api/projects/:projectId/mailbox` — project inbox.
+- `GET /api/mailbox` — the global user inbox (project-less messages).
+
+Both return (recipient, message) pairs, filterable by `unreadOnly` / `actionableOnly`. State changes (`read`, `action`, `dismiss`) are `POST`ed to `.../recipients/:id/read|action|dismiss` — each re-emits the message fact through the live-event path so the unread badge updates without a page refresh.
+
+Two live-event types flow to the UI via the `live_outbox` relay:
+- `mailbox.message.changed` — on enqueue and on any recipient state change; includes a `recipientSummary` (total/unread/actionable count).
+- `mailbox.delivery.changed` — on accept/retry/dead-letter; keyed by **delivery ID** (not message ID) to avoid collisions in the client live store (`mailbox-service.ts:302–309`). Consumers must read `payload.messageId` to correlate — not the frame's `entityId`.
+
+### 8. The "waiting for an answer" record (pending interactions)
+
+Some messages require a reply — an agent asking a question, or a workflow pausing for approval. These use a **`pending_interactions`** row (`pending-interaction-service.ts`) as the durable record of the open question. The mailbox message carries the interaction's ID as a link (`interactionId`). When someone answers, the answer is written to the DB and `pending-interaction.changed` fires via the live-event path.
+
+The HTTP answer route lives at `POST /api/projects/:projectId/pending-interactions/:id/answer`. Today this is a "durable shadow" — the in-memory resolver at `/api/ask` is still the authoritative path that actually unblocks the agent. The durable path does not yet replace it.
 
 ---
 
-## Target shape (per north star)
+## How it connects
 
-Per `unified-process-supervision-2026-06-02.md §7` the mailbox IS the target shape for this
-concern. It is already the one "notify door" — no competing path.
+- **Depends on:** `@pc/db` — five mailbox tables (`mailbox_messages`, `mailbox_recipients`, `mailbox_deliveries`, `mailbox_dead_letters`, `mailbox_audit`) + `live_outbox` (via `insertLiveEvent`); `ConversationSendService` (injected into the turn adapter; the one caller that actually puts a message into an orchestrator session); `getActiveOrchestratorSession` (resolves `active-orchestrator` to the current live session).
+- **Used by:** `agent-run-terminal-effects.ts`, `agent-run-factory.ts`, `pause-resume.ts`, workflow engine, HTTP callers.
+- **Contracts / events:** `MailboxAddress` union + `MailboxMessageKind` + `MailboxDeliveryChannel` — all in `packages/contracts/src/mailbox.ts`; `mailbox.message.changed`, `mailbox.delivery.changed`, `pending-interaction.changed` live-event frames.
 
-Ledger verdict (`consolidation-ledger-2026-06-02.md §2` Notification/delivery):
-**KEEP** — `mailbox / deliverAgentEnvelope` is the durable notify door; no merge/delete action.
+---
 
-What does need to happen before this is fully clean:
+## Target shape (per north star + Foundation Decisions)
 
-- **Migrate `inbox-drain.cjs` → mailbox.** The hook still reads/writes the old `agent_inbox` and
-  `agent_delivery_audit` tables via raw SQL (lines 66/74/77 of the hook). Until that refactor
-  lands, the `agent_inbox` tables cannot be dropped. Ledger row 9 is gated on this.
-- **`active-orchestrator` address resolution is a live-DB lookup.** When the orchestrator is not
-  running, the delivery fails immediately (non-retryable: `'no orchestrator session resolvable'`,
-  `mailbox-worker.ts:140`). This is correct behaviour — it reaches max-retries and dead-letters.
-  Under the target architecture the Brain's reconciler would re-dispatch on reconnect; today
-  dead-lettered messages don't auto-recover.
-- **`compat-channel` is reserved but unimplemented.** Deliveries with that channel dead-letter
-  immediately (`mailbox-worker.ts:162`). No callers enqueue with it today — safe to ignore until
-  needed.
+**FD-3 is locked:** the mailbox is already the one notify door. The old channel-server notification system — every piece of it — is sentenced to deletion.
+
+What the channel system was (all dead): the per-orchestrator channel-server child process, the `--dangerously-load-development-channels` spawn flag, the regex-matched auto-confirm of Claude's dev-channel boot prompt, the `channel-event` direct-to-UI relay bypass, and the config-filtering machinery it required. All gone.
+
+**What still needs to happen before this is fully clean:**
+
+1. **Migrate `inbox-drain.cjs` → mailbox** (ledger row 9). The legacy hook must be rewritten to enqueue a mailbox message instead of writing raw SQL to `agent_inbox`. Until that lands, `agent_inbox` tables cannot be dropped.
+
+2. **FD-3 injected-turn tagging** — system-label + machine-readable source/kind tag must flow all the way through to the chat renderer. The send-queue `source` field exists today; the rest of the chain is not yet complete.
+
+3. **Dead-letter recovery for `orchestrator-turn` messages** — if the orchestrator is down for all 5 attempts, the delivery dies silently (see Known issues). The target architecture has the Brain's reconciler re-dispatch on reconnect; today there is no sweep.
+
+4. **`compat-channel` cleanup** — reserved and unused; dead-letters immediately. Safe to ignore until a real use appears, then wire the worker branch before any caller uses it.
 
 ---
 
 ## Known issues / scar tissue
 
-1. **Dead-lettered orchestrator-turn messages don't auto-recover.** If the orchestrator was down
-   when max-retries was hit, the delivery is dead-lettered and there is no sweep to retry it
-   once the orchestrator comes back. The human inbox copy (ui-inbox channel) survives — the
-   orchestrator copy is lost. The fix is either a longer `maxAttempts` ceiling or a dead-letter
-   requeue endpoint, neither of which exists yet.
+1. **Dead-lettered orchestrator-turn messages don't auto-recover.** If the orchestrator was down for all 5 attempts, the delivery is dead-lettered. The human-inbox copy (`ui-inbox` channel) survives — the orchestrator copy is silently gone. No alert, no UI indicator, no requeue path today. Fix is either a longer `maxAttempts` ceiling or a dead-letter requeue endpoint.
 
-2. **`inbox-drain.cjs` hook is a parallel path.** The hook (`templates/.claude/hooks/inbox-drain.cjs`)
-   still drains the legacy `agent_inbox` table on every `UserPromptSubmit`. That table is written
-   by nobody on the server path today (the TS repo at `repos/agent-inbox.ts` has zero callers),
-   but the hook's raw SQL writes are still live. It creates an invisible secondary delivery path
-   that runs inside the orchestrator's Claude process, not the server worker. Must be refactored
-   to enqueue a mailbox message instead (and the `agent_inbox` tables dropped after).
-   Ledger entry: `consolidation-ledger-2026-06-02.md §2 Dead/legacy`.
+2. **`inbox-drain.cjs` is a parallel path.** See Part 4 above. The hook's raw SQL writes create an invisible secondary delivery path inside the orchestrator's Claude process, outside the worker. Must go.
 
-3. **`active-orchestrator` address resolved at delivery time, not enqueue time.** If the session
-   id changes between enqueue and the first worker pass (e.g. orchestrator restarts), the
-   delivery resolves the new session correctly — that is intentional. But if no orchestrator
-   session exists on ANY of the 5 attempts, the message is dead-lettered silently. No alert or
-   UI indicator surfaces this today.
+3. **`active-orchestrator` resolved at delivery time, not enqueue time.** If no orchestrator session exists on ANY of the 5 worker attempts, the message is dead-lettered with no visible alert. Intentional behavior for the "orchestrator not running" case, but there is currently no surface that shows the owner their message was lost.
 
-4. **Delivery frame `entityId` was changed to `delivery.id` (not `messageId`) in slice 015b**
-   to prevent collisions in the client live store (`mailbox-service.ts:302-308`). Consumers must
-   read `payload.messageId` not the frame's `entityId` when correlating. This is documented in a
-   comment but easy to miss.
+4. **Delivery frame `entityId` is the delivery ID, not the message ID.** Changed in slice 015b to prevent collisions in the client live store (`mailbox-service.ts:302–308`). Consumers must read `payload.messageId` to correlate with a message — not the frame's `entityId`. Documented in a code comment but easy to miss.
 
-5. **`compat-channel` deliveries dead-letter immediately** with `'unsupported delivery channel'`.
-   If any future code enqueues with that channel without wiring the worker branch first, those
-   deliveries will silently fail after 5 attempts.
+5. **`compat-channel` dead-letters immediately** with `'unsupported delivery channel'`. If any future code enqueues with that channel before wiring the worker branch, those deliveries will silently fail after 5 attempts.
 
 ---
 
-## Open questions
+## Decisions & open questions
 
-1. **Dead-letter recovery.** Should there be a requeue endpoint or a periodic sweep for dead-lettered
-   `orchestrator-turn` deliveries once an orchestrator comes back online?
+**For Emerson (product calls):**
 
-2. **`inbox-drain.cjs` migration order.** Which slice / step owns this refactor? It is a prereq
-   for dropping `agent_inbox` tables (ledger step 9) but has no assigned owner.
+1. **When should the orchestrator get a dead-letter recovery UI?** If the orchestrator was down when a notification arrived and all retries failed, today that notification is silently gone on the orchestrator side (the human inbox copy survives). Is that acceptable, or should the product show a visible "missed notification" indicator?
 
-3. **`PendingInteractionService` answer authority.** The in-memory resolver (`/api/ask`) is still
-   the authoritative unblock path; `PendingInteractionService.answer` is a "durable shadow." When
-   does the durable path become the sole authority, and does the orchestrator-turn adapter need
-   to be wired to answer/resume agent runs as a result?
+2. **Should system-injected orchestrator messages be hidden by default in the transcript view?** FD-3 requires them to be tagged so they *can* be filtered — but the product call is whether the toggle is on or off by default. (Most owners probably don't want to see internal plumbing messages in their conversation thread.)
 
-4. **Worker interval.** 1-second sweep with a 30-second lease. Under high agent throughput (many
-   concurrent runs completing at once), does the 50-message-per-pass cap cause delivery lag? No
-   monitoring on queue depth today.
+3. **`inbox-drain.cjs` migration timing.** This is the last piece of the pre-mailbox world still running. What slice/step owns it? It blocks dropping the `agent_inbox` tables (ledger row 9).
+
+**Technical:**
+
+- **Dead-letter requeue:** build a periodic sweep that retries dead-lettered `orchestrator-turn` deliveries once an orchestrator comes back online — or raise the `maxAttempts` ceiling as a short-term fix?
+- **`PendingInteractionService` answer authority:** the in-memory resolver at `/api/ask` is still the actual unblock path; the durable `PendingInteractionService.answer` is a shadow. When does the durable path become sole authority, and does the turn adapter need to wire answer/resume as a result?
+- **Worker throughput:** 1-second sweep, 50-message cap, 30-second lease. Under high agent concurrency, does the 50-per-pass ceiling cause delivery lag? No queue-depth monitoring exists today.

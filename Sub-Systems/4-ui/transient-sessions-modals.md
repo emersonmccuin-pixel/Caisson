@@ -3,147 +3,132 @@
 > **Role:** Brain (today) → Engine (north star, Step 5)
 > **Status:** as-built snapshot — 2026-06-03
 > **Code anchors:**
-> - `apps/server/src/services/project-runtime.ts` — spawn + lifecycle (lines 763–1072)
-> - `apps/server/src/features/transient-sessions/routes.ts` — HTTP + WS wiring
-> - `packages/runtime/src/pty-session.ts` — PtySession (the session primitive)
-> - `apps/web/src/features/transient-sessions/events.ts` — envelope adapter
-> - `apps/web/src/features/transient-sessions/client.ts` — frontend HTTP calls
-> - `apps/web/src/components/WorkflowBuilderModal.tsx` — workflow-builder modal
-> - `apps/web/src/components/SetupWizardModal.tsx` — setup-wizard modal
-> - `apps/web/src/components/agents/CreatePodModal.tsx` — agent-designer host modal
-> - `apps/web/src/components/agents/AgentDesignerChat.tsx` — agent-designer chat surface
-> - `apps/web/src/components/WorkflowBuilderChat.tsx` — workflow-builder chat surface
-> - `apps/web/src/components/TransientAgentConversation.tsx` — shared chat wrapper
+> `apps/server/src/services/project-runtime.ts` (lines 763–1072) · `apps/server/src/features/transient-sessions/routes.ts` · `packages/runtime/src/pty-session.ts` · `apps/web/src/features/transient-sessions/events.ts` · `apps/web/src/features/transient-sessions/client.ts` · `apps/web/src/components/WorkflowBuilderModal.tsx` · `apps/web/src/components/SetupWizardModal.tsx` · `apps/web/src/components/agents/CreatePodModal.tsx` · `apps/web/src/components/agents/AgentDesignerChat.tsx` · `apps/web/src/components/WorkflowBuilderChat.tsx` · `apps/web/src/components/TransientAgentConversation.tsx`
+
+---
 
 ## What it is (plain English)
 
-Three short-lived Claude sessions that run inside UI modals: one for designing an agent by conversation, one for building a workflow by interview, and one for writing a project's `CLAUDE.md` via a guided wizard. Each spawns its own `claude.exe` process behind the scenes, streams its chat into the modal while the user types, and is thrown away when the modal closes. They feel like a live chat window that opens, does one job, and disappears.
+Three short-lived Claude chat windows that open inside popups (modals): one for designing an agent by conversation, one for building a workflow by interview, and one for writing a project's setup file via a guided wizard. Each one starts its own Claude process, streams the conversation live into the popup while you type, and disappears completely when you close it. Think of them as pop-up consultants — they show up, do one specific job, and leave no trace behind.
 
-Note: `AgentTranscriptModal` is NOT a transient session — it is a read-only view of a dispatched agent run's JSONL. It has no PtySession; it does not belong to this subsystem.
+> **Not in this group:** `AgentTranscriptModal` — that's a read-only view of a finished agent run's log. It has no live process. It doesn't belong here.
+
+---
 
 ## What it's supposed to do (intent)
 
-Give users a conversational interface for authoring tasks that are too complex for a form but don't need a full persistent session — design an agent pod, build a workflow graph, or answer setup questions. Each modal is its own isolated Claude session with a curated tool allowlist, runs only while open, and leaves no durable session row.
+Give you a conversational way to author things that are too rich for a form but don't need a permanent session: design an agent pod, build a workflow graph, or answer setup questions. Each popup is its own isolated Claude session with a curated set of tools, runs only while open, and leaves no saved session row in the database.
 
-## How it works today (as-built)
+---
 
-### The three modals
+## The parts (every component, plain English)
 
-| Modal | Claude pod | Purpose | WS prefix |
+### 1. The three modals
+
+| Popup | Which Claude "personality" | Job | Internal label |
 |---|---|---|---|
-| Agent-designer | `agent-designer` stock pod | Design a new agent by chat | `agent-designer-*` |
-| Workflow-builder | `workflow-builder` stock pod | Author a v2 workflow by interview + live graph | `workflow-builder-*` |
-| Setup wizard | CC default + `--append-system-prompt-file setup-wizard-prompt.md` | Writes `CLAUDE.md` for the project | `setup-wizard-*` |
+| **Agent designer** | `agent-designer` stock pod | Design a new agent by chatting through its purpose, tools, and behavior | `agent-designer-*` |
+| **Workflow builder** | `workflow-builder` stock pod | Author a workflow by interview + live graph preview | `workflow-builder-*` |
+| **Setup wizard** | Claude's default + an appended instructions file | Writes the project's `CLAUDE.md` setup file | `setup-wizard-*` |
 
-### Server side: ProjectRuntime owns the PtySession
+### 2. How a session starts — and why the session ID matters
 
-`ProjectRuntime` holds one `PtySession | null` per modal type (`agentDesigner`, `workflowBuilder`, `setupWizard`). All three spawn through `PtySession` (not through `AgentRun` / the Engine). (`project-runtime.ts:108–119`)
+When you open one of these popups, the server doesn't just launch a Claude process blindly. It first **mints a specific session ID** and tells Claude "use this exact ID." That matters because Claude writes its conversation history to a file on disk, and without a pinned ID the system would fall back to scanning a folder and grabbing whatever file was most recently touched — which could be **the conversation from a completely different Claude window** (a VS Code session, for instance). That chat would then bleed into your popup. The pinned ID prevents that entirely. (`project-runtime.ts:825–831`)
 
-**Start sequence (agent-designer and workflow-builder):**
-1. `startAgentDesigner()` / `startWorkflowBuilder()` kills any prior session, then calls `preparePodSpawn(agentName)` which materialises the pod row's prompt, tools, and MCP allowlist into a temp session-local directory. (`project-runtime.ts:763–811`, `:905–953`)
-2. Calls `transientCcSession()` to mint a fresh CC session UUID and compute the deterministic JSONL path (`jsonlPathFor(folderPath, ccSessionId)` — resolves to `~/.claude/projects/<cwd-hash>/<uuid>.jsonl`). (`project-runtime.ts:825–831`)
-3. Constructs a `PtySession` with `claudeSessionId: cc.ccSessionId`, `resume: false`, `jsonlPath: cc.jsonlPath`, and `--agent <podName>` (replaces CC's default identity). The `PC_SESSION_ID` env var is set to the `ad-`/`wb-`/`sw-` prefixed transient id that names the on-disk session directory. (`project-runtime.ts:792–808`, `:934–951`)
-4. Returns the `PtySession` object (does NOT call `.start()` here — start happens inside `PtySession`'s constructor via internal spawn).
+**Start sequence (agent designer and workflow builder):**
+1. Kills any existing session of the same type (only one per project at a time).
+2. Reads the pod's settings (prompt, allowed tools, MCP config) and writes them to a temporary local folder — `preparePodSpawn()`. (`project-runtime.ts:763–811`, `:905–953`)
+3. Mints a fresh session UUID and computes the exact file path Claude will write its conversation to — `transientCcSession()`, `jsonlPathFor()`. (`project-runtime.ts:825–831`)
+4. Launches Claude with `--agent <podName>` (which replaces Claude's default personality entirely) and the minted session ID. Sets `PC_SESSION_ID` in the process environment so hook scripts can tag their writes to this session.
+5. Returns to the frontend with the session's identity — does NOT separately call `.start()`; the process is already running.
 
-**Setup wizard** mirrors steps 2–3 but uses `prepareClaudeRuntimeFiles` (no pod spawn) and `--append-system-prompt-file` instead of `--agent`. (`project-runtime.ts:994–1043`)
+**Setup wizard** follows the same pattern but uses `prepareClaudeRuntimeFiles` (no pod definition needed) and `--append-system-prompt-file` instead of `--agent`. (`project-runtime.ts:994–1043`)
 
-### WS wiring (routes)
+### 3. How the chat streams to the popup
 
-`registerTransientSessionRoutes` registers `start`, `send`, `interrupt`, `terminal-input`, `resize`, and `DELETE` (end) routes for all three modals. (`routes.ts:209–252`)
+Claude's output travels over a WebSocket connection (a persistent live channel) as **envelopes** — small labeled packets. Each modal type has its own prefix so packets don't mix:
 
-On `start`, `attachTransientSessionHandlers` wires `PtySession` events (`raw`, `state`, `event`, `jsonl-event`, `exit`) to `broadcastTo(projectId, ...)` envelopes prefixed with the modal's wire prefix (e.g. `agent-designer-raw`, `agent-designer-state`, `agent-designer-jsonl`). (`routes.ts:65–117`)
+- `agent-designer-raw`, `agent-designer-state`, `agent-designer-jsonl`, `agent-designer-exit`
+- Same pattern for `workflow-builder-*` and `setup-wizard-*`
 
-The `start` HTTP response returns `{ ok, state, sessionId }` where `sessionId` is the `PC_SESSION_ID` (the `ad-`/`wb-`/`sw-` prefixed id, NOT the CC session UUID). (`routes.ts:129–149`)
+On the frontend, `adaptTransientEvents()` filters the project-wide event stream down to envelopes for this session only (using the session ID to exclude anything that arrived before the ID was resolved), then translates them into the standard shapes the shared `ChatSurface` component understands. The chat renderer is the **same component** used by the main orchestrator chat — no bespoke renderer. (`events.ts:23–86`)
 
-### Client side: modal lifecycle
+One cosmetic touch: both agent-designer and workflow-builder chat components hide the MCP warmup message pair (`reply with only the word ok` / `ok`) so it never appears in the conversation. (`AgentDesignerChat.tsx:55–57`, `WorkflowBuilderChat.tsx:74–77`)
 
-Each modal's React component calls `transientSessionsApi.start*()` in a `useEffect` on mount and `stop*()` on unmount cleanup. (`SetupWizardModal.tsx:41–65`, `WorkflowBuilderModal.tsx:101–127`)
+### 4. State the session can be in
 
-**Start-race fix** (`mergeTransientSessionState`): The start HTTP response may arrive AFTER a WS `*-state` envelope has already advanced the state. If the response naively called `setState(r.state)` it would overwrite the newer state back to `spawning`. Instead it uses `mergeTransientSessionState(prev, next)` which ignores a `next === 'spawning'` if `prev` has already moved forward. (`events.ts:102–108`)
+`'spawning' → 'ready' → 'thinking' → 'exited'`
 
-The `sessionId` is set from the HTTP response via `setSessionId(r.sessionId)` — deliberately separate from the state update so the session identity is locked in before state advances. (`SetupWizardModal.tsx:50`, `WorkflowBuilderModal.tsx:112`)
+Driven entirely by `*-state` WebSocket envelopes — there is no database row. State lives only in the React component and in the server's in-memory `PtySession` handle. (`events.ts:3`)
 
-### Chat streaming: envelope adapter → ChatSurface
+### 5. Workflow-builder extras
 
-Raw WS envelopes (`workflow-builder-jsonl`, etc.) go into the project-level events array. Each modal's chat component calls `adaptTransientEvents(events, prefix)` to translate them into the standard shapes `ChatSurface` understands: `{type:'jsonl', event}`, `{type:'state', state}`, `{type:'raw', ...}`. (`events.ts:23–86`)
+The workflow builder has a second pane alongside the chat: a live graph preview that updates as the agent authors the workflow.
 
-`adaptTransientEvents` filters by `sessionId` (via `belongsToTransientSession`) so a session started before the sessionId resolved doesn't leak into the chat. (`events.ts:38–44`)
+- **Two-pane layout:** chat (~64%) + graph (~36%). (`WorkflowBuilderModal.tsx:243–263`)
+- **Draft sync:** the agent calls `pc_save_workflow_draft` mid-interview; the server stores the draft in memory and broadcasts a `workflow-builder-draft` envelope; the frontend feeds it to the graph. (`project-runtime.ts:884–899`, `WorkflowBuilderModal.tsx:158–164`)
+- **You can drag nodes:** the frontend writes changes back via `saveWorkflowBuilderDraft` so the agent can read them with `pc_read_workflow_draft`. (`WorkflowBuilderModal.tsx:193–199`)
+- **Edit-mode first message:** when opened for an existing workflow, the modal sends a hidden `[edit-mode workflowId="…"]` message once the session is ready; the chat component drops it from the rendered view. (`WorkflowBuilderModal.tsx:62–72`, `:130–142`)
+- **Auto-close:** the modal closes itself when a `workflow-definition` live event arrives with the matching published slug. (`WorkflowBuilderModal.tsx:172–188`)
 
-Both `AgentDesignerChat` and `WorkflowBuilderChat` pass `hiddenUserText` to drop the MCP warmup turn pair (`reply with only the word ok`) from the rendered conversation so users never see it. (`AgentDesignerChat.tsx:55–57`, `WorkflowBuilderChat.tsx:74–77`)
+### 6. Setup wizard extras
 
-The adapted envelopes feed `TransientAgentConversation` → `ChatSurface`, the same surface used by the orchestrator chat. (`TransientAgentConversation.tsx:72–90`)
+- **Auto-close:** closes when it detects that the project's `CLAUDE.md` file has been written — it captures a baseline signature at mount and watches for it to change. (`SetupWizardModal.tsx:92–104`)
 
-### Workflow-builder extras
+### 7. Session teardown
 
-- Two-pane layout: chat (~64%) + live `WorkflowGraphV2` visualizer (~36%). (`WorkflowBuilderModal.tsx:243–263`)
-- Agent calls `pc_save_workflow_draft` during the interview; server stores the draft in `workflowBuilderDrafts: Map<sessionId, WorkflowV2.Workflow>` and broadcasts `workflow-builder-draft` WS envelope. Frontend syncs it to `draftDef` for the visualizer. (`project-runtime.ts:884–899`, `WorkflowBuilderModal.tsx:158–164`)
-- User can drag nodes; frontend calls `saveWorkflowBuilderDraft(projectId, sessionId, nextDef)` to write changes back so the agent picks them up via `pc_read_workflow_draft`. (`WorkflowBuilderModal.tsx:193–199`)
-- Edit mode: `WorkflowBuilderModal` sends a `[edit-mode workflowId="…"]` first message once the session reaches `ready`; `WorkflowBuilderChat` drops this message from the rendered chat. (`WorkflowBuilderModal.tsx:62–72`, `:130–142`)
-- Close trigger: modal closes on a `workflow-definition` live event matching the published slug. (`WorkflowBuilderModal.tsx:172–188`)
+Each modal calls `stop*()` in its explicit close handler (not in React's cleanup hook — see scar tissue below). The server kills the Claude process, cleans up the temp folder, and that's it. No database row to clean up.
 
-### Setup wizard extras
+---
 
-- Close trigger: auto-closes when the live entity signature for `project-claude-md` changes (i.e. when `CLAUDE.md` gets written), comparing against a baseline captured at mount. (`SetupWizardModal.tsx:92–104`)
+## How it connects
 
-### State machine
+- **Depends on:** `PtySession` (the process/PTY/JSONL-tailer primitive) · `preparePodSpawn` (writes the temp session files) · `prepareClaudeRuntimeFiles` (setup wizard path) · `jsonlPathFor` (deterministic JSONL path) · `ChatSurface` (the shared chat renderer) · `WorkflowGraphV2` (workflow builder only)
+- **Used by:** `CreatePodModal` (hosts the agent-designer tab) · `WorkflowBuilderModal` · `SetupWizardModal` — all opened from the main UI
+- **Contracts crossed:** WS envelopes (`{prefix}-raw/state/event/jsonl/exit`, `workflow-builder-draft`) · HTTP (`POST /start`, `POST /send`, `POST /interrupt`, `DELETE /`) · `PC_SESSION_ID` env var (hooks use it to tag `ask` envelopes so session routing works — `templates/.claude/hooks/ask-intercept.cjs:28–30`)
 
-`TransientSessionState` = `'spawning' | 'ready' | 'thinking' | 'exited'`. (`events.ts:3`) Driven by `*-state` WS envelopes. There is no DB row; state lives only in the React component and the runtime's `PtySession`.
+---
 
-## Integrations (how it connects)
-
-- **Depends on:**
-  - `PtySession` (`packages/runtime/src/pty-session.ts`) — the PTY/spawn/JSONL-tailer primitive
-  - `preparePodSpawn` (`apps/server/src/services/pod-spawn.ts`) — materialises the pod's prompt, tools, mcp.json into a temp dir
-  - `prepareClaudeRuntimeFiles` (`apps/server/src/services/claude-runtime-bundle.ts`) — used by setup wizard
-  - `jsonlPathFor` (`packages/runtime/src/path-resolver.ts`) — deterministic CC JSONL path
-  - `ChatSurface` (`apps/web/src/features/chat/ChatSurface.tsx`) — the shared chat render surface
-  - `WorkflowGraphV2` — the workflow visualizer (workflow-builder only)
-- **Used by:**
-  - `CreatePodModal` — hosts the agent-designer chat tab
-  - `WorkflowBuilderModal` — the workflow authoring surface
-  - `SetupWizardModal` — the project onboarding wizard
-  - All three are opened from the main UI (agent creation, new workflow, first-run setup)
-- **Contracts / events crossed:**
-  - WS broadcast envelopes: `{prefix}-raw`, `{prefix}-state`, `{prefix}-event`, `{prefix}-jsonl`, `{prefix}-exit`, `workflow-builder-draft`
-  - HTTP REST: `POST /start`, `POST /send`, `POST /interrupt`, `POST /terminal-input`, `POST /resize`, `DELETE /`
-  - `PC_SESSION_ID` env var (set in `extraEnv`) — scopes hook writes and ask-intercept routing
-  - `ask-intercept.cjs` hook uses `PC_SESSION_ID` to tag outbound `ask` envelopes so session filtering works (`templates/.claude/hooks/ask-intercept.cjs:28–30`)
-
-## Target shape (per north star)
+## Target shape (per north star + Foundation Decisions)
 
 **Ledger verdict:** `MERGE→Engine` (Step 5), HIGH confidence. (`consolidation-ledger-2026-06-02.md §2`)
 
-Today `ProjectRuntime` (Brain) owns these `PtySession` instances — the same structural problem as the orchestrator owning its own Claude process. The target moves them to the Engine with policy `{ephemeral, streaming}`: same primitive as an agent run, just a different policy record, no separate class.
+Today `ProjectRuntime` (Brain) owns these `PtySession` instances directly — the same structural problem as the orchestrator owning its own Claude process. The target moves them to the Engine with a policy of `{ephemeral, streaming}`: the same underlying primitive as an agent run, differentiated only by the policy record, no separate class needed.
 
-What changes:
-- Brain calls the Engine to start a modal session (like it calls Engine for dispatched agents). Engine owns the `claude.exe`.
-- `PtySession` and `SessionState`/`terminalBufferLooksReady` are deleted in Step 6 after both orchestrator (Step 4) and modals (Step 5) have migrated.
-- Deterministic `ccSessionId` still needs to be threaded through `AgentHostStartRunRequest` — the bleed-through guard that was added for `PtySession` must carry over.
-- The `PtySession` file-watching (stop-marker + events file) dies with the migration. (`consolidation-ledger-2026-06-02.md §2, Transcript reading`)
+**What changes in the migration:**
+- Brain calls the Engine to start a modal session, the same way it calls the Engine for dispatched agents. The Engine owns the `claude.exe`.
+- The deterministic `ccSessionId` (the bleed-through guard) must be threaded through `AgentHostStartRunRequest` — the guard that was added for `PtySession` must carry over.
+- `PtySession` and its `terminalBufferLooksReady` banner-detection function are **deleted** in Step 6 (after both the orchestrator in Step 4 and modals in Step 5 have migrated). The JSONL file-watching dies with them.
+- **Prerequisite:** Step 3 (Engine endpoint re-resolution + reattach) must land first, or an Engine respawn silently severs modal sessions mid-conversation. (`unified-process-supervision-2026-06-02.md §9`)
+- **Phase-0 plan row:** Item 7 in `consolidation-ledger-2026-06-02.md §6`.
 
-**Prerequisite:** Step 3 (Engine endpoint re-resolution + reattach) must land before Steps 4–5, or an Engine respawn silently severs modal sessions. (`unified-process-supervision-2026-06-02.md §9 step ordering`)
-
-**Phase-0 plan row:** Item 7 in `consolidation-ledger-2026-06-02.md §6`.
+---
 
 ## Known issues / scar tissue
 
-1. **JSONL bleed-through** — without a deterministic `--session-id`, `PtySession` fell back to a directory scan (`~/.claude/projects/<cwd-hash>/`) and latched onto the newest `.jsonl` by mtime, which could be a sibling VS Code claude.exe session writing into the same project folder. Fix: `transientCcSession()` mints a UUID, passes `--session-id`, and uses `jsonlPathFor` to produce the exact path CC will write to (`project-runtime.ts:825–831`). Fixed in commit `b33e37b`.
+1. **JSONL bleed-through (FIXED — commit `b33e37b`).** Without a pinned session ID, the system scanned `~/.claude/projects/<cwd-hash>/` and grabbed the newest `.jsonl` by file-modification time. If a VS Code Claude window was open in the same project folder, its conversation bled into the modal. Fix: `transientCcSession()` mints a UUID and `jsonlPathFor()` computes the exact file path. (`project-runtime.ts:825–831`)
 
-2. **Start-race ("Starting…" forever)** — the HTTP `start` response returns before the first WS `*-state` envelope if the session reaches `ready` very quickly. Naively doing `setState(r.state)` in the `.then()` overwrites a `ready` back to `spawning`. Fix: `mergeTransientSessionState` refuses to regress (`events.ts:102–108`). Also: `setSessionId` is called separately from `setState` so the session identity is locked in regardless of state ordering.
+2. **"Starting…" forever — the start-race (FIXED).** The HTTP `start` response can arrive *after* a WebSocket `*-state` envelope has already advanced the session to `ready`. Naively writing `setState(r.state)` in the response handler overwrote a `ready` back to `spawning` — the modal appeared stuck loading. Fix: `mergeTransientSessionState` refuses to go backward; `setSessionId` is called separately from `setState` so identity is locked in regardless of ordering. (`events.ts:102–108`, `SetupWizardModal.tsx:50`, `WorkflowBuilderModal.tsx:112`)
 
-3. **React Strict Mode double-invoke teardown** — in dev, React 18 double-invokes `useEffect` mount + cleanup. Putting `stopAgentDesigner` in `useEffect` cleanup killed the freshly-spawned claude.exe ~50ms after creation, producing a 16-byte silent transcript. Fix: cleanup is in the explicit `handleClose()` handler, NOT in `useEffect` cleanup (`CreatePodModal.tsx:97–106`). Same pattern in `WorkflowBuilderChat.tsx` comment.
+3. **React Strict Mode kills the session at birth (FIXED).** In development, React 18 double-invokes every `useEffect` mount + cleanup. Placing `stopAgentDesigner` in a `useEffect` cleanup killed the freshly-spawned Claude process ~50ms after creation, producing a silent 16-byte transcript. Fix: teardown is in the explicit `handleClose()` handler, NOT in `useEffect` cleanup. (`CreatePodModal.tsx:97–106`, `WorkflowBuilderChat.tsx` comment)
 
-4. **Banner cursor-escape regex** — claude.exe v2+ renders banner words with `\x1b[1C` cursor-right escapes instead of spaces. After `stripAnsi`, `"Welcome back"` becomes `"Welcomeback"`. `terminalBufferLooksReady` uses `\s*` between words to absorb both renderings. (`pty-session.ts:79–91`). This function is marked `DELETE` in Step 6 (dies with PtySession after migration).
+4. **Banner cursor-escape regex.** Claude v2+ renders banner words using `\x1b[1C` cursor-right escape sequences instead of spaces. After stripping escape codes, `"Welcome back"` becomes `"Welcomeback"`. The `terminalBufferLooksReady` function uses `\s*` between words to absorb both renderings. (`pty-session.ts:79–91`) This function is marked for deletion in Step 6 when `PtySession` is removed.
 
-5. **Modal auto-open state backfill** (unverified live in all three modals) — modals that auto-open on a WS broadcast must backfill state from the events history at mount; cursor-snap-to-end skips the triggering envelope. `SetupWizardModal` scans `events.slice(processedRef.current)` in a second `useEffect` to catch state and exit envelopes that arrived before the component mounted. The agent-designer pattern (in `CreatePodModal`) is manual start (not auto-open), so this race is less likely there.
+5. **Modal auto-open state backfill** (unverified across all three). Modals that open automatically in response to a WS broadcast must scan the event history at mount — the event that triggered the open may have already scrolled past the cursor. `SetupWizardModal` handles this by scanning `events.slice(processedRef.current)` in a second `useEffect`. The agent-designer opens manually (not on broadcast), so this race is less likely there. (`SetupWizardModal.tsx:92–104`)
 
-6. **Dead-event-stream post-23.4** (scar tissue, partially resolved) — prior to the JSONL migration, transient modal chat was driven by the `'event'`/`*-creator-event` hook channel. Post-23 those channels no longer emit chat events; the fix was to migrate modals to `*-jsonl` envelopes + `ChatSurface` adapter. The agent-designer and workflow-builder are on the correct path; verify the setup wizard similarly uses `*-jsonl` (it does: `adaptTransientEvents` with `prefix: 'setup-wizard'`).
+6. **Dead-event-stream post-23.4 (partially resolved).** Before the JSONL migration, modal chat was driven by the `'event'`/`*-creator-event` hook channel. Post-23, that channel stopped emitting chat events. The fix was to migrate to `*-jsonl` envelopes + `ChatSurface`. Agent-designer and workflow-builder are on the correct path. Setup wizard also uses `adaptTransientEvents` with `prefix: 'setup-wizard'`, so it should be correct too — but this wasn't independently re-verified.
 
-7. **One per project, not one per user** — `ProjectRuntime` holds exactly one of each modal session. Starting a second agent-designer kills the first (`endAgentDesigner()` in `startAgentDesigner()`). Not a bug, but a constraint: two browser tabs on the same project share one transient session.
+7. **One session per project, not per user.** `ProjectRuntime` holds exactly one of each modal type. Opening the agent-designer in a second browser tab on the same project kills the first session. Not a bug — a deliberate constraint — but worth knowing if you're testing.
 
-## Open questions
+---
 
-- Does the Engine's `AgentRun` primitive need new policy flags (`ephemeral`, `streaming`) before Step 5, or can the existing one-shot flags be reused with small tweaks? The orchestrator migration (Step 4) is the validation gate.
-- Does `ccSessionId` need to be threaded through `AgentHostStartRunRequest` for bleed-through prevention, or does the Engine already mint deterministic session ids on the host side?
-- After Step 5, does the `workflow-builder-draft` store (currently in `ProjectRuntime`) need to move to the Brain/Store, or can it stay as an in-process Brain-side map keyed by `sessionId`?
+## Decisions & open questions
+
+**For Emerson (product calls):**
+- **One modal per project is a real constraint.** Today two tabs on the same project share one agent-designer session — opening a second kills the first. Is that acceptable long-term, or should sessions eventually be per-user?
+
+**Technical:**
+- Does the Engine's `AgentRun` primitive need new policy flags (`ephemeral`, `streaming`) before Step 5, or can the existing flags be reused with small tweaks? The orchestrator migration (Step 4) is the validation gate.
+- Does `ccSessionId` need to be threaded through `AgentHostStartRunRequest` for bleed-through prevention, or does the Engine already mint deterministic session IDs on the host side?
+- After Step 5, does the `workflow-builder-draft` store (currently an in-memory map in `ProjectRuntime`) need to move to Brain/Store, or can it stay as a Brain-side map keyed by `sessionId`?
 - Setup wizard uses `--append-system-prompt-file` (no pod spawn). After migration, does this need a pod row, or can the Engine accept an arbitrary append-prompt path in its session policy?

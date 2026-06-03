@@ -2,102 +2,147 @@
 
 > **Role:** Engine
 > **Status:** as-built snapshot — 2026-06-03
-> **Code anchors:** `packages/agent-host/src/agent-host-service.ts`, `packages/agent-host/src/http-server.ts`, `packages/agent-host/src/cli.ts`, `packages/runtime/src/agent-host-protocol.ts`, `packages/runtime/src/agent-host-lock-file.ts`, `apps/server/src/services/host-connection.ts`, `apps/desktop/src/agent-host-process.ts`
+> **Code anchors:** `packages/agent-host/src/agent-host-service.ts` · `packages/agent-host/src/http-server.ts` · `packages/agent-host/src/cli.ts` · `packages/runtime/src/agent-host-protocol.ts` · `packages/runtime/src/agent-host-lock-file.ts` · `apps/server/src/services/host-connection.ts` · `apps/desktop/src/agent-host-process.ts`
+
+---
 
 ## What it is (plain English)
 
-The Agent Host is a separate background process that owns and runs dispatched `claude.exe` agent workers. The main server (the Brain) sends it commands over HTTP to start, pause, answer, cancel, or complete a run. The host actually spawns the `claude.exe` processes, watches them, and streams their events back. It is crash-isolated from the Brain: if the server hot-reloads or crashes, the agent workers survive.
+The Engine is **the garage where every Claude process is parked and maintained — one mechanic owns all the cars.** It is a background process that runs separately from the main app server. When an agent needs to do a job, the server tells the Engine "start this one," and the Engine spawns the Claude process, keeps it alive, watches it, and streams back everything it does. If the server crashes or hot-reloads during development, the agents already running keep going — they're in the garage, not inside the server.
 
-Today it only owns **dispatched agents** (workflow steps and orchestrator-triggered workers). The orchestrator conversation and the three modal sessions (`agent-designer`, `workflow-creator`, `setup-wizard`) are still owned by the Brain directly — that is the gap the north star closes.
+Today the Engine only manages **dispatched agents** (workers launched by a workflow or the orchestrator). The orchestrator's own conversation and three pop-up sessions (agent-designer, workflow-creator, setup-wizard) are still managed directly by the server — that's the gap the north-star rebuild closes.
+
+---
 
 ## What it's supposed to do (intent)
 
-Own every `claude.exe` process so that no other component needs to manage AI-process lifecycle. One home for spawning, one ready signal, one completion signal, one transcript stream. The crash-isolation property is the whole reason it exists as a separate process.
+Own every Claude process in the system so that no other part of the app needs to think about AI-process lifecycle. One place to start a process, one signal that it's ready, one signal that it's done, one stream of events. The separation from the server is the whole point — crash-isolation means a server restart or hot-reload during development doesn't kill agents mid-task.
 
-## How it works today (as-built)
+---
 
-**Startup — two transport modes**
+## The parts (every component, plain English)
 
-- `cli.ts` starts the host. If `--http-lock-file` (or `PC_AGENT_HOST_LOCK_FILE`) is set, it starts an HTTP server and writes a lock file (`agent-host/host.lock.json`) containing `{ pid, hostId, port, startedAt, protocolVersion }`. This is the production path.
-- If no lock-file flag is present, it falls back to a stdio JSON-line protocol (newline-delimited commands in / events out). This path exists for tests and is not used by the running app.
+### 1. How the Engine starts up
 
-**Lock file and discovery**
+The Engine starts as a separate process via `cli.ts`. It has two modes:
 
-- The Brain discovers the host by reading the lock file via `discoverAgentHostEndpoint` (`agent-host-lock-file.ts`). It checks the PID is alive before trusting the port.
-- The lock file is the ONLY rendezvous — there is no registration call, no fixed port.
-- `agent-host-lock-file.ts` and `apps/desktop/src/agent-host-process.ts` are **drift twins**: the Electron main process cannot import `@pc/runtime` (it would pull in `node-pty`), so it hand-copies the lock-file shape. Any change to the shape or `protocolVersion` must be mirrored manually (`agent-host-lock-file.ts:1–6`).
+- **HTTP mode (production path):** started with a `--http-lock-file` flag. It opens an HTTP server on an available port and writes a small **lock file** — a JSON file at `<dataDir>/agent-host/host.lock.json` that says "I'm alive at this port, this PID, this time." Everything else in the system uses that file to find and talk to the Engine.
+- **Stdio mode (test-only):** if no lock-file flag is present, it falls back to reading commands from standard input and writing events to standard output. This path exists for automated tests; the real app always uses HTTP.
 
-**HTTP API (three endpoints)**
+### 2. The lock file — how the server finds the Engine
 
-| Endpoint | Purpose |
+The lock file is the **only rendezvous point**. There is no hard-coded port. The server reads the file, checks that the process ID inside is actually running, and then connects to whatever port the file says.
+
+Contents of the lock file (`agent-host-lock-file.ts`):
+
+| Field | Plain meaning | Example |
+|---|---|---|
+| `pid` | Process ID — used to confirm the Engine is alive | `12345` |
+| `hostId` | A unique ID minted each startup | (a UUID) |
+| `port` | The HTTP port to send commands to | `49200` |
+| `startedAt` | When it started | (ISO timestamp) |
+| `protocolVersion` | Version of the command format — must match the server's expectation | `1` |
+
+> ⚠️ **Drift twin.** The lock-file shape is defined in `packages/runtime/src/agent-host-lock-file.ts`, but the Electron main process (`apps/desktop/src/agent-host-process.ts`) can't import that package (it would drag in `node-pty`, a native module). So the desktop app **hand-copies the shape**. Any change to the lock file format must be mirrored by hand in both files — there's no compile-time check. A comment at `agent-host-lock-file.ts:1` explicitly warns about this.
+
+### 3. The HTTP API — how the server talks to the Engine
+
+Three endpoints:
+
+| Endpoint | Plain purpose |
 |---|---|
-| `GET /health` | Returns identity. Used by heartbeat. |
-| `POST /command` | Accepts any `AgentHostCommand` JSON; returns `AgentHostCommandResponse`. |
-| `GET /events?after=<seq>` | NDJSON stream — replays buffered events, then streams live ones. 15s newline keepalive. |
+| `GET /health` | "Are you alive?" — returns the Engine's identity. Used by the heartbeat. |
+| `POST /command` | "Do something" — accepts any command and returns a response. |
+| `GET /events?after=<seq>` | A live stream of everything happening — replays buffered events, then streams new ones as they arrive. Sends a blank keepalive line every 15 seconds to hold the connection open. |
 
-**Commands the host understands** (`agent-host-protocol.ts:76–90`)
+Commands the Engine understands (`agent-host-protocol.ts:76–90`):
 
 `hello` · `list-runs` · `start-run` · `resume-run` · `send` · `mark-paused` · `answer-pending` · `cancel` · `complete-run` · `notify-mcp-handshake` · `shutdown`
 
-**Run lifecycle inside the host**
+### 4. The run tracker — what lives inside the Engine
 
-- `AgentHostService` (`agent-host-service.ts`) holds two in-memory maps: `runs` (runId → `HostRunEntry`) and `ccSessionIndex` (ccSessionId → runId).
-- On `start-run` or `resume-run`, it creates an `AgentRun` (from `@pc/runtime`), wires four event listeners (`state`, `jsonl-event`, `chunk`, `terminal`), then calls `run.start()`.
-- On `terminal`, it appends a `run-terminal` event to the buffer and removes the cc session from the index.
-- The event buffer holds up to 1,000 events (configurable). The `/events` stream replays anything after the caller's `seq` watermark and then goes live.
+`AgentHostService` (`agent-host-service.ts`) holds two in-memory lookup tables:
 
-**Completion path** (`agent-host-service.ts:296–313`)
+- **`runs`** — maps a run ID to its active `HostRunEntry` (one entry per live agent job).
+- **`ccSessionIndex`** — maps the Claude process's own session ID back to the run ID (so when Claude signals something, the Engine can find which run it belongs to).
 
-The Brain's deliverable route calls `complete-run` on the host when an agent submits `pc_submit_deliverable`. The host calls `run.complete(result)`, which transitions the `AgentRun` to `completed` and fires the `terminal` event. That event is the sole "good done" signal — there is no in-process fallback path (it was deleted in slice Step 1, commit `40c2a91f`).
+On `start-run` or `resume-run`, the Engine creates an `AgentRun` (from `@pc/runtime`), wires up four listeners (state changes, transcript events, raw text chunks, and terminal/done signals), and starts the Claude process.
 
-**Brain-side connection** (`host-connection.ts`)
+### 5. How a job finishes (the done signal)
 
-`HostConnection` wraps an `HttpAgentHostClient` behind a single long-lived conduit. Key behaviors:
-- Re-discovers the host from the lock file on any connection failure (survives host respawn on a new port without requiring a Brain restart).
-- Tracks a `lastSeq` watermark so reconnection resubscribes from the right event offset.
-- Backoff-gated heartbeat (10s–30s) publishes `HostHealth` (`connected` / `reconnecting` / `down`) for the UI health pill.
-- If the lock file's `protocolVersion` doesn't match, health transitions to terminal `down` (not `reconnecting`).
+When an agent calls the `pc_submit_deliverable` tool — "here's my finished work" — the server's deliverable route tells the Engine `complete-run`. The Engine calls `run.complete(result)`, which triggers the `terminal` event. That event is the **only valid "done" signal.** There is no fallback path that guesses completion from log files; the old fallback was deleted in commit `40c2a91f`. The lesson is law: any "done" handling added outside this one path will strand runs again.
 
-**Packaged mode** (`apps/desktop/src/agent-host-process.ts`)
+(`agent-host-service.ts:296–313`)
 
-Electron main calls `spawnPackagedAgentHostProcess`, which runs `agent-host.mjs --http-lock-file <path>` as a child process using the Electron binary with `ELECTRON_RUN_AS_NODE=1`. **Packaged Electron does NOT respawn the host if it dies** — this is the known gap that Step 7 (Supervisor) fixes.
+### 6. The event buffer — the Engine's memory
 
-## Integrations (how it connects)
+The Engine keeps the last 1,000 events in a ring buffer (an in-memory queue that discards oldest entries when full). When the server reconnects after a gap, it tells the Engine the last event sequence number it saw and gets a replay of everything since. 
 
-- **Depends on:** `AgentRun` + `AgentRunRegistry` + `LowLevelSpawn` from `@pc/runtime` (the actual PTY spawn and lifecycle primitives). `ReadyGate` lives inside `AgentRun`. The Brain passes `jsonlPath` (server-computed) to avoid the host recomputing it from a divergent env.
-- **Used by:** the Brain (`apps/server`) via `HostConnection` → `HttpAgentHostClient` → `POST /command`; Electron main (`apps/desktop`) for spawning and shutdown.
+> ⚠️ If the server is disconnected long enough that more than 1,000 events have passed, it misses the middle; it falls back to `list-runs` to get current state. This is not a data-loss bug (the database is the truth) but means the event stream is not a durable log on its own.
+
+### 7. The server's connection to the Engine (`host-connection.ts`)
+
+`HostConnection` is the server-side wrapper that manages the ongoing relationship with the Engine. Key behaviors:
+
+- **Auto-rediscovers after a respawn.** If the Engine dies and restarts on a new port, the server re-reads the lock file and reconnects automatically — no server restart needed.
+- **Watermark tracking.** Remembers the last event sequence number so reconnection picks up where it left off.
+- **Heartbeat with backoff.** Checks in every 10–30 seconds and publishes a health status (`connected` / `reconnecting` / `down`) for the health indicator in the UI.
+- **Protocol version mismatch = terminal.** If the lock file shows a different `protocolVersion` than expected, health goes to permanent `down` rather than keep retrying.
+
+### 8. Packaged (installed) app mode (`apps/desktop/src/agent-host-process.ts`)
+
+In the installed desktop app (Electron), the main process starts the Engine by running `agent-host.mjs --http-lock-file <path>` as a child process, using the Electron binary with a flag that makes it run as plain Node.
+
+> 📌 **Known gap — packaged host never respawns.** If the Engine dies in the packaged app, Electron does not restart it. In development, a separate dev-supervisor script (`dev-supervisor.mjs`) handles respawning, which is why this gap only surfaces in the installed app. This is the direct motivation for **Step 7 (Supervisor)** in the rebuild plan.
+
+---
+
+## How it connects
+
+- **Depends on:** `AgentRun`, `AgentRunRegistry`, and `LowLevelSpawn` from `@pc/runtime` — the actual PTY (terminal emulator) spawn and lifecycle primitives. `ReadyGate` (the signal that a Claude process is ready to receive input) lives inside `AgentRun`. The server passes in the `jsonlPath` (path to Claude's transcript file) rather than letting the Engine compute it independently, to avoid drift.
+- **Used by:** the main server (`apps/server`) via `HostConnection` → `HttpAgentHostClient` → `POST /command`; the Electron main process (`apps/desktop`) for startup and shutdown.
 - **Contracts / events crossed:**
-  - Wire protocol: `AgentHostCommand` / `AgentHostCommandResponse` / `AgentHostEvent` (all defined in `packages/runtime/src/agent-host-protocol.ts`).
+  - Wire protocol types: `AgentHostCommand` / `AgentHostCommandResponse` / `AgentHostEvent` (all in `packages/runtime/src/agent-host-protocol.ts`).
   - Discovery: `AgentHostLockFile` at `<dataDir>/agent-host/host.lock.json`.
-  - Events the Brain reacts to: `run-terminal` (the one terminal authority), `run-state`, `run-jsonl`, `run-chunk`.
-  - Brain-side handlers: `applyHostTerminalSnapshot` in `agent-host-reattach.ts` routes every terminal event through `applyAgentRunTerminalEffects` (the single terminal authority, Step 1 done).
+  - Events the server reacts to: `run-terminal` (the one good "done"), `run-state`, `run-jsonl`, `run-chunk`.
+  - Server-side handler: `applyHostTerminalSnapshot` in `agent-host-reattach.ts` routes every terminal event through `applyAgentRunTerminalEffects` — the single terminal authority (Step 1, done).
 
-## Target shape (per north star)
+---
 
-**Ledger verdict:** `KEEP → grow` (it IS the Engine; expand its scope, don't replace it).
+## Target shape (per north star + Foundation Decisions)
 
-Per `unified-process-supervision-2026-06-02.md` §9 Steps 3–6:
+**Ledger verdict: KEEP → grow.** The Engine is the right foundation; expand its scope, don't replace it.
 
-- **Step 3 (Brain re-resolution):** already mostly works via `HostConnection`'s lock-file re-discovery. Needs a guard: the Brain must HOLD (not finalize) if the Engine is unreachable, not act on an empty snapshot.
-- **Step 4:** Engine absorbs the orchestrator session (`InteractiveSession`). Brain stops owning orchestrator `claude.exe`; passes it to the Engine as a `{ persistent, interactive, fire-and-watch }` policy run.
-- **Step 5:** Engine absorbs the three modals (`PtySession`). Same move, policy `{ ephemeral, streaming }`.
-- **Step 6:** With everything on the Engine, delete the duplicates: `PtySession`, `InteractiveSession`, the banner-regex ready detector (`terminalBufferLooksReady`), PtySession's file-watching. `AgentRun` becomes the single session primitive with policy flags. `jsonl-tailer.ts` (base layer) stays.
+Per `unified-process-supervision-2026-06-02.md` §9, Steps 3–6:
 
-After Step 6, the Engine owns every `claude.exe` in the tree: one state machine, one ready detector (`ReadyGate`), one transcript reader (`agent-run-jsonl-tailer.ts`), one completion signal (`complete-run`).
+- **Step 3 (Brain re-resolution):** `HostConnection` can already rediscover after an Engine respawn. Remaining: the server must **hold** (not act on stale state) if the Engine is unreachable — it currently could act on an empty snapshot.
+- **Step 4:** Engine absorbs the orchestrator session (`InteractiveSession`). Server stops owning the orchestrator's Claude process; hands it to the Engine as a policy run (`{ persistent, interactive, fire-and-watch }`).
+- **Step 5:** Engine absorbs the three modal sessions (`PtySession`). Same move, policy `{ ephemeral, streaming }`.
+- **Step 6:** With all sessions on the Engine, delete the duplicates: `PtySession`, `InteractiveSession`, the banner-regex ready detector (`terminalBufferLooksReady`), and PtySession's file-watching. `AgentRun` becomes the one session primitive, differentiated by policy flags. `jsonl-tailer.ts` (the base transcript reader) stays.
 
-The current gap: the host owns **dispatched agents only**. The orchestrator lives in `InteractiveSession` (Brain-owned) and the three modals live in `PtySession` (also Brain-owned). Steps 4–5 are `HIGH` confidence but require Step 3 as a prereq (so an Engine respawn doesn't silently sever the orchestrator).
+After Step 6: **one state machine, one ready detector (`ReadyGate`), one transcript reader (`agent-run-jsonl-tailer.ts`), one completion signal (`complete-run`).**
+
+The current gap: today the Engine owns dispatched agents only. The orchestrator lives in `InteractiveSession` (server-owned) and the three modals live in `PtySession` (also server-owned). Steps 4–5 are high-confidence moves but require Step 3 as a prereq so an Engine respawn can't silently sever the orchestrator.
+
+---
 
 ## Known issues / scar tissue
 
-- **Packaged host never respawns.** Electron main spawns the host once and does not restart it on death. This is the direct motivation for Step 7 (Supervisor). In dev, `dev-supervisor.mjs` does respawn it, which is why the gap is only visible in the packaged app.
-- **Lock-file drift twin.** `agent-host-lock-file.ts` and `apps/desktop/src/agent-host-process.ts` must be kept in sync by hand — there is no compile-time check. Comment at `agent-host-lock-file.ts:1` explicitly warns about this.
-- **Step 3 is incomplete.** `HostConnection` can re-discover after a respawn, but the Brain's reconciler does not yet HOLD on an unreachable Engine — it could act on stale state. This is Step 2/3 work.
-- **Stdio path is a latent dual transport.** `cli.ts` still supports the JSON-line stdio protocol. In any real server run, the HTTP path is always taken (`index.ts:279,304` always wires a `hostConnection`). The stdio branch is only exercised by tests that don't start a real host. Not a behavior risk in production, but it is an untested surface in prod.
-- **Event buffer is lossy.** The in-memory ring buffer caps at 1,000 events. If the Brain disconnects long enough to miss more than 1,000 events, it will not be able to reconstruct intermediate run states from the replay buffer alone — it must fall back to `list-runs`. This is not a correctness bug (the DB is truth) but means the event stream is not a durable log.
+- **Packaged host never respawns.** See Part 8. Only visible in the installed app; development is covered by `dev-supervisor.mjs`. Supervisor (Step 7) is the fix.
+- **Lock-file drift twin.** See Part 2. No compile-time safety net — a format change must be mirrored by hand.
+- **Step 3 is incomplete.** The server can rediscover after an Engine respawn, but its reconciler does not yet hold on an unreachable Engine. It could act on stale state. This is Step 2/3 work.
+- **Stdio path is a latent dual transport.** `cli.ts` still supports the JSON-line stdio mode. In any real run, the HTTP path is always taken. The stdio branch is only exercised by tests; it is not a behavior risk in production, but it is an untested surface.
+- **Event buffer is lossy.** See Part 6. 1,000-event cap is not a correctness bug but means the stream is not a durable replay log.
 
-## Open questions
+---
 
-- What policy flags are needed for the orchestrator (`persistent, interactive, fire-and-watch`) to actually work on the Engine's `AgentRun` primitive? The `AgentRun` class was designed for one-shot dispatched runs; `interactive` and `persistent` semantics (no wall-clock, no idle-kill, streaming input) need to be validated before Step 4.
-- Do modals need deterministic `ccSessionId`s threaded through `AgentHostStartRunRequest`? Prior bleed-through bugs (`b33e37b`) required deterministic session ids. Confirm the mint path is safe before Step 5.
-- After the Engine absorbs the orchestrator (Step 4), does the Brain's `ChannelServer` per-project stdio child still need to exist? The ledger marks this `VERIFY` — confirm it's the orchestrator's MCP bridge and what survives after Step 4.
-- Should the event buffer be backed by the `live_outbox` table (once workflow events become truth in slice 3) rather than an in-memory ring? If the Brain can always replay from the DB, the in-memory cap becomes irrelevant.
+## Decisions & open questions
+
+**For Emerson (product calls):**
+1. **Supervisor scope.** Step 7 builds a Supervisor that respawns the Engine if it dies in the packaged app. Does it also need to restart the main server if that dies? (The dev script already does both.)
+
+**Technical:**
+- What policy flags does `AgentRun` need for an orchestrator session (`persistent`, `interactive`, no idle-kill, streaming input)? The class was designed for one-shot dispatched jobs; these semantics need validation before Step 4.
+- Do modal sessions need deterministic Claude session IDs threaded through `AgentHostStartRunRequest`? Prior bleed-through bugs (`b33e37b`) required deterministic session IDs. Confirm the mint path is safe before Step 5.
+- ~~Does the server's `ChannelServer` child survive Step 4?~~ **Resolved — ☠ FD-3 (locked 2026-06-03):** nothing of the channel system survives the rebuild. Notifications reach the orchestrator only via the mailbox-injected turn.
+- Should the event buffer be backed by the `live_outbox` table (once workflow events become the truth in slice 3) rather than an in-memory ring? If the server can always replay from the DB, the 1,000-event cap becomes irrelevant.

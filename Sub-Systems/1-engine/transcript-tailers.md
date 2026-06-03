@@ -2,271 +2,202 @@
 
 > **Role:** Engine / cross-cutting (chat rendering + historical replay)
 > **Status:** as-built snapshot — 2026-06-03
-> **Code anchors:**
-> - `packages/runtime/src/jsonl-tailer.ts` — v1 base layer (used by PtySession, InteractiveSession, LowLevelSpawn)
-> - `packages/runtime/src/agent-run-jsonl-tailer.ts` — v2 agent-run layer (used by AgentRun + server-side drain callers)
-> - `packages/runtime/src/path-resolver.ts` — single source for all JSONL paths
-> - `apps/server/src/services/jsonl-sweep.ts` — retention cleanup
-> - `apps/server/src/services/session-replay.ts` — one-shot replay loader
-> - `apps/server/src/services/conversation-replay.ts` — HTTP service wrapper over session-replay
+> **Code anchors:** `packages/runtime/src/jsonl-tailer.ts` · `packages/runtime/src/agent-run-jsonl-tailer.ts` · `packages/runtime/src/path-resolver.ts` · `apps/server/src/services/jsonl-sweep.ts` · `apps/server/src/services/session-replay.ts` · `apps/server/src/services/conversation-replay.ts`
 
 ---
 
 ## What it is (plain English)
 
-When an agent runs, Claude Code writes everything it does — every message, tool call, and
-system event — to a plain text file called a JSONL transcript (one JSON object per line).
-This subsystem reads those files and turns the raw lines into typed events the app can
-use: tool calls for the activity panel, assistant text for chat bubbles, usage numbers for
-the token counter, system messages for the status line.
+**Claude writes everything it says and does to a file on disk.** Every message, every tool call, every system event lands in a plain-text log called a JSONL transcript — one line per event, appended as the agent runs. "Tailing" that file means reading it as it grows, line by line, the same way `tail -f` works in a terminal.
 
-There are two distinct and legitimate reasons to read the transcript:
-1. **Chat rendering** — show the user what the agent said and did (valid forever).
-2. **Completion detection** — decide whether the run is finished (the anti-pattern the north star kills).
+This subsystem does the tailing. It turns the raw lines into typed events — chat bubbles, tool calls, token counts, status messages — so the app can show you what the agent is doing in real time, and reload that history when you reconnect.
 
-These two uses are separated in the current code, but not yet fully enforced. The biggest
-ongoing risk is that a path-resolution failure silently severs the tailer and makes the idle
-timer the only remaining "done" signal.
+**The line this subsystem must never cross:** in the past, the app also used the transcript to *guess* whether the agent had finished. That was wrong, caused the stall bug, and is now gone. Today the transcript is read for two legitimate reasons only: **showing you the chat** and **loading history on reconnect**. Whether a run is done comes from the agent explicitly saying so (`pc_submit_deliverable`), not from reading a log file.
 
 ---
 
 ## What it's supposed to do (intent)
 
-Provide a reliable, real-time stream of typed events from Claude Code's on-disk JSONL transcript
-so the app can render chat faithfully. The tailer is the authoritative source for **what the
-agent said**. It is NOT and must NOT be the source for **whether the run is done** — that signal
-must come from a positive MCP receipt (`pc_submit_deliverable`).
+Stream typed events from Claude's on-disk transcript to the app so chat renders faithfully. Be the authoritative source for **what the agent said**. Never be the source for **whether the run is done** — that must always come from a positive, explicit signal.
 
 ---
 
-## How it works today (as-built)
+## The parts (every component, plain English)
 
-### The two tailer classes
+### 1. Where Claude writes — the transcript file
 
-**`JsonlTailer` (v1) — `packages/runtime/src/jsonl-tailer.ts`**
+When Claude starts, it creates a JSONL file on disk in its own config directory. The path is built from:
+- A base directory (`CLAUDE_CONFIG_DIR`, or the default `~/.claude/` if not overridden)
+- A folder named after the working directory (special characters replaced with `-`)
+- A file named after the session UUID
 
-- Base layer. Polls the file every 200ms (`setInterval`; unref'd so it doesn't block process exit).
-- On each tick: reads the whole file with `readFileSync`, splits on `\n`, skips the last
-  partial line (mid-write guard), emits typed `JsonlEvent` objects for every new line past
-  the cursor.
-- Handles every CC entry type: `user`, `assistant`, `tool_use`/`tool_result`, `system`,
-  `queue-operation`, `attachment` (queued_command), plus Section 31's metadata types
-  (`ai-title`, `last-prompt`, `tool_progress`, `stream_event`, `session_state_changed`,
-  `compact_boundary`, etc.).
-- CC quirk handled: `attachment` with `attachment.type === 'queued_command'` carries the
-  queued prompt body — synthesized into a `jsonl-user` envelope so the message appears in
-  chat even though CC never writes a `type: 'user'` row for it.
-- CC quirk handled: CC ≥2.1 logs `remove` instead of `dequeue` for turn-end-driven queue
-  consumption — both collapsed to `jsonl-queue-dequeue` (line 329).
-- Used by: `LowLevelSpawn` (agent workers), `PtySession` (orchestrator + modals today),
-  `InteractiveSession` (orchestrator today).
+Example: `~/.claude/projects/E--Projects-Caisson/<session-uuid>.jsonl`
 
-**`AgentRunJsonlTailer` (v2) — `packages/runtime/src/agent-run-jsonl-tailer.ts`**
-
-- Agent-run layer built on the same poll mechanism. Adds:
-  - **Loop-state tracking** — resets `firedThisLoop` at each `user`/`queued_command` boundary
-    so dedup works across multi-turn conversations.
-  - **Interleaved-thinking fix** — Opus 4.7 can emit two `assistant` rows with
-    `stop_reason: end_turn` in one logical turn (thinking-only first, text-bearing second).
-    v1's "first end_turn = done" fired prematurely. v2 requires a non-empty text block on
-    named happy-path stop reasons before emitting `jsonl-turn-end`; waits for the
-    text-bearing row or a `stop_hook_summary` fallback (line 371–395).
-  - **Pause detection** — state machine (`idle`→`armed`) watches for a `tool_use` stop
-    reason followed by tool results with no subsequent assistant row, confirmed by
-    `stop_hook_summary`. Emits `jsonl-pause-detected` before the turn-end fallback (line 404–419).
-  - **`setImmediate`-deferred first emit** — initial drain deferred so listeners attached
-    after `new AgentRunJsonlTailer(...)` but before the next tick still see events (guards
-    the constructor-emit-before-listeners-wired bug class; line 175).
-  - **`drainAvailable()`** — synchronous one-shot read, no polling. Used by server-side
-    callers that need a snapshot without starting an ongoing poll.
-- Used by: `AgentRun` (live agent workers), server-side drain in routes and terminal-effects.
-
-### Path resolution
-
-`packages/runtime/src/path-resolver.ts:jsonlPathFor(workspaceAbsPath, ccProviderSessionId)`
-builds the canonical path:
-`<CLAUDE_CONFIG_DIR>/projects/<encoded-cwd>/<session-uuid>.jsonl`
-
-CWD encoding: every non-`[A-Za-z0-9._-]` character maps to `-`
-(e.g. `E:\Projects\Caisson` → `E--Projects-Caisson`).
-
-`CLAUDE_CONFIG_DIR` env var is honored (historically missed — Section 15 lesson). All callers
-import from `path-resolver.ts`; hardcoding `homedir()` elsewhere is a lint error.
-
-### Live tailing (agent workers)
-
-`LowLevelSpawn.attachJsonlTailer()` (`low-level-spawn.ts:500`):
-- Polls every 250ms for the file to appear (CC mints it lazily, ~1–2s after first turn).
-- On resume: reads existing line count and sets `startLine` so prior turns don't replay as
-  fresh events and race the completion path (line 509–519).
-- Forwards all `jsonl-event` emissions up to `AgentRun.onJsonlEvent()`.
-
-`AgentRun.onJsonlEvent()` (`agent-run.ts:528`):
-- Resets the idle timer on every event.
-- Captures last assistant text for the `result` field.
-- Disarms the first-output watchdog when genuine activity arrives.
-- **Does NOT close the run.** The comment at line 545 is explicit: "a turn-end is NO
-  LONGER a completion signal. Completion comes solely from `complete()` (the agent's
-  `pc_submit_deliverable` receipt)."
-
-### Server-side drain uses (one-shot, no poll)
-
-Several server routes and services create a tailer, call `drainAvailable()`, read all events,
-then discard the tailer — no ongoing poll:
-
-- `apps/server/src/features/agent-runs/routes.ts:183` — loads transcript for the agent card's
-  inline JSONL display.
-- `apps/server/src/services/agent-run-terminal-effects.ts:290` — verification gate reads tool
-  calls from the transcript to confirm `pc_ask_user` was invoked before accepting a paused
-  terminal state.
-- `apps/server/src/services/agent-run-control.ts:214` — similar verification path.
-- `apps/server/src/services/agent-host-reattach.ts:475` — backfill broadcasts JSONL events
-  to the live WS stream when the host reports a run that wasn't tracked in-memory (reattach
-  scenario).
-
-### Replay (historical / reconnect)
-
-`apps/server/src/services/session-replay.ts:loadSessionReplayCheckpoint()`:
-- Reads `<sessionDataPath>/jsonl-events.jsonl` (PC's normalized event log written by
-  `PtySession`'s tailer) as the primary source.
-- Falls back to `events.jsonl` (legacy hook-written) for pre-Section 23 sessions.
-- Returns a `SessionReplayCheckpoint`: sorted envelopes with stable `seq` numbers for
-  ordered replay.
-
-`apps/server/src/services/conversation-replay.ts` wraps `session-replay.ts` as a
-`ConversationReplayService` for HTTP endpoints; delegates all reads to `loadSessionReplayCheckpoint`.
-
-### Retention sweep
-
-`apps/server/src/services/jsonl-sweep.ts:sweepStaleJsonl()`:
-- Walks `~/.claude/projects/` at server boot, deletes `.jsonl` files whose `mtime` is older
-  than the retention window (configurable; `'never'` is a no-op).
-- Mtime-based (not creation time) — a resumed long-lived session survives.
-- Non-fatal per-file errors counted as `skipped`, never abort the sweep.
-
-### Chat rendering dedup
-
-The web layer receives both hook-derived events and JSONL events on the same WS stream.
-`apps/web/src/features/chat/normalizeJsonlEnvelope.ts:normalizeJsonlEnvelope()` converts
-JSONL envelopes into hook-shape envelopes so the chat renderer has a single render path.
-Dedup between hook and JSONL events is handled at the envelope level in the UI store
-(the surviving JSONL envelope inherits the hook's index via a `replacedBy` map to avoid
-remount flicker — referenced in memory as `[PC-PTY dual-stream render identity]`).
+**All path construction goes through one place:** `packages/runtime/src/path-resolver.ts`. Nothing in the codebase should hardcode this path or guess it. (This was a past source of bugs — a wrong path means a silently severed tailer.)
 
 ---
 
-## Integrations (how it connects)
+### 2. The base tailer — the reading engine
 
-- **Depends on:** `path-resolver.ts` for all paths; the CC process having written a JSONL
-  file to disk; `CLAUDE_CONFIG_DIR` env if overridden.
+**`packages/runtime/src/jsonl-tailer.ts`** (v1)
+
+This is the core reading loop. Every 200ms it reads the transcript file, finds any new lines since the last read, and turns each one into a typed event. The last partial line (still being written by Claude) is always skipped.
+
+It knows how to handle every kind of line Claude writes:
+
+| Line type | What it is |
+|---|---|
+| `user` | Something the user or system sent to Claude |
+| `assistant` | Claude's response text |
+| `tool_use` / `tool_result` | Claude calling a tool, and the result that came back |
+| `system` | Internal system messages |
+| `queue-operation` / `attachment` | A command queued up to be sent on the next turn |
+| `ai-title`, `compact_boundary`, etc. | Session-state metadata (Section 31 additions) |
+
+**Two CC quirks handled here:**
+
+- **Queue protocol (CC ≥2.1):** When Claude finishes a turn and consumes a queued command, it logs `remove` instead of `dequeue`. Both are collapsed to the same `jsonl-queue-dequeue` event. Also: queued commands arrive as `attachment` lines with `attachment.type === 'queued_command'`, not as `user` lines — the tailer synthesizes them into a `jsonl-user` envelope so they appear in chat. (`jsonl-tailer.ts:329`)
+- **No guard test exists** that both quirk handlers stay in sync across v1 and v2.
+
+Used by: `LowLevelSpawn` (agent workers), `PtySession` (orchestrator + modals today), `InteractiveSession` (orchestrator today).
+
+---
+
+### 3. The agent-run tailer — the layer built for workers
+
+**`packages/runtime/src/agent-run-jsonl-tailer.ts`** (v2)
+
+Built on the same poll loop as v1, but adds several things that matter for dispatched agent workers:
+
+**Interleaved-thinking fix (Opus 4.7 quirk):** Opus 4.7 can emit *two* `assistant` messages in one logical turn — a thinking-only message first, then the real text. v1's logic said "first `end_turn` = done" and fired prematurely on the thinking-only message. v2 requires a non-empty text block before it emits `jsonl-turn-end`; it waits for the text-bearing message or a `stop_hook_summary` fallback. (`agent-run-jsonl-tailer.ts:371–395`)
+
+**Pause detection:** A state machine watches for Claude stopping mid-turn at a tool call (waiting for a result), confirmed by a `stop_hook_summary` event. Emits `jsonl-pause-detected` so the app can show the agent is waiting, not hung. (`agent-run-jsonl-tailer.ts:404–419`)
+
+**Loop-state tracking:** Resets dedup state at each new user turn so multi-turn conversations don't bleed events across turns.
+
+**Deferred first emit:** The very first drain is deferred with `setImmediate` so that code that wires up listeners immediately after `new AgentRunJsonlTailer(...)` doesn't miss events. (Guards the "constructor emits before listeners are wired" bug class.) (`agent-run-jsonl-tailer.ts:175`)
+
+**`drainAvailable()`:** A one-shot synchronous read — no ongoing poll. Server-side callers that just need a snapshot use this and discard the tailer immediately after.
+
+Used by: `AgentRun` (live agent workers), several server-side routes for snapshot reads.
+
+---
+
+### 4. Live tailing (agent workers in real time)
+
+When an agent worker starts (`LowLevelSpawn.attachJsonlTailer()`), the tailer doesn't begin immediately — Claude mints its transcript file lazily, about 1–2 seconds after the first turn. The attachment logic polls every 250ms until the file appears, then starts.
+
+**On resume:** if an agent is resuming a prior session, the tailer reads the current line count first and sets `startLine` to that number. This means prior turns don't replay as fresh events. If the `readFileSync` to count lines fails, it falls back to 0 — which can silently reinstate the replay race (see Known issues).
+
+Every event flows up to `AgentRun.onJsonlEvent()` (`agent-run.ts:528`), which:
+- Resets the idle timer (so the run doesn't time out while the agent is working)
+- Captures the last assistant text for the `result` field
+- Disarms the first-output watchdog
+
+**What `onJsonlEvent` explicitly does NOT do:** close the run. The comment at line 545 is clear: *"a turn-end is NO LONGER a completion signal. Completion comes solely from `complete()` (the agent's `pc_submit_deliverable` receipt)."*
+
+---
+
+### 5. One-shot reads (server-side snapshots)
+
+Several parts of the server create a tailer, call `drainAvailable()` to read all events at that moment, then throw the tailer away — no ongoing poll. These are read-only snapshots:
+
+| Caller | What it reads the transcript for |
+|---|---|
+| `agent-runs/routes.ts:183` | Load the inline JSONL transcript for display on the agent card |
+| `agent-run-terminal-effects.ts:290` | Verify that `pc_ask_user` was actually called before accepting a paused state |
+| `agent-run-control.ts:214` | Same verification path, different call site |
+| `agent-host-reattach.ts:475` | Backfill WS stream when the host reports a run that wasn't tracked in memory |
+
+---
+
+### 6. Replay — loading history when you reconnect
+
+When the UI reconnects to a session (or loads the transcript view), it needs the full conversation history. Two services handle this:
+
+**`apps/server/src/services/session-replay.ts`** (`loadSessionReplayCheckpoint`):
+- Reads PC's own normalized event log at `<sessionDataPath>/jsonl-events.jsonl` (written by `PtySession`'s tailer as events flow through)
+- Falls back to `events.jsonl` (written by the legacy hook) for pre-Section 23 sessions
+- Returns sorted envelopes with stable `seq` numbers for ordered replay
+
+**`apps/server/src/services/conversation-replay.ts`** (`ConversationReplayService`):
+- An HTTP wrapper around `session-replay.ts` — delegates all reads there, exposes it to routes
+
+---
+
+### 7. Cleanup — the retention sweep
+
+**`apps/server/src/services/jsonl-sweep.ts`** (`sweepStaleJsonl`):
+- Runs at server boot
+- Walks `~/.claude/projects/` and deletes `.jsonl` files whose last-modified time is older than the configured retention window (`'never'` = no cleanup)
+- Uses last-modified time, not creation time — a resumed long-lived session survives
+- Per-file errors are counted as `skipped` and never abort the sweep
+
+---
+
+### 8. Chat dedup — merging two event streams
+
+The web layer receives events from two sources on the same connection: the hook stream and the JSONL stream. Both describe the same agent activity; showing both would duplicate messages.
+
+`apps/web/src/features/chat/normalizeJsonlEnvelope.ts` converts JSONL envelopes into the same shape as hook envelopes so the chat renderer has one path. Dedup happens at the envelope level in the UI store: the surviving JSONL envelope inherits the hook's index via a `replacedBy` map to prevent remount flicker — keying off the JSONL envelope's own index would cause the chat to visibly rebuild.
+
+---
+
+## How it connects
+
+- **Depends on:** `path-resolver.ts` for every transcript path · the CC process having written a JSONL file to disk · `CLAUDE_CONFIG_DIR` env var if overridden
 - **Used by:**
-  - `LowLevelSpawn` → `AgentRun` (live activity + idle reset, NOT completion)
-  - `PtySession` (orchestrator + modal sessions — live chat rendering)
-  - `InteractiveSession` (orchestrator — live chat rendering, idle state tracking)
-  - Server routes (one-shot drain for card display, verification gate, reattach backfill)
-  - `session-replay.ts` / `conversation-replay.ts` (historical replay on reconnect)
-  - `jsonl-sweep.ts` (retention cleanup at boot)
-- **Contracts / events crossed:**
-  - Emits `JsonlEvent` (v1) / `AgentRunJsonlEvent` (v2) — typed unions in the respective
-    tailer files.
-  - `AgentRun` consumes `'jsonl-event'` from `LowLevelSpawn`.
-  - WS stream receives `{ type: 'jsonl', event: JsonlEvent }` envelopes from `PtySession`'s
-    tailer write-through to `jsonl-events.jsonl`.
-  - `SessionReplayCheckpoint` carries `ReplayEnvelope[]` across the HTTP replay seam.
+  - `LowLevelSpawn` → `AgentRun` — live activity stream + idle reset (not completion)
+  - `PtySession` — live chat rendering for orchestrator + modals today
+  - `InteractiveSession` — live chat rendering for orchestrator today
+  - Server routes — one-shot drain for card display, verification gate, reattach backfill
+  - `session-replay.ts` / `conversation-replay.ts` — historical replay on reconnect
+  - `jsonl-sweep.ts` — retention cleanup at boot
+- **Events emitted:** `JsonlEvent` (v1) · `AgentRunJsonlEvent` (v2) · `jsonl-turn-end` · `jsonl-pause-detected`
+- **Events consumed:** `AgentRun` listens on `'jsonl-event'` from `LowLevelSpawn`; the WS stream receives `{ type: 'jsonl', event }` envelopes written through by `PtySession`
 
 ---
 
-## Target shape (per north star)
+## Target shape (per north star + Foundation Decisions)
 
-Ledger verdict (`consolidation-ledger-2026-06-02.md §2`, Transcript reading block):
+Ledger verdict (`consolidation-ledger-2026-06-02.md §2`):
 
-- `jsonl-tailer.ts` (v1): **KEEP** — base layer; not legacy. `LowLevelSpawn`, `PtySession`,
-  and `InteractiveSession` all import it.
-- `agent-run-jsonl-tailer.ts` (v2): **KEEP** — the agent-run layer with loop-state tracking
-  and interleaved-thinking fix.
-- `PtySession` file-watching (stop-marker + events file): **DELETE** (after Step 5 — modals
-  migrate to the Engine).
+- `jsonl-tailer.ts` (v1): **KEEP** — base layer, not legacy. Three callers today.
+- `agent-run-jsonl-tailer.ts` (v2): **KEEP** — agent-run layer with loop-state tracking and the interleaved-thinking fix.
+- `PtySession` file-watching (stop-marker + events file): ☠ **DELETE** — after Step 5, when modals migrate to the Engine.
 
-In the target architecture (Steps 4–6), every `claude.exe` lives in the Engine. The Engine
-has **one transcript reader** — the tailer in `LowLevelSpawn` (used via `AgentRun`). There
-is no second reader. `PtySession`'s tailer dies when modals migrate to the Engine (Step 5);
-`InteractiveSession`'s tailer dies when the orchestrator migrates (Step 4). After Step 6,
-v1 and v2 converge to one module or v1 is absorbed into v2.
+In the target architecture (Steps 4–6), every `claude.exe` lives in the Engine. The Engine has **one transcript reader** — the tailer in `LowLevelSpawn` via `AgentRun`. There is no second reader. `PtySession`'s tailer dies when modals migrate (Step 5); `InteractiveSession`'s tailer dies when the orchestrator migrates (Step 4). After Step 6, v1 and v2 converge to one module or v1 is absorbed into v2.
 
-What changes from today:
-- **Keep:** tailing for chat rendering — valid and necessary forever.
-- **Kill:** any remaining inference of completion from JSONL events. Step 8 makes
-  timeouts the only typed-failure backstop; positive MCP receipt is the sole "done".
-- **Kill:** the dual `PtySession`-owned tailer (orchestrator + modals) once they move to
-  the Engine.
-- **Guard test:** after Step 6, a single-path import test prevents a second transcript reader
-  from re-emerging.
+**What survives unchanged:** tailing for chat rendering — valid and necessary forever. The one-shot server-side drain callers don't depend on `PtySession` or `InteractiveSession` and survive the migration unchanged.
+
+**What gets killed:** any inference of completion from JSONL events (already killed on the live branch) · the dual `PtySession`-owned tailer once it migrates.
+
+**Post-Step 6 guard:** a single-path import test prevents a second transcript reader from re-emerging.
 
 ---
 
 ## Known issues / scar tissue
 
-**The root cause of the agent stall** (documented in memory as `[Agent stall ROOT CAUSE]`):
+**The stall (root cause, FIXED):** Completion was previously inferred by watching for a `turn-end` in the JSONL stream. If the path passed to the tailer was wrong — wrong `CLAUDE_CONFIG_DIR`, stale session ID, resume-mode `startLine` not set — the tailer never fired. The run went blind. With zero events arriving, the only remaining "done" signal was the idle timer (300,000ms / 5 minutes, `agent-run.ts:138,168`). At exactly 300s the run terminated as `idle-timeout` — a typed failure, but one that destroyed real work that had already completed on disk. Fix shipped: `complete()` on `AgentRun` is driven exclusively by `pc_submit_deliverable` (positive MCP receipt). `onJsonlEvent` explicitly does not close the run (`agent-run.ts:545`). JSONL events now drive only idle-reset and last-assistant-text capture.
 
-Completion was previously inferred by tailing the JSONL and watching for a `turn-end` event.
-If the path passed to the tailer diverged from where CC actually wrote the transcript — wrong
-`CLAUDE_CONFIG_DIR`, stale `ccSessionId`, resume-mode `startLine` not set — the tailer never
-fires. The run goes blind. It produces zero JSONL output as far as the server can see.
-The only remaining signal is the idle timer (default 300,000ms / 5 minutes,
-`agent-run.ts:138,168`). At exactly 300s of silence the run terminates as `idle-timeout`
-— a typed failure, but one that destroys real work that completed successfully on disk.
+**Resume replay race (resolved, fragile):** On resume without `startLine` set, prior turn-end events replay as fresh `jsonl-turn-end` events and can race the completion path. Fixed by setting `startLine` to the current line count before the resume starts (`low-level-spawn.ts:509–519`). The fallback when that `readFileSync` throws is `startLine = 0`, which silently reinstates the race.
 
-The fix (already shipped): `complete()` on `AgentRun` is driven by `pc_submit_deliverable`
-(a positive MCP receipt), not by a JSONL turn-end. The `onJsonlEvent` handler explicitly does
-not close the run (`agent-run.ts:545`). JSONL events now drive only idle-reset and
-last-assistant-text capture.
+**Dual `end_turn` premature complete (fixed in v2):** Opus 4.7 emits two `assistant` rows with `stop_reason: end_turn` in one logical turn. v1's "first `end_turn` = done" fired on the thinking-only first row. Now a rendering correctness issue only (completion no longer comes from turn-end), but v2 still handles it correctly for accurate chat display (`agent-run-jsonl-tailer.ts:371–386`).
 
-**Resume replay race** (resolved by `startLine` in `LowLevelSpawn.attachJsonlTailer`):
+**Two readers alive today:** Steps 4–5 haven't landed. The orchestrator (`InteractiveSession`) and three modals (`PtySession`) have their own v1 tailers running in parallel with the Engine's reader. They are correct and live today; convergence is a migration item, not a current bug.
 
-On resume, if the tailer starts at line 0, prior conversation's turn-ends replay as fresh
-`jsonl-turn-end` events and race the completion path into prematurely completing the run.
-Fixed: `startLine` is set to the file's current line count before the resume starts
-(`low-level-spawn.ts:509–519`). If the `readFileSync` to count lines throws, it falls back
-to 0 and the replay bug can recur — logged as best-effort only.
-
-**Dual end_turn premature complete** (fixed in v2 tailer):
-
-Opus 4.7 (interleaved thinking) emits two `assistant` rows with `stop_reason: end_turn` in
-one logical turn — thinking-only first, text-bearing second. v1's "first end_turn = done"
-logic was broken and could prematurely emit `jsonl-turn-end`. v2 waits for the text-bearing
-assistant row (`agent-run-jsonl-tailer.ts:371–386`). This was also the completion-by-inference
-path; decoupling completion from turn-end made this a rendering correctness issue only.
-
-**PtySession still has its own tailer (two readers live today)**:
-
-Steps 4–5 haven't landed. The orchestrator (`InteractiveSession`) and three modals
-(`PtySession`) have their own v1 tailers. These are the second readers the target design
-eliminates. They are live and correct today; the convergence is a migration item, not a
-current bug.
-
-**`formatSystemMessage` duplicated between v1 and v2**:
-
-Both tailer files contain a copy of `formatSystemMessage`. The comment in
-`agent-run-jsonl-tailer.ts:480` acknowledges the drift risk: "change here AND in v1's
-`formatSystemMessage` to keep render parity until v1 retires." No guard test enforces this.
+**`formatSystemMessage` duplicated:** Both tailer files contain a copy of `formatSystemMessage`. The comment in `agent-run-jsonl-tailer.ts:480` acknowledges the drift risk. No guard test enforces parity.
 
 ---
 
-## Open questions
+## Decisions & open questions
 
-- **Step 6 convergence shape:** when v1 and v2 merge into one module, does v2 absorb v1's
-  richer Section 31 event catalog (session-state, compaction, tool-progress, etc.) or do those
-  only matter for the orchestrator/modal path? Decide before deleting `PtySession`.
-- **`drainAvailable()` callers after Step 6:** the server-side drain uses (routes,
-  terminal-effects, reattach backfill) don't depend on `PtySession` or `InteractiveSession` —
-  they survive the migration unchanged. Confirm they still resolve the right JSONL path after
-  the Engine absorbs those sessions (the path-resolver contract is the seam).
-- **`startLine` fallback safety:** the resume-mode fallback to `startLine = 0` on a
-  `readFileSync` error (`low-level-spawn.ts:518`) can silently reinstate the replay race.
-  Should be a typed failure, not a silent best-effort.
-- **`formatSystemMessage` drift test:** add a test that asserts v1 and v2 produce identical
-  output for the same input before Step 6 deletes v1.
-- **Stall warn + JSONL mtime** (`agent-run-stall-warn.ts`): the stall-warn sweep uses the
-  JSONL file's mtime as a proxy for last agent activity. After the Engine absorbs all sessions,
-  confirm this probe still resolves the right path for every session type, not just host-dispatched
-  agent workers.
+**For Emerson (product calls):**
+- No product decisions are open here — the core question (transcript = display only, done-signal = explicit receipt) is settled and shipped.
+
+**Technical:**
+- **Step 6 convergence shape:** when v1 and v2 merge, does v2 absorb v1's richer event catalog (`session-state`, `compaction`, `tool-progress`, etc.) or do those only matter for the orchestrator/modal path? Decide before deleting `PtySession`.
+- **`startLine` fallback safety:** the fallback to `startLine = 0` on a `readFileSync` error (`low-level-spawn.ts:518`) can silently reinstate the resume replay race. Should be a typed failure, not a silent best-effort.
+- **`formatSystemMessage` drift test:** add a test that asserts v1 and v2 produce identical output for the same input before Step 6 deletes v1.
+- **One-shot drain callers after Step 6:** confirm server-side drain callers (routes, terminal-effects, reattach backfill) still resolve the right JSONL path after the Engine absorbs `PtySession` and `InteractiveSession` — the path-resolver contract is the seam.
+- **Stall-warn JSONL mtime probe** (`agent-run-stall-warn.ts`): uses the JSONL file's mtime as a proxy for last agent activity. After the Engine absorbs all sessions, confirm this probe resolves the right path for every session type, not just host-dispatched workers.

@@ -2,192 +2,135 @@
 
 > **Role:** Brain (control plane — the home of all durable write logic)
 > **Status:** as-built snapshot — 2026-06-03
-> **Code anchors:** `packages/app-services/src/index.ts`, `packages/app-services/src/`
+> **Code anchors:** `packages/app-services/src/` · `apps/server/src/services/*-writer.ts` (thin broadcast shims)
 
 ---
 
 ## What it is (plain English)
 
-`@pc/app-services` is a portable package that sits between the raw database
-(SQLite, via `@pc/db`) and the HTTP server (`apps/server`). It is the single
-durable write door for every entity the UI cares about. Every mutation — creating
-a work item, pausing an agent run, cancelling a workflow, enqueuing a mailbox
-message — routes through one of its gateways. The gateway writes the product row
-and the matching `live_outbox` notification row in one atomic transaction, then
-hands back a typed publication that the server fans out to WebSocket clients.
+Think of it as **the one cashier's window** — every change to the books goes through it and gets receipted in the same motion. Want to create a work item? Move a card? Cancel a workflow run? Each of those writes flows through this layer, which saves the change to the database AND stamps a "this changed" notification at the exact same instant in one unbreakable step (called an atomic transaction). If the save fails, no notification goes out — structurally impossible to announce something that didn't actually happen.
 
-The package also owns the pure mappers (adapters) that convert raw SQLite rows
-to the browser-safe DTOs defined in `@pc/contracts`.
+This layer (`@pc/app-services`) sits between the raw database and the HTTP server. It knows nothing about web requests, WebSockets, or running processes — just "write the change, stamp the receipt."
 
 ---
 
 ## What it's supposed to do (intent)
 
-Own the "durable write + outbox fact" step for every entity, with no knowledge
-of HTTP, WebSockets, or runtime processes. The reason it is a separate package:
-any code that needs to write durable state should import *this* package, not
-re-implement the transaction-plus-outbox pattern inline. The boundary keeps the
-server's HTTP wiring (routes, broadcast) from leaking into business logic, and
-makes the gateways unit-testable without a running server (inject fake `transaction`
-and `insertLiveEvent` via the `Deps` constructor pattern).
+Own the "save + receipt" step for every entity in the app. Its one law: **a state change and its notification are written in the same transaction.** That law is what makes the live UI trustworthy — any card move, run status flip, or mailbox message the UI sees was durably committed the moment the notification was emitted. No phantom announcements.
+
+It also owns the pure mappers (adapters) that convert raw database rows into the browser-safe data shapes defined in `@pc/contracts`.
 
 ---
 
-## How it works today (as-built)
+## The parts (every component, plain English)
 
-### The core pattern — identical across all gateways
+### 1. The one-cashier-window pattern (the gateway)
 
-1. Caller invokes a gateway method (e.g. `gateway.pauseRun(...)`).
-2. The gateway opens a `getDb().transaction(...)`.
-3. Inside the same transaction: product mutation (repo write) + `insertLiveEvent(tx, draft)` writes a `live_outbox` row.
-4. On commit, the gateway returns a typed `Publication` object (the updated DTO + the live-outbox row).
-5. The **caller** (a server-side writer service, never the gateway itself) fans out the canonical `{type:'live-event'}` frame and any legacy WS envelope to clients via the live-relay or broadcast.
-6. On rollback, nothing is emitted — structural guarantee.
+Every gateway — there's one per domain — does exactly the same five steps:
 
-This is the "one durable fact point" principle applied per entity.
+1. A caller (a server-side service) asks the gateway to do something (e.g., "pause this run").
+2. The gateway opens a database transaction.
+3. Inside that transaction: **write the product change** (the actual row update) + **write a `live_outbox` row** (the "this changed" receipt) — both or neither, never just one.
+4. The transaction commits; the gateway hands back a typed `Publication` — the updated data shape plus the outbox row.
+5. The caller fans out the live notification to WebSocket clients. The gateway itself never touches WebSockets.
 
-### Domains covered
+If anything goes wrong inside the transaction, it rolls back completely — the outbox row is never written, so nothing reaches the UI.
 
-| File | Gateway / Service | Entity |
-|------|-------------------|--------|
-| `work-items/gateway.ts` | `WorkItemMutationGateway` | work items, stages, field schemas, attachments |
-| `workflows/run-gateway.ts` | `WorkflowRunMutationGateway` | workflow runs, review facts |
-| `workflows/boot-reconcile.ts` | `reconcileWorkflowRunsOnBoot()` | workflow boot-time fail-close |
-| `agent-runs/run-gateway.ts` | `AgentRunMutationGateway` | agent runs, pending asks |
-| `mailbox/mailbox-service.ts` | `MailboxService` | mailbox messages, deliveries, recipients |
-| `mailbox/pending-interaction-service.ts` | `PendingInteractionService` | pending interactions |
-| `contracts/service.ts` | `ContractService` | agent contracts |
-| `areas/service.ts` | `AreaService` | areas (project groupings) |
-| `projects.ts` | `ProjectService` | projects |
-| `conversations/send-service.ts` | `ConversationSendService` | orchestrator send queue |
-| `conversations/replay-service.ts` | `ConversationReplayService` | transcript replay |
+(`packages/app-services/src/` — every gateway file; the `live_outbox` table is in `packages/db/src/schema.ts`)
 
-### Adapter files (pure, no side effects)
+### 2. The gateways — one per domain
 
-Each domain folder has an `adapters.ts`: pure functions mapping SQLite rows to
-`@pc/contracts` DTOs. Zero imports from Hono, WS, process classes, or runtime.
-Used by the gateway itself when building the outbox draft, and exported for
-server routes that need to map rows without going through a full mutation.
+Each domain has its own gateway that applies the pattern above to its tables:
 
-### Dependency injection pattern
+| Gateway | What it writes |
+|---|---|
+| `WorkItemMutationGateway` | work items, stages, field schemas, attachments |
+| `WorkflowRunMutationGateway` | workflow runs, review facts |
+| `AgentRunMutationGateway` | agent runs, pending asks |
+| `MailboxService` | mailbox messages, deliveries, recipients |
+| `PendingInteractionService` | pending interactions (paused human gates) |
+| `ContractService` | agent contracts (an agent's assignment + work context) |
+| `AreaService` | areas (project groupings) |
+| `ProjectService` | projects |
+| `ConversationSendService` | orchestrator send queue |
+| `ConversationReplayService` | transcript replay (read-path adapter, no write concern) |
 
-Every gateway accepts an optional `Deps` constructor arg. Defaults wire to the
-live `@pc/db` functions. Tests inject fakes. Example from
-`agent-runs/run-gateway.ts:57–89`: `transaction`, `insertLiveEvent`, `getRun`,
-`updateStatus`, `markTerminal`, etc. are all overridable.
+(`work-items/gateway.ts`, `workflows/run-gateway.ts`, `agent-runs/run-gateway.ts`, `mailbox/mailbox-service.ts`, etc.)
 
-### `WorkflowBootReconcile` (pure logic, no DB calls itself)
+### 3. The adapters (pure translators)
 
-`workflows/boot-reconcile.ts` is intentionally side-effect-free: it takes a
-`listRuns` function and a `failClosed` callback as deps and calls them. The
-server wires the real DB reads + gateway writes. This makes the boot-reconcile
-policy testable without a DB (`reconcileWorkflowRunsOnBoot`, line 43).
+Each domain folder has an `adapters.ts` file — a set of simple functions that convert raw database rows into the data shapes the browser expects. Zero side effects; zero knowledge of the server, web requests, or processes. Used inside the gateways when building the outbox draft, and available to server routes that need to map rows without going through a full mutation.
 
----
+(`work-items/adapters.ts`, `agent-runs/adapters.ts`, etc.)
 
-## The architectural seam — app-services vs apps/server/src/services
+### 4. Boot reconciliation (what happens on server restart)
 
-This is the key question. The answer: **app-services is the portable core; the
-server's `services/` directory is the HTTP-wiring and runtime-composition layer**.
-They are not duplicates — they are two distinct layers.
+A special piece of logic (`workflows/boot-reconcile.ts`) runs once at startup. It looks for workflow runs that were actively executing when the server last died and marks them as failed with the reason `interrupted-on-boot`. Runs parked at a review gate are left exactly as they were.
 
-### What `@pc/app-services` owns
+This is intentionally written without any direct database calls of its own — it just receives a "read runs" function and a "fail this run" callback as inputs. That makes the policy easy to test and reason about in isolation.
 
-- Transaction-wrapped durable writes + outbox fact insertion.
-- Row-to-DTO adapters (pure).
-- Boot-reconcile logic (pure, injectable deps).
-- Dependency-injectable constructors so the layer is testable in isolation.
-- No Hono, no WS hub, no `AgentRun`/`PtySession`/`HostClient` runtime classes.
-  Every gateway file enforces this in its header comment ("Boundary purity").
+### 5. The broadcast shims (thin wrappers in the server)
 
-### What `apps/server/src/services/` owns
+The gateways live in `@pc/app-services` and know nothing about broadcasting. In the server, three thin "writer" files hold a singleton gateway instance and add the one extra step: call the gateway, then fan out the result to live WebSocket clients:
 
-- **Writer shims** that hold a singleton gateway instance and add the broadcast
-  call: `agent-run-writer.ts`, `workflow-run-writer.ts`, `work-item-writer.ts`.
-  These are thin — they instantiate the gateway, call the gateway method, and
-  call `fanout(pub, broadcast)`.
-- **Runtime services** with no app-services equivalent: `agent-run-factory.ts`,
-  `agent-run-settle.ts`, `agent-run-terminal-effects.ts`, `project-runtime.ts`,
-  `dag-run-service.ts`, `host-connection.ts`, etc. These are heavy — they own
-  `AgentRun` objects, `PtySession`, `InteractiveSession`, host-client handles.
-  They are NOT being extracted into app-services; they belong to the Brain /
-  Engine layer, not the portable write-door layer.
-- **Pure utility services** (file system, onboarding, preflight, etc.) that have
-  no durable-write concern and never will.
+- `agent-run-writer.ts`
+- `workflow-run-writer.ts`
+- `work-item-writer.ts`
 
-### Evidence this is a clean seam, not accidental duplication
+These are intentionally thin — they are not business logic.
 
-`apps/server/src/services/work-item-writer.ts` (the old writer) predates the
-gateway. It still exists as a thin shim that calls `announceWorkItemRow`, which
-does its own `getDb().transaction(() => insertLiveEvent(...))` — a slightly
-older inline form of the same pattern. The newer gateway pattern (`WorkItemMutationGateway`)
-is the correct form: it accepts the product mutation as a callback, so mutation +
-outbox happen in one txn. The old writer does them in separate txns (mutation
-happened before the writer was called). This inconsistency is the main scar: two
-forms of the same "announce" pattern coexist. The gateway form is the keeper.
+### 6. Dependency injection (why it's testable)
 
-`apps/server/src/services/agent-run-writer.ts` and `workflow-run-writer.ts` both
-import from `@pc/app-services` and hold singleton gateway instances. The legacy
-`broadcast` callback arg is now a no-op in both (comments say "relay-delivered;
-no hand fanout"). The fanout seam is structurally correct; the legacy arg is dead.
+Every gateway accepts an optional `Deps` argument at construction time. In production, those deps default to the real database functions. In tests, fake versions are injected instead — so the entire gateway can be tested without a running server or real database. (`agent-runs/run-gateway.ts:57–89`)
 
 ---
 
-## Integrations (how it connects)
+## How it connects
 
-- **Depends on:** `@pc/db` (repo functions + `insertLiveEvent` + `getDb`) · `@pc/contracts` (DTO types, payload types) · `@pc/domain` (row types, domain value objects).
-- **Does NOT depend on:** Hono · WebSocket hub · `AgentRun` · `PtySession` · `HostClient` · MCP SDK · any `apps/` package. The boundary is strictly enforced in every file's header.
-- **Used by:** `apps/server/src/services/*-writer.ts` (thin broadcast shims) · `apps/server/src/services/agent-run-settle.ts` + `agent-run-terminal-effects.ts` · `apps/server/src/services/dag-run-service.ts` · `apps/server/src/routes/*` · `apps/server/src/features/*/routes.ts` (23 server files total import from `@pc/app-services`).
-- **Contracts / events crossed:** writes to `live_outbox` (the durable event log the live-relay drains); reads from `agent_runs`, `workflow_runs_v2`, `work_items`, `mailbox_messages`, `agent_contracts`, `areas`, `projects` tables. Returns typed `Publication` objects that carry both the outbox row and the mapped DTO.
+- **Depends on:** `@pc/db` (repo functions + `insertLiveEvent` + `getDb`) · `@pc/contracts` (DTO types) · `@pc/domain` (row types, domain value objects).
+- **Does NOT depend on:** Hono (the web framework) · WebSocket hub · `AgentRun` · `PtySession` · `HostClient` · MCP SDK · any `apps/` package. Strictly enforced in every file's header comment ("Boundary purity").
+- **Used by:** `apps/server/src/services/*-writer.ts` (broadcast shims) · `agent-run-settle.ts` · `agent-run-terminal-effects.ts` · `dag-run-service.ts` · server routes and feature routes (23 server files total import from `@pc/app-services`).
+- **Crossing the boundary:** writes to `live_outbox` (the durable event log the live-relay drains to the UI); returns typed `Publication` objects carrying both the updated DTO and the outbox row; reads from `agent_runs`, `workflow_runs_v2`, `work_items`, `mailbox_messages`, `agent_contracts`, `areas`, `projects`.
 
 ---
 
-## Target shape (per north star)
+## Target shape (per north star + Foundation Decisions)
 
-In the five-role target, `@pc/app-services` maps to the **Brain's control-plane
-write surface** — the Brain owns the Store and all durable transitions route
-through it. The gateways are already shaped correctly for this: transport-free,
-injectable, one txn per mutation.
+In the five-role target architecture, `@pc/app-services` maps to the **Brain's control-plane write surface** — every durable state change routes through it. The gateways are already shaped correctly: transport-free, injectable, one transaction per mutation.
 
-**Ledger verdict (implied, no explicit row):** KEEP + finish the extraction.
-Specifically:
+**Ledger verdict:** KEEP + finish the extraction. Remaining:
 
-1. The `work-item-writer.ts` inline announce pattern (separate txns) should be
-   migrated to use `WorkItemMutationGateway.commitWorkItemChange(...)` so the
-   mutation and outbox fact are one txn. Today `work-item.ts` calls
-   `announceWorkItemRow` *after* the repo write — if the second txn fails the
-   outbox row is missing.
-2. The `ConversationSendService` / `ConversationReplayService` are thin facades
-   with no gateway-pattern equivalents yet (the send queue is already durable via
-   its own repo; these are read-path adapters). They stay as-is.
-3. Once Step 12 (ledger §6, row 12) ships — routing `appendEvent` through the
-   gateway/live_outbox — `workflow_run_events` becomes a live entity and its
-   gateway should live here.
-4. The dead `broadcast` callback arg on `agent-run-writer` and
-   `workflow-run-writer` shims should be removed in a cleanup pass.
-
-No merge or delete verdict for this package. It is the correct extraction target.
+1. Migrate `work-item-writer.ts` (the old two-step form — see Known Issues) to route through `WorkItemMutationGateway`, so the work-item domain matches the other gateways.
+2. Once Slice 3 of the workflow rebuild ships (run-event diary), route `appendEvent` through the gateway + `live_outbox`. Then `workflow_run_events` becomes a live entity and its gateway should live here.
+3. Remove the dead `broadcast` callback arg from the agent-run and workflow-run shims in a cleanup pass.
+4. If/when the Brain is separated from the HTTP server, `@pc/app-services` stays as-is — it has no HTTP surface and would survive the split unchanged.
 
 ---
 
 ## Known issues / scar tissue
 
-1. **Two "announce" forms coexist for work items.** `work-item-writer.ts` (old form: mutation already happened, writer announces separately — two txns). `WorkItemMutationGateway.commitWorkItemChange` (correct form: mutation + outbox in one txn). The gateway form is the keeper; the writer shim has not yet been cut.
+**The biggest one — is there ANYTHING that circumvents the one door?**
 
-2. **Dead `broadcast` arg on writer shims.** `agent-run-writer.ts:fanoutAgentRunChange` and `workflow-run-writer.ts:fanout` accept a broadcast callback and immediately no-op it. The arg is kept for caller compat but adds noise and creates the false impression that broadcast is still happening there. Cleanup deferred.
+Yes: one known bypass exists today, and a second gap.
 
-3. **`ProjectService` has a code smell: it dispatches to `updateProjectMetaWithLiveEvent` (inline form) vs `this.repo.updateProjectMeta` (injectable form) based on `this.repo !== defaultRepo`** (`projects.ts:119`). This is a test-compat shim — the injectable form can't write the outbox in the same txn because the repo abstraction doesn't receive the txn. The gateway pattern (pass mutation as callback) would clean this up.
+1. **Work-item writes are a two-step, not one-step.** The old `work-item-writer.ts` (predates the gateway) does the product mutation first, *then* calls `announceWorkItemRow` as a separate transaction. So the write and the receipt are in two separate database transactions — if the second one fails, the outbox row is never written and the UI doesn't see the change. The newer `WorkItemMutationGateway.commitWorkItemChange()` is the correct form (mutation + outbox in one txn) and is the keeper. The old shim has not yet been cut. This is the main scar.
 
-4. **`workflow_run_events` writes are currently dead** (ledger §0, row 3): `appendEvent` writes to the table but the rows bypass the gateway/live_outbox and the UI discards `res.events`. The table exists; the gateway wiring does not. Until Slice 3 ships, these are orphaned writes.
+2. **The workflow run-event diary bypasses the gateway entirely.** `appendEvent` writes to the `workflow_run_events` table but those writes skip the gateway and skip `live_outbox`. The UI discards them (`res.events`). Until Slice 3 of the workflow rebuild ships, these are orphaned writes — the table exists but nothing reads it. (Ledger §0, row 3.)
 
-5. **`toAgentRunDto` hard-codes `model: 'opus'`** (`agent-runs/adapters.ts:20`). The run row carries no model field; the DTO freezes the legacy fallback. This is a known lossy mapping, documented in the file.
+3. **Dead `broadcast` arg on the run writer shims.** `agent-run-writer.ts` and `workflow-run-writer.ts` each accept a broadcast callback and immediately no-op it. Kept for caller compatibility but adds noise and creates a false impression. Cleanup deferred.
+
+4. **`ProjectService` has a split-brain dispatch.** It calls two different code paths (`updateProjectMetaWithLiveEvent` vs `this.repo.updateProjectMeta`) depending on whether it was constructed with injected deps or defaults (`projects.ts:119`). This is a test-compat shim; the injectable path can't write the outbox in the same transaction. The callback-mutation pattern used elsewhere would clean this up.
+
+5. **`toAgentRunDto` hard-codes `model: 'opus'`** (`agent-runs/adapters.ts:20`). The run row carries no model field; this is a known lossy mapping, documented in the file.
 
 ---
 
-## Open questions
+## Decisions & open questions
 
-1. Should `work-item-writer.ts` (server-side shim) be deleted in favour of routing all callers directly to `WorkItemMutationGateway`? The shim adds a layer of indirection that no longer pays for itself now that the gateway exists.
+**For Emerson (product calls):**
+- None immediately — this is infrastructure. The issues above are all engineering cleanup, not product choices. The only one that has a user-visible consequence: if the work-item two-step ever races (write succeeds, announce fails), a card change in the UI could silently not update. Worth knowing exists; not a daily hazard.
 
-2. The `ProjectService` injectable-vs-default dispatch split (`projects.ts:119`) — is it worth normalizing to the callback-mutation pattern used by the other gateways? Low risk, low urgency.
-
-3. When the Brain is separated from the HTTP server (migration Steps 4–7), does `@pc/app-services` stay as the Brain's write surface, or does it get inlined into a new `@pc/brain` package? The current boundary would survive that split unchanged — the package has no HTTP surface.
+**Technical:**
+1. Should `work-item-writer.ts` be deleted entirely in favour of routing all callers directly to `WorkItemMutationGateway`? The shim now adds indirection that doesn't pay for itself.
+2. The `ProjectService` split dispatch (`projects.ts:119`) — worth normalizing to the callback-mutation pattern? Low risk, low urgency.
+3. When the Brain is separated from the HTTP server (migration Steps 4–7), does `@pc/app-services` stay as the Brain's write surface, or get inlined into a new `@pc/brain` package? Current boundary would survive unchanged.

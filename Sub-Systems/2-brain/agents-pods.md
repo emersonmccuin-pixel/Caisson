@@ -2,6 +2,7 @@
 
 > **Role:** Brain / Store (definition layer) — cross-cutting into Engine at spawn time
 > **Status:** as-built snapshot — 2026-06-03
+> **Catalog companion:** [built-in-agents.md](built-in-agents.md) lists the ten agents that ship in the box.
 > **Code anchors:**
 > `packages/domain/src/pod.ts`, `pod-defaults.ts`, `agent.ts`, `tool-catalog.ts`, `tool-registry.ts`
 > `packages/db/src/schema.ts` (agents + four child tables), `repos/pods.ts`, `pod-audit.ts`, `pod-revision.ts`
@@ -10,158 +11,226 @@
 > `apps/server/src/routes/pod-routes.ts`
 > `apps/web/src/hooks/use-project-pods.ts`, `features/agents/`
 
+---
+
 ## What it is (plain English)
 
-A "pod" is the stored definition of an AI agent — its prompt, which tools it can call, what model and effort level to use, any reference documents ("knowledge"), secrets (env vars), and extra MCP server configs. Think of it as the agent's job description and toolbox, persisted in the database and rendered fresh into files on disk every time the agent is launched.
+A **"pod" is the saved definition of an AI agent** — everything that makes one agent different from
+another. Think of it as the agent's **job description plus its toolbox**, stored in the database.
 
-Stock pods are the nine built-in specialists (researcher, writer, reviewer, planner, extractor, code-writer, agent-designer, workflow-builder, caisson) seeded at boot. User-created pods are project-scoped by default; they can be promoted to global.
+The agent itself doesn't permanently exist as a running thing. It's *born fresh* each time it's
+needed: the system reads the pod from the database and writes out the files a Claude process needs to
+start. When the job's done, those files are thrown away. The pod (the definition) is what lasts.
+
+> **"Pod" vs "agent":** they're effectively the same thing in this codebase. "Agent" is the everyday
+> word; "pod" is what the stored definition is called. (Historically the table is even named `agents`.)
+
+---
 
 ## What it's supposed to do (intent)
 
-Own the durable configuration of every agent in the system: what it knows, what it can do, and how smart it is. Every spawn reads from this layer; the pod row is the source of truth and the materialized `.md` + `mcp.json` are disposable outputs derived from it.
+Own the **durable configuration of every agent**: what it knows, what it's allowed to do, and how
+capable it is. Every time an agent runs, it reads from here. The pod is the single source of truth;
+the files written to disk to launch it are disposable copies.
 
-## How it works today (as-built)
+---
 
-### Storage — five DB tables
+## The parts (every component, plain English)
 
-All in `packages/db/src/schema.ts`:
+A pod is made of **one core record plus four kinds of attachment.**
 
-- `agents` — one row per pod. Scalar settings: `name`, `scope` (`global`/`project`), `project_id`, `prompt`, `tools` (JSON array of slugs), `model`, `effort`, `max_turns`, `output_destination`, `description`, `origin` (`stock`/`user-created`), `dispatch_guidance`, `expected_output`, `rev` (monotonic write counter). Soft-delete via `deleted_at`. (`schema.ts:580`)
-- `agent_knowledge` — reference docs attached to a pod (`schema.ts:644`). Hard-deleted.
-- `agent_secrets` — env-var secrets, stored plaintext v1 (`schema.ts:676`). Values never returned over the wire.
-- `agent_mcp_servers` — per-pod MCP server configs in the `.mcp.json` shape (`schema.ts:706`).
-- `agent_audit` — append-only change log. Every mutation writes a row in the same transaction. Secrets log event-only (value columns null). (`schema.ts:736`)
+### Part 1 — the core settings (the `agents` table row)
 
-Domain types live in `packages/domain/src/pod.ts`: `PodAgentRow`, `PodKnowledgeRow`, `PodSecretRow`, `PodMcpServerRow`, `PodSpawnBundle`, `PodAuditRow`.
+These are the dials that define the agent. (`schema.ts:580`)
 
-### Repository layer (`packages/db/src/repos/pods.ts`)
+| Component | Plain English | Example / values |
+|---|---|---|
+| **name** | The agent's handle — how the orchestrator refers to it | `writer`, `researcher` |
+| **prompt** | The instructions: its job, personality, rules, how to behave. The heart of the agent | (a block of text) |
+| **tools** | The list of things it's *allowed* to do — read files, run commands, call app functions | `Read`, `Bash`, `pc_submit_deliverable` |
+| **model** | Which Claude "brain" it uses | `opus` (most capable) / `sonnet` (faster) |
+| **effort** | How hard it thinks before answering | `low` / `medium` / `high` |
+| **max_turns** | How many back-and-forth steps it gets before it must wrap up | a number, or empty = no cap |
+| **output_destination** | Where its result goes when done | `chat` (posts to the conversation) / `passthrough` (hands the raw result back to whatever called it) |
+| **description** | A human-readable summary of what it does (shown in the UI) | "Drafts emails, docs, summaries…" |
+| **dispatch_guidance** | A note that tells the *orchestrator* **when** to pick this agent | "use for drafting prose" |
+| **expected_output** | What kind of result it's supposed to produce by default | (a description of the deliverable) |
+| **scope** | Where the agent is available | `global` (everywhere) / `project` (one project only) |
+| **project_id** | Which project it belongs to, if project-scoped | (a project id, or empty) |
+| **origin** | Whether it's built-in or user-made | `stock` (ships with the app) / `user-created` |
+| **rev** | A counter that ticks up on every change — used to detect edits | `1`, `2`, `3`… |
+| **deleted_at** | A "deleted" marker. Deleting hides it rather than erasing it (a "soft delete") | empty = alive |
 
-- `createAgent` / `updateAgent` / `softDeleteAgent` / `restoreAgent` — CRUD on `agents`. Every write is wrapped in a transaction that also inserts into `agent_audit`. `updateAgent` merges required contract tools (`mergeRequiredAgentTools`) so the DB always carries the correct set even after a hand-edit attempt.
-- `promoteAgentToGlobal` — flips `scope='global'`, clears `project_id`. Audited as `field='scope'`. (`repos/pods.ts:374`)
-- `cloneAgentToProject` — deep-copies an agent (scalars + knowledge + MCP rows, NOT secrets) into a target project as a `user-created` scope-project row. (`repos/pods.ts:428`)
-- `isProjectDispatchable(agent)` — the single dispatch policy: a pod is visible/usable in a project if `scope==='project'` (for that project) OR `origin==='stock'` (built-in global). Global user-created pods are NOT auto-discoverable; the user must clone them. (`repos/pods.ts:1084`)
-- `listProjectVisibleAgents(projectId)` — applies `isProjectDispatchable`; used by the orchestrator's `{{AVAILABLE_AGENTS}}` variable and the Agents-tab list route. (`repos/pods.ts:1092`)
-- `resolveAgentForDispatch(name, projectId)` — project-scope wins over same-name global. Introduced in Section 22.1. (`repos/pods.ts:1099`)
-- `getPodForSpawn(name, projectId)` — assembles the full `PodSpawnBundle` (agent row + content tables) the materializer needs. (`repos/pods.ts:1121`)
+### Part 2 — the four attachments (one extra table each)
 
-### Stock pod seeding (`apps/server/src/services/stock-pod-seed.ts`)
+Beyond the core row, a pod can carry four kinds of attached data:
 
-Nine stock pods are seeded at server boot:
-- `STOCK_POD_CONTENT` array holds the `CreateAgentInput` for all nine non-orchestrator pods (prompts are inline constants). (`stock-pod-seed.ts:1038+`)
-- Seeding uses `seedPodWithDriftReseed` (below) — insert if missing, auto-reseed if the row drifted and has no user-authored audit rows, skip if the user edited it.
-- The caisson pod ships with five knowledge docs (product model, navigation, config cookbook, workflows guide, agents guide, troubleshooting) seeded via `createKnowledge` / `updateKnowledge`. (`stock-pod-seed.ts:398`)
-- Orchestrator pod is seeded separately via `orchestrator-pod-seed.ts` / `orchestrator-pod-content.ts`.
+1. **Knowledge** (`agent_knowledge`) — **reference documents** the agent can read while it works.
+   Background material, guides, examples. (For instance, the `caisson` agent ships with six knowledge
+   docs explaining the product.) The agent can only actually read these if it has the
+   `pc_knowledge_read` tool.
+2. **Secrets** (`agent_secrets`) — **private values like API keys**, handed to the agent as
+   environment variables when it launches. ⚠️ Stored as plain text today (see Known issues). Their
+   values are never sent back out over the network.
+3. **MCP servers** (`agent_mcp_servers`) — **extra tool servers** beyond the built-in ones. This is
+   how a pod could get, say, Gmail or Slack tools — by pointing at an additional server.
+4. **Audit log** (`agent_audit`) — a **permanent, append-only history** of every change ever made to
+   the pod: who changed what, when, and why. Written in the same step as the change itself, so it
+   can't get out of sync. (Secret *values* aren't logged — only the fact that a secret changed.)
 
-### Drift detection (`apps/server/src/services/pod-seed-with-drift.ts` + `pod-drift.ts`)
+> Together, fetching the core row + all four attachments is called a **`PodSpawnBundle`** — the
+> complete package needed to launch the agent.
 
-`seedPodWithDriftReseed` is the trust model for stock pods:
-1. If the row is missing — insert it.
-2. If the row drifted from canonical (`collectDriftedFields` compares `SEED_OWNED_FIELDS`: prompt, tools, model, effort, maxTurns, outputDestination, description, dispatchGuidance) AND no user-authored audit row exists — auto-reseed the drifted fields.
-3. If a user-authored audit row exists (`hasUserAuthoredEdit`) — skip and report. The user's customization is preserved.
-4. "Reset to default" (UI button) writes reason `'ui-reset-to-default'`; the drift checker treats that as system-authored so future reseeds can resume.
+---
 
-`detectStockPodDrift(pod)` wraps the same logic for the UI — powers the "Customized" pill on stock rows in the Agents tab and the Specialists tab's "Reset all to default" action. (`pod-drift.ts:43`)
+## How a pod lives — the lifecycle
 
-### Tool catalog (`packages/domain/src/tool-catalog.ts` + `tool-registry.ts`)
+### Where it's stored
 
-Two layers, now unified:
-- `PC_RIG_TOOL_REGISTRY` in `tool-registry.ts` is **the single source of truth** for all pc-rig tools: name, description, catalogDescription, inputSchema, family. Added in Slice 016. (`tool-registry.ts:52`)
-- `TOOL_CATALOG` in `tool-catalog.ts` is built by mapping over `PC_RIG_TOOL_REGISTRY` for the `pc-rig` partition, then appending hand-authored CC built-in entries (Read, Glob, Grep, Edit, Write, Bash, Task, WebFetch, WebSearch, AskUserQuestion). (`tool-catalog.ts:104,111`)
-- `REQUIRED_AGENT_TOOLS` — four tools every dispatched agent always has: `pc_get_work_item`, `pc_submit_deliverable`, `pc_ask_user`, `pc_ask_orchestrator`. Enforced at three layers: (1) `createAgent`/`updateAgent` union-merge them into the DB row, (2) `materializePod` re-merges at spawn, (3) stock pod seeds list them explicitly. (`tool-catalog.ts:138`)
-- `mergeRequiredAgentTools(tools)` — idempotent union. (`tool-catalog.ts:155`)
-- `PC_RIG_TOOL_NAMES` is exported from `@pc/mcp` and re-exported by `pod-tool-catalog.ts` — the explicit name list used by the materializer's wildcard expander. (`apps/server/src/services/pod-tool-catalog.ts:13`)
+All of the above is in SQLite (`packages/db/src/schema.ts`): one `agents` row + the four child tables
+(`agent_knowledge`, `agent_secrets`, `agent_mcp_servers`, `agent_audit`). The database is the truth;
+everything else is derived from it.
 
-### Materializer (`packages/runtime/src/pod-materializer.ts`)
+### Creating, editing, deleting (`repos/pods.ts`)
 
-Takes a `PodSpawnBundle` and writes two files:
-1. `<pluginDir>/agents/<name>.md` — YAML frontmatter (name, description, tools comma-list, model, effort, maxTurns) + prompt body + optional "## Your contract" section (when a work item is linked) + optional "## Knowledge available" footer (when the pod has knowledge docs AND `pc_knowledge_read` is in its tool list) + "## Available tools" footer (when the prompt uses `{{AVAILABLE_TOOLS}}`).
-2. A temp `mcp.json` — baseline MCP servers (the pc-rig server) merged with the pod's own `agent_mcp_servers` rows (pod wins per-name on conflict).
+- **Create / edit / delete / restore** — standard operations on a pod. Every single write is wrapped
+  together with an audit-log entry in one transaction, so the history is always complete.
+- **A safety merge on edit:** whenever a pod is saved, the system force-adds four mandatory tools
+  (below) back into its tool list — so even a hand-edit can't accidentally remove them.
 
-Wildcard expansion: `mcp__<server>__*` in the tools list is expanded to every explicit tool name from the supplied `mcpToolCatalog` before writing frontmatter. Unknown servers throw. (`pod-materializer.ts:428`)
+### Scope — who can see and use a pod
 
-`filterMcpToReferencedTools=true` (set for agent dispatches, not orchestrator spawns) strips unreferenced baseline servers (e.g. `webhook`) from mcp.json so CC's `--strict-mcp-config` doesn't drop all tools when a server fails to load. (`pod-materializer.ts:66`)
+This is the rule for *which agents show up in which project* (`isProjectDispatchable`,
+`repos/pods.ts:1084`):
 
-Two materializer functions:
-- `materializePod` — writes to `<worktreeDir>/.claude/agents/<name>.md`.
-- `materializePodPlugin` — writes to a session-local plugin dir and returns `--plugin-dir` + `--agent` CLI args. Production spawns use this path so agent definitions are isolated from the user's worktree. (`pod-materializer.ts:115`)
+- A **project-scoped** pod is usable in *its own project*.
+- A **stock** (built-in) pod is usable *everywhere*.
+- A **user-created global** pod is **not** automatically available in projects — you have to **clone**
+  it into the project first. (This prevents one person's custom agents from silently appearing in
+  everyone's projects.)
+- **Promote to global** flips a project pod to global. **Clone to project** copies a pod into a
+  project (it copies the settings, knowledge, and MCP servers — but **not** secrets, on purpose).
+- When two agents share a name, the **project version wins** over a global one.
 
-Variable substitution: `{{KEY}}` in the prompt body is replaced before writing. `AVAILABLE_TOOLS` is always injected (from the final expanded list). `AVAILABLE_AGENTS` is computed from DB at spawn time and injected when the prompt contains the placeholder. (`pod-variable-renderers.ts`, `pod-spawn.ts:113`)
+### The built-in pods and "drift" (`stock-pod-seed.ts`, `pod-seed-with-drift.ts`)
 
-### Spawn prep (`apps/server/src/services/pod-spawn.ts`)
+The nine specialists (plus the orchestrator) are **re-seeded into the database every time the server
+starts.** That raises a question: what if you've customized one? The system handles it with a
+**trust model** (`seedPodWithDriftReseed`):
 
-`preparePodSpawn(input)` is the entry point the dispatch door calls:
-1. `getPodForSpawn(agentName, projectId)` — fetches the bundle.
-2. `prepareClaudeRuntimeFiles` — builds the baseline MCP config + settings file.
-3. Checks for `{{AVAILABLE_AGENTS}}` and computes the rendered roster if needed.
-4. Calls `materializePodPlugin(...)` with `PC_RIG_TOOL_NAMES` as the catalog for wildcard expansion.
-5. Returns `{ mcpConfigPath, agentCliName, pluginDir, settingsPath, extraEnv, cleanup, podScope, podProjectId }`.
+1. **Missing?** → insert it.
+2. **Changed in the code since last boot, and you *haven't* touched it?** → quietly update it to the
+   new built-in version (you get bug-fixes/improvements for free).
+3. **You *have* edited it?** → leave your version alone, and just flag it as "Customized" in the UI.
+4. **"Reset to default" button** → wipes your customization and lets the auto-updates resume.
 
-### HTTP routes (`apps/server/src/routes/pod-routes.ts`)
+"Drift" just means "this pod no longer matches its built-in definition." The check compares eight
+fields (prompt, tools, model, effort, max turns, output destination, description, dispatch guidance).
 
-Mounted on the Hono app via `registerPodRoutes()`. CRUD on pods + content tables.
+### Tools — the catalog, the required four, and wildcards
 
-Post-mutation effects (two layers, in-txn):
-- `announcePod(...)` — writes a `pod.changed` `live_outbox` row in-transaction. Global pods get a global frame (reaches all project sockets); project pods get a project frame. The relay drains it post-commit. (`pod-writer.ts`)
-- `deps.onPodChanged?.(name, change)` — optional restart-on-edit hook; production wires agent-run-manager + project-runtime kill+respawn. (`pod-routes.ts:80`)
+- **The tool catalog** (`tool-registry.ts` + `tool-catalog.ts`) is the master list of every tool an
+  agent could be given — both Caisson's own app tools (the `pc_…` ones) and Claude Code's built-ins
+  (Read, Edit, Bash, etc.). There's now **one source of truth** for this list (it used to be
+  duplicated in a few places — that was a recurring bug).
+- **The required four** (`REQUIRED_AGENT_TOOLS`): every dispatched agent *always* gets four tools, no
+  matter what — read its assignment (`pc_get_work_item`), submit its result
+  (`pc_submit_deliverable`), and reach out (`pc_ask_user`, `pc_ask_orchestrator`). This is enforced in
+  three places so it can't be lost.
+- **Wildcards:** a pod can list `mcp__pc-rig__*` to mean "all tools from this server." At launch that
+  expands to the explicit list. If it names a server that doesn't exist, it **fails loudly** rather
+  than silently giving the agent no tools.
 
-Stock pod guard: routes that delete or edit a pod with `origin='stock'` return 409/403. The `origin` column is the authoritative stock-pod identifier (introduced Section 36; replaced the multi-list pattern).
+### From stored definition to running agent (`pod-materializer.ts`, `pod-spawn.ts`)
 
-`GET /api/agents/pods?projectId=<ulid>` — returns `listProjectVisibleAgents(projectId)` with a `driftedFields` annotation on each pod (from `detectStockPodDrift`). Without `projectId`, returns global pods only.
+This is the moment a pod becomes a live agent. The system takes the `PodSpawnBundle` and writes **two
+files** Claude needs:
 
-`POST /api/agents/pods/:id/promote-to-global` — calls `promoteAgentToGlobal`.
+1. **An agent definition file** (`<name>.md`) — the agent's settings as a header (name, tools, model,
+   etc.) plus the prompt text. It also bolts on extra sections when relevant: the agent's "contract"
+   (its assignment) when a work item is linked, a "knowledge available" footer, and an "available
+   tools" list.
+2. **A tool-server config file** (`mcp.json`) — which tool servers to connect, built from the standard
+   set plus the pod's own extra servers.
 
-`POST /api/agents/pods/:sourceId/clone-to-project` — calls `cloneAgentToProject`.
+Two important touches at this stage:
+- **Variable substitution:** placeholders in the prompt like `{{AVAILABLE_AGENTS}}` get filled in with
+  live data (e.g. the current roster of agents) just before launch.
+- **Trimming unused servers:** for dispatched agents, tool servers the agent doesn't actually use are
+  stripped out, so that if one server fails to load it doesn't knock out *all* the agent's tools.
 
-### UI (`apps/web/src/hooks/use-project-pods.ts` + `features/agents/`)
+`preparePodSpawn` is the single entry point the dispatch system calls to do all of this and hand back
+everything needed to start the process.
 
-`useProjectPods(project, events)` — drives a `useResourceList` hook against `agentsApi.listPods(projectId)`. Triggers a wholesale refetch on any `pod.changed` live event (via `useLiveEntitySignature`). No in-memory patch: the list endpoint is the source of truth.
+### How pods show up and update in the app (`pod-routes.ts`, `use-project-pods.ts`)
 
-Pod mutations are delivered over WS via the `live_outbox` relay, not raw-broadcast.
+- The Agents tab lists the pods visible in the current project, each flagged if it's been customized.
+- **Built-in pods are protected:** trying to delete or hard-edit a `stock` pod is refused by the
+  server.
+- **Edits can restart a running agent:** there's an optional hook so that editing a pod kills and
+  respawns any affected running agent, so changes take effect.
+- **Live updates:** every pod change writes a `pod.changed` notification through the normal live-event
+  path, and the UI refetches the list when it sees one. (No shortcuts — the list endpoint is always
+  the source of truth.)
+
+---
 
 ## Integrations (how it connects)
 
 - **Depends on:**
   - `@pc/db` (`agents` + four content tables, `agent_audit`, `live_outbox`) — the persistent store.
-  - `@pc/domain` (`PC_RIG_TOOL_REGISTRY`, `TOOL_CATALOG`, `REQUIRED_AGENT_TOOLS`, pod types) — the type + catalog layer.
-  - `@pc/runtime` (`materializePodPlugin`) — the file-writing step.
-  - `@pc/mcp` (`PC_RIG_TOOL_NAMES`) — the explicit tool-name list for wildcard expansion.
-
+  - `@pc/domain` (the tool catalog, required-tools list, pod types) — the type + catalog layer.
+  - `@pc/runtime` (the materializer) — the file-writing step.
+  - `@pc/mcp` (the tool-name list) — used to expand wildcards.
 - **Used by:**
-  - Agent dispatch door (`agent-run-factory.ts` → `preparePodSpawn`) — every dispatched agent run reads through here.
-  - Orchestrator spawn (`project-runtime.ts`) — materializes the orchestrator pod at boot.
-  - Orchestrator prompt (`{{AVAILABLE_AGENTS}}`) — `pod-variable-renderers.ts:renderAvailableAgents` provides the roster.
-  - PC-rig MCP tools `pc_create_agent`, `pc_update_agent`, `pc_get_agent`, `pc_list_agents`, `pc_delete_agent`, `pc_create_knowledge`, etc. — all route through `@pc/db` pod repos.
-
+  - The agent dispatch path — every dispatched agent reads its pod through here.
+  - The orchestrator — materialized from its pod at boot; its prompt's `{{AVAILABLE_AGENTS}}` roster
+    is computed from the pod list.
+  - The app's agent tools (`pc_create_agent`, `pc_update_agent`, `pc_list_agents`, …) — all read/write
+    pods through this layer.
 - **Contracts / events crossed:**
-  - `pod.changed` live-outbox event — published in-transaction on every mutation; relay fans to project/global WS subscribers.
-  - `PodSpawnBundle` — the read contract between the DB layer and the materializer.
-  - `MaterializedPluginPod` — the output contract between the materializer and the spawn prep; carries `agentCliName`, `pluginDir`, `mcpConfigPath`, `envVars`.
+  - `pod.changed` live event — fired on every change.
+  - `PodSpawnBundle` — the package handed from the database layer to the materializer.
+
+---
 
 ## Target shape (per north star)
 
-Pods are the **configuration layer** for the one session primitive (§3–4 of `unified-process-supervision-2026-06-02.md`). In the target: orchestrator, agent workers, and modals are the same primitive differentiated by a **policy record** on spawn. The pod supplies that policy: `prompt`, `tools`, `model`, `effort`, `maxTurns`, and the `filterMcpToReferencedTools` flag encode whether a session is persistent/interactive vs. one-shot/awaited vs. ephemeral.
+Pods are the **configuration layer for the one session primitive** (§3–4 of
+`unified-process-supervision-2026-06-02.md`). In the target design the orchestrator, agent workers,
+and modals are all the *same* underlying thing, differentiated only by a **policy record** at launch —
+and the pod is what supplies that policy (prompt, tools, model, effort, max turns, and the
+trim-unused-servers flag that distinguishes a long-lived session from a one-shot job).
 
-No structural change required to the pod definition layer itself. The consolidation ledger (`consolidation-ledger-2026-06-02.md` §2, "Sources of truth") marks `PC_RIG_TOOL_REGISTRY → TOOLS/PC_RIG_TOOL_NAMES/catalog` as **DONE — single source** (Slice 016). The web `STOCK_POD_NAMES` mirror is **N/A — already gone**.
+No structural change is needed to the pod layer itself; the tool-catalog single-source cleanup is
+already **done**. What changes: once the orchestrator and modals move to the Engine (Steps 4–6),
+`preparePodSpawn` becomes the **one launch path for every kind of session**, not just dispatched
+agents.
 
-What does change: when Steps 4–6 (migrate orchestrator + modals to the Engine) land, `preparePodSpawn` becomes the one path for ALL session types, not just dispatched agents. The `filterMcpToReferencedTools` toggle already differentiates agent spawns (true) from orchestrator spawns (false) — that distinction is preserved and extended to modals (also true).
+---
 
 ## Known issues / scar tissue
 
-- **Secret storage is plaintext v1.** `agent_secrets.value_plaintext` is stored in SQLite with no encryption. The code comments note "v2 will swap to encrypted_value (DPAPI)." A UI warning banner is shown; the `buildEnvMap` function is the decrypt hook when encryption lands. (`pod-materializer.ts:417`, `pod.ts:143`)
-
-- **`agent_inbox` tables still referenced by a hook.** `templates/.claude/hooks/inbox-drain.cjs` reads/writes the `agent_inbox` table via raw SQL (confirmed in ledger §0 re-verification). The TS repo for `agent_inbox` has zero callers, but the tables cannot be dropped until the hook is refactored to use the mailbox instead. This is tracked in ledger row #9 (`consolidation-ledger-2026-06-02.md:136`).
-
-- **`listResolvedAgents` / `pc_list_agents` visibility gap (partially resolved).** The MCP tool `pc_list_agents` calls `listProjectVisibleAgents` which reads the DB directly — pod-aware. The older memory note about flat-file invisibility is stale for dispatch purposes: `resolveAgentForDispatch` has been DB-only since Section 22.1. However, the `agent-designer` pod's prompt still tells the designer to call `pc_create_agent` for new pods; there is no automatic sync back to flat files (the flat-file loader was removed in Section 17e). Any code path that formerly read `~/.project-companion/agents/*.md` is dead.
-
-- **Tool wildcard throws on unknown server.** `expandToolWildcards` throws rather than silently ignoring an unknown server pattern. This is intentional ("loud failure beats a silent empty list") but means any pod whose tools list contains `mcp__<custom>__*` without a matching catalog entry will fail at spawn with an error, not a graceful degradation. (`pod-materializer.ts:444`)
-
-- **Drift-reseed tool comparison needs `mergeRequiredAgentTools`.** Without the explicit merge in `collectDriftedFields`, every pod would false-positive a `tools` drift on every boot (seed lists don't include required tools explicitly; the DB row always does). The current code handles this correctly (`pod-seed-with-drift.ts:116`), but it's a subtle invariant that must be preserved when adding new `REQUIRED_AGENT_TOOLS`.
-
-- **Secrets not cloned.** `cloneAgentToProject` deliberately excludes secrets ("sensitive and the cloning user may not intend to share them"). Any cloned pod requiring API-key env vars needs its secrets re-added manually. (`repos/pods.ts:428` comment)
+- **Secrets are stored in plain text.** `agent_secrets` holds values unencrypted in the database. A UI
+  warning is shown; encryption (DPAPI) is planned but not built. (`pod.ts:143`)
+- **A legacy hook still touches old `agent_inbox` tables.** `templates/.claude/hooks/inbox-drain.cjs`
+  reads/writes those tables with raw SQL. Nothing else uses them, but they can't be dropped until the
+  hook is migrated to the mailbox. (Ledger row #9.)
+- **Wildcard tools fail hard on an unknown server.** Intentional ("loud failure beats a silent empty
+  toolset"), but a pod listing `mcp__something-unknown__*` errors at launch instead of degrading
+  gracefully.
+- **A subtle drift-check invariant.** The drift comparison has to merge in the required tools first,
+  or every pod would falsely look "changed" on every boot. Handled correctly today, but must be kept
+  in mind when adding new required tools. (`pod-seed-with-drift.ts:116`)
+- **Cloning doesn't copy secrets** — on purpose. A cloned pod that needs an API key must have it
+  re-added by hand.
 
 ## Open questions
 
-- **DPAPI encryption for secrets.** When does v2 land? The `buildEnvMap` function is the right hook; the schema column rename (`value_plaintext` → `encrypted_value`) needs a migration.
-- **`agent_inbox` hook refactor.** What's the timeline for migrating `inbox-drain.cjs` to the mailbox so the legacy tables can be dropped?
-- **Project-scope pod overlay (Section 17c).** The schema already carries `scope` + `project_id` on content tables to support per-project knowledge/secret overlays on top of a global pod. `getPodForSpawn` reads a project pod's own content or a global pod's global content — it does NOT merge global + project content layers. The 17c overlay path (project-specific knowledge on top of a global pod) is described in comments but not implemented.
-- **Wildcard expansion for custom MCP servers.** Today the only catalog entry for wildcard expansion is `'pc-rig': PC_RIG_TOOL_NAMES`. A pod with a custom MCP server (`pc_add_agent_mcp_server`) that wants `mcp__gmail__*` would need `gmail` added to the catalog at spawn time. There is no mechanism for that yet — the pod must list explicit tool names for custom servers.
+- **When does secret encryption land?** It needs a schema change + a migration.
+- **`agent_inbox` hook refactor** — timeline to migrate it so the legacy tables can be dropped?
+- **Per-project overlays (Section 17c).** The schema is *ready* for project-specific knowledge/secrets
+  layered on top of a global pod, but the layering isn't implemented — today a pod uses either its own
+  content or the global content, never a merge.
+- **Custom MCP server wildcards.** Today only the built-in `pc-rig` server supports `mcp__…__*`
+  wildcard expansion. A pod with a custom server (e.g. Gmail) must list its tools explicitly.
