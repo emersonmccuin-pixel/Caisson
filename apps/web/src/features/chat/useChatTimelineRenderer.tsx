@@ -32,10 +32,12 @@ import { isPendingUserEvent } from './usePendingPrompts';
 export function useChatTimelineRenderer({
   projectId,
   renderItems,
+  wsEvents,
   onAskReply,
 }: {
   projectId: string;
   renderItems: RenderItem[];
+  wsEvents: WsEnvelope[];
   onAskReply?: (toolUseId: string, answer: string) => boolean;
 }): (item: RenderItem, index: number) => ReactNode {
   const [resolvedApprovals, setResolvedApprovals] = useState<
@@ -91,6 +93,8 @@ export function useChatTimelineRenderer({
               agentRunId={item.agentRunId}
               agentName={item.agentName}
               events={item.events}
+              projectId={projectId}
+              wsEvents={wsEvents}
             />
           </ChatTurnCard>
         );
@@ -266,6 +270,7 @@ export function useChatTimelineRenderer({
       projectId,
       renderItems,
       resolvedApprovals,
+      wsEvents,
     ],
   );
 }

@@ -1,16 +1,25 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
 import { TranscriptViewer } from '@/components/TranscriptViewer';
+import { agentRunsApi } from '@/features/agent-runs/client';
+import {
+  agentTranscriptEmptyMessage,
+  mergeAgentTranscriptEvents,
+  type AgentTranscriptLoadStatus,
+} from '@/features/agent-runs/transcript';
+import { TranscriptRow } from '@/features/agent-runs/TranscriptRow';
+import type { AgentRunTranscriptStatus } from '@/features/agent-runs/types';
 import type {
+  JsonlEvent,
   SubagentFailureEvent,
   TaskEndEvent,
   TaskStartEvent,
   TodosEvent,
+  WsEnvelope,
 } from '@/features/runtime/ws-types';
-import { useAgentTranscript } from '@/store/agent-transcript';
 import {
   CollapsibleEventGroup,
   type EventGroupStatusTone,
@@ -156,15 +165,75 @@ export function AgentDispatchGroupBubble({
   agentRunId,
   agentName,
   events,
+  projectId,
+  wsEvents,
 }: {
   agentRunId: string;
   agentName: string | null;
   events: AgentEventEntry[];
+  projectId: string;
+  wsEvents: WsEnvelope[];
 }) {
   const [open, setOpen] = useState(false);
   const status = deriveAgentStatus(events);
   const label = agentName ? `Agent · ${agentName}` : 'Agent';
-  const openTranscript = useAgentTranscript((s) => s.open);
+
+  // JSONL transcript backfill — loaded lazily on first expand.
+  const [backfill, setBackfill] = useState<{
+    status: AgentTranscriptLoadStatus;
+    transcriptStatus: AgentRunTranscriptStatus | null;
+    events: JsonlEvent[];
+    error: string | null;
+  }>({ status: 'loading', transcriptStatus: null, events: [], error: null });
+  const loadedRef = useRef(false);
+
+  useEffect(() => {
+    if (!open || loadedRef.current) return;
+    loadedRef.current = true;
+    agentRunsApi
+      .getAgentRunEvents(projectId, agentRunId)
+      .then((response) => {
+        setBackfill({
+          status: 'ready',
+          transcriptStatus: response.transcriptStatus,
+          events: response.events as JsonlEvent[],
+          error: null,
+        });
+      })
+      .catch((err) => {
+        setBackfill({
+          status: 'error',
+          transcriptStatus: null,
+          events: [],
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+  }, [open, projectId, agentRunId]);
+
+  const transcriptItems = useMemo(
+    () =>
+      mergeAgentTranscriptEvents({
+        runId: agentRunId,
+        backfillEvents: backfill.events,
+        events: wsEvents,
+      }),
+    [agentRunId, backfill.events, wsEvents],
+  );
+
+  // Surface prompt text for pending ask/approval events.
+  const promptBlock = useMemo(() => {
+    if (events.length === 0) return null;
+    const last = events[events.length - 1]!;
+    if (
+      last.kind === 'agent-asks-user' ||
+      last.kind === 'agent-asks-orchestrator' ||
+      last.kind === 'agent-approval-request'
+    ) {
+      return { kind: last.kind, text: extractPromptText(last.body) };
+    }
+    return null;
+  }, [events]);
+
   return (
     <CollapsibleEventGroup
       label={label}
@@ -173,33 +242,68 @@ export function AgentDispatchGroupBubble({
       open={open}
       onToggle={() => setOpen((v) => !v)}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-          run {agentRunId}
-        </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            openTranscript(agentRunId);
-          }}
-          className="shrink-0 border border-border bg-card px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          View transcript
-        </button>
+      <div className="font-mono text-[10px] text-muted-foreground">
+        run {agentRunId}
       </div>
-      {events.map((ev, i) => (
-        <div key={i} className="border-l border-border pl-2">
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            {ev.kind}
+
+      {promptBlock && (
+        <div className="border-l-2 border-warning/60 bg-warning/8 px-2 py-1.5">
+          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning">
+            {promptBlock.kind === 'agent-approval-request'
+              ? 'approval requested'
+              : promptBlock.kind === 'agent-asks-user'
+                ? 'awaiting user'
+                : 'awaiting orchestrator'}
           </div>
-          <pre className="whitespace-pre-wrap break-words font-mono text-xs text-foreground">
-            {ev.body}
-          </pre>
+          <div className="whitespace-pre-wrap text-xs text-foreground">
+            {promptBlock.text}
+          </div>
         </div>
-      ))}
+      )}
+
+      <div>
+        <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+          Transcript
+        </div>
+        {transcriptItems.length === 0 ? (
+          <div className="text-[10px] italic text-muted-foreground">
+            {agentTranscriptEmptyMessage({
+              loadStatus: backfill.status,
+              transcriptStatus: backfill.transcriptStatus,
+            })}
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {transcriptItems.map((item) => (
+              <TranscriptRow key={item.key} event={item.event} />
+            ))}
+          </ul>
+        )}
+        {backfill.status === 'error' && (
+          <div className="mt-1 text-[10px] text-destructive">
+            Backfill unavailable: {backfill.error}
+          </div>
+        )}
+      </div>
     </CollapsibleEventGroup>
   );
+}
+
+/**
+ * Strip [key: value] metadata marker lines and the trailing boilerplate
+ * instruction from a pause-event body, leaving just the human-readable
+ * question/decision text the agent sent.
+ */
+function extractPromptText(body: string): string {
+  const lines = body.split('\n');
+  const out: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^\[.*\]$/.test(trimmed)) continue; // [key: value] metadata
+    if (trimmed.startsWith('Answer via pc_answer_pending')) continue; // trailing instruction
+    out.push(line);
+  }
+  return out.join('\n').trim();
 }
 
 const SIDECHAIN_ROLE_LABEL: Record<SidechainStep['role'], string> = {

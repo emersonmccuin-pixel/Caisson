@@ -92,6 +92,7 @@ export function ChatSurface({
   const renderTimelineItem = useChatTimelineRenderer({
     projectId,
     renderItems,
+    wsEvents: events,
     onAskReply,
   });
 
