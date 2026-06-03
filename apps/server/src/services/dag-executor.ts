@@ -295,6 +295,21 @@ export class DagExecutor {
       // finalizes to `failed`.
       this.deps.event({ type: 'iteration_ceiling_hit', nodeId: reviewNodeId });
       this.deps.holdForHuman(reviewNodeId, 'reject iteration ceiling reached');
+    } else if (decision.kind === 'approve') {
+      // Card-move transition effect on APPROVE (locked decision 1) — a review
+      // node's `move` advances the run-root card when the gate is approved,
+      // symmetric with an agent step's `move` on completion. (Was silently
+      // ignored: only agent-node `move` + `reject.move` were wired.)
+      const reviewNode = this.byId.get(reviewNodeId);
+      const moved = reviewNode?.move;
+      if (moved) {
+        const res = await this.deps.moveCard(moved);
+        this.deps.event({
+          type: 'card_moved',
+          nodeId: reviewNodeId,
+          data: res.ok ? { stage: moved } : { stage: moved, error: res.error ?? 'move failed' },
+        });
+      }
     } else if (outcome.kickedBack) {
       // Card-move transition effect on kick-back (locked decision 1) — e.g. a QA
       // gate reject moves the card back to the build stage before the loop re-runs.

@@ -91,6 +91,30 @@ test('a failed step does NOT move the card', async () => {
   assert.deepEqual(moves, [], 'no move on a failed step');
 });
 
+test('an approved review node applies its `move` (card-move on approve)', async () => {
+  const moves: string[] = [];
+  const deps = baseDeps({
+    dispatchAgent: async (): Promise<NodeOutcome> => ({ state: 'completed', workItemId: 'wi-a' as ULID }),
+    moveCard: async (stage) => (moves.push(stage), { ok: true }),
+  });
+  const wf: WorkflowV2.Workflow = {
+    id: 'wf',
+    name: 'WF',
+    triggers: [],
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'x', task: 'go', next: ['gate'] },
+      { id: 'gate', kind: 'review', reviewer: 'human', move: 'done', next: [] },
+    ],
+  };
+  const exec = DagExecutor.start(wf, deps, ctxBase);
+  const s1 = await exec.advance();
+  assert.equal(s1, 'awaiting-review');
+  assert.deepEqual(moves, [], 'no move until the gate is approved');
+  const s2 = await exec.onReviewDecision('gate', { kind: 'approve' });
+  assert.equal(s2, 'completed');
+  assert.deepEqual(moves, ['done'], 'approving the gate moves the card to its `move` stage');
+});
+
 test('reject notes auto-flow to the kicked-back node as $carry.feedback', async () => {
   const carries: Record<string, string>[] = [];
   let dispatched = 0;
