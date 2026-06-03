@@ -47,7 +47,7 @@ Before asking you to install anything, the app checks what's already on the mach
 
 | Check | What it looks for | Possible results |
 |---|---|---|
-| **Claude Code** | Finds the binary, runs `--version`, checks it's ≥ 2.0.0 | `ok` · `not-found` · `version-too-old` · `unverified` |
+| **Claude Code** | Finds the binary, runs `--version`, checks it's ≥ 2.0.0 — ⚠️ **FD-22 changes this to an exact-pin check** (today's floor-check is the gap Emerson flagged) | `ok` · `not-found` · `version-too-old` · `unverified` |
 | **Auth (sign-in)** | Runs `claude auth status --json` — reads a local token file, no network call | `authed` · `login-required` · `unknown` |
 | **git** | Probes `git --version` | `present` / not present |
 | **Node / Bash / Python** | Soft checks — only needed for workflow code steps | present / not present |
@@ -91,7 +91,12 @@ After a project is created, the user can open the setup wizard — a transient C
 
 The interview script is in `templates/.project-companion/setup-wizard-prompt.md` — it's appended to Claude's system prompt at spawn time. The modal watches the `project-claude-md` live-store signature and auto-closes when the file is written.
 
-The setup wizard is a transient `PtySession`-owned modal (confirmed: `project-runtime.ts:117`). Per the migration plan (Steps 5–6), all transient modals eventually move to the Engine — when that happens the WS envelope handling (`setup-wizard-state`, `setup-wizard-exit`) migrates with it, but the interview content, scaffold logic, and preflight are unaffected.
+The setup wizard is a transient `PtySession`-owned modal (confirmed: `project-runtime.ts:117`).
+
+> ☠ **FD-21 (locked 2026-06-03): the project setup wizard dies** with the other transient modals —
+> "too complicated and not necessary" (Emerson). The orchestrator does this job in the one chat:
+> "tell me about this project" → writes `CLAUDE.md`. The **first-run wizard stays** (a bare machine
+> needs install + sign-in + first project).
 
 ---
 
@@ -192,7 +197,10 @@ An in-memory map of `project ULID → ProjectRuntime` (`project-registry.ts`). L
 
 The consolidation ledger has no explicit row for this subsystem — it has no lifecycle ownership or process concerns and is not in the five-role migration path.
 
-One structural change pending: the setup wizard modal moves to the Engine (Steps 5–6) along with all other transient modals. WS envelope handling migrates with it; interview content, scaffold logic, and preflight are unaffected.
+**Changes from Foundation Decisions (locked 2026-06-03):**
+- ☠ **The project setup wizard is deleted (FD-21)** — no Engine migration, no modal; the orchestrator writes `CLAUDE.md` by conversation. The first-run wizard stays.
+- **Preflight moves to an exact version pin (FD-22):** one tested Claude Code version pinned in code · preflight checks exact match (not ≥ floor) · installer installs exactly that version · PC disables Claude's auto-updater for spawned sessions · mismatch = loud warning + one-click install of the tested version, not a hard wall.
+- **`.project-companion/` stays committed to git (FD-22 related lock):** workflows are part of the project — versioned, not gitignored. Nothing else PC writes lands in project folders.
 
 Everything else — preflight, install, auth, project-create, scaffold, registry — maps cleanly to the target. DB is the source of truth for projects; scaffold produces durable files; session bundle produces ephemeral runtime config per spawn.
 
@@ -217,6 +225,6 @@ Everything else — preflight, install, auth, project-create, scaffold, registry
 3. **Partial-scaffold rollback.** If project creation fails mid-way, the folder is left in a broken state. Is a cleanup / retry flow worth building, or is a clear error message + manual delete good enough?
 
 **Technical:**
-- When `SetupWizardModal` migrates to the Engine (Steps 5–6), does auto-close via `useLiveEntitySignature` still work, or does the event path change?
+- ~~`SetupWizardModal` Engine migration~~ — moot; the wizard is deleted (FD-21).
 - `inbox-drain.cjs` refactor timeline — prerequisite for dropping `agent_inbox` tables (ledger row 9). Blocked on mailbox-stable.
 - `GET /api/preflight` has no caching contract beyond the binary-probe cache that install clears. Should preflight results have a TTL so repeated calls don't re-exec `claude --version` on every wizard render?

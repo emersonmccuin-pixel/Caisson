@@ -211,6 +211,8 @@ The north star (`unified-process-supervision-2026-06-02.md §2`) says the UI she
 
 ## Known issues / scar tissue
 
+- **Rails must not be adjustable (Emerson, 2026-06-03 — open bug).** Left and right rails are meant to be fixed-width, but both still render resize-adjuster arrows, and the right-rail adjuster can actually collapse the rail. Fix: remove the adjuster affordances on both rails; kill the right-rail collapse behavior.
+
 - **`WorkflowsList.tsx:871` throws away `res.events`** — `appendEvent` writes `workflow_run_events` rows in the server, but the UI discards them on receipt. Until Slice-3 routes those through the live relay, they are dead observability writes that never reach the screen. (Ledger §2.)
 
 - **`useResourceList` `_events` param is dead** (`use-resource-list.ts:57`) — still in every call signature for compatibility. The old positional-cursor scan it powered was replaced by the live-store overlay (Slice 018). Safe to remove once confirmed.

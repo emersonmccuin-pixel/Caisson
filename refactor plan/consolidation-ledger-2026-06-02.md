@@ -12,6 +12,34 @@ single-path guard. When no `MERGE`/`DELETE` rows remain unresolved, the app is u
 
 ---
 
+## 0. Phase-0 re-verification (2026-06-03) — multi-agent trace + adversarial refute
+
+25 rows re-traced, each then attacked by an independent skeptic, then synthesized. Deltas:
+
+**Step 1 is DONE in code** (`40c2a91f` + `0022872d`). These rows are CLOSED — only guard tests remain:
+`applyHostTerminalSnapshot` merge, per-run `onEvent` listener delete, boot-reconcile-listener merge,
+`resolveDone`→run-keyed registry, turn-end-as-completion delete. So real open work starts at **Step 2**.
+
+**Three rows the trace got WRONG — skeptic won (verified):**
+1. `agent_inbox` tables — NOT a free delete: `templates/.claude/hooks/inbox-drain.cjs` still reads/writes
+   them via raw SQL (lines 66/74/77). Refactor that hook → mailbox BEFORE dropping tables.
+2. `work_items.body` mirror — DO NOT delete: `dag-run-service.ts:173` reads it live to resolve
+   `$root.output` workflow refs. Re-scoped to KEEP + document dual purpose.
+3. `workflow_run_events` — table exists + `appendEvent` writes, but they bypass the gateway/live_outbox
+   and the UI discards `res.events`. Currently dead observability writes; "events = truth" is unbuilt.
+
+**One refute OVERREACHED (trace stands):** `reattach-path` — the `AgentRunInput.reattach` field +
+`reattachLifecycle()` method ARE dead (no caller sets `reattach`); the skeptic confused them with the
+live `reattachAgentRunsOnBoot` module (different thing). Delete field+method in the Step 6 pass.
+
+**Stale VERIFY rows resolved:** V5 workflow-boot-reconcile EXISTS + live (`index.ts:487`, `38fb3436`).
+raw-WS-broadcast → live-relay merge already DONE.
+
+**Build order + near-term anchor:** see §6 (Phase-0 ordered plan). Anchor = **Step 7 Supervisor** (ready
+now, independent, fixes packaged-host-never-respawns).
+
+---
+
 ## 1. Verification queue — RESOLVED (2026-06-02)
 
 All seven checked. The sweeps **disagreed on three** and two memory notes were **stale** — verifying
@@ -43,7 +71,7 @@ live/foundational. The genuinely-dead in-process branch is gated behind a test r
 | `startDispatchedRun` host-vs-in-process fork (agent-run-factory.ts:~703) | **DELETE in-process branch** | HIGH (V2) | Dead in any real server (host always wired, `index.ts:279,304`); only unit tests hit it. Move those tests to a host-fake, then cut. |
 | `spawnPackagedAgentHostProcess` (desktop/agent-host-process.ts) | **KEEP→fold into Supervisor** | HIGH | Becomes part of the one supervisor (Step 7). Packaged host respawn is the gap. |
 | `dev-supervisor.mjs` (spawns API+host, respawns) | **KEEP→fold into Supervisor** | HIGH | The dev half of the one supervisor. |
-| `ProjectRuntime` spawning orchestrator (`InteractiveSession`) + modals (`PtySession`) | **MERGE→Engine** | HIGH (V1) | Steps 4–5 move these to the Engine. Confirmed: orchestrator=InteractiveSession, modals=PtySession. |
+| `ProjectRuntime` spawning orchestrator (`InteractiveSession`) + modals (`PtySession`) | **orchestrator MERGE→Engine · modals ☠ DELETE (FD-21)** | HIGH (V1) | Step 4 moves the orchestrator to the Engine; the modals are deleted outright per FD-21 (orchestrator-led authoring), not migrated. |
 | ChannelServer per-project stdio children (index.ts:~321) | **KEEP** (re-evaluate) | VERIFY | Orchestrator bridge; confirm it's still needed after Engine absorbs orchestrator. |
 
 ### Lifecycle primitive (target: ONE state machine + policy flags)
@@ -53,7 +81,7 @@ live/foundational. The genuinely-dead in-process branch is gated behind a test r
 | `SpawnState` (low-level-spawn.ts) | **KEEP-internal** | HIGH | Stays internal to LowLevelSpawn; not a public FSM. |
 | `InteractiveSessionState` (interactive-session.ts) | **MERGE→AgentRun** | HIGH (V1) | LIVE — the orchestrator (`project-runtime.ts:104,501`). Becomes a `persistent,interactive` policy on the one primitive. |
 | `SessionState`/`PtySession` (pty-session.ts) | **DELETE** (after Step 5) | HIGH (V1) | LIVE today — the 3 modals (`project-runtime.ts:109,114,117`). Migrate to the Engine first, THEN delete. Not a free delete. |
-| reattach path: `AgentRun.reattach` field + `reattachLifecycle()` (agent-run.ts:120,499) | **DELETE** | HIGH | Dead — no caller sets `reattach`; references a non-existent `HostClient.attachSpawn`. |
+| reattach path: `AgentRun.reattach` field + `reattachLifecycle()` (agent-run.ts:120,499) | **DELETE in Step 6 pass** | HIGH (re-confirmed 06-03) | Field+method DEAD — no caller sets `reattach`. ⚠️ NOT the same as the LIVE `reattachAgentRunsOnBoot` module (skeptic confused them). Delete field+method only. |
 
 ### Ready detection (target: ONE)
 | `ReadyGate` (ready-gate.ts) | **KEEP** | HIGH | Signal-based; the keeper. |
@@ -69,12 +97,12 @@ live/foundational. The genuinely-dead in-process branch is gated behind a test r
 | JSONL turn-end as a *completion* trigger | **DELETE-as-completion** (keep as activity) | HIGH | Already decoupled; must never close a run. |
 | process-exit / idle / wall-clock / spawn-stuck / ready timeouts | **KEEP-as-typed-failure** | HIGH | Backstops only — always produce a reason, never silent hang or fake success. |
 
-### Terminal application + done-resolution (target: ONE authority + run-keyed waiter) — **STEP 1**
-| `applyAgentRunTerminalEffects` (agent-run-terminal-effects.ts) | **KEEP** (the one terminal authority) | HIGH | Already funnels DB-flip + gate + verify + envelope + `onSettled`. |
-| `applyHostTerminalSnapshot` (agent-host-reattach.ts:419) | **MERGE→applyAgentRunTerminalEffects** | HIGH | Its early-return on already-terminal SKIPS `onSettled` — the starve. Route the host path so the one authority always settles. |
-| per-run factory `onEvent` listener (agent-run-factory.ts:~746) | **DELETE** (redundant 2nd listener) | HIGH | The race's loser; replaced by the run-keyed waiter. |
-| boot/reconcile PERSISTENT listener (agent-host-reattach.ts:170) | **MERGE→the one reconciler** | HIGH | The race's winner; folds into the single control loop. |
-| `resolveDone`/`onSettled`/`settleDone` (agent-run-factory.ts) | **KEEP→move to run-keyed registry** | HIGH | The waiter; store it keyed by runId so any terminal path resolves it (no listener race). |
+### Terminal application + done-resolution (target: ONE authority + run-keyed waiter) — **STEP 1 ✅ DONE (40c2a91f + 0022872d) — guard tests only remain**
+| `applyAgentRunTerminalEffects` (agent-run-terminal-effects.ts) | **KEEP** (the one terminal authority) | HIGH | Funnels DB-flip + gate + verify + envelope + `settle`. ✅ live. |
+| `applyHostTerminalSnapshot` (agent-host-reattach.ts) | **✅ MERGED** — KEEP the fn (live wrapper, 4 callers) | HIGH | Already-terminal short-circuit removed; always routes through the one authority → settles. Do NOT delete the wrapper. |
+| per-run factory `onEvent` listener | **✅ DELETED** (40c2a91f, ~108 lines) | HIGH | Gone. Factory has 0 `hostClient.onEvent`. Add ONE-TERMINAL-AUTHORITY guard. |
+| boot/reconcile PERSISTENT listener (agent-host-reattach.ts:165) | **✅ routes through one authority** | HIGH | Listener-merge done; loop unification is separate Step 2 work. |
+| `resolveDone`/`onSettled`/`settleDone` → `ActiveRunRegistry` | **✅ MOVED to run-keyed registry** (agent-active-runs.ts) | HIGH | Registered before start (factory.ts:465,635); fires by runId. Fire-exactly-once test green. |
 
 ### Reconcilers / sweeps / registries (target: ONE control loop, all states) — **STEP 2**
 | boot reconcile (agent-run-boot-reconcile.ts) | **MERGE→one loop** | HIGH | Becomes "the loop at boot." |
@@ -98,14 +126,14 @@ live/foundational. The genuinely-dead in-process branch is gated behind a test r
 | `agent_runs` table | **KEEP-as-truth** (runs) | HIGH | Registry/caches are projections. |
 | `live_outbox` | **KEEP-as-truth** (live events) | HIGH | Append-only; relay cursor is a projection. |
 | `work_items.history` | **KEEP-as-truth** (WI transitions) | HIGH | Denormalized position/status are projections. |
-| `agent_contracts.deliverable` vs legacy `work_items.body` mirror | **KEEP contract; DELETE wi.body mirror** | HIGH | The "Slice 014" cleanup; contract is canonical. |
-| `workflow_runs_v2.dag_state` (today's store) → `workflow_run_events` (target truth) | **CREATE events log; dag_state→projection** | HIGH (V5) | No events table today; dag_state JSON IS the store. The append-only log is the unshipped workflow-redesign slice 3. |
+| `agent_contracts.deliverable` vs legacy `work_items.body` mirror | **KEEP contract; KEEP wi.body — DO NOT delete** | HIGH (re-scoped 06-03) | ⚠️ wi.body is read LIVE by `dag-run-service.ts:173` to resolve `$root.output` workflow refs. Dual purpose (deliverable store + workflow-ref store). Add round-trip guard, do not remove. |
+| `workflow_runs_v2.dag_state` (today's store) → `workflow_run_events` (target truth) | **CREATE live events log; dag_state→projection** | HIGH (re-scoped 06-03) | ⚠️ Table EXISTS + `appendEvent` writes, BUT they bypass the gateway/live_outbox and the UI discards `res.events` (`WorkflowsList.tsx:871`). Today = dead observability writes. Slice-3 work = route appendEvent through gateway/live_outbox so events become truth. |
 | `PC_RIG_TOOL_REGISTRY` → `TOOLS`/`PC_RIG_TOOL_NAMES`/catalog | **DONE — single source** | HIGH (V3) | Already unified (Slice 016): all `.map()` off the registry + parity check. Not a target. |
 | web `STOCK_POD_NAMES` mirror | **N/A — already gone** | HIGH (V4) | No mirror in `apps/web/src`. Not a target. |
 | `field_schemas`, `orchestrator_sessions` tables | **KEEP-as-truth** | HIGH (V7) | Real repo'd tables. |
 
 ### Dead / legacy (DELETE after their V-row clears)
-| `agent_inbox` / `agent_delivery_audit` tables + `repos/agent-inbox.ts` | **DELETE** (post mailbox-stable) | HIGH | Superseded by mailbox; never written now. Archive old rows first. |
+| `agent_inbox` / `agent_delivery_audit` tables + `repos/agent-inbox.ts` | **DELETE — gated behind hook refactor** | HIGH (re-scoped 06-03) | TS repo IS dead (0 callers). ⚠️ BUT `templates/.claude/hooks/inbox-drain.cjs` (lines 66/74/77) still reads/writes the TABLES via raw SQL on UserPromptSubmit. Refactor that hook → mailbox, archive rows, THEN drop tables. |
 | `PcInvokeAgentResultSync` + `PcInvokeAgentInput.wait` (agent-comms.ts) | **DELETE** | HIGH | Sync invoke mode never implemented. |
 | forked workflow-subagent dispatch | **DELETED** ✓ | HIGH | Already removed (slice 8b). |
 
@@ -130,8 +158,10 @@ already used for the tool-catalog drift test):
   waiter; delete the redundant listener. All HIGH confidence; ready to scope now.
 - **Step 2:** the "Reconcilers/sweeps" block → one control loop.
 - **Steps 4–6:** the "Lifecycle / ready / transcript / spawning" blocks — V-rows now CLEARED; the
-  shape is: migrate orchestrator (InteractiveSession) + modals (PtySession) onto the Engine, THEN
-  delete PtySession + its banner-regex + file-watching. Keep `jsonl-tailer.ts` (base) + ReadyGate.
+  shape (updated by ☠ FD-21, 2026-06-03): migrate the orchestrator (InteractiveSession) onto the
+  Engine (Step 4), **delete the 3 modals outright** (Step 5 collapses — FD-21 replaces them with
+  orchestrator-led authoring), THEN delete PtySession + its banner-regex + file-watching.
+  Keep `jsonl-tailer.ts` (base) + ReadyGate.
 - **Step 7:** fold `dev-supervisor.mjs` + `spawnPackagedAgentHostProcess` into one Supervisor.
 - **Ongoing cleanup:** "Dead/legacy" block (reattach path, sync-invoke type, agent_inbox post-stable,
   in-process branch after test-refactor). Catalog/web "drift" rows are already done — dropped.
@@ -140,5 +170,28 @@ already used for the tool-catalog drift test):
 
 ## 5. Next action
 
-Verification queue is **cleared** (§1). **Step 1 is fully unblocked** — entirely HIGH-confidence, no
-open dependency. Scope it concretely (the run-keyed waiter + the listener/sweep collapse) and build.
+Step 1 is **done in code** (§0). **Building the Supervisor (Step 7) first** — ready now, independent,
+fixes packaged-host-never-respawns. Scope: `supervisor-build-scope-2026-06-03.md`.
+
+---
+
+## 6. Phase-0 ordered plan (2026-06-03)
+
+Each row independently shippable. Risky moves after prereqs. `✅` = code already landed.
+
+| # | Concern | Action | Prereq | Guard | Risk |
+|---|---------|--------|--------|-------|------|
+| 1 | Step 1 close-out | ✅ code done; add guards + close rows | — | ONE-TERMINAL-AUTHORITY | low |
+| 2 | Step 2 one reconciler | fold boot+host+liveness sweeps into one mode-agnostic loop; HOLD on unreachable host | 1 | ONE-RECONCILER (one setInterval; HOLD test) | med |
+| 3 | in-process fork DELETE | cut `constructAndStart` else-branch (dead in prod) | 2 + move null-host tests to host-fake | ONE-SPAWN-OWNER (partial) | low |
+| 4 | **Step 7 Supervisor** ◀ NEAR-TERM | one spawn→watch→respawn module, dev + packaged; fix packaged respawn | — (parallel w/ 2) | ONE-SUPERVISOR | med |
+| 5 | Step 3 Engine re-resolution | Brain re-finds Engine after respawn | 4 (need a respawn to test) | RECONNECT | med |
+| 6 | Step 4 orchestrator→Engine | policy {persistent,interactive}; fix `thinking` type-width | 5 | (migration) | high |
+| 7 | ~~Step 5 modals→Engine~~ **☠ FD-21: modals DELETED, not migrated** (orchestrator-led authoring replaces them) | delete the 3 modal paths outright; no Engine policy needed | 6 (orchestrator must own authoring first) | (deletion) | med↓ |
+| 8 | Step 6 converge primitive | DELETE PtySession + InteractiveSession + banner-regex + file-watching + reattach field | 6,7 | ONE-TRANSCRIPT-READER / ONE-READY-DETECTOR / ONE-SPAWN-OWNER (full) | high |
+| 9 | agent-inbox tables DELETE | refactor `inbox-drain.cjs` → mailbox, archive, drop tables | mailbox-stable + hook refactor | NO-INBOX-WRITE | med |
+| 10 | sync-invoke types DELETE | remove `PcInvokeAgentResultSync` + `wait` | — | self-guarding (compile) | low |
+| 11 | wi.body re-scope | KEEP; document dual purpose | — | $root.output round-trip | low |
+| 12 | workflow events = truth | route `appendEvent` through gateway/live_outbox | slice 3 | EVENTS-ARE-TRUTH | high |
+
+**Ready now (no prereq):** Step 7 Supervisor · sync-invoke DELETE · wi.body re-scope.

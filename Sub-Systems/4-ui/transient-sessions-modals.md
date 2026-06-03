@@ -91,16 +91,20 @@ Each modal calls `stop*()` in its explicit close handler (not in React's cleanup
 
 ## Target shape (per north star + Foundation Decisions)
 
-**Ledger verdict:** `MERGE→Engine` (Step 5), HIGH confidence. (`consolidation-ledger-2026-06-02.md §2`)
+> ☠ **FD-21 (locked 2026-06-03) — this entire subsystem is deleted.** No modal Claude sessions
+> survive the rebuild. The user tells the **orchestrator** what they want; it interviews them in
+> the one chat and **dispatches the specialist agent** (FD-11 expert workflow-builder · the
+> agent-management agent · plain `CLAUDE.md` writing for setup). "Create agent" / "Create workflow"
+> buttons survive as **chat handoffs** (pre-filled intent into the orchestrator chat), not popups.
+> Built workflows are reviewed in the real Workflows-page visual editor, not a modal preview.
 
-Today `ProjectRuntime` (Brain) owns these `PtySession` instances directly — the same structural problem as the orchestrator owning its own Claude process. The target moves them to the Engine with a policy of `{ephemeral, streaming}`: the same underlying primitive as an agent run, differentiated only by the policy record, no separate class needed.
-
-**What changes in the migration:**
-- Brain calls the Engine to start a modal session, the same way it calls the Engine for dispatched agents. The Engine owns the `claude.exe`.
-- The deterministic `ccSessionId` (the bleed-through guard) must be threaded through `AgentHostStartRunRequest` — the guard that was added for `PtySession` must carry over.
-- `PtySession` and its `terminalBufferLooksReady` banner-detection function are **deleted** in Step 6 (after both the orchestrator in Step 4 and modals in Step 5 have migrated). The JSONL file-watching dies with them.
-- **Prerequisite:** Step 3 (Engine endpoint re-resolution + reattach) must land first, or an Engine respawn silently severs modal sessions mid-conversation. (`unified-process-supervision-2026-06-02.md §9`)
-- **Phase-0 plan row:** Item 7 in `consolidation-ledger-2026-06-02.md §6`.
+**What FD-21 supersedes:**
+- The prior ledger verdict `MERGE→Engine` (Step 5, `consolidation-ledger-2026-06-02.md §2`, §6 item 7)
+  — **Step 5 collapses into "delete."** Only the orchestrator migrates to the Engine (Step 4).
+- `PtySession` + `terminalBufferLooksReady` banner detection die sooner — Step 6 shrinks to
+  "after the orchestrator migrates," with no modal migration in between.
+- The `ccSessionId`-threading and `{ephemeral, streaming}` policy questions below are moot for
+  modals (the bleed-through guard remains relevant for any session the Engine mints).
 
 ---
 
@@ -124,11 +128,14 @@ Today `ProjectRuntime` (Brain) owns these `PtySession` instances directly — th
 
 ## Decisions & open questions
 
-**For Emerson (product calls):**
-- **One modal per project is a real constraint.** Today two tabs on the same project share one agent-designer session — opening a second kills the first. Is that acceptable long-term, or should sessions eventually be per-user?
+**Resolved 2026-06-03 → Foundation Decisions:**
+- ~~Scrap the modals?~~ — **FD-21**: yes, all three die; authoring flows through the orchestrator +
+  dispatched specialists. The one-modal-per-project constraint, the Step-5 policy-flag questions,
+  the `workflow-builder-draft` store question, and the setup-wizard pod-row question are all moot.
 
-**Technical:**
-- Does the Engine's `AgentRun` primitive need new policy flags (`ephemeral`, `streaming`) before Step 5, or can the existing flags be reused with small tweaks? The orchestrator migration (Step 4) is the validation gate.
-- Does `ccSessionId` need to be threaded through `AgentHostStartRunRequest` for bleed-through prevention, or does the Engine already mint deterministic session IDs on the host side?
-- After Step 5, does the `workflow-builder-draft` store (currently an in-memory map in `ProjectRuntime`) need to move to Brain/Store, or can it stay as a Brain-side map keyed by `sessionId`?
-- Setup wizard uses `--append-system-prompt-file` (no pod spawn). After migration, does this need a pod row, or can the Engine accept an arbitrary append-prompt path in its session policy?
+**Still relevant (technical, survives FD-21):**
+- Does `ccSessionId` need to be threaded through `AgentHostStartRunRequest`, or does the Engine
+  already mint deterministic session IDs host-side? (The bleed-through guard matters for *any*
+  Engine-minted session, not just modals.)
+- FD-21 build question: how does a "Create workflow" chat handoff carry its pre-filled intent into
+  the orchestrator conversation (a tagged send? a mailbox message?) — design with the rebuild.

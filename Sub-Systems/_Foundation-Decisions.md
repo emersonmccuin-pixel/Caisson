@@ -480,6 +480,54 @@ Pattern's context attaches to the spawned card (interacts with the dispatch-payl
 
 ---
 
+## FD-21 — Transient modal sessions die; authoring flows through the orchestrator
+
+**Status:** 🟢 Locked — 2026-06-03 (from `4-ui` + `5-supervisor-ops` notes discussion)
+
+**The decision:** the three popup Claude sessions — **agent designer, workflow builder, project
+setup wizard — are deleted entirely.** No separate modal Claude processes. Instead:
+- The user tells the **orchestrator** what they want (new agent, new workflow, project setup);
+  the orchestrator interviews them **in the one chat**, then **dispatches the specialist agent**
+  to build it (the FD-11 expert workflow-builder · the agent-management agent from the audit
+  backlog · plain `CLAUDE.md` writing for setup).
+- **Entry buttons survive as chat handoffs** — "Create agent" / "Create workflow" drop the user
+  into the orchestrator chat with a pre-filled intent, not into a popup.
+- **Review happens on the real surfaces** — the built workflow is reviewed in the Workflows page's
+  visual editor (FD-9 requires it to be genuinely good), not a modal preview pane.
+- The **first-run wizard stays** (install + sign-in + first project) — a bare machine genuinely
+  needs it. Only the *project* setup wizard (the `CLAUDE.md` interview popup) dies.
+
+**Why:** modals pull the user out of where they work, and each one spawns its own Claude process on
+the most burned machinery in the codebase (start-race, chat bleed-through, banner-regex, strict-mode
+kill — four documented scars). One conversation surface, one brain, specialists dispatched behind it.
+
+**Structural bonus:** migration **Step 5 ("move modals to Engine") collapses into "delete."** Only
+the orchestrator migrates (Step 4); `PtySession` + banner detection die sooner (Step 6 shrinks).
+
+---
+
+## FD-22 — Claude Code version is exact-pinned, tested, and update-controlled
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:**
+1. PC declares **one exact tested Claude Code version** — a pin in code, bumped deliberately only
+   after a new version is verified against PC's quirk surface (banner rendering, queue protocol,
+   transcript format — all have broken under us before).
+2. **Preflight checks for exactly that version** (today it only checks ≥ 2.0.0); the first-run
+   installer installs exactly that version.
+3. PC **disables Claude's auto-updater for sessions it spawns** (PC controls every spawned Claude's
+   environment, so this is cheap) — an overnight self-update can't silently break the app.
+4. **Mismatch = loud warning + one-click "install the tested version"** — not a hard wall, so a dev
+   machine can run ahead deliberately.
+
+**Related lock (same discussion):** `.project-companion/` (workflows + prompts scaffolded into a
+project) **stays committed to git** — workflows are part of the project: versioned, history-tracked,
+machine-portable. Not gitignored. Nothing else PC writes lands in project folders (runtime config
+lives in per-session scratch dirs outside the repo).
+
+---
+
 ## Audit backlog (agreed work, not decisions)
 
 - **Knowledge usage audit** — is attached knowledge actually *used* by agents, or just listed in a

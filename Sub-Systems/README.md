@@ -66,7 +66,7 @@ path"). The unified design says **one job, one owner, one path**. Most issues be
 | Subsystem | What it is | Verdict | Biggest issue |
 |---|---|---|---|
 | [Web UI shell](4-ui/web-ui-shell.md) | React frontend: shell/rails/tabs, client store, WS-driven live hooks, API client | **keep — already close to target** | Mostly clean. Lingering: a dead `_events` param on `useResourceList`; workflow-run events written to DB but discarded by the UI until they route through the relay. |
-| [Transient sessions & modals](4-ui/transient-sessions-modals.md) | Short-lived chat modals: agent-designer, workflow-creator, setup-wizard | **rebuild → Engine-owned** | Brain owns these `claude.exe` directly (same gap as the orchestrator); a Brain reload can lose a live modal. Moves to Engine in Step 5. |
+| [Transient sessions & modals](4-ui/transient-sessions-modals.md) | Short-lived chat modals: agent-designer, workflow-creator, setup-wizard | **☠ delete (FD-21)** | Modals die entirely — authoring flows through the orchestrator + dispatched specialists; Step 5 collapses into "delete." |
 
 ### Supervisor & operations — keep the processes alive
 
@@ -74,7 +74,7 @@ path"). The unified design says **one job, one owner, one path**. Most issues be
 |---|---|---|---|
 | [Supervisor](5-supervisor-ops/supervisor.md) | The dumb durable root: spawn → watch → respawn-with-backoff | **build + wire in** | The `@pc/supervisor` package is built + unit-tested but **not wired in**. Packaged mode still doesn't respawn the host. This is Step 7 — ready to build now, no prereqs. |
 | [Desktop / Electron shell](5-supervisor-ops/desktop-electron.md) | Packaged Windows app: hosts the API in-process, spawns the host, serves the UI | **rebuild → thin shell** | The agent host is spawned once and **never respawned** (`main.ts:279` logs and stops). Dev and packaged are structurally different trees; Step 7 unifies them. |
-| [Onboarding & setup](5-supervisor-ops/onboarding-setup.md) | First-run gate + project factory (preflight, auth, install, scaffold) | **keep** | Self-contained and clean. Only migration item: the setup-wizard modal moving to the Engine (Step 5). Carries the same `inbox-drain.cjs` scaffold blocker. |
+| [Onboarding & setup](5-supervisor-ops/onboarding-setup.md) | First-run gate + project factory (preflight, auth, install, scaffold) | **keep** (setup-wizard modal ☠ FD-21; version pin → FD-22) | Self-contained and clean. Carries the same `inbox-drain.cjs` scaffold blocker. |
 | [Dev controls & diagnostics](5-supervisor-ops/dev-controls-diagnostics.md) | Restart endpoint, process-control, crash capture, host-health pill | **keep dev-only; fold restart into Supervisor** | Restart-on-crash works in dev (`dev-supervisor.mjs`) but not packaged — the same gap Step 7 closes. |
 | [Live events & relay](5-supervisor-ops/live-events-relay.md) | DB fact → all browser tabs: write `live_outbox` row in-txn, relay fans out over WS | **keep + finish migration** | Dual delivery still live for several domains (some code calls `broadcastTo()` directly alongside the relay). `workflow_run_events` bypasses the outbox entirely. |
 
