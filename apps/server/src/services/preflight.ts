@@ -21,8 +21,15 @@ const execFileAsync = promisify(execFile);
 /** Minimum Claude Code version PC supports. v2 introduced the banner + flag
  *  behaviors PC's spawn machinery depends on (cursor-right banner rendering,
  *  folder-trust prompt, `--agent` replace semantics, dev-channel flag).
- *  Anything below 2.0.0 breaks those assumptions. Dev binary: 2.1.150. */
+ *  Anything below 2.0.0 breaks those assumptions. */
 export const MIN_CLAUDE_VERSION = '2.0.0';
+
+/** FD-22 — the ONE exact Claude Code version PC is tested against. Bump
+ *  deliberately, only after verifying a new version against PC's quirk surface
+ *  (banner rendering, queue protocol, transcript format — all have broken
+ *  under us before). The installer installs exactly this; a mismatch is a
+ *  loud warning, never a hard wall (dev machines may run ahead on purpose). */
+export const PINNED_CLAUDE_VERSION = '2.1.162';
 
 const PROBE_TIMEOUT_MS = 10_000;
 
@@ -34,6 +41,11 @@ export interface ClaudePreflight {
   source: ClaudeBinarySource | 'not-found';
   version: string | null;
   minVersion: string;
+  /** FD-22 — the exact version PC is tested against. */
+  pinnedVersion: string;
+  /** true = installed version IS the pin; false = mismatch (warn, don't wall);
+   *  null = version unreadable. */
+  pinnedMatch: boolean | null;
 }
 
 export interface AuthPreflight {
@@ -111,6 +123,8 @@ async function checkClaude(): Promise<ClaudePreflight> {
       source: 'not-found',
       version: null,
       minVersion: MIN_CLAUDE_VERSION,
+      pinnedVersion: PINNED_CLAUDE_VERSION,
+      pinnedMatch: null,
     };
   }
   const raw = await runVersion(res.path);
@@ -131,6 +145,8 @@ async function checkClaude(): Promise<ClaudePreflight> {
     source: res.source,
     version,
     minVersion: MIN_CLAUDE_VERSION,
+    pinnedVersion: PINNED_CLAUDE_VERSION,
+    pinnedMatch: version ? compareVersions(version, PINNED_CLAUDE_VERSION) === 0 : null,
   };
 }
 

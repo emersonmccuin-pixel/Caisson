@@ -7,6 +7,7 @@ import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { SessionSwitcher } from '@/components/SessionSwitcher';
 import { HostHealthPill } from '@/features/system/HostHealthPill';
+import { ClaudeVersionBanner } from '@/features/system/ClaudeVersionBanner';
 import { HostHealthBanner } from '@/features/system/HostHealthBanner';
 import { Shell } from '@/components/Shell';
 import { tabLabel } from '@/components/Tabs';
@@ -440,6 +441,7 @@ export default function App() {
         </div>
       </header>
       <HostHealthBanner />
+      <ClaudeVersionBanner />
       {restartRequired && (
         <div className="flex items-center justify-between gap-3 border-b border-warning/60 bg-warning/10 px-3 py-1.5 text-xs text-warning">
           <span>

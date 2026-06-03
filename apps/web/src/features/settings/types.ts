@@ -42,6 +42,10 @@ export interface ClaudePreflight {
   source: string;
   version: string | null;
   minVersion: string;
+  /** FD-22 — the exact version Caisson is tested against. */
+  pinnedVersion: string;
+  /** true = installed version IS the pin; false = mismatch; null = unreadable. */
+  pinnedMatch: boolean | null;
 }
 
 export interface DependencyProbe {

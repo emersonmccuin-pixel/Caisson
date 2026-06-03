@@ -20,7 +20,7 @@ import { promisify } from 'node:util';
 
 import { clearClaudeProbeCache } from '@pc/runtime';
 
-import { runPreflight, type PreflightReport } from './preflight.ts';
+import { PINNED_CLAUDE_VERSION, runPreflight, type PreflightReport } from './preflight.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +51,9 @@ async function run(cmd: string, args: string[], timeoutMs = INSTALL_TIMEOUT_MS):
 }
 
 export async function installClaude(platform: NodeJS.Platform = process.platform): Promise<InstallResult> {
+  // FD-22 — install exactly the pinned, tested version, never "latest". The
+  // official scripts take a version target (they run `claude install <target>`
+  // under the hood).
   let log: string;
   if (platform === 'win32') {
     log = await run('powershell.exe', [
@@ -58,10 +61,13 @@ export async function installClaude(platform: NodeJS.Platform = process.platform
       '-ExecutionPolicy',
       'Bypass',
       '-Command',
-      'irm https://claude.ai/install.ps1 | iex',
+      `& ([scriptblock]::Create((irm https://claude.ai/install.ps1))) ${PINNED_CLAUDE_VERSION}`,
     ]);
   } else {
-    log = await run('/bin/bash', ['-c', '/usr/bin/curl -fsSL https://claude.ai/install.sh | /bin/bash']);
+    log = await run('/bin/bash', [
+      '-c',
+      `/usr/bin/curl -fsSL https://claude.ai/install.sh | /bin/bash -s ${PINNED_CLAUDE_VERSION}`,
+    ]);
   }
   // The installer may have added claude to PATH; drop the memoized probe so the
   // post-install preflight re-resolves (the homedir candidate already re-checks

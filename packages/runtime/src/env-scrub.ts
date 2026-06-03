@@ -49,6 +49,9 @@ export function scrubIdeEnv(
   // Default to low-ANSI output for non-terminal consumers. Interactive xterm
   // sessions can override this through `extra` after the IDE scrub completes.
   out.FORCE_COLOR = '0';
+  // FD-22 — spawned claude.exes must never self-update; PC pins the tested
+  // version and bumps it deliberately. CC honors this env var natively.
+  out.DISABLE_AUTOUPDATER = '1';
   for (const [k, v] of Object.entries(extra)) {
     if (v !== undefined) out[k] = v;
   }

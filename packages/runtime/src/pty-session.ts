@@ -362,6 +362,9 @@ export class PtySession extends EventEmitter {
     const env = scrubIdeIntegrationEnv({
       ...process.env,
       FORCE_COLOR: '0',
+      // FD-22 — spawned claude.exes must never self-update (PC pins the
+      // tested version). CC honors this env var natively.
+      DISABLE_AUTOUPDATER: '1',
       ...(opts.extraEnv ?? {}),
     });
     this.child = pty.spawn(claudeExe, args, {
