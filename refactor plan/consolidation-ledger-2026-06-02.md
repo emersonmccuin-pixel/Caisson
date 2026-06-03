@@ -170,8 +170,12 @@ already used for the tool-catalog drift test):
 
 ## 5. Next action
 
-Step 1 is **done in code** (§0). **Building the Supervisor (Step 7) first** — ready now, independent,
-fixes packaged-host-never-respawns. Scope: `supervisor-build-scope-2026-06-03.md`.
+Step 1 is **done in code** (§0). Supervisor (Step 7) build in flight — scope:
+`supervisor-build-scope-2026-06-03.md`.
+
+> **Sequencing superseded (2026-06-03):** the full FD-1..22-reconciled build order now lives in
+> **`rebuild-sequencing-2026-06-03.md`** — it absorbs §6's rows into two parallel tracks
+> (Process / Model) + product surfaces. This ledger stays as the verdict record.
 
 ---
 
