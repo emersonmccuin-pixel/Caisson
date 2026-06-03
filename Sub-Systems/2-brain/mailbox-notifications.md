@@ -156,7 +156,7 @@ What the channel system was (all dead): the per-orchestrator channel-server chil
 
 2. **FD-3 injected-turn tagging** — system-label + machine-readable source/kind tag must flow all the way through to the chat renderer. The send-queue `source` field exists today; the rest of the chain is not yet complete.
 
-3. **Dead-letter recovery for `orchestrator-turn` messages** — if the orchestrator is down for all 5 attempts, the delivery dies silently (see Known issues). The target architecture has the Brain's reconciler re-dispatch on reconnect; today there is no sweep.
+3. **Dead-letter recovery for `orchestrator-turn` messages** — if the orchestrator is down for all 5 attempts, the delivery dies silently (see Known issues). The target architecture has the Brain's reconciler re-dispatch on reconnect; today there is no sweep. 🟢 **FD-8 (locked):** the sweep + lifecycle watchdog are now required — no message may silently die.
 
 4. **`compat-channel` cleanup** — reserved and unused; dead-letters immediately. Safe to ignore until a real use appears, then wire the worker branch before any caller uses it.
 
@@ -180,11 +180,15 @@ What the channel system was (all dead): the per-orchestrator channel-server chil
 
 **For Emerson (product calls):**
 
-1. **When should the orchestrator get a dead-letter recovery UI?** If the orchestrator was down when a notification arrived and all retries failed, today that notification is silently gone on the orchestrator side (the human inbox copy survives). Is that acceptable, or should the product show a visible "missed notification" indicator?
+1. ~~Dead-letter recovery UI?~~ 🟢 **FD-8 (locked 2026-06-03):** silent loss is never acceptable —
+   a sweep re-delivers dead-lettered orchestrator-turn messages when an orchestrator comes back, plus
+   full lifecycle tracking (sent → delivered → expecting response → answered → done) with a watchdog
+   for answers that never came.
 
-2. **Should system-injected orchestrator messages be hidden by default in the transcript view?** FD-3 requires them to be tagged so they *can* be filtered — but the product call is whether the toggle is on or off by default. (Most owners probably don't want to see internal plumbing messages in their conversation thread.)
+2. ~~Hide system-injected messages by default?~~ 🟢 **FD-6 (locked 2026-06-03):** **shown by
+   default**, with a chat-settings filter to hide them. (FD-3's kind-tagging is the mechanism.)
 
-3. **`inbox-drain.cjs` migration timing.** This is the last piece of the pre-mailbox world still running. What slice/step owns it? It blocks dropping the `agent_inbox` tables (ledger row 9).
+3. **`inbox-drain.cjs` migration timing.** This is the last piece of the pre-mailbox world still running. What slice/step owns it? It blocks dropping the `agent_inbox` tables (ledger row 9). — still open.
 
 **Technical:**
 

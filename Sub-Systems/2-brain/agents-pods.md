@@ -51,13 +51,13 @@ These are the dials that define the agent. (`schema.ts:580`)
 | **model** | Which Claude "brain" it uses | `opus` (most capable) / `sonnet` (faster) |
 | **effort** | How hard it thinks before answering | `low` / `medium` / `high` |
 | **max_turns** | How many back-and-forth steps it gets before it must wrap up | a number, or empty = no cap |
-| **output_destination** | Where its result goes when done | `chat` (posts to the conversation) / `passthrough` (hands the raw result back to whatever called it) |
+| **output_destination** | Where its result goes when done. 🟢 *FD-5: moves to the Work Contract in the rebuild (job-level, not agent-level)* | `chat` (posts to the conversation) / `passthrough` (hands the raw result back to whatever called it) |
 | **description** | A human-readable summary of what it does (shown in the UI) | "Drafts emails, docs, summaries…" |
 | **dispatch_guidance** | A note that tells the *orchestrator* **when** to pick this agent | "use for drafting prose" |
-| **expected_output** | What kind of result it's supposed to produce by default | (a description of the deliverable) |
-| **scope** | Where the agent is available | `global` (everywhere) / `project` (one project only) |
+| **expected_output** | What kind of result it's supposed to produce by default. 🟢 *FD-5: moves to the Work Contract in the rebuild* | (a description of the deliverable) |
+| **scope** | Where the agent is available. 🟢 *FD-4: rebuild collapses scope+origin into one field: `built-in` / `global` / `project`* | `global` (everywhere) / `project` (one project only) |
 | **project_id** | Which project it belongs to, if project-scoped | (a project id, or empty) |
-| **origin** | Whether it's built-in or user-made | `stock` (ships with the app) / `user-created` |
+| **origin** | Whether it's built-in or user-made. 🟢 *FD-4: dies in the rebuild (folded into scope)* | `stock` (ships with the app) / `user-created` |
 | **rev** | A counter that ticks up on every change — used to detect edits | `1`, `2`, `3`… |
 | **deleted_at** | A "deleted" marker. Deleting hides it rather than erasing it (a "soft delete") | empty = alive |
 
@@ -112,6 +112,11 @@ This is the rule for *which agents show up in which project* (`isProjectDispatch
   project (it copies the settings, knowledge, and MCP servers — but **not** secrets, on purpose).
 - When two agents share a name, the **project version wins** over a global one.
 
+> 🟢 **FD-4 (locked 2026-06-03):** the rebuild expresses this as **one scope field, three values**
+> (`built-in` / `global` / `project`); `origin` dies. Promote-to-global keeps the project original.
+> Per-project tweaks to a built-in (with a "customized here" indicator) — intent locked, overlay
+> mechanism designed later.
+
 ### The built-in pods and "drift" (`stock-pod-seed.ts`, `pod-seed-with-drift.ts`)
 
 The nine specialists (plus the orchestrator) are **re-seeded into the database every time the server
@@ -136,7 +141,8 @@ fields (prompt, tools, model, effort, max turns, output destination, description
 - **The required four** (`REQUIRED_AGENT_TOOLS`): every dispatched agent *always* gets four tools, no
   matter what — read its assignment (`pc_get_work_item`), submit its result
   (`pc_submit_deliverable`), and reach out (`pc_ask_user`, `pc_ask_orchestrator`). This is enforced in
-  three places so it can't be lost.
+  three places so it can't be lost. 🟢 *FD-6: `pc_ask_user` dies in the rebuild (agents only ask the
+  orchestrator) — the required set gets re-derived in the baseline-tools audit.*
 - **Wildcards:** a pod can list `mcp__pc-rig__*` to mean "all tools from this server." At launch that
   expands to the explicit list. If it names a server that doesn't exist, it **fails loudly** rather
   than silently giving the agent no tools.
@@ -231,6 +237,12 @@ agents.
 - **`agent_inbox` hook refactor** — timeline to migrate it so the legacy tables can be dropped?
 - **Per-project overlays (Section 17c).** The schema is *ready* for project-specific knowledge/secrets
   layered on top of a global pod, but the layering isn't implemented — today a pod uses either its own
-  content or the global content, never a merge.
+  content or the global content, never a merge. 🟢 *FD-4 locks the intent (per-project tweak of a
+  built-in, visibly flagged); the mechanism is the open part.*
 - **Custom MCP server wildcards.** Today only the built-in `pc-rig` server supports `mcp__…__*`
   wildcard expansion. A pod with a custom server (e.g. Gmail) must list its tools explicitly.
+
+**Audit items (agreed 2026-06-03 — see Foundation Decisions "Audit backlog"):** knowledge-usage audit
+(is attached knowledge actually read?) · agent-management toolkit audit (one built-in agent with the
+complete toolkit — verify tool coverage vs UI-only) · baseline-tools audit (re-derive the required set
+after FD-6).

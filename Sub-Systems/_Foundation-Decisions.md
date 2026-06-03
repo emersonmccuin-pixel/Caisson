@@ -140,16 +140,189 @@ endpoint that enqueues a mailbox message) — trivial to add when actually neede
 
 ---
 
+## FD-4 — Agent scope: one three-tier field; `origin` dies
+
+**Status:** 🟢 Locked — 2026-06-03 (from `2-brain/Emerson's Notes.md` discussion)
+
+**The decision:**
+- Scope becomes **one field with three values**:
+  - **`built-in`** — ships with the app, available everywhere. Protected: can't be deleted, receives
+    auto-updates unless customized (the existing drift/trust model keys off this value).
+  - **`global`** — appears in every project's **"Add agent" picker**, but is *not* usable in a project
+    until explicitly added. Not orchestrator-callable anywhere it hasn't been added.
+  - **`project`** — lives in one project. **Promote to global** makes it *available* to other projects
+    via the picker; the project-scoped original remains where it is.
+- The separate **`origin` field is deleted** — "is this built-in?" *is* now a scope value, not a
+  second axis to mentally combine with the first.
+
+**Why:** today's behavior is already approximately this, but expressed as two fields (`scope` +
+`origin`) whose combinations the reader must decode. One field, three values, no decoding.
+
+**Deferred design (intent locked, mechanism later):** per-project *adjustment of a built-in* — tweak a
+built-in agent for one project's specifics, with a visible "customized for this project" indicator.
+The DB is already shaped for this overlay (Section 17c); the layering gets designed as its own small
+piece, not in this pass.
+
+---
+
+## FD-5 — Assignment-level settings move to the Work Contract
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:**
+- **`expected_output` and `output_destination` come off the pod.** Both describe *an assignment*
+  ("what does this job produce, where does the result go"), not *an agent*. The **Work Contract**
+  owns them — set at dispatch, per job.
+- **The deliverable result lives on the Work Contract** (absorbs the former backlog item). The work
+  item's `body` goes back to being the human description only — kills the "result stored in two
+  places" split (`work_items.body` doing double duty as `$root.output`).
+
+**Why:** Emerson's instinct ("this should always be set at agent dispatch, no?") is exactly right —
+pod-level defaults for job-level facts is how dispatch-time settings get silently overridden or
+conflict. The contract becomes the *complete* job spec: what to produce, where it goes, who reviews it.
+
+**Guard:** the `work_items.body` ↔ `$root.output` coupling is load-bearing today — the migration
+needs the round-trip guard test the ledger already calls for before that write moves.
+
+---
+
+## FD-6 — One ask door: agents only ask the orchestrator
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:**
+- **Agents never ask the human directly. Every agent question goes to the orchestrator** through the
+  mailbox; the orchestrator answers it itself or surfaces it to the human. `pc_ask_user` **dies**.
+- The agent↔orchestrator exchange is **visible in chat by default**, with a chat-settings filter to
+  hide system traffic. (No new mechanism — FD-3 already requires every injected system message to
+  carry a machine-readable kind tag *exactly so* the chat can filter it. This also answers the
+  mailbox doc's open question: system-injected messages are **shown by default**, filterable.)
+
+**Why:** one door instead of two; the orchestrator is better positioned to triage than a raw agent
+question landing in the human's lap; deletes a whole path.
+
+**Ripple:** the **required-tools set changes** — `pc_ask_user` leaves the always-granted four. Fold
+into the baseline-tools audit (see Audit backlog).
+
+---
+
+## FD-7 — Human Inbox System becomes its own workstream
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:** human review gets designed as a **dedicated subsystem**, not patched per-feature:
+- proper **review packages** (everything a reviewer needs, assembled),
+- a proper **review process** (consistent approve/reject/feedback flow everywhere),
+- **global notifications** when review is needed in *other* projects.
+
+**What it must resolve (currently open questions it absorbs):**
+- The two overlapping "open question" tables (`pending_asks_v2` vs `pending_interactions`) — the
+  workstream picks ONE canonical durable inbox surface.
+- Whether workflow review gates and contract verification holds **merge into one approval flow**
+  (they are two mechanisms today; the asks-deliverables doc flags this).
+- Where the loop-limit "agent failed 3 times, human needed" hand-offs land (FD-9).
+
+---
+
+## FD-8 — No message silently dies (mailbox lifecycle + failsafes)
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:** the principle is law — **every undelivered or unanswered mailbox message must
+either retry or surface visibly. Silent loss is never acceptable.** Concretely:
+- **Dead-letter recovery:** a sweep re-delivers given-up orchestrator-turn messages when an
+  orchestrator comes back online (today: 5 attempts, then silently gone — that's the bug this kills).
+- **Lifecycle tracking:** sent → delivered → *expecting response* → response received → done. The
+  plumbing half-exists (delivery rows track pending→accepted; interactions track open→answered); the
+  rebuild unifies it and adds a **watchdog for "expecting a response that never came."**
+
+**Why:** Emerson's failsafes note + the known issue that dead-lettered orchestrator copies vanish
+with no alert, no indicator, no requeue.
+
+---
+
+## FD-9 — Workflow steps: Agent · Review · Move card · Loop
+
+**Status:** 🟢 Locked — 2026-06-03 · ⚠️ **reverses the shipped card-move-as-effect decision**
+
+**The decision:** the rebuild's step model is **four visible step kinds, each doing one thing**:
+- **Agent** — hand a job to an agent (unchanged).
+- **Review** — quality gate, human or orchestrator (unchanged).
+- **Move card** — moving the card is **a step of its own**, drawn in the graph — not a property
+  hidden under an agent or review step. The move-as-property mechanism **dies**, including
+  "on reject, move back to Z."
+- **Loop** — a real construct: review rejects → loop back to the agent step with feedback, up to a
+  **retry ceiling (default 3)**; hitting the ceiling sends the work to the **Human Inbox** (FD-7).
+
+**Why:** what the graph shows = what happens. A property is invisible in the editor; a step is drawn
+and reviewable. The visual editor being genuinely good is a rebuild requirement — this serves it.
+The old property's one job the step can't do (conditional move-back on reject) is covered better by
+Loop semantics: the card only moves on the *forward* path, via explicit Move steps.
+
+**One-path note:** this consciously reverses `card-move-as-effect` from the first-principles
+redesign (shipped days earlier). The rebuild **deletes** the property path — no dual support.
+
+---
+
+## FD-10 — No stage-entry triggers
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:** a card entering a stage **does not start a workflow**. Exactly two ways a run
+starts: the **orchestrator's fire tool** and **manual "run now."** The stage-watching trigger
+machinery is deleted in the rebuild.
+
+**Why:** stage-entry triggering "causes too much issue" (Emerson) — it's a hidden tripwire that
+fights the agent-centric direction. If automation demand returns, it comes back deliberately — most
+likely as the orchestrator *noticing* the move and choosing to fire, keeping one brain in charge.
+
+---
+
+## FD-11 — Workflow observability + repair are core requirements
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:**
+1. **The run diary becomes the truth.** Every run keeps a readable step-by-step story (started step 2
+   · agent delivered · review rejected with notes · retried…), and **the orchestrator can read all of
+   it** to debug. A stuck or dead run is never a mystery. (This is the engine's flagged biggest gap —
+   now fix-priority, and it interacts with the store event-log decision in the backlog.)
+2. **Restart at a specific step** after repair — not from scratch.
+3. **Repair loop until reliable:** broken workflow → orchestrator helps work through it → resume from
+   the failed step → once it succeeds, it's locked in as the repeatable, reliable workflow.
+4. **The workflow-builder agent must be expert-level** — complete knowledge of how the engine works,
+   translating user intent into a fully valid, runnable workflow ("saved ⇒ runnable" validation
+   backstops it).
+
+---
+
+## Audit backlog (agreed work, not decisions)
+
+- **Knowledge usage audit** — is attached knowledge actually *used* by agents, or just listed in a
+  footer? Dispatch agents with knowledge attached, read transcripts, verify they reach for
+  `pc_knowledge_read` when relevant. Nobody has checked.
+- **Agent-management toolkit audit** — FD requirement: one built-in, orchestrator-callable agent with
+  the *complete* agent-management toolkit (apply knowledge, secrets, tools, MCP servers…). Verify
+  what's tool-doable today vs UI-only; close the gaps.
+- **Baseline-tools audit** — re-derive the always-granted tool set EVERY agent gets (changes under
+  FD-6: `pc_ask_user` leaves). Then the full agent roster audit (tools, descriptions, dispatch
+  guidance) — deliberately *after* the rebuild's bigger pieces settle.
+
+---
+
 ## Decision backlog (raised in discussion, not yet written up)
 
 These came up and need their own entries once we talk them through:
 
 - ⚪ **Work Item vs Work Contract model** — what each is, how they relate (goal vs. assignment), and
   the rule for a contract with no work item. *(See `0-store/contracts-system.md` and `3-product/work-items.md`.)*
-- ⚪ **Where the deliverable lives** — proposed: the result lives on the Work Contract; the work item's
-  `body` goes back to being the human description only. Kills the "result stored in two places" split.
+  Also owns: **passing work down the line** in workflows (hand-off control lives in the contract) —
+  parked here per the 2026-06-03 discussion.
 - ⚪ **Store: event-log vs row-state** — the biggest one. Do we keep mutable rows, or move to an
   append-only event log with the current picture rebuilt from it? *(See `0-store/store-db.md`.)*
+  FD-11's run diary interacts directly with this.
 - 🟢 **Naming: "Work Contract"** — agreed 2026-06-03; in prose we call the `agent_contracts` entity the
   "Work Contract" to avoid collision with the `@pc/contracts` type package. (Code rename deferred to
   the rebuild.)
+
+*(Resolved and promoted: "Where the deliverable lives" → FD-5.)*

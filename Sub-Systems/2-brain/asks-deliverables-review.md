@@ -29,6 +29,7 @@ Nothing else can end a run as "complete."
 ### 1. Asking a question and waiting (pending asks)
 
 When an agent calls `pc_ask_user`, `pc_ask_orchestrator`, or `pc_request_approval`, the system:
+*(🟢 FD-6: in the rebuild `pc_ask_user` dies — agents only ask the orchestrator, one ask door.)*
 
 - Looks up the run in the **ActiveRunRegistry** (the in-memory list of live runs). (`pause-resume.ts:133`)
 - Reads the run's real status from the **database row**, not from memory — this prevents a race where the row still shows `queued` on an agent that asks a question the instant it spawns. If the row is behind, the system does a live read from the host to catch up before deciding. (`pause-resume.ts:147–160`, `152–158`)
@@ -211,9 +212,18 @@ An agent that calls `pc_ask_*` immediately after spawn may find its DB row still
 ## Decisions & open questions
 
 **For Emerson (product calls):**
-1. **Where does a deliverable live?** Today the default is `work_items.body`, but the right answer — a dedicated result field on the Work Contract — is an open Foundation Decisions item. This affects what agents, workflows, and humans see when they look up a finished piece of work.
-2. **Two overlapping "open question" tables.** `pending_asks_v2` (agent pauses) and `pending_interactions` (richer general-purpose asks) serve related but slightly different jobs. The workflow engine's review steps will need one of these as their durable inbox. Does this become one surface, or do they stay separate with `pending_interactions` as the canonical home? This is a product-visible question: it affects where human review tasks appear in the UI.
-3. **Verification tiers in the workflow editor.** The review step in a workflow (human or orchestrator sign-off) pauses via the inbox. The contract's `verifying` hold is a different mechanism today. Before the new executor ships, decide: do these merge into one approval flow, or stay as two separate things?
+
+*(All three resolved 2026-06-03 → Foundation Decisions:)*
+1. ~~Where does a deliverable live?~~ 🟢 **FD-5:** the result lives on the **Work Contract**;
+   `expected_output` + `output_destination` move there too (job-level, not agent-level);
+   `work_items.body` goes back to human-description-only. Needs the round-trip guard test first.
+2. ~~Two overlapping "open question" tables.~~ 🟢 **FD-7:** the **Human Inbox System workstream**
+   picks ONE canonical durable inbox surface — this question is absorbed there.
+3. ~~Verification tiers merge?~~ 🟢 **FD-7:** also absorbed by the Human Inbox workstream (one
+   consistent review process everywhere is its mandate).
+
+**Also locked (FD-6):** agents only ask the **orchestrator** — `pc_ask_user` dies; the orchestrator
+triages and surfaces to the human when needed. Exchanges visible in chat by default, filterable.
 
 **Technical:**
 - Once the Step 2 reconciler lands, confirm whether the early-ask on-demand round-trip (`pause-resume.ts:152–158`) can be removed outright, or whether a first-ask latency window still needs it.

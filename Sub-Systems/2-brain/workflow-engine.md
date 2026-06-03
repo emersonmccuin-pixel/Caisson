@@ -33,10 +33,13 @@ Under the hood a workflow is stored in the database as the definition of record.
 
 ### 2. Triggering (what starts the line)
 
-Three ways a run starts:
-- **A card enters a specific stage.** Each workflow binds to one exact stage in one project — no roles, no tags, no indirection (locked decision). Only *forward* moves count (a card dragged backward doesn't re-fire the line). (`project-runtime.ts:362`, `dag/triggers.ts`)
+Three ways a run starts today:
+- **A card enters a specific stage.** Each workflow binds to one exact stage in one project — no roles, no tags, no indirection. Only *forward* moves count (a card dragged backward doesn't re-fire the line). (`project-runtime.ts:362`, `dag/triggers.ts`) ⚠️ **Sentenced by FD-10:** stage-entry triggering is deleted in the rebuild.
 - **Manually** — "run this now" over HTTP. (`workflow-routes.ts`)
 - **The orchestrator fires it** with its `pc_fire_workflow` tool.
+
+> 🟢 **FD-10 (locked 2026-06-03):** the rebuild keeps exactly two triggers — orchestrator fire tool +
+> manual. The stage-watching machinery goes.
 
 ### 3. The steps (nodes)
 
@@ -47,9 +50,13 @@ Exactly **two kinds of step**, on purpose — everything else was deleted to kee
   - **Approve** → the step completes; the card can move; the line continues.
   - **Reject** → the work goes *back* to an earlier step **with the reviewer's notes attached** (the kicked-back step can read them as `$carry.feedback`). There's a retry ceiling (3 by default); hitting it fails the run and flags a human.
 
-Not steps (by design or not yet):
-- **Move card** — today this is a **property on a step**, not a step of its own: "when this agent finishes, move the card to X" / "when this review approves, move to Y" (and optionally "on reject, move back to Z"). ⚠️ **Open decision (Emerson):** keep as a property, or make it a visible node in the graph? Changes what the visual editor draws.
-- **Loops** — **not built.** The only loop today is the review-reject kickback. A general "repeat until X" construct is on the wish list. ⚠️ **Open decision:** is reject-kickback enough, or do we want a real loop step in the rebuild?
+Not steps today (both decided for the rebuild — see FD-9):
+- **Move card** — today this is a **property on a step**, not a step of its own: "when this agent finishes, move the card to X" / "when this review approves, move to Y" (and optionally "on reject, move back to Z"). 🟢 **FD-9 (locked 2026-06-03):** becomes a **visible step** in the rebuild; the property mechanism dies, including on-reject move-back.
+- **Loops** — **not built.** The only loop today is the review-reject kickback. 🟢 **FD-9 (locked 2026-06-03):** the rebuild gets a real **Loop step** — review rejects loop back to the agent with feedback, retry ceiling (default 3), ceiling hit → Human Inbox (FD-7).
+
+> 🟢 **FD-9 target step model: Agent · Review · Move card · Loop** — four visible kinds, each one
+> thing. Consciously reverses the shipped card-move-as-effect decision; the rebuild deletes the
+> property path.
 
 ### 4. Passing work down the line (data flow)
 
@@ -71,7 +78,9 @@ The agent calls `pc_submit_deliverable` — "here's my finished work." That posi
 - **Pause at a review** — built and durable. The run survives restarts while parked; the inbox item persists; a decision resumes it exactly where it stopped.
 - **Pause on failure + a user-facing "fix it and resume" button** — **not built.** Today a failed step fails the run (downstream steps are skipped) and you get notified.
 
-> 📌 **Rebuild requirement (Emerson, from discussion 2026-06-03):** "shit went wrong → fix it → resume" should be a core capability, not a nice-to-have. To confirm and write into the decisions doc.
+> 🟢 **FD-11 (locked 2026-06-03):** "went wrong → fix it → resume" is a core capability — restart at
+> a specific step after repair, repair-loop until the workflow is reliable, run diary readable by the
+> orchestrator.
 
 ### 7. When things go wrong (failure policy)
 
@@ -111,7 +120,9 @@ The first-principles spec reduces the engine to three concepts: **step → trans
 
 **Already done on this branch:** two step kinds only (old bash/script/move/split-review steps deleted) · done = deliverable receipt (stall fixed; one terminal authority) · card-move as a property · declared input ports validated at save · unified review with reject-carry feedback · failed-run notifications · boot reconciliation · "Saved ⇒ runnable" validation.
 
-**Remaining:** the run diary becomes the truth (#8 — slice 3) · user-facing resume (#6) · loop construct decision (#3) · re-attach instead of fail-closed on boot (the one-reconciler work, Step 2).
+**Locked 2026-06-03 (Foundation Decisions):** step model becomes Agent · Review · Move card · Loop — move-as-property dies (FD-9) · stage-entry triggers die (FD-10) · run diary becomes the truth + restart-at-step + repair-until-reliable + expert builder agent (FD-11).
+
+**Remaining:** build the FD-9/10/11 items above · user-facing resume (#6) · re-attach instead of fail-closed on boot (the one-reconciler work, Step 2).
 
 ---
 
@@ -127,12 +138,10 @@ The first-principles spec reduces the engine to three concepts: **step → trans
 
 ## Decisions & open questions
 
-**For Emerson (product calls — to land in `_Foundation-Decisions.md`):**
-1. **Move-card: property or visible node?** Property = smaller graphs; node = the move is drawn in the editor.
-2. **Pause-on-failure + resume = core requirement?** (Lean yes, per 2026-06-03 discussion.)
-3. **The run diary becomes the truth** — fixes "frozen run is a mystery" and powers live watching; interacts with the store (event-log) decision.
-4. **What does editing a definition do to runs already in flight?** (Today: nothing — they finish on their frozen snapshot.)
-5. **Loops: is reject-kickback enough, or do we build a real loop step?**
+**For Emerson (product calls):**
+1. **What does editing a definition do to runs already in flight?** (Today: nothing — they finish on their frozen snapshot.) — still open.
+
+*(Resolved 2026-06-03 → Foundation Decisions: move-card is a step (FD-9) · loops are a real step (FD-9) · pause-on-failure/resume + run-diary-as-truth + repair loop are core (FD-11) · stage-entry triggers die (FD-10).)*
 
 **Technical:**
 - Pod-existence/scope check at save time?
