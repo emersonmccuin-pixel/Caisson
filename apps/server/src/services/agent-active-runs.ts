@@ -23,6 +23,10 @@ import type {
   AgentRunState,
 } from '@pc/runtime';
 
+// Type-only (no runtime cycle): the terminal authority lives in
+// agent-run-terminal-effects.ts, which type-imports ActiveRunRegistry from here.
+import type { TerminalSettlement } from './agent-run-terminal-effects.ts';
+
 /** Slice 009 OBJ-2 — the outcome of threading an answer into a paused run.
  *  In-process resume is synchronous and (post pre-validation) always `ok`. The
  *  host path awaits the host command response and maps a `not-resumable` /
@@ -255,6 +259,13 @@ export interface RegisterActiveRunInput {
 export class ActiveRunRegistry {
   private byRunId = new Map<string, ActiveRunEntry>();
   private byCcSession = new Map<string, ActiveRunEntry>();
+  /** One terminal authority, one wake-up. A dispatch registers a settlement
+   *  waiter keyed by run id BEFORE the run starts; the terminal authority
+   *  (`applyAgentRunTerminalEffects`) fires it by run id whenever the run
+   *  reaches terminal — regardless of WHICH host-event listener / reconcile
+   *  sweep processed the terminal first. This is what makes the workflow `done`
+   *  promise immune to the old double-subscribe race. Fires at most once. */
+  private settlementWaiters = new Map<string, (settlement: TerminalSettlement) => void>();
 
   register(input: RegisterActiveRunInput): ActiveRunEntry {
     const entry: ActiveRunEntry = {
@@ -287,6 +298,31 @@ export class ActiveRunRegistry {
     }
   }
 
+  /** Register a one-shot settlement waiter for a run. Called by a dispatch
+   *  before `start()` so the terminal — applied by whichever listener wins —
+   *  resolves the dispatch's `done` promise by run id. Overwrites any prior
+   *  waiter for the same id (last dispatch wins; ids are unique in practice). */
+  onSettled(runId: string, listener: (settlement: TerminalSettlement) => void): void {
+    this.settlementWaiters.set(runId, listener);
+  }
+
+  /** Fire + remove the settlement waiter for a run. Idempotent: a re-entrant
+   *  terminal (race / reconcile re-derive) finds no waiter and no-ops, so the
+   *  waiter fires EXACTLY once. */
+  settle(runId: string, settlement: TerminalSettlement): void {
+    const waiter = this.settlementWaiters.get(runId);
+    if (!waiter) return;
+    this.settlementWaiters.delete(runId);
+    waiter(settlement);
+  }
+
+  /** Drop a settlement waiter without firing it — for a dispatch whose start
+   *  failed before the run could ever reach terminal (so `done` is discarded
+   *  and the waiter would otherwise leak). */
+  cancelSettlement(runId: string): void {
+    this.settlementWaiters.delete(runId);
+  }
+
   get(agentRunId: string): ActiveRunEntry | null {
     return this.byRunId.get(agentRunId) ?? null;
   }
@@ -303,6 +339,7 @@ export class ActiveRunRegistry {
   clear(): void {
     this.byRunId.clear();
     this.byCcSession.clear();
+    this.settlementWaiters.clear();
   }
 }
 

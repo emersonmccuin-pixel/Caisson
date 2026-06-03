@@ -94,12 +94,6 @@ export interface AgentRunTerminalEffectsDeps {
   verificationDeps?: VerificationDeps;
   now?: () => number;
   onError?: (error: Error) => void;
-  /** Door-unification — fired EXACTLY ONCE after verification, carrying the
-   *  post-verify terminal facts. Wired by `dispatchFreshAgent` to resolve the
-   *  `done` promise the workflow engine awaits. Omitted by the orchestrator
-   *  (fire-and-forget). Also fires on the already-terminal early-return so an
-   *  awaiting caller never hangs. */
-  onSettled?: (settlement: TerminalSettlement) => void;
 }
 
 export interface AgentRunTerminalEffectsResult {
@@ -112,11 +106,13 @@ export function applyAgentRunTerminalEffects(
 ): AgentRunTerminalEffectsResult {
   const row = (deps.getAgentRun ?? defaultGetAgentRunRow)(input.runId);
   if (!row || isDbTerminal(row.status)) {
-    // Already terminal (reconcile re-entrancy). Effects don't re-apply, but an
-    // awaiting caller (workflow `done`) must still settle — emit from the
-    // durable row so the promise never hangs. No re-verify (side-effecting).
-    if (row && deps.onSettled) {
-      deps.onSettled({
+    // Already terminal (reconcile re-entrancy, or the rival listener won the
+    // race). Effects don't re-apply, but an awaiting caller (workflow `done`)
+    // must still settle — fire the run-keyed waiter from the durable row so the
+    // promise never hangs, regardless of which path finalized the row. The
+    // waiter is idempotent (fires once). No re-verify (side-effecting).
+    if (row) {
+      deps.activeRunRegistry?.settle(input.runId, {
         status: row.status as TerminalStatus,
         failureCause: row.failureCause ?? null,
         failureReason: row.failureReason ?? null,
@@ -385,10 +381,12 @@ async function finishTerminalEffects(args: {
   // (see `captureDeliverable`). The envelope surfaces the resolved result.
   const result = resolvedResult;
 
-  // Door-unification — settle the awaiting caller (workflow `done`) with the
-  // post-verification terminal facts. Fired before the envelope emit so a
-  // mailbox failure can't starve the workflow of its node outcome.
-  deps.onSettled?.({
+  // One terminal authority — settle the awaiting caller (workflow `done`) by
+  // run id, with the post-verification terminal facts. Fired before the envelope
+  // emit so a mailbox failure can't starve the workflow of its node outcome.
+  // Run-keyed (not a per-call callback): done-resolution is NOT gated on which
+  // host-event listener / reconcile sweep processed the terminal.
+  deps.activeRunRegistry?.settle(input.runId, {
     status: input.status,
     failureCause,
     failureReason,

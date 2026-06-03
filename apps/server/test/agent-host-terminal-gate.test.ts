@@ -194,6 +194,79 @@ test('liveness-sweep finalize: a swept failure routes to the mailbox', async () 
   assert.equal(mb.calls.length, 1, 'swept failure enqueues a mailbox turn');
 });
 
+// One-terminal-authority guard (the link-2 race fix). The dispatch's `done`
+// promise resolves through a run-keyed settlement waiter on the ActiveRunRegistry
+// — NOT a per-call onSettled callback — so done-resolution is immune to WHICH
+// terminal-apply path wins the host-event race. This proves:
+//  (1) the waiter fires when the terminal is applied (running → completed),
+//  (2) a SECOND apply of the same terminal (the rival listener / reconcile sweep
+//      re-deriving an already-terminal row) STILL settles the waiter — and fires
+//      it EXACTLY ONCE.
+test('settlement waiter resolves by run id and fires exactly once across a double-apply', async () => {
+  const { runId, projectId } = seedRun(`htg-settle-once-${Date.now()}`);
+  const registry = new ActiveRunRegistry();
+
+  const settlements: Array<{ status: string }> = [];
+  registry.onSettled(runId, (s) => settlements.push({ status: s.status }));
+
+  // First apply — the "winning" listener finalizes the row AND settles.
+  const applied1 = applyHostTerminalSnapshot(terminalSnapshot(runId, projectId), {
+    activeRunRegistry: registry,
+    broadcast: () => {},
+    terminalCleanup: () => {},
+  });
+  assert.equal(applied1, 1, 'first apply finalizes the row');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(getAgentRunRow(runId)!.status, 'completed');
+  assert.equal(settlements.length, 1, 'waiter fired on the winning apply');
+  assert.equal(settlements[0]!.status, 'completed');
+
+  // Second apply — the row is ALREADY terminal (the rival path). It must NOT
+  // re-apply effects (returns 0) but must NOT re-fire the waiter either: the
+  // waiter was already consumed and is idempotent.
+  const applied2 = applyHostTerminalSnapshot(terminalSnapshot(runId, projectId), {
+    activeRunRegistry: registry,
+    broadcast: () => {},
+    terminalCleanup: () => {},
+  });
+  assert.equal(applied2, 0, 'second apply is a no-op on the already-terminal row');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(settlements.length, 1, 'waiter fires EXACTLY once across a double-apply');
+});
+
+// The losing-race ordering: the row is finalized FIRST (rival listener, no
+// waiter), THEN the awaiting dispatch's waiter is registered + its path applies
+// the (already-terminal) snapshot. The already-terminal authority must still
+// settle the waiter from the durable row, or the workflow `done` hangs forever —
+// the exact link-2 stall.
+test('a waiter registered after the row is already terminal still settles', async () => {
+  const { runId, projectId } = seedRun(`htg-settle-late-${Date.now()}`);
+  const registry = new ActiveRunRegistry();
+
+  // Rival path wins: finalize the row with NO waiter registered.
+  const applied1 = applyHostTerminalSnapshot(terminalSnapshot(runId, projectId), {
+    activeRunRegistry: registry,
+    broadcast: () => {},
+    terminalCleanup: () => {},
+  });
+  assert.equal(applied1, 1);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(getAgentRunRow(runId)!.status, 'completed');
+
+  // Now the awaiting dispatch registers its waiter + re-applies the terminal.
+  const settlements: Array<{ status: string }> = [];
+  registry.onSettled(runId, (s) => settlements.push({ status: s.status }));
+  const applied2 = applyHostTerminalSnapshot(terminalSnapshot(runId, projectId), {
+    activeRunRegistry: registry,
+    broadcast: () => {},
+    terminalCleanup: () => {},
+  });
+  assert.equal(applied2, 0, 'already-terminal: no re-apply');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(settlements.length, 1, 'already-terminal path settles the late waiter from the durable row');
+  assert.equal(settlements[0]!.status, 'completed');
+});
+
 // Slice 020 — the agent reports its deliverable via pc_submit_deliverable (the
 // free-text result is empty). The completion envelope surfaces the SUBMITTED
 // deliverable text (sourced from the contract, not borrowed from wi.body)

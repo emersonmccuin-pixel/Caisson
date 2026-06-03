@@ -60,7 +60,6 @@ import {
   AgentRunRegistry,
   jsonlPathFor,
   type AgentHostCommandResponse,
-  type AgentHostEvent,
   type AgentHostResumeRunRequest,
   type AgentHostRunSnapshot,
   type AgentHostStartRunRequest,
@@ -80,7 +79,6 @@ import {
   type ActiveRunRegistry,
 } from './agent-active-runs.ts';
 import {
-  applyAgentHostEvent,
   applyHostTerminalSnapshot,
   type AgentHostReattachClient,
 } from './agent-host-reattach.ts';
@@ -90,10 +88,7 @@ import {
   runVerificationOnTerminal,
   type VerificationDeps,
 } from './agent-verification.ts';
-import {
-  applyAgentRunTerminalEffects,
-  type TerminalSettlement,
-} from './agent-run-terminal-effects.ts';
+import { applyAgentRunTerminalEffects } from './agent-run-terminal-effects.ts';
 import { announceAgentRunChange } from './agent-run-writer.ts';
 
 /** Process-wide cap-and-queue registry shared by every dispatch. Lives in
@@ -280,10 +275,13 @@ export async function dispatchFreshAgent(
   deps: DispatchAgentDeps,
 ): Promise<DispatchAgentResult> {
   const now = (deps.now ?? Date.now)();
+  const activeReg = deps.activeRunRegistry ?? getActiveRunRegistry();
 
-  // Door-unification — the `done` promise the workflow engine awaits. Resolved
-  // exactly once from the terminal-effects `onSettled` hook (in-process or
-  // host path). Created up-front so it's wired into `startDispatchedRun`.
+  // The `done` promise the workflow engine awaits. Resolved exactly once by the
+  // ONE terminal authority through a run-keyed settlement waiter on the
+  // ActiveRunRegistry (registered just before start, below) — NOT by a per-run
+  // host-event listener. That keys done-resolution to the run id, so it no
+  // longer depends on which listener / reconcile sweep wins the terminal race.
   let resolveDone!: (outcome: TerminalOutcome) => void;
   const done = new Promise<TerminalOutcome>((res) => {
     resolveDone = res;
@@ -461,6 +459,11 @@ export async function dispatchFreshAgent(
     expectedOutput: input.expectedOutput,
   });
 
+  // Register the run-keyed settlement waiter BEFORE start so a terminal applied
+  // synchronously in the start response (or by the persistent host-event
+  // listener during the await) resolves `done`.
+  activeReg.onSettled(agentRunId, (s) => resolveDone({ agentRunId, ...s }));
+
   const started = await startDispatchedRun({
     input: { ...input, parentWorkItemId: parentWorkItemForRow },
     podName: input.agentName,
@@ -474,10 +477,14 @@ export async function dispatchFreshAgent(
     continuesParent: null,
     workItemId: workItem?.workItemId ?? null,
     contractId,
-    resolveDone,
     deps,
   });
-  if (!started.ok) return started;
+  if (!started.ok) {
+    // Start failed before the run could ever reach terminal — `done` is
+    // discarded; drop the waiter so it doesn't leak in the registry.
+    activeReg.cancelSettlement(agentRunId);
+    return started;
+  }
 
   return {
     ok: true,
@@ -500,10 +507,11 @@ export async function dispatchContinueAgent(
   deps: DispatchAgentDeps,
 ): Promise<DispatchAgentResult> {
   const now = (deps.now ?? Date.now)();
+  const activeReg = deps.activeRunRegistry ?? getActiveRunRegistry();
 
-  // Door-unification — the `done` promise (resolved from terminal-effects'
-  // `onSettled`). Symmetric with the fresh path so both dispatch shapes return
-  // an awaitable terminal.
+  // The `done` promise — resolved by the one terminal authority via a run-keyed
+  // settlement waiter (registered just before start, below). Symmetric with the
+  // fresh path so both dispatch shapes return an awaitable terminal.
   let resolveDone!: (outcome: TerminalOutcome) => void;
   const done = new Promise<TerminalOutcome>((res) => {
     resolveDone = res;
@@ -623,6 +631,11 @@ export async function dispatchContinueAgent(
     contractService: deps.contractService,
   });
 
+  // Register the run-keyed settlement waiter BEFORE start (see fresh path).
+  activeReg.onSettled(plan.plan.agentRunId, (s) =>
+    resolveDone({ agentRunId: plan.plan.agentRunId, ...s }),
+  );
+
   const started = await startDispatchedRun({
     input: {
       projectId: input.projectId,
@@ -645,10 +658,12 @@ export async function dispatchContinueAgent(
     continuesParent: input.parentAgentRunId,
     workItemId: continueWorkItemId,
     contractId,
-    resolveDone,
     deps,
   });
-  if (!started.ok) return started;
+  if (!started.ok) {
+    activeReg.cancelSettlement(plan.plan.agentRunId);
+    return started;
+  }
 
   return {
     ok: true,
@@ -683,9 +698,6 @@ interface ConstructAndStartArgs {
    *  dispatch). NULL for non-contract dispatches. Threaded to terminal-effects
    *  so the deliverable lands on the contract. */
   contractId: ULID | null;
-  /** Door-unification — resolves the dispatch's `done` promise from the
-   *  terminal-effects `onSettled` hook. Omitted = no awaiting caller. */
-  resolveDone?: (outcome: TerminalOutcome) => void;
   deps: DispatchAgentDeps;
 }
 
@@ -716,63 +728,23 @@ async function startHostBackedRun(
   hostClient: AgentHostReattachClient,
 ): Promise<StartDispatchedRunResult> {
   const activeReg = args.deps.activeRunRegistry ?? getActiveRunRegistry();
-  // Door-unification — resolve the dispatch's `done` promise from the host-side
-  // terminal snapshot (mirror of the in-process `onSettled` wiring).
-  const settleDone = args.resolveDone
-    ? (s: TerminalSettlement) => args.resolveDone?.({ agentRunId: args.agentRunId, ...s })
-    : undefined;
   const commandType = args.mode === 'fresh' ? 'start-run' : 'resume-run';
   const command =
     args.mode === 'fresh'
       ? { type: 'start-run' as const, request: buildHostStartRunRequest(args) }
       : { type: 'resume-run' as const, request: buildHostResumeRunRequest(args) };
+  // ONE terminal authority. This dispatch does NOT subscribe a per-run host-event
+  // listener — that was the rival in the double-subscribe race that starved the
+  // workflow `done`. Run-terminal / run-state for this run flow through the
+  // persistent boot host-event listener (and the watchdog reconcile sweep), which
+  // finalize the row via applyAgentRunTerminalEffects AND fire the run-keyed
+  // settlement waiter the dispatch registered on the ActiveRunRegistry. A
+  // terminal returned synchronously in the start response is applied below.
   let handle: HostBackedActiveRunHandle | null = null;
-  // T1.2 — the OBJ-2A `latestRunStateSnapshot` replay patch is gone. The factory
-  // subscribes BELOW before awaiting `sendCommand`, and `hostConnection.onEvent`
-  // is fed by ONE ordered `/events` stream (seq-continuous across reconnect), so
-  // any `run-state` during the await is delivered in order; after `handle` is
-  // assigned, subsequent state events apply directly. The mid-await null window
-  // the patch covered no longer leaves a stale seed (proven: host-connection-
-  // consumers.test.ts "run-state mid-sendCommand … WITHOUT the … patch").
-  let unsubscribe: (() => void) | void;
   const fail = (
     cause: 'host-unavailable' | 'host-protocol-error',
     error: string,
-  ): StartDispatchedRunResult => {
-    unsubscribe?.();
-    return failHostStart(args, cause, error);
-  };
-
-  unsubscribe = hostClient.onEvent?.((event) => {
-    if (!hostEventBelongsToRun(event, args.agentRunId)) return;
-    if (event.type === 'run-terminal') {
-      const applied = applyHostTerminalSnapshot(event.run, {
-        activeRunRegistry: activeReg,
-        broadcast: broadcastForFactory(args),
-        mailboxEnqueue: args.deps.mailboxEnqueue,
-        verifyOnTerminal: args.deps.verifyOnTerminal,
-        verificationDeps: args.deps.verificationDeps,
-        terminalCleanup: () => args.podPrep.cleanup(),
-        onSettled: settleDone,
-        onTerminalError: (err) => {
-          console.error(
-            `[agent-run-factory] host terminal handler failed for run ${args.agentRunId}:`,
-            err,
-          );
-        },
-      });
-      handle?.applySnapshot(event.run);
-      if (applied > 0) unsubscribe?.();
-      return;
-    }
-    applyAgentHostEvent(event, {
-      activeRunRegistry: activeReg,
-      broadcast: broadcastForFactory(args),
-    });
-    if (event.type === 'run-state') {
-      if (handle) handle.applySnapshot(event.run);
-    }
-  });
+  ): StartDispatchedRunResult => failHostStart(args, cause, error);
 
   let response: AgentHostCommandResponse | void;
   try {
@@ -835,7 +807,6 @@ async function startHostBackedRun(
       verifyOnTerminal: args.deps.verifyOnTerminal,
       verificationDeps: args.deps.verificationDeps,
       terminalCleanup: () => args.podPrep.cleanup(),
-      onSettled: settleDone,
       onTerminalError: (err) => {
         console.error(
           `[agent-run-factory] host terminal handler failed for run ${args.agentRunId}:`,
@@ -1006,19 +977,6 @@ function hostStateToReason(state: AgentHostRunSnapshot['state']): AgentRunChange
     default:
       return 'reconciled';
   }
-}
-
-function hostEventBelongsToRun(
-  event: AgentHostEvent,
-  runId: ULID,
-): boolean {
-  if (event.type === 'run-state' || event.type === 'run-terminal') {
-    return event.run.runId === runId;
-  }
-  if (event.type === 'run-jsonl' || event.type === 'run-chunk' || event.type === 'run-error') {
-    return event.runId === runId;
-  }
-  return false;
 }
 
 function hostSnapshotMatchesDispatch(
@@ -1237,11 +1195,9 @@ function constructAndStart(args: ConstructAndStartArgs): AgentRun {
           },
           verifyOnTerminal: args.deps.verifyOnTerminal,
           verificationDeps: args.deps.verificationDeps,
-          // Door-unification — resolve the dispatch's `done` promise with the
-          // post-verification facts so an awaiting workflow node settles.
-          onSettled: args.resolveDone
-            ? (s) => args.resolveDone?.({ agentRunId: args.agentRunId, ...s })
-            : undefined,
+          // One terminal authority — the registry's run-keyed settlement waiter
+          // (registered by the dispatch) resolves `done`. Same mechanism the
+          // host path uses, via `activeRunRegistry` above.
           onError: (err) => {
             console.error(
               `[agent-run-factory] terminal handler failed for run ${args.agentRunId}:`,

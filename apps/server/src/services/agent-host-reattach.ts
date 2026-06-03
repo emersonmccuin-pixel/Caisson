@@ -34,7 +34,6 @@ import {
 import {
   applyAgentRunTerminalEffects,
   replayMissingTerminalEnvelopes,
-  type AgentRunTerminalEffectsDeps,
 } from './agent-run-terminal-effects.ts';
 import { announceAgentRunChange as defaultAnnounceAgentRunChange } from './agent-run-writer.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
@@ -77,10 +76,6 @@ export interface AgentHostReattachDeps {
   verifyOnTerminal?: typeof runVerificationOnTerminal;
   verificationDeps?: VerificationDeps;
   terminalCleanup?: () => void;
-  /** Door-unification — forwarded to terminal-effects so a host-driven terminal
-   *  resolves the dispatch's `done` promise (the workflow engine awaits it).
-   *  Boot/reconcile paths omit it (no awaiting caller). */
-  onSettled?: AgentRunTerminalEffectsDeps['onSettled'];
   onTerminalError?: (error: Error) => void;
   onHostCommandError?: (error: Error) => void;
   /** T1.4 (D1) — this tick the connection authoritatively could not reach a
@@ -422,8 +417,14 @@ export function applyHostTerminalSnapshot(
 ): number {
   if (!isTerminalState(snapshot.state)) return 0;
 
+  // NOTE: do NOT short-circuit when the row is already terminal. Fall through to
+  // the one authority (`applyAgentRunTerminalEffects`), which detects the
+  // already-terminal row, skips re-applying effects, but STILL fires the
+  // run-keyed settlement waiter so a waiting dispatch `done` resolves even when
+  // a rival listener / sweep finalized the row first. Only a missing row (the
+  // event predates the DB insert, or the run was purged) has nothing to do.
   const row = (deps.getAgentRun ?? defaultGetAgentRunRow)(snapshot.runId);
-  if (!row || isDbTerminal(row.status)) return 0;
+  if (!row) return 0;
 
   const terminal = snapshot.terminalResult;
   const status = terminal?.status ?? snapshot.state;
@@ -456,7 +457,6 @@ export function applyHostTerminalSnapshot(
       verifyOnTerminal: deps.verifyOnTerminal,
       verificationDeps: deps.verificationDeps,
       now: deps.now,
-      onSettled: deps.onSettled,
       onError: deps.onTerminalError,
     },
   ).applied;
