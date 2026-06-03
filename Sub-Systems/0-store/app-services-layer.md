@@ -113,6 +113,12 @@ In the five-role target architecture, `@pc/app-services` maps to the **Brain's c
 
 Yes: one known bypass exists today, and a second gap.
 
+> 🟢 **FD-12 (locked 2026-06-03):** the gateway law is now enforced, not aspirational — every
+> durable write goes through the one door, write + receipt in one transaction, zero bypasses. The
+> three known bypasses (the two-step work-item writer below, the diary writes below, and the
+> legacy `inbox-drain.cjs` raw SQL) are all sentenced, plus a structural guard test so a new bypass
+> can't quietly appear.
+
 1. **Work-item writes are a two-step, not one-step.** The old `work-item-writer.ts` (predates the gateway) does the product mutation first, *then* calls `announceWorkItemRow` as a separate transaction. So the write and the receipt are in two separate database transactions — if the second one fails, the outbox row is never written and the UI doesn't see the change. The newer `WorkItemMutationGateway.commitWorkItemChange()` is the correct form (mutation + outbox in one txn) and is the keeper. The old shim has not yet been cut. This is the main scar.
 
 2. **The workflow run-event diary bypasses the gateway entirely.** `appendEvent` writes to the `workflow_run_events` table but those writes skip the gateway and skip `live_outbox`. The UI discards them (`res.events`). Until Slice 3 of the workflow rebuild ships, these are orphaned writes — the table exists but nothing reads it. (Ledger §0, row 3.)
@@ -128,7 +134,8 @@ Yes: one known bypass exists today, and a second gap.
 ## Decisions & open questions
 
 **For Emerson (product calls):**
-- None immediately — this is infrastructure. The issues above are all engineering cleanup, not product choices. The only one that has a user-visible consequence: if the work-item two-step ever races (write succeeds, announce fails), a card change in the UI could silently not update. Worth knowing exists; not a daily hazard.
+- ~~None immediately~~ → 🟢 **FD-12 (locked 2026-06-03):** zero-bypass is now law; the cleanup items
+  above are rebuild requirements, not optional chores.
 
 **Technical:**
 1. Should `work-item-writer.ts` be deleted entirely in favour of routing all callers directly to `WorkItemMutationGateway`? The shim now adds indirection that doesn't pay for itself.

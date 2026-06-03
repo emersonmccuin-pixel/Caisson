@@ -296,6 +296,131 @@ likely as the orchestrator *noticing* the move and choosing to fire, keeping one
 
 ---
 
+## FD-12 — One write door, zero bypasses
+
+**Status:** 🟢 Locked — 2026-06-03 (from `0-store/Emerson's Notes.md` discussion)
+
+**The decision:** the gateway law becomes enforced, not aspirational — **every durable change goes
+through the one write door, with the change and its "this changed" receipt written in one
+unbreakable step. Zero bypasses.**
+
+**The three known bypasses, all sentenced:**
+1. ☠ The old two-step work-item writer (`work-item-writer.ts` — save, then announce separately) —
+   cut in favor of the one-step gateway form that already exists.
+2. ☠ The workflow run-diary writes that skip the gateway and `live_outbox` (`appendEvent`) — routed
+   through the door when the diary becomes truth (FD-11 / FD-13).
+3. ☠ The legacy `inbox-drain.cjs` hook's raw-SQL writes — dies with the mailbox migration
+   (ledger row 9).
+
+**Plus a guard:** a structural test that a new bypass can't quietly appear (e.g., no direct
+table-write imports outside the gateway layer). Vigilance is not a strategy; the build enforces it.
+
+**Why:** Emerson's "poison at the roots rots the whole tree." The one-cashier-window pattern is
+already the design; this locks closing the stragglers as rebuild requirements.
+
+---
+
+## FD-13 — The store split: happenings are event logs, configuration is rows
+
+**Status:** 🟢 Locked — 2026-06-03 — **the #1 store decision, resolved**
+
+**The decision:** a deliberate split, not all-or-nothing event-sourcing:
+- **Things that happen** — workflow runs, agent runs, messages/notifications — are stored as
+  **append-only event logs** (the diary is the truth; "current state" is derived from it).
+- **Things that are configured** — agents/pods, projects, settings, cards, stages — stay as
+  **mutable rows** (with the existing append-only audit tables for history).
+
+**What this buys (user-visible):** a frozen or dead run is never a mystery · any run's history can
+be replayed step-by-step · the orchestrator's debugging view (FD-11) becomes trivially real.
+
+**Why the split and not full event-sourcing:** history is the whole *value* of run-shaped data —
+you ask "what went wrong?" about runs, not about a pod's prompt. Event-sourcing config would tax
+every screen in the app for no user-visible gain; the audit tables already keep config history.
+All the payoff where it pays, none of the tax where it doesn't.
+
+**Resolves:** the "Store: event-log vs row-state" backlog item. FD-11's run diary is the first
+concrete instance. Open (technical): cutover handling for runs in flight when the diary becomes
+truth (migrate history vs accept gap vs quiet-moment cutover).
+
+---
+
+## FD-14 — Interrupted runs are resumable; paused runs always survive restart
+
+**Status:** 🟢 Locked — 2026-06-03 (from `1-engine/Emerson's Notes.md` discussion)
+
+**The decision:**
+1. **A run killed by an app/engine crash is resumable, not just visibly failed.** The conversation
+   survives on disk (Claude's transcript file); the continuation machinery already exists. The
+   product grows a **"resume interrupted job"** affordance instead of a dead-end failure notice.
+2. **Paused runs (waiting on a human answer) always survive a restart** — already true on the
+   production path; locked as law everywhere (the legacy boot path that bulk-fails paused runs is
+   wrong and dies in the Step-2 one-loop merge).
+
+**Why:** "I don't want users losing valuable work because they accidentally closed the app"
+(Emerson). The work isn't lost today — we just don't offer the pickup.
+
+---
+
+## FD-15 — Agent concurrency cap is a visible app setting
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:** the "how many agents may run at once" limit (hard-coded 5 today; the rest queue)
+becomes a **global app setting** the user can see and change.
+
+---
+
+## FD-16 — Orchestrator tooling is two-tier: lifecycle first-order, diagnostics on demand
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:**
+- **Agent-lifecycle tools are first-order** — the orchestrator natively knows them in its prompt:
+  list my agents, inspect a run, cancel, resume/continue. (Partially exists.)
+- **Diagnostic/engine tools are reachable on demand** — exposed through a search-style "find me the
+  tool for X" tool rather than dumped into the prompt or load-time tool list. Applies to the
+  orchestrator and the `caisson` in-app specialist.
+
+**Why:** Emerson wants debugging power available without prompt-bloat. The on-demand pattern is
+proven (Claude Code itself uses deferred tool search for big catalogs).
+
+---
+
+## FD-17 — Timeouts escalate before they execute
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:** **no agent is killed while demonstrably alive and working.** Silence is a trigger
+for escalation, not execution. The ladder, in order:
+1. "Looks slow" badge in the UI (exists today).
+2. Verify the process is actually alive and mid-task (process check + transcript activity).
+3. Notify the orchestrator to look in on it.
+4. Kill **only** on the hard ceilings: total-run-time limit, or a confirmed-dead process.
+
+Every escalation step is still typed and visible — this does not reintroduce silent hangs. The
+blunt "5 minutes of quiet = killed as idle" behavior dies: it guesses death from silence, which
+violates the positive-receipt principle, burns usage, and destroys user trust by killing
+deep-in-work agents.
+
+---
+
+## FD-18 — "Claude is loading" is visible on every session surface
+
+**Status:** 🟢 Locked — 2026-06-03
+
+**The decision:** every chat surface (orchestrator especially, plus modals and agent views) shows a
+clear loading state — greyed-out input + a "Claude is loading…" indicator — until the session's
+**positive ready signal** fires, and only then enables input.
+
+**The mechanism already exists:** the modern spawn path's ready gate waits for three positive
+confirmations (tools registered + input channel open + init complete) — not just the welcome
+banner. The rebuild requirement is *surfacing* it. The three popup modals get this for free when
+they migrate off the older banner-guess machinery (Engine Steps 5–6).
+
+**Why:** feedback to the user is non-negotiable; "is it frozen or loading?" must never be a guess.
+
+---
+
 ## Audit backlog (agreed work, not decisions)
 
 - **Knowledge usage audit** — is attached knowledge actually *used* by agents, or just listed in a
@@ -318,11 +443,8 @@ These came up and need their own entries once we talk them through:
   the rule for a contract with no work item. *(See `0-store/contracts-system.md` and `3-product/work-items.md`.)*
   Also owns: **passing work down the line** in workflows (hand-off control lives in the contract) —
   parked here per the 2026-06-03 discussion.
-- ⚪ **Store: event-log vs row-state** — the biggest one. Do we keep mutable rows, or move to an
-  append-only event log with the current picture rebuilt from it? *(See `0-store/store-db.md`.)*
-  FD-11's run diary interacts directly with this.
 - 🟢 **Naming: "Work Contract"** — agreed 2026-06-03; in prose we call the `agent_contracts` entity the
   "Work Contract" to avoid collision with the `@pc/contracts` type package. (Code rename deferred to
   the rebuild.)
 
-*(Resolved and promoted: "Where the deliverable lives" → FD-5.)*
+*(Resolved and promoted: "Where the deliverable lives" → FD-5 · "Store: event-log vs row-state" → FD-13.)*

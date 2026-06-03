@@ -170,7 +170,7 @@ Every table has exactly one "repo" file that owns all reads and writes for it. R
 
 ## Target shape (per north star + Foundation Decisions)
 
-The north star (`unified-process-supervision-2026-06-02.md §2`) says: **append-only event log = truth; all live state is a projection of it.**
+The north star (`unified-process-supervision-2026-06-02.md §2`) says: **append-only event log = truth; all live state is a projection of it.** 🟢 **FD-13 (locked 2026-06-03)** scopes this deliberately: it applies to *happenings* (workflow runs, agent runs, messages); *configuration* (pods, projects, settings, cards) stays row-state + audit tables.
 
 **How far we are today — plainly stated:**
 
@@ -203,8 +203,11 @@ The DB is primarily **row-state** (mutable rows with `updatedAt`/`rev` that over
 
 **For Emerson (product calls):**
 
-1. **Event log vs row-state — the #1 decision.** Today the DB stores "what things are now" (mutable rows). The target stores "everything that ever happened" (append-only events) and derives current state from that. The pay-off: a frozen or dead run is never a mystery; you can replay history; the run diary in the workflow engine becomes real. The cost: it's the highest-effort single change in the backlog. **When do we start it?**
-2. **When `workflow_run_events` becomes truth (Slice 3), runs in flight at cutover have history only in `dag_state` — no events.** Do we migrate their history, accept the gap, or wait for a quiet moment with zero in-flight runs?
+1. ~~Event log vs row-state — the #1 decision.~~ 🟢 **FD-13 (locked 2026-06-03): the split.**
+   Happenings (workflow runs, agent runs, messages) become append-only event logs — the diary is the
+   truth. Configuration (pods, projects, settings, cards) stays as mutable rows + audit tables.
+   Full event-sourcing of config was deliberately rejected (tax with no user-visible gain).
+2. **When `workflow_run_events` becomes truth (Slice 3), runs in flight at cutover have history only in `dag_state` — no events.** Do we migrate their history, accept the gap, or wait for a quiet moment with zero in-flight runs? — still open (noted in FD-13).
 
 **Technical:**
 

@@ -48,7 +48,7 @@ Transitions are enforced internally. `toTerminal()` is the single internal path 
 
 ### 2. The concurrency cap — the runway queue
 
-`AgentRunRegistry` (`agent-run-registry.ts`) limits how many jobs run at the same time (default: 5, process-wide FIFO). When a new job arrives:
+`AgentRunRegistry` (`agent-run-registry.ts`) limits how many jobs run at the same time (default: 5, process-wide FIFO). 🟢 *FD-15: becomes a visible app setting in the rebuild.* When a new job arrives:
 
 - If a slot is free: `admit()` grants a ticket and the job starts immediately.
 - If all slots are busy: the job waits in line.
@@ -205,9 +205,17 @@ Per `refactor plan/unified-process-supervision-2026-06-02.md` §5–6 and the co
 
 **For Emerson (product calls):**
 
-1. **What should happen to a running job if the server restarts?** Today it is failed with reason `interrupted-on-boot`, visibly. Should the system try to re-attach automatically? (Host-mode already does this for jobs the host still has. The open question is: what does the user see, and should there be a "resume interrupted job" button?)
-2. **Paused jobs across restarts** — today a paused-for-human-answer job survives a restart in host mode. In legacy mode (not production, but reached by some paths) it would be failed. When the one-loop Step-2 work lands, this becomes consistent. Worth confirming: do you want paused jobs to always survive a restart, or is it acceptable to fail them?
-3. **Idle timeout** — a deep-thinking agent can be killed after 5 min of silence as a false failure. Should there be a way to mark a workflow step as "this agent needs more time"? Or should the default just be longer?
+*(All three resolved 2026-06-03 → Foundation Decisions:)*
+1. ~~Running job when the server restarts?~~ 🟢 **FD-14:** interrupted runs are **resumable** —
+   the transcript survives on disk, the continuation machinery exists; the product gets a
+   "resume interrupted job" affordance, not just a visible failure.
+2. ~~Paused jobs across restarts?~~ 🟢 **FD-14:** paused runs **always** survive a restart; the
+   legacy bulk-fail path is wrong and dies in the Step-2 merge.
+3. ~~Idle timeout kills deep-thinking agents?~~ 🟢 **FD-17:** timeouts **escalate before they
+   execute** — badge → verify alive → notify orchestrator → kill only on wall-clock ceiling or
+   confirmed-dead process. No agent killed while demonstrably alive and working.
+
+**Also locked:** 🟢 **FD-15** — the concurrency cap (§2, hard-coded 5) becomes a visible app setting.
 
 **Technical:**
 

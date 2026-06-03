@@ -84,6 +84,10 @@ Subagents wait for signals 1 + 2 only. The orchestrator (with `remoteControl` on
 
 Once all required signals fire, the gate emits a `ready` event with timestamps for each signal. `LowLevelSpawn` resolves its `awaitReady()` promise at that point.
 
+> 🟢 **FD-18 (locked 2026-06-03):** this positive ready signal must be *surfaced* — every session
+> chat surface shows "Claude is loading…" + greyed-out input until it fires. The modals get this
+> when they migrate off `PtySession`'s banner-guess (Steps 5–6).
+
 > `PtySession` does NOT use `ReadyGate`. It declares ready as soon as the welcome banner appears — which is too early. This is a documented gap (see Scar Tissue).
 
 ---

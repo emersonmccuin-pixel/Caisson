@@ -59,6 +59,10 @@ Commands the Engine understands (`agent-host-protocol.ts:76–90`):
 
 `hello` · `list-runs` · `start-run` · `resume-run` · `send` · `mark-paused` · `answer-pending` · `cancel` · `complete-run` · `notify-mcp-handshake` · `shutdown`
 
+> 🟢 **FD-16 (locked 2026-06-03):** these surface to the orchestrator two-tier — lifecycle ops
+> (list / inspect / cancel / resume) as first-order tools it natively knows; diagnostics reachable
+> on demand via a search-style tool, never dumped into the prompt.
+
 ### 4. The run tracker — what lives inside the Engine
 
 `AgentHostService` (`agent-host-service.ts`) holds two in-memory lookup tables:
