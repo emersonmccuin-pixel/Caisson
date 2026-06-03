@@ -164,7 +164,7 @@ In the five-role target, the work-item store is owned by **Brain** (control plan
 
 - ~~Where does the deliverable live?~~ — **FD-5**: the deliverable lives on the **Work Contract**; `body` returns to being the human description only. (Migration guard: the `wi.body` ↔ `$root.output` coupling needs the round-trip test before the write moves.)
 - **Patterns** — locked as **FD-20**: a "Patterns" place for repeatable work — a template (context + instructions + optional workflow) that mints a fresh, fully-loaded work item when invoked. Work items complete; Patterns persist; finished work items can be promoted to Patterns. No new runtime machinery.
-- **Work item as context pod** — intent confirmed: a work item is the unit of work and the human↔AI collaboration point; humans define + provide context, the agent works from it. Whether the *full* card (attachments, fields, parent context) actually reaches the agent at dispatch is unverified → **dispatch-payload audit** (FD audit backlog).
+- **Work item as context pod** — intent confirmed: a work item is the unit of work and the human↔AI collaboration point; humans define + provide context, the agent works from it. **Dispatch-payload audit ✅ 2026-06-03:** body/fields/parent/live-read OK via `pc_get_work_item`; 🔴 **attachments unreachable** (prompt directs the agent to use them, no fetch tool exists — `pod-materializer.ts:320`); 🟠 acceptance criteria invisible to the agent (FD-5 addendum: agent must be able to read its full contract). Verdicts + requirements in the FD audit backlog.
 - The three open output-type forks (`repo` / `external` / `binary` — card or no card) stay **parked** until those agent types are actually used.
 
 **Still open (product calls):**

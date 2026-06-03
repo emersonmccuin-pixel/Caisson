@@ -184,6 +184,15 @@ conflict. The contract becomes the *complete* job spec: what to produce, where i
 **Guard:** the `work_items.body` ↔ `$root.output` coupling is load-bearing today — the migration
 needs the round-trip guard test the ledger already calls for before that write moves.
 
+**Addendum (2026-06-03, from the dispatch-payload audit):** "the contract is the complete job spec"
+must hold **from the agent's side too** — the agent must be able to **read its own contract during
+the run, including the acceptance criteria** it will be verified against (today only the
+expected-output spec is inlined once; the verification predicates are invisible, so an agent can't
+self-check before submitting). Concretely: a contract-read tool (or equivalent) in the dispatched
+agent's baseline set, carrying expected output + acceptance criteria. The companion gap — work-item
+**attachments unreachable by tool** — is logged in the audit backlog as a baseline-tools rebuild
+requirement.
+
 ---
 
 ## FD-6 — One ask door: agents only ask the orchestrator
@@ -539,10 +548,22 @@ lives in per-session scratch dirs outside the repo).
 - **Baseline-tools audit** — re-derive the always-granted tool set EVERY agent gets (changes under
   FD-6: `pc_ask_user` leaves). Then the full agent roster audit (tools, descriptions, dispatch
   guidance) — deliberately *after* the rebuild's bigger pieces settle.
-- **Dispatch-payload audit** — the work-item-as-context-pod goal (and FD-20 Patterns) only holds if
-  the agent actually *receives* everything on the card at dispatch: body, attachments, custom
-  fields, parent context — not just the body text. Nobody has verified what crosses the dispatch
-  boundary today. Check it; close the gaps.
+- **Dispatch-payload audit — ✅ DONE 2026-06-03.** Verdict: the context-pod goal is **partially met,
+  broken for attachments.**
+  - **Body / fields / parent / live-read:** OK — body referenced in the prompt, everything readable
+    via `pc_get_work_item` during the run.
+  - **🔴 Attachments are unreachable.** The dispatch prompt *explicitly tells* the agent to use the
+    card's attachments (`pod-materializer.ts:320`) but **no tool exists to fetch them** — no
+    `pc_list_attachments` / `pc_get_attachment` in the registry. The agent is directed to use
+    something it cannot access. **Rebuild requirement: an attachment-read tool in the baseline set.**
+  - **🟠 Acceptance criteria are invisible to the agent.** Only the expected-output spec is inlined;
+    the verification predicates (`body_contains`, `attachments_present`, …) are never surfaced, so an
+    agent can't self-check before submitting. Folds into FD-5: the Work Contract the agent can read
+    must include its acceptance criteria (see FD-5 addendum).
+  - **🟠 No contract re-read.** `expected_output` is inlined once; no `pc_get_contract` tool to
+    re-check mid-run. Same FD-5 fold.
+  - Knowledge: roster inlined, content via `pc_knowledge_read` — OK (depth of *use* is the separate
+    knowledge-usage audit above).
 
 ---
 
