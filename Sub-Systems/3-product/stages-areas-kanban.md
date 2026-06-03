@@ -12,13 +12,13 @@ Your project board has **columns** — Inbox, In Progress, Done, whatever you na
 
 Cards can also belong to a **grouping track** — something like a feature area or epic — called an **area**. Areas appear as a filter rail on the left side of the board. They're purely organizational: changing a card's area doesn't change which column it's in.
 
-When a card enters a specific column, the board can automatically kick off a workflow. That trigger is wired directly to the column's id — no roles, no tags, no categories in between (locked decision).
+When a card enters a specific column, the board can automatically kick off a workflow. That trigger is wired directly to the column's id — no roles, no tags, no categories in between (locked decision). ☠ **Sentenced by FD-10:** stage-entry triggering is deleted in the rebuild — runs start only from the orchestrator's fire tool or manual "run now."
 
 ---
 
 ## What it's supposed to do (intent)
 
-Own the column layout and grouping structure of a project, and fire automation when a card lands somewhere new. One law: the trigger is a direct stage-id match — there is no abstract layer between "the column" and "the workflow that fires when a card arrives there."
+Own the column layout and grouping structure of a project, and fire automation when a card lands somewhere new. One law: the trigger is a direct stage-id match — there is no abstract layer between "the column" and "the workflow that fires when a card arrives there." *(The fire-automation half of this intent dies in the rebuild — FD-10. The no-abstract-layer law survives wherever a stage id is referenced, e.g. Move-card steps.)*
 
 ---
 
@@ -84,9 +84,18 @@ Every card move — whether you drag it on the board or the orchestrator calls `
 
 **The trigger is a direct stage-id match — no role, tag, or category layer exists between the trigger and the stage.** This is a locked decision.
 
+> ☠ **FD-10 (locked 2026-06-03):** the entire stage-entry trigger mechanism above is **deleted in the
+> rebuild**. A card entering a stage never starts a workflow; runs start only from the orchestrator's
+> fire tool or manual "run now." The no-abstract-layer law (stage id, nothing in between) carries
+> forward to every remaining stage-id reference.
+
 ### 6. Card-move as a workflow effect (not a step)
 
-When a workflow step finishes and has a `move` field set, the engine moves the card directly — bypassing `moveAndFireV2` so it does *not* re-fire stage-entry workflows (loop-safe). Card-move is a **property on a step's transition**, not a separate node kind. (`dag-run-service.ts:334`, `workflow-v2.ts:156` — locked decision)
+When a workflow step finishes and has a `move` field set, the engine moves the card directly — bypassing `moveAndFireV2` so it does *not* re-fire stage-entry workflows (loop-safe). Card-move is a **property on a step's transition**, not a separate node kind. (`dag-run-service.ts:334`, `workflow-v2.ts:156`)
+
+> ☠ **FD-9 (locked 2026-06-03, reverses the above):** in the rebuild, **Move card is a visible step
+> of its own** in the graph — the move-as-property mechanism dies, including "on reject, move back."
+> What the graph shows = what happens.
 
 ---
 
@@ -102,9 +111,12 @@ When a workflow step finishes and has a `move` field set, the engine moves the c
 
 The consolidation ledger (`consolidation-ledger-2026-06-02.md`) has no verdict row for this subsystem — it is not a consolidation target and is not in the five-role conflict zone.
 
-Per the north-star design (`unified-process-supervision-2026-06-02.md`): stage and area data are Store — DB-backed, announced through the outbox, projected via the live-relay. Trigger matching is Brain logic in `ProjectRuntime`. The card-move-as-effect pattern is already the correct locked design.
+Per the north-star design (`unified-process-supervision-2026-06-02.md`): stage and area data are Store — DB-backed, announced through the outbox, projected via the live-relay. The `announceStageList` / `announceWorkItemRow` outbox pattern is already the target write-door.
 
-**What changes from today:** nothing structural. The `announceStageList` / `announceWorkItemRow` outbox pattern is already the target write-door. No dual paths here.
+**What changes from today (Foundation Decisions, locked 2026-06-03):**
+- ☠ **Stage-entry triggers are deleted (FD-10).** The trigger-matching machinery in `ProjectRuntime.moveAndFireV2` and `dag/triggers.ts` goes; a card move never starts a workflow. Runs start only from the orchestrator's fire tool or manual "run now."
+- ☠ **Card-move-as-effect is deleted (FD-9).** Moving a card becomes a visible **Move card step** in the workflow graph; the `move` property on step transitions dies.
+- **Areas get promoted (FD-19).** Page renamed "Areas"; cards (title · summary · open-vs-complete counts) → click → edit modal; every area carries a description; the orchestrator considers and assigns an area when creating work items, and can maintain area descriptions itself.
 
 ---
 
@@ -120,10 +132,13 @@ Per the north-star design (`unified-process-supervision-2026-06-02.md`): stage a
 ## Decisions & open questions
 
 **For Emerson (product calls):**
-1. **Renaming a stage id should probably be blocked or auto-migrated.** Today you can change the id slug in the editor and any workflow tied to it silently stops triggering. Worth deciding: block the rename, or offer to update all affected workflow triggers automatically?
-2. **`also_fire_on_regression`** is in the schema (lets a workflow fire even when a card moves backward) but has no UI surface. Is there a real use case for it, or should it be removed?
+1. **Renaming a stage id should probably be blocked or auto-migrated.** FD-10 removes triggers, but Move-card steps (FD-9) still name stage ids — so a slug rename can still silently break a published workflow's move target. Worth deciding in the rebuild: block the rename, or auto-update affected workflows?
+
+**Resolved 2026-06-03 → Foundation Decisions:**
+- ~~`also_fire_on_regression`~~ — moot; dies with the whole trigger mechanism (FD-10).
+- ~~Areas page design / orchestrator-and-areas~~ — locked as FD-19.
 
 **Technical:**
 - Should `area.changed` (delete) emit per-card `work-item.changed` rows instead of relying on the board's full-refetch workaround? The refetch is cheap today but fragile.
 - `workflow_run_events`: route `appendEvent` through the gateway/`live_outbox` so the step diary becomes an observable truth source (slice-3 work, no current owner).
-- `refreshProject` race: add a guard or serialise the refresh + move path to eliminate the stale-stage-list window.
+- `refreshProject` race: moot under FD-10 for trigger matching (no triggers); the stage list is still used for move validation, where staleness only risks rejecting a valid move — fail-safe.

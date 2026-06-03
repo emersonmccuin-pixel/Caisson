@@ -85,7 +85,7 @@ Entry kinds:
 Three MCP tools (functions the orchestrator and agents can call) act on work items:
 
 - **`pc_create_work_item`** — create a new card.
-- **`pc_move_work_item`** — move a card to a different stage (this also fires workflow triggers if any are wired to that stage).
+- **`pc_move_work_item`** — move a card to a different stage (this also fires workflow triggers if any are wired to that stage — ☠ trigger-firing dies with FD-10).
 - **`pc_update_work_item`** — update a card's title, body, or fields.
 
 When an agent is dispatched via `pc_create_agent_work_item`, the system mints a new child card *and* a linked "contract" row at the same moment. The contract is the verification spine — it records what the agent was asked for, and the acceptance criteria the result must meet. (`apps/server/src/services/agent-work-item.ts`)
@@ -107,13 +107,17 @@ Every mutation carries a typed reason (`WorkItemMutationReason`): `created` · `
 
 Moving a card is version-checked (no overwriting a concurrent move). On a move, the system appends a `move` history entry with `from`/`to` and automatically derives the new status from the destination stage's flags (`isDone → 'complete'`, `isCancelled → 'cancelled'`, else `'pending'`).
 
-Workflow triggers are **not** fired by `WorkItemService.move` itself — callers that want both compose the move *plus* the trigger call on top. (`apps/server/src/services/work-item.ts:311`)
+Workflow triggers are **not** fired by `WorkItemService.move` itself — callers that want both compose the move *plus* the trigger call on top. (`apps/server/src/services/work-item.ts:311`) ☠ The trigger half goes away entirely under FD-10 — in the rebuild, a move is just a move.
 
 ### 7. The work-item policy (which outputs need a card)
 
 `expectedOutputRequiresWorkItem` answers the question: "does this type of agent output need a card to land in?" The dispatch guard uses it to reject a dispatch that declares a card-requiring output but has no card linked. (`packages/domain/src/work-item-policy.ts`)
 
 Current answers: `prose` output (unless stored as a contract) → requires a card; `repo` output → requires a card; `answer`, `payload`, `action`, `external`, `binary` → no card required (some forks open — see Decisions).
+
+> 🟢 **FD-5 context (locked 2026-06-03):** `expected_output` moves off the pod onto the **Work
+> Contract**, set at dispatch. So this policy's input becomes the contract's declared output for the
+> job — not an agent-level default.
 
 ---
 
@@ -147,7 +151,7 @@ In the five-role target, the work-item store is owned by **Brain** (control plan
 
 ## Known issues / scar tissue
 
-- **`wi.body` does double duty.** The `body` column holds the original task brief *and* the agent's prose deliverable. `dag-run-service.ts:173` reads it live as `$root.output`. Before a prior fix, agents wrote their output into `fields.body` instead, silently freezing the column and breaking both workflow refs and `body_contains` acceptance-criteria checks. Fixed: `updateWorkItemFields` now promotes `body`/`title` keys from the fields map onto their real columns (`packages/db/src/repos/work-items.ts:306-348`). The deeper structural question — should a deliverable live in a dedicated column or contract instead of the body? — is in the decision backlog.
+- **`wi.body` does double duty.** The `body` column holds the original task brief *and* the agent's prose deliverable. `dag-run-service.ts:173` reads it live as `$root.output`. Before a prior fix, agents wrote their output into `fields.body` instead, silently freezing the column and breaking both workflow refs and `body_contains` acceptance-criteria checks. Fixed: `updateWorkItemFields` now promotes `body`/`title` keys from the fields map onto their real columns (`packages/db/src/repos/work-items.ts:306-348`). The deeper structural question is resolved — **FD-5**: the deliverable moves to the Work Contract; `body` returns to human-description-only in the rebuild.
 - **The agent-update route bypasses `WorkItemService`.** `POST /api/projects/:id/work-items/update` calls `dbUpdateWorkItemFields` directly then announces separately. It skips field-schema validation (intentional for agent writes — agents don't use custom field schemas), but it's a second write path. (`apps/server/src/features/work-items/routes.ts`)
 - **`workflow_run_events` writes go nowhere.** `appendEvent` writes to this table but bypasses the gateway/live_outbox pipeline, and the UI discards `res.events`. Observability stubs only — Slice-3 unbuilt. (`ledger §0 row 3`)
 - **Callsign suffix scan is linear.** The per-parent suffix scan to find the next child number reads all siblings. Correct and safe today; not indexed; will slow at scale. (`packages/db/src/repos/work-items.ts:196-213`)
@@ -156,11 +160,16 @@ In the five-role target, the work-item store is owned by **Brain** (control plan
 
 ## Decisions & open questions
 
-**For Emerson (product calls — to land in `_Foundation-Decisions.md`):**
+**Resolved 2026-06-03 → Foundation Decisions:**
 
-1. **Where does the deliverable live?** Right now the agent's finished work overwrites the card's description field (`body`). That means the original brief is gone once the agent writes its result. Should the card have a separate "deliverable" field, or should it keep living in the body? This decision is in `_Foundation-Decisions.md` as the "Work Item vs Work Contract" question — it's load-bearing because the workflow engine reads `wi.body` as `$root.output`.
-2. **Child cards per workflow step — do you want to see them?** Each workflow step today can create its own child card. That means a single workflow run may produce several cards under the root. Is that the right experience, or should intermediate step results live somewhere less visible?
-3. **The three open output-type forks.** `repo`, `external`, and `binary` output types don't have a firm answer for whether they require a card. When these agent types are used, what should happen?
+- ~~Where does the deliverable live?~~ — **FD-5**: the deliverable lives on the **Work Contract**; `body` returns to being the human description only. (Migration guard: the `wi.body` ↔ `$root.output` coupling needs the round-trip test before the write moves.)
+- **Patterns** — locked as **FD-20**: a "Patterns" place for repeatable work — a template (context + instructions + optional workflow) that mints a fresh, fully-loaded work item when invoked. Work items complete; Patterns persist; finished work items can be promoted to Patterns. No new runtime machinery.
+- **Work item as context pod** — intent confirmed: a work item is the unit of work and the human↔AI collaboration point; humans define + provide context, the agent works from it. Whether the *full* card (attachments, fields, parent context) actually reaches the agent at dispatch is unverified → **dispatch-payload audit** (FD audit backlog).
+- The three open output-type forks (`repo` / `external` / `binary` — card or no card) stay **parked** until those agent types are actually used.
+
+**Still open (product calls):**
+
+1. **Child cards per workflow step — do you want to see them?** Each workflow step today can create its own child card. That means a single workflow run may produce several cards under the root. Is that the right experience, or should intermediate step results live somewhere less visible?
 
 **Technical:**
 - Should the agent-update route be absorbed into `WorkItemService` so there is truly one write door? (Current bypass skips field validation — intentional, but structural inconsistency.)

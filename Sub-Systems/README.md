@@ -57,7 +57,7 @@ path"). The unified design says **one job, one owner, one path**. Most issues be
 | Subsystem | What it is | Verdict | Biggest issue |
 |---|---|---|---|
 | [Work Items](3-product/work-items.md) | The unit of work: every card/task/job is one `work_items` row | **keep** | `wi.body` does double duty (human brief *and* agent deliverable) and a workflow reads it live for variable refs — load-bearing but undocumented, no guard test. |
-| [Stages, Areas & Kanban](3-product/stages-areas-kanban.md) | Board columns; cards move between stages; workflows trigger on a stage_id | **keep** | Area soft-delete nulls members' `areaId` without per-item events; the board survives only via a full refetch on the delete frame — fragile in a race. |
+| [Stages, Areas & Kanban](3-product/stages-areas-kanban.md) | Board columns; cards move between stages (stage-entry triggers ☠ FD-10; areas promoted per FD-19) | **keep** | Area soft-delete nulls members' `areaId` without per-item events; the board survives only via a full refetch on the delete frame — fragile in a race. |
 | [Conversations & Chat](3-product/conversations-chat.md) | Durable conversation model + chat UI (a view over events) | **keep + delete legacy path** | The dual-stream render fix is in, but two render paths still coexist; the legacy one is "frozen baseline," not deleted — violates one-path. |
 | [Files & Attachments](3-product/files-attachments.md) | Project file tree/preview + attachments stored inline in the DB | **keep** | Path containment uses `startsWith(root+sep)` (works, but one edit from the sibling-prefix hole); a dual-broadcast in `AttachmentService` is unscheduled debt. |
 

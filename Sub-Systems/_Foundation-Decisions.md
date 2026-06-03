@@ -204,6 +204,14 @@ question landing in the human's lap; deletes a whole path.
 **Ripple:** the **required-tools set changes** — `pc_ask_user` leaves the always-granted four. Fold
 into the baseline-tools audit (see Audit backlog).
 
+**Addendum (2026-06-03, from `3-product` notes):** the **orchestrator itself has no ask tool, and
+keeps none** — verified: its toolset contains no `pc_ask_*`; it only *answers* agent questions via
+`pc_answer_pending`. **Chat is the orchestrator's ask door** — when it needs the human, it asks in
+plain text and the turn ends. The full ask layering, deliberate:
+- **agents** ask the **orchestrator** (mailbox, this FD),
+- the **orchestrator** asks the **human in chat** (no special mechanism),
+- **formal reviews/approvals** go through the **Human Inbox** (FD-7).
+
 ---
 
 ## FD-7 — Human Inbox System becomes its own workstream
@@ -217,7 +225,10 @@ into the baseline-tools audit (see Audit backlog).
 
 **What it must resolve (currently open questions it absorbs):**
 - The two overlapping "open question" tables (`pending_asks_v2` vs `pending_interactions`) — the
-  workstream picks ONE canonical durable inbox surface.
+  workstream picks ONE canonical durable inbox surface. *(Note: `pending_interactions` is fed by the
+  **AskShadow** side-write — a durability copy of in-flight agent questions that today has **no UI
+  at all**, write-only. The inbox workstream gives that data its visible surface — the "floats where
+  I can't miss it" experience Emerson described.)*
 - Whether workflow review gates and contract verification holds **merge into one approval flow**
   (they are two mechanisms today; the asks-deliverables doc flags this).
 - Where the loop-limit "agent failed 3 times, human needed" hand-offs land (FD-9).
@@ -421,6 +432,54 @@ they migrate off the older banner-guess machinery (Engine Steps 5–6).
 
 ---
 
+## FD-19 — Areas are first-class: renamed, redesigned, and known to the orchestrator
+
+**Status:** 🟢 Locked — 2026-06-03 (from `3-product/Emerson's Notes.md` discussion)
+
+**The decision:**
+1. **The page is called "Areas"** — not FOCUS.
+2. **The page becomes cards → click → edit modal.** Each area card shows title, a summary, and
+   open-vs-complete work-item counts. Clicking opens a modal to edit name, description, everything.
+3. **Areas become first-class for the orchestrator** — the same pattern as tools: every area carries
+   a **good description**, and when the orchestrator creates a work item it **considers which area
+   the item belongs to** and assigns it. Ergonomics are part of the decision:
+   - the orchestrator is **nudged at card-creation time** (the create door carries the area
+     consideration — it doesn't have to remember),
+   - the orchestrator can **write and improve area descriptions itself**, so the human isn't
+     maintaining them by hand for the orchestrator's benefit.
+
+**Why:** areas are the project's mental map; today they're a passive filter rail. If the
+orchestrator is the primary creator of work items, it must think in the same buckets the human
+does — and that only works if the buckets describe themselves (exactly how tool selection works).
+
+---
+
+## FD-20 — Patterns: a template that spawns a fully-loaded work item
+
+**Status:** 🟢 Locked (shape) — 2026-06-03 · detailed design comes as its own pass
+
+**The decision:** PC gets a **"Patterns" place** — saved, reusable recipes for work that recurs.
+
+- **What a Pattern is:** a package — context + instructions + optionally a workflow — that **mints a
+  fresh work item with everything attached** when invoked. "A combo of work items and workflows,
+  wrapped up and repeatable" (Emerson).
+- **The dividing line:** work items **complete**; Patterns **persist**. A work item is a one-shot
+  unit of work with an ending; a Pattern is the standing recipe for the next occurrence.
+- **Promotion:** a finished work item can be **promoted to a Pattern** — the brief, context, and
+  shape of work that succeeded once becomes the reusable starting point.
+- **No new runtime machinery:** workflows remain the only execution path. A Pattern is a **template
+  layer above** — it spawns the card (and wires the workflow if it has one); the engine never learns
+  a new concept.
+
+**Why this shape:** PC already has a repeatable construct (workflows) — a Pattern must not become a
+second one. Keeping it as "template that spawns a fully-loaded work item" adds the recurring-work
+experience with zero new engine semantics, and keeps one path.
+
+**Open (design pass later):** where Patterns live (global vs project) · the promote flow · how a
+Pattern's context attaches to the spawned card (interacts with the dispatch-payload audit below).
+
+---
+
 ## Audit backlog (agreed work, not decisions)
 
 - **Knowledge usage audit** — is attached knowledge actually *used* by agents, or just listed in a
@@ -432,6 +491,10 @@ they migrate off the older banner-guess machinery (Engine Steps 5–6).
 - **Baseline-tools audit** — re-derive the always-granted tool set EVERY agent gets (changes under
   FD-6: `pc_ask_user` leaves). Then the full agent roster audit (tools, descriptions, dispatch
   guidance) — deliberately *after* the rebuild's bigger pieces settle.
+- **Dispatch-payload audit** — the work-item-as-context-pod goal (and FD-20 Patterns) only holds if
+  the agent actually *receives* everything on the card at dispatch: body, attachments, custom
+  fields, parent context — not just the body text. Nobody has verified what crosses the dispatch
+  boundary today. Check it; close the gaps.
 
 ---
 

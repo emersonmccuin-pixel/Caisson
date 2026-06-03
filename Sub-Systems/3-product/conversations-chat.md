@@ -103,7 +103,14 @@ When the orchestrator mentions a work item as a rich link, clicking it opens the
 
 When the orchestrator calls an ask tool, a hook script POSTs to `POST /api/ask`. The server broadcasts an `ask` frame to the browser (you see an inline prompt card) and then **blocks** on an in-memory resolver waiting for your answer or a 10-minute timeout.
 
-`AskShadow` (`ask-shadow.ts`) is a side-write for durability: it creates an `open` row in `pending_interactions` (via the live outbox, so it fans correctly), and closes it when you answer or the timeout fires. The in-memory resolver is still the authority for unblocking the orchestrator — the shadow is only for inspection.
+`AskShadow` (`ask-shadow.ts`) is a side-write for durability: it creates an `open` row in `pending_interactions` (via the live outbox, so it fans correctly), and closes it when you answer or the timeout fires. The in-memory resolver is still the authority for unblocking the orchestrator — the shadow is only for inspection. **Nothing in the UI reads the shadow rows today** — it's a write-only safety receipt. Its visible surface arrives with the Human Inbox workstream (FD-7).
+
+> 🟢 **Ask layering (FD-6 addendum, 2026-06-03):** the **orchestrator itself has no ask tool** —
+> verified: its toolset contains no `pc_ask_*`; it only answers agent questions via
+> `pc_answer_pending`. The ask doors, deliberately: **agents → orchestrator** (mailbox, FD-6) ·
+> **orchestrator → human in plain chat** (no mechanism needed) · **formal reviews → Human Inbox**
+> (FD-7). The inline-ask path described above is what *dispatched agents'* questions ride today —
+> and FD-6 reroutes those to the orchestrator in the rebuild.
 
 ### 9. Post-turn summaries
 
