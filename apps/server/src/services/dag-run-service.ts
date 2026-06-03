@@ -18,6 +18,7 @@ import { DagExecutor, type DagExecutorDeps, type DagNodeContext, type NodeOutcom
 import { announceRunCreated, writeDagAndStatus } from './workflow-run-writer.ts';
 import { ContractService, WorkflowRunMutationGateway } from '@pc/app-services';
 import {
+  contractDeliverableText,
   type WorkflowReviewFlavor,
   type WorkflowReviewState,
 } from '@pc/contracts';
@@ -133,6 +134,10 @@ export function makeExecutorDeps(
   workflow: WorkflowV2.Workflow,
   opts: DagRunServiceOptions
 ): DagExecutorDeps {
+  // One ContractService for the whole run's deps — the deliverable resolver
+  // (below) + the child-contract reads in dispatchAgent share it.
+  const contractService = new ContractService();
+
   const resolveRef =
     (state: WorkflowV2.WorkflowDagState): RefResolver =>
     (nodeId, field) => {
@@ -147,18 +152,38 @@ export function makeExecutorDeps(
         return typeof v === 'string' ? v : JSON.stringify(v);
       }
       const rec = state.nodes[nodeId];
-      // Bash/script nodes have no work item — they expose captured stdout via
-      // `rec.output` (F#1). Field-form refs on a bash node have nothing to read
-      // beyond bare output, so they resolve to empty.
+      // Legacy captured-stdout nodes (no work item) expose bare output. Field-
+      // form refs on one have nothing structured to read, so resolve to empty.
       if (rec?.workItemId === undefined && rec?.output !== undefined) {
         return field ? '' : rec.output;
       }
       const wiId = rec?.workItemId;
       if (!wiId) return '';
+
+      // `$nodeId.output` = the agent's PRODUCED DELIVERABLE (submitted via
+      // pc_submit_deliverable, stored on the linked contract) — NOT the child WI
+      // body, which holds the TASK the agent was given. Downstream steps consume
+      // the result, not the instructions. Fall back to the WI body/fields only
+      // when no deliverable was captured (a node that produced none).
+      const contract = contractService.listByWorkItem(wiId as ULID).slice(-1)[0] ?? null;
+      if (!field) {
+        const text = contract
+          ? contractDeliverableText(contract.deliverable, contract.report)
+          : '';
+        if (text) return text;
+        return getWorkItem(wiId as ULID)?.body ?? '';
+      }
+      // Field form: a structured `payload` deliverable's data field wins; else
+      // the child WI's stored field (legacy).
+      if (contract?.deliverable?.kind === 'payload') {
+        const data = contract.deliverable.data;
+        if (data && typeof data === 'object' && field in (data as Record<string, unknown>)) {
+          const fv = (data as Record<string, unknown>)[field];
+          return fv == null ? '' : typeof fv === 'string' ? fv : JSON.stringify(fv);
+        }
+      }
       const wi = getWorkItem(wiId as ULID);
-      if (!wi) return '';
-      if (!field) return wi.body ?? '';
-      const v = wi.fields?.[field];
+      const v = wi?.fields?.[field];
       if (v == null) return '';
       return typeof v === 'string' ? v : JSON.stringify(v);
     };
@@ -205,7 +230,7 @@ export function makeExecutorDeps(
         // Mint the linked contract here so the door resolves + reuses it (no
         // double contract). The door requires an expectedOutput for a WI-linked
         // dispatch; we read it back off this contract below.
-        contractService: new ContractService(),
+        contractService,
         getPodRowExpectedOutput: (podName) => {
           const row = resolveAgentForDispatch(podName, opts.projectId);
           return row?.expectedOutput as ExpectedOutput | null | undefined;
@@ -214,7 +239,7 @@ export function makeExecutorDeps(
     );
 
     const childContract =
-      new ContractService().listByWorkItem(childWi.id as ULID).slice(-1)[0] ?? null;
+      contractService.listByWorkItem(childWi.id as ULID).slice(-1)[0] ?? null;
     if (!childContract) {
       return {
         state: 'failed',

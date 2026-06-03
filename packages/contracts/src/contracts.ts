@@ -132,6 +132,22 @@ export type Deliverable =
   | { kind: 'binary'; attachmentId: string; mime: string; bytes: number }
   | { kind: 'action'; tool: string; count: number };
 
+/** Canonical "deliverable → readable text" projection. `answer`/`prose` carry
+ *  their text inline; every other (structured) kind has no prose body, so the
+ *  contract's free-text `report` is surfaced instead. This is the ONE place that
+ *  decides what a submitted deliverable "reads as" — the terminal envelope
+ *  (agent completion) and the workflow `$node.output` resolver both call it so
+ *  they can never diverge. Returns '' when there is nothing to show. */
+export function contractDeliverableText(
+  deliverable: Deliverable | null | undefined,
+  report?: string | null,
+): string {
+  if (deliverable && (deliverable.kind === 'answer' || deliverable.kind === 'prose')) {
+    return deliverable.text ?? '';
+  }
+  return report ?? '';
+}
+
 export type AcceptancePredicate =
   | { kind: 'files_exist'; paths: string[]; min_size_bytes?: number }
   | { kind: 'fields_populated'; keys: string[] }

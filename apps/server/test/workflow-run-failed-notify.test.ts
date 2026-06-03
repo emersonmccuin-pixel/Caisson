@@ -15,7 +15,6 @@ function baseDeps(over: Partial<DagExecutorDeps> = {}): DagExecutorDeps {
   return {
     resolveRef: () => () => '',
     dispatchAgent: async (): Promise<NodeOutcome> => ({ state: 'completed' }),
-    runCommand: async (): Promise<NodeOutcome> => ({ state: 'completed' }),
     moveCard: async () => ({ ok: true }),
     requestReview: async () => {},
     persist: () => {},
@@ -90,6 +89,70 @@ test('a failed step does NOT move the card', async () => {
   );
   await exec.advance();
   assert.deepEqual(moves, [], 'no move on a failed step');
+});
+
+test('reject notes auto-flow to the kicked-back node as $carry.feedback', async () => {
+  const carries: Record<string, string>[] = [];
+  let dispatched = 0;
+  const deps = baseDeps({
+    dispatchAgent: async (_node, ctx): Promise<NodeOutcome> => {
+      dispatched += 1;
+      carries.push({ ...ctx.carry });
+      return { state: 'completed', workItemId: `wi-${dispatched}` as ULID };
+    },
+  });
+  const wf: WorkflowV2.Workflow = {
+    id: 'wf',
+    name: 'WF',
+    triggers: [],
+    nodes: [
+      { id: 'build', kind: 'agent', agent: 'x', task: 'build it' },
+      { id: 'gate', kind: 'review', reviewer: 'human', reject: { back_to: 'build', max_iterations: 3 } },
+    ],
+  };
+  const exec = DagExecutor.start(wf, deps, ctxBase);
+  const s1 = await exec.advance();
+  assert.equal(s1, 'awaiting-review');
+  assert.deepEqual(carries[0], {}, 'first build run has no reviewer feedback');
+
+  const s2 = await exec.onReviewDecision('gate', { kind: 'reject', notes: 'make it punchier' });
+  assert.equal(s2, 'awaiting-review', 're-runs build then re-pauses at the gate');
+  assert.equal(dispatched, 2, 'build re-dispatched once after the reject');
+  assert.equal(
+    carries[1]?.feedback,
+    'make it punchier',
+    'reject notes auto-flow as $carry.feedback with no manual wiring',
+  );
+});
+
+test('an explicit reject.carry.feedback overrides the auto-seeded notes', async () => {
+  const carries: Record<string, string>[] = [];
+  let dispatched = 0;
+  const deps = baseDeps({
+    dispatchAgent: async (_node, ctx): Promise<NodeOutcome> => {
+      dispatched += 1;
+      carries.push({ ...ctx.carry });
+      return { state: 'completed', workItemId: `wi-${dispatched}` as ULID };
+    },
+  });
+  const wf: WorkflowV2.Workflow = {
+    id: 'wf',
+    name: 'WF',
+    triggers: [],
+    nodes: [
+      { id: 'build', kind: 'agent', agent: 'x', task: 'build it' },
+      {
+        id: 'gate',
+        kind: 'review',
+        reviewer: 'human',
+        reject: { back_to: 'build', max_iterations: 3, carry: { feedback: 'CUSTOM' } },
+      },
+    ],
+  };
+  const exec = DagExecutor.start(wf, deps, ctxBase);
+  await exec.advance();
+  await exec.onReviewDecision('gate', { kind: 'reject', notes: 'ignored by override' });
+  assert.equal(carries[1]?.feedback, 'CUSTOM', 'explicit reject.carry wins over the default');
 });
 
 test('a completed run does NOT fire notifyRunFailed', async () => {

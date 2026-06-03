@@ -17,7 +17,7 @@ import {
 } from '@pc/db';
 import { AgentRunJsonlTailer, jsonlPathFor, type AgentRunJsonlEvent } from '@pc/runtime';
 import { ContractService } from '@pc/app-services';
-import type { Contract, Deliverable } from '@pc/contracts';
+import { contractDeliverableText, type Contract, type Deliverable } from '@pc/contracts';
 
 import {
   buildAgentCompletedBody,
@@ -245,10 +245,7 @@ function captureDeliverable(
   }
   if (existing?.deliverable) {
     if (result.trim() === '') {
-      const submittedText =
-        existing.deliverable.kind === 'answer' || existing.deliverable.kind === 'prose'
-          ? existing.deliverable.text ?? ''
-          : existing.report ?? '';
+      const submittedText = contractDeliverableText(existing.deliverable, existing.report);
       if (submittedText.trim()) return submittedText;
     }
     return result;

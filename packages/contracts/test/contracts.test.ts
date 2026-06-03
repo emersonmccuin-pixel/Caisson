@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildLiveEventFrame,
+  contractDeliverableText,
   isContract,
   isContractChangedLiveEvent,
   isContractChangedLiveEventFrame,
@@ -119,6 +120,27 @@ test('contract status + mutation-reason guards', () => {
     assert.equal(isContractMutationReason(r), true);
   }
   assert.equal(isContractMutationReason('deleted'), false);
+});
+
+test('contractDeliverableText projects a deliverable to its readable text', () => {
+  // answer/prose carry inline text.
+  assert.equal(contractDeliverableText({ kind: 'answer', text: 'hello' }), 'hello');
+  assert.equal(contractDeliverableText({ kind: 'prose', text: 'a doc' }), 'a doc');
+  // structured kinds have no prose body → fall back to the report.
+  assert.equal(
+    contractDeliverableText({ kind: 'payload', data: { x: 1 } }, 'see report'),
+    'see report',
+  );
+  assert.equal(
+    contractDeliverableText({ kind: 'action', tool: 'pc_x', count: 1 }, 'did it'),
+    'did it',
+  );
+  // structured kind with no report → empty.
+  assert.equal(contractDeliverableText({ kind: 'payload', data: {} }), '');
+  // no deliverable → report, else empty.
+  assert.equal(contractDeliverableText(null, 'fallback'), 'fallback');
+  assert.equal(contractDeliverableText(null), '');
+  assert.equal(contractDeliverableText(undefined), '');
 });
 
 test('contract.changed live-event + frame guards', () => {

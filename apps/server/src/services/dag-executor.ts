@@ -248,12 +248,19 @@ export class DagExecutor {
    *  resolves to the reviewer's reject notes (a review node's "output" IS its
    *  verdict — stashed in `state.rejectFeedback` by applyReviewDecision so it
    *  survives the loop-subtree reset); other `$nodeId.output` refs read upstream
-   *  child WIs via the resolver. */
+   *  child WIs via the resolver.
+   *
+   *  The reviewer's notes are ALSO auto-exposed as `$carry.feedback` with no
+   *  manual wiring — so a re-dispatched node can address the rejection out of the
+   *  box. An explicit `reject.carry.feedback` entry overrides this default. */
   private carryFor(nodeId: string, resolve: RefResolver): Record<string, string> {
     const carry: Record<string, string> = {};
     for (const n of this.workflow.nodes) {
       if (!isReview(n) || !n.reject || n.reject.back_to !== nodeId) continue;
       const feedback = this.state.rejectFeedback?.[n.id] ?? '';
+      // Default: the reviewer's reject notes are available as `$carry.feedback`.
+      // Seeded BEFORE the explicit-carry loop so an authored `feedback` wins.
+      if (feedback && carry.feedback === undefined) carry.feedback = feedback;
       for (const [key, expr] of Object.entries(n.reject.carry ?? {})) {
         carry[key] = expr
           // `$self.output[.field]` → the reviewer's notes (replacer fn avoids
