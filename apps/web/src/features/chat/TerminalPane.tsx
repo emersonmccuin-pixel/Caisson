@@ -1,5 +1,6 @@
 import {
   Bug,
+  Cog,
   MessagesSquare,
   Terminal as TerminalIcon,
 } from 'lucide-react';
@@ -95,6 +96,45 @@ export function TerminalModeToggle({
       >
         <TerminalIcon className="h-3.5 w-3.5" aria-hidden="true" />
         <span>Terminal</span>
+      </span>
+    </button>
+  );
+}
+
+/** FD-6 — user filter for mailbox-injected system messages (agent finished,
+ *  workflow review, run failed, …). Shown by default; toggling hides the
+ *  system cards from the chat. Live — no reload — and persists. */
+export function SystemMessagesToggle({
+  shown,
+  onToggle,
+}: {
+  shown: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={shown}
+      data-testid="chat-system-messages-toggle"
+      aria-label={shown ? 'System messages shown' : 'System messages hidden'}
+      title={
+        shown
+          ? 'System messages are shown (agent results, reviews, failures injected into the conversation). Click to hide them.'
+          : 'System messages are hidden. Click to show them in the chat.'
+      }
+      onClick={onToggle}
+      className={
+        'inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium shadow-sm transition-colors ' +
+        (shown
+          ? 'border-info bg-info/10 text-foreground'
+          : 'border-border bg-background text-muted-foreground hover:border-info/60')
+      }
+    >
+      <Cog className="h-3.5 w-3.5" aria-hidden="true" />
+      <span>System</span>
+      <span className={shown ? 'text-info' : 'text-muted-foreground'}>
+        {shown ? 'shown' : 'hidden'}
       </span>
     </button>
   );

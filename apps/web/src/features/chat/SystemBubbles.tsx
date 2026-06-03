@@ -190,6 +190,59 @@ export function SystemFooter({ event }: { event: SystemEvent }) {
   );
 }
 
+/** FD-3/FD-6 — a mailbox-injected system message (a `[pc:…]`-marked user turn:
+ *  agent finished, workflow review, run failed, …). Rendered as a distinct
+ *  system card — never as a human bubble — with the marker stripped, a kind
+ *  chip, and a collapsed body (first line shown; click to expand). Visible by
+ *  default; the chat-footer "System" toggle hides them. */
+export function SystemTurnCard({
+  kind,
+  text,
+  ts,
+}: {
+  kind: string;
+  text: string;
+  ts?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const firstLine = text.split('\n')[0] ?? '';
+  const hasMore = text.trim() !== firstLine.trim();
+  const time = ts
+    ? new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : null;
+  return (
+    <div className="self-start w-full max-w-[92%] border-l-2 border-info bg-info/5 px-3 py-1.5 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="bg-info/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-info">
+          ⚙ system
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          {kind.replace(/-/g, ' ')}
+        </span>
+        {time && (
+          <span className="ml-auto text-[10px] text-muted-foreground">{time}</span>
+        )}
+      </div>
+      <div className="mt-1 text-foreground/90">
+        {open ? (
+          <div className="whitespace-pre-wrap break-words">{text}</div>
+        ) : (
+          <div className="truncate">{firstLine || '(no message)'}</div>
+        )}
+      </div>
+      {hasMore && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground underline-offset-2 hover:underline"
+        >
+          {open ? 'Collapse' : 'Show full message'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function SystemRawDump({ raw }: { raw: unknown }) {
   return (
     <pre className="mt-1.5 max-h-64 overflow-auto border border-border bg-background p-2 font-mono text-[10px] leading-snug">

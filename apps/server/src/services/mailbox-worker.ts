@@ -44,6 +44,9 @@ export interface MailboxWorkerDeps {
   getRecipientAddress: (recipientId: ULID) => MailboxAddress | null;
   /** Resolve a message body for the orchestrator-turn channel. */
   getMessageBody: (messageId: ULID) => string | null;
+  /** Resolve a message kind (agent-terminal, workflow-review, …) for the
+   *  FD-3/FD-6 system-marker fallback on injected turns. */
+  getMessageKind?: (messageId: ULID) => string | null;
   leaseOwner?: string;
   leaseMs?: number;
   maxAttempts?: number;
@@ -67,6 +70,7 @@ export class MailboxWorker {
       leaseMs: deps.leaseMs ?? DEFAULT_LEASE_MS,
       maxAttempts: deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
       now: deps.now ?? (() => Date.now()),
+      getMessageKind: deps.getMessageKind ?? (() => null),
       ...deps,
     };
   }
@@ -145,6 +149,7 @@ export class MailboxWorker {
         sessionId: session.sessionId,
         deliveryId: delivery.id,
         text: body,
+        kind: this.d.getMessageKind?.(delivery.messageId) ?? null,
       });
       if (result.ok) {
         this.d.service.acceptDelivery({

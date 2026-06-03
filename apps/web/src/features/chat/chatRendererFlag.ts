@@ -44,6 +44,27 @@ export function setJsonlCanonicalChatOverride(value: boolean | null): void {
   }
 }
 
+const HIDE_SYSTEM_KEY = 'caisson.chat.hideSystemMessages';
+
+/** FD-6 — user filter for mailbox-injected system messages (the `[pc:…]`
+ *  marked user turns). SHOWN by default; this flag hides them. */
+export function isHideSystemMessages(): boolean {
+  try {
+    return localStorage.getItem(HIDE_SYSTEM_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setHideSystemMessages(value: boolean): void {
+  try {
+    if (value) localStorage.setItem(HIDE_SYSTEM_KEY, '1');
+    else localStorage.removeItem(HIDE_SYSTEM_KEY);
+  } catch {
+    // no-op when storage is unavailable
+  }
+}
+
 const REVEAL_HIDDEN_KEY = 'caisson.chat.revealHidden';
 
 /** Debug toggle: render rows the policy marks `hidden` (queue churn, titles,

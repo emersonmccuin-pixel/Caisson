@@ -10,7 +10,7 @@ import { useCallback, useState } from 'react';
 import { Composer } from '@/features/chat/ChatComposer';
 import type { ChatSurfaceProps } from '@/features/chat/ChatSurfaceProps';
 import { ChatTimeline } from '@/features/chat/ChatTimeline';
-import { RawModeToggle, TerminalModeToggle, TerminalPane } from '@/features/chat/TerminalPane';
+import { RawModeToggle, SystemMessagesToggle, TerminalModeToggle, TerminalPane } from '@/features/chat/TerminalPane';
 import { SendBatchTray } from '@/features/chat/SendBatchTray';
 import { ThinkingIndicator } from '@/features/chat/ThinkingIndicator';
 import { useChatComposerActions } from '@/features/chat/useChatComposerActions';
@@ -20,8 +20,10 @@ import { useChatSurfaceMode } from '@/features/chat/useChatSurfaceMode';
 import { usePendingPrompts } from '@/features/chat/usePendingPrompts';
 import { useChatRenderItems } from '@/features/chat/useChatRenderItems';
 import {
+  isHideSystemMessages,
   isJsonlCanonicalChat,
   isRevealHiddenChatRows,
+  setHideSystemMessages,
   setRevealHiddenChatRows,
 } from '@/features/chat/chatRendererFlag';
 import { useChatTimelineRenderer } from '@/features/chat/useChatTimelineRenderer';
@@ -80,6 +82,19 @@ export function ChatSurface({
     });
   }, []);
 
+  // FD-6 — system-message filter (mailbox-injected `[pc:…]` turns). Shown by
+  // default; the persisted flag hides them. Live — no reload.
+  const [hideSystem, setHideSystem] = useState<boolean>(() =>
+    isHideSystemMessages(),
+  );
+  const toggleSystemMessages = useCallback(() => {
+    setHideSystem((prev) => {
+      const next = !prev;
+      setHideSystemMessages(next);
+      return next;
+    });
+  }, []);
+
   const { chatEnvelopes, renderItems } = useChatRenderItems({
     events,
     currentSessionId,
@@ -87,6 +102,7 @@ export function ChatSurface({
     visiblePendingPrompts,
     canonical: isJsonlCanonicalChat(),
     revealHidden,
+    hideSystem,
   });
 
   const renderTimelineItem = useChatTimelineRenderer({
@@ -211,7 +227,10 @@ export function ChatSurface({
       {!composerHidden && (
         <div className="shrink-0 border-t border-border bg-card px-3 py-1.5">
           <div className="flex items-center justify-between gap-2">
-            <RawModeToggle active={revealHidden} onToggle={toggleRawMode} />
+            <div className="flex items-center gap-2">
+              <RawModeToggle active={revealHidden} onToggle={toggleRawMode} />
+              <SystemMessagesToggle shown={!hideSystem} onToggle={toggleSystemMessages} />
+            </div>
             <TerminalModeToggle
               eligible={terminalEligible}
               active={terminalActive}

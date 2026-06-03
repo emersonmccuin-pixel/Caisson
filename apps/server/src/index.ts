@@ -398,6 +398,7 @@ const mailboxWorker = new MailboxWorker({
     return parsed.ok ? parsed.value : null;
   },
   getMessageBody: (messageId) => getMailboxMessage(messageId)?.body ?? null,
+  getMessageKind: (messageId) => getMailboxMessage(messageId)?.kind ?? null,
 });
 
 // Slice 015b — the enqueue writes the canonical `mailbox.message.changed`

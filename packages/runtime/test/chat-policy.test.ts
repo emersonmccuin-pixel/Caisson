@@ -6,7 +6,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { JsonlEvent } from "../src/jsonl-tailer.ts";
-import { INTERNAL_TOOLS, rowPolicy } from "../src/chat-policy.ts";
+import {
+  INTERNAL_TOOLS,
+  ensureSystemTurnMarker,
+  parseSystemTurnMarker,
+  rowPolicy,
+  stripSystemTurnMarkerLine,
+} from "../src/chat-policy.ts";
 
 const FIXTURES: Array<{ label: string; ev: JsonlEvent }> = [
   { label: "user", ev: { kind: "jsonl-user", text: "hi" } },
@@ -80,4 +86,60 @@ test("hidden set matches suppressed set", () => {
 test("internal tools are hidden, ordinary tools are visible", () => {
   assert.equal(rowPolicy({ kind: "jsonl-tool-call", toolUseId: "a", name: "TodoWrite", input: {} }).visibility, "hidden");
   assert.notEqual(rowPolicy({ kind: "jsonl-tool-call", toolUseId: "b", name: "Read", input: {} }).visibility, "hidden");
+});
+
+// ── FD-3 / FD-6 — system-injected turn marker ─────────────────────────────
+
+test("parseSystemTurnMarker: composer headers, fallback header, plain text", () => {
+  // kind= attribute wins over the token
+  assert.deepEqual(
+    parseSystemTurnMarker("[pc:agent-event kind=agent-completed version=1]\nbody"),
+    { kind: "agent-completed" },
+  );
+  // no kind= attribute → the token is the kind
+  assert.deepEqual(
+    parseSystemTurnMarker("[pc:workflow-review run=R1 node=gate flavor=human]\nbody"),
+    { kind: "workflow-review" },
+  );
+  assert.deepEqual(parseSystemTurnMarker("[pc:system kind=workflow-run-failed]\nbody"), {
+    kind: "workflow-run-failed",
+  });
+  // ordinary human text — including bracket-y text — is NOT a marker
+  assert.equal(parseSystemTurnMarker("hello world"), null);
+  assert.equal(parseSystemTurnMarker("[PC:agent-event]"), null);
+  assert.equal(parseSystemTurnMarker(" [pc:agent-event]"), null);
+  assert.equal(parseSystemTurnMarker("[pc-other] text"), null);
+});
+
+test("ensureSystemTurnMarker: passthrough when marked, fallback header otherwise", () => {
+  const marked = "[pc:workflow-review run=R1]\nbody";
+  assert.equal(ensureSystemTurnMarker(marked, "workflow-review"), marked);
+  assert.equal(
+    ensureSystemTurnMarker("Workflow failed: X\nreason", "workflow-run-failed"),
+    "[pc:system kind=workflow-run-failed]\nWorkflow failed: X\nreason",
+  );
+  // kind is sanitised, never breaks the header shape
+  assert.equal(
+    ensureSystemTurnMarker("body", "Weird Kind!!"),
+    "[pc:system kind=weird-kind]\nbody",
+  );
+  assert.equal(ensureSystemTurnMarker("body", ""), "[pc:system kind=notice]\nbody");
+});
+
+test("stripSystemTurnMarkerLine: drops only the marker line", () => {
+  assert.equal(stripSystemTurnMarkerLine("[pc:system kind=x]\nline1\nline2"), "line1\nline2");
+  assert.equal(stripSystemTurnMarkerLine("[pc:system kind=x]\n\nline1"), "line1");
+  assert.equal(stripSystemTurnMarkerLine("[pc:system kind=x]"), "");
+  assert.equal(stripSystemTurnMarkerLine("plain text\nstays"), "plain text\nstays");
+});
+
+test("rowPolicy: marked user rows are system-lane and SHOWN; plain user rows stay chat-lane", () => {
+  assert.deepEqual(rowPolicy({ kind: "jsonl-user", text: "[pc:agent-event kind=agent-completed]\nResult" }), {
+    visibility: "shown",
+    lane: "system",
+  });
+  assert.deepEqual(rowPolicy({ kind: "jsonl-user", text: "hi" }), {
+    visibility: "shown",
+    lane: "chat",
+  });
 });

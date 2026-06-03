@@ -17,12 +17,17 @@
 
 import type { ConversationSendService } from '@pc/app-services';
 import type { ULID } from '@pc/domain';
+import { ensureSystemTurnMarker } from '@pc/runtime/chat-policy';
 
 export interface OrchestratorTurnDeliveryInput {
   projectId: ULID;
   sessionId: ULID;
   deliveryId: ULID;
   text: string;
+  /** Mailbox message kind (agent-terminal, workflow-review, …). Used for the
+   *  FD-3/FD-6 fallback `[pc:system kind=…]` header when the composed body
+   *  doesn't already start with a `[pc:…]` marker. */
+  kind?: string | null;
 }
 
 export type OrchestratorTurnDeliveryResult =
@@ -43,7 +48,10 @@ export class MailboxOrchestratorTurnAdapter {
         projectId: input.projectId,
         sessionId: input.sessionId,
         clientMessageId: mailboxClientMessageId(input.deliveryId),
-        text: input.text,
+        // FD-3/FD-6 — the ONE injection door guarantees every injected turn
+        // starts with a `[pc:…]` system marker. The marker survives into CC's
+        // transcript, so the chat can render + filter these as system messages.
+        text: ensureSystemTurnMarker(input.text, input.kind ?? 'notice'),
         source: 'mailbox',
         sourceRef: input.deliveryId,
       });

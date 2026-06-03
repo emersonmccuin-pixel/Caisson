@@ -1,5 +1,10 @@
 import { useCallback, useState, type ReactNode } from 'react';
 
+import {
+  parseSystemTurnMarker,
+  stripSystemTurnMarkerLine,
+} from '@pc/runtime/chat-policy';
+
 import { AskCard } from '@/components/AskCard';
 import {
   AgentDispatchGroupBubble,
@@ -15,6 +20,7 @@ import {
   pendingStatusTone,
   SUPPRESSED_SYSTEM_SUBTYPES,
 } from '@/features/chat/EventBubbles';
+import { SystemTurnCard } from '@/features/chat/SystemBubbles';
 import { formatElapsed } from '@/features/chat/ThinkingIndicator';
 import { EditBubble, ToolGroupBubble } from '@/features/chat/ToolBubbles';
 import type {
@@ -204,6 +210,22 @@ export function useChatTimelineRenderer({
               projectId={projectId}
               resolvedApprovals={resolvedApprovals}
               onApprovalResolved={markApprovalResolved}
+            />
+          );
+        }
+      }
+      // FD-3/FD-6 — mailbox-injected turns arrive as user rows but carry the
+      // `[pc:…]` marker. Render them as system cards, never as human bubbles.
+      if (ev.kind === 'user') {
+        const userText = (ev as { text?: string }).text ?? '';
+        const marker = parseSystemTurnMarker(userText);
+        if (marker) {
+          return (
+            <SystemTurnCard
+              key={item.key}
+              kind={marker.kind}
+              text={stripSystemTurnMarkerLine(userText)}
+              ts={ev.ts}
             />
           );
         }

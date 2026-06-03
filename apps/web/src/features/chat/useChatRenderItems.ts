@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 
-import { rowPolicy } from '@pc/runtime/chat-policy';
+import { parseSystemTurnMarker, rowPolicy } from '@pc/runtime/chat-policy';
 
 import type { JsonlEvent, WsEnvelope } from '@/features/runtime/ws-types';
 import { injectTodoSnapshots, normalizeJsonlEnvelope } from '@/features/chat/normalizeJsonlEnvelope';
@@ -31,6 +31,9 @@ interface BuildEnvelopesArgs {
   projectId: string;
   visiblePendingPrompts: PendingPrompt[];
   revealHidden?: boolean;
+  /** FD-6 — hide mailbox-injected system messages (`[pc:…]` marked user turns).
+   *  Default false: system messages are SHOWN. */
+  hideSystem?: boolean;
 }
 
 /**
@@ -54,6 +57,7 @@ export function buildCanonicalChatEnvelopes({
   projectId,
   visiblePendingPrompts,
   revealHidden = false,
+  hideSystem = false,
 }: BuildEnvelopesArgs): StableEnvelope[] {
   const content = events.filter((env) => env.type === 'jsonl' || env.type === 'ask');
   const withTodos = injectTodoSnapshots(content);
@@ -80,6 +84,13 @@ export function buildCanonicalChatEnvelopes({
       const ev = env.event as JsonlEvent | undefined;
       if (!ev) continue;
       if (rowPolicy(ev).visibility === 'hidden' && !revealHidden) continue;
+      // FD-6 — user-facing system-message filter (shown by default).
+      if (
+        hideSystem &&
+        ev.kind === 'jsonl-user' &&
+        parseSystemTurnMarker(ev.text ?? '')
+      )
+        continue;
       const normalized = normalizeJsonlEnvelope(env);
       if (normalized) out.push({ origIdx: i, env: normalized });
       else if (revealHidden) out.push({ origIdx: i, env: debugRevealEnvelope(env, ev) });
@@ -103,6 +114,7 @@ export function useChatRenderItems({
   visiblePendingPrompts,
   canonical = false,
   revealHidden = false,
+  hideSystem = false,
 }: {
   events: WsEnvelope[];
   currentSessionId: string | null;
@@ -110,6 +122,7 @@ export function useChatRenderItems({
   visiblePendingPrompts: PendingPrompt[];
   canonical?: boolean;
   revealHidden?: boolean;
+  hideSystem?: boolean;
 }): { chatEnvelopes: StableEnvelope[]; renderItems: RenderItem[] } {
   const chatEnvelopes = useMemo<StableEnvelope[]>(() => {
     if (canonical) {
@@ -119,6 +132,7 @@ export function useChatRenderItems({
         projectId,
         visiblePendingPrompts,
         revealHidden,
+        hideSystem,
       });
     }
     // --- legacy path (frozen; the trustworthy A/B baseline) ---
@@ -154,7 +168,7 @@ export function useChatRenderItems({
       });
     }
     return out;
-  }, [events, currentSessionId, projectId, visiblePendingPrompts, canonical, revealHidden]);
+  }, [events, currentSessionId, projectId, visiblePendingPrompts, canonical, revealHidden, hideSystem]);
 
   const renderItems = useMemo(
     () => synthesizeRenderItems(chatEnvelopes),

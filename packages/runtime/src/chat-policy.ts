@@ -16,6 +16,49 @@
 
 import type { JsonlEvent } from './jsonl-tailer.ts';
 
+// ── FD-3 / FD-6 — the system-injected turn marker ─────────────────────────
+// Every message the mailbox injects into an orchestrator PTY (it arrives as if
+// a user typed it) is guaranteed to START with a `[pc:…]` header line — either
+// a composer-specific one ([pc:agent-event kind=agent-completed …],
+// [pc:workflow-review run=… node=…]) or the door's fallback
+// ([pc:system kind=<mailbox-kind>]). The header IS the end-to-end tag: it
+// survives verbatim into CC's JSONL transcript, so replay and live rendering
+// see the same marker. Chat renders marked user rows as system messages and
+// can filter them (shown by default per FD-6).
+
+export const SYSTEM_TURN_MARKER_RE = /^\[pc:([a-z0-9][a-z0-9-]*)((?:[ \t][^\]\n]*)?)\]/;
+
+export interface SystemTurnMarker {
+  /** Best display kind: the `kind=` attribute when present, else the token
+   *  after `pc:` (e.g. `workflow-review`). */
+  kind: string;
+}
+
+/** Parse the marker off an injected turn's text. Null for ordinary human text. */
+export function parseSystemTurnMarker(text: string): SystemTurnMarker | null {
+  const m = SYSTEM_TURN_MARKER_RE.exec(text);
+  if (!m) return null;
+  const kindAttr = /(?:^|[ \t])kind=([a-z0-9][a-z0-9-]*)/.exec(m[2] ?? '');
+  return { kind: kindAttr?.[1] ?? m[1]! };
+}
+
+/** Guarantee a marker at the ONE injection door. Text already carrying a
+ *  `[pc:…]` first line passes through; anything else gets the fallback header. */
+export function ensureSystemTurnMarker(text: string, kind: string): string {
+  if (SYSTEM_TURN_MARKER_RE.test(text)) return text;
+  const safeKind = kind.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'notice';
+  return `[pc:system kind=${safeKind}]\n${text}`;
+}
+
+/** Display helper: drop the marker line (and one following blank line) so the
+ *  rendered body starts with the human-readable content. */
+export function stripSystemTurnMarkerLine(text: string): string {
+  if (!SYSTEM_TURN_MARKER_RE.test(text)) return text;
+  const nl = text.indexOf('\n');
+  if (nl === -1) return '';
+  return text.slice(nl + 1).replace(/^\n/, '');
+}
+
 /** Whether a row reaches the user, and how prominently. `hidden` rows are
  *  filtered at the view (debug-toggle revealable), not discarded. */
 export type RowVisibility = 'shown' | 'collapsed' | 'hidden';
@@ -52,7 +95,12 @@ export const INTERNAL_TOOLS: ReadonlySet<string> = new Set([
 export function rowPolicy(ev: JsonlEvent): RowPolicy {
   switch (ev.kind) {
     case 'jsonl-user':
-      return { visibility: 'shown', lane: 'chat' };
+      // FD-3/FD-6 — mailbox-injected turns carry the [pc:…] marker and render
+      // in the system lane (distinct style + user-facing filter). Shown by
+      // default; never hidden at the policy layer.
+      return parseSystemTurnMarker(ev.text ?? '')
+        ? { visibility: 'shown', lane: 'system' }
+        : { visibility: 'shown', lane: 'chat' };
 
     case 'jsonl-turn-end':
       // Today: empty-text turn-end is dropped (normalizeJsonlEnvelope returns null).
