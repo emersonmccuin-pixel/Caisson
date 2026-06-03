@@ -35,7 +35,7 @@ const APP_ID = DEV ? 'com.projectcompanion.app.dev' : 'com.projectcompanion.app'
 const PORT = Number(process.env.PORT ?? 4040);
 // Packaged resource root (electron-builder `extraResources` → `pcserver/`).
 // Mirrors the repo's sub-paths so the server's ROOT-relative resolution
-// (apps/web/dist, templates, packages/mcp/dist, channel-server) just works.
+// (apps/web/dist, templates, packages/mcp/dist) just works.
 const PC_ROOT = join(process.resourcesPath, 'pcserver');
 // Section 10 — the pinned Claude Code CLI shipped with the app (electron-builder
 // `extraResources` → `<resources>/claude/`). The server pushes this into the
@@ -167,7 +167,7 @@ ipcMain.handle('pc:update:install', () => {
 });
 
 /**
- * Boot the Hono/channel server inside this process. Packaged-mode only —
+ * Boot the Hono server inside this process. Packaged-mode only —
  * loads the esbuild server bundle (1.5) by file path so there's no dependency
  * on tsx at runtime. Env (PC_DATA_DIR, ports) is set by the caller first.
  */
@@ -178,16 +178,13 @@ async function startInProcessServer(): Promise<void> {
   process.env.PC_BUNDLED_CLAUDE_EXE = PC_BUNDLED_CLAUDE_EXE; // Section 10 — pinned CLI
   process.env.PC_DATA_DIR ??= app.getPath('userData'); // 1.3 — per-user data dir
   process.env.PORT ??= String(PORT);
-  process.env.CHANNEL_PORT ??= '8788';
   await startPackagedAgentHost();
   // Importing the bundle runs the full boot sequence (migrations, seeds, the
-  // Hono `serve()` + the :8788 channel listener) inside this process. The
-  // bundle has top-level await, so this resolves once the server is listening.
+  // Hono `serve()`) inside this process. The bundle has top-level await, so
+  // this resolves once the server is listening.
   const serverEntry = join(PC_ROOT, 'server.mjs');
   await import(pathToFileURL(serverEntry).href);
 }
-
-const CHANNEL_PORT = Number(process.env.CHANNEL_PORT ?? 8788);
 
 function describeConflict(c: PortConflict): string {
   if (c.isCaisson) {
@@ -198,13 +195,13 @@ function describeConflict(c: PortConflict): string {
 }
 
 /**
- * Packaged boot with a port-conflict guard. Detects whether the API/channel
- * ports are taken, and — on explicit user action — frees the Caisson processes
+ * Packaged boot with a port-conflict guard. Detects whether the API port is
+ * taken, and — on explicit user action — frees the Caisson processes
  * holding them and retries. Returns true once the in-process server has booted;
  * false means the user chose to quit (caller should exit).
  */
 async function bootPackagedServerWithGuard(): Promise<boolean> {
-  const ports = [PORT, CHANNEL_PORT];
+  const ports = [PORT];
 
   // Up to two free-and-retry rounds, then give up with a clear message.
   for (let attempt = 0; attempt < 2; attempt += 1) {

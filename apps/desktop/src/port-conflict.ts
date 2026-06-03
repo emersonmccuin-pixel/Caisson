@@ -1,8 +1,8 @@
 // Section 10 — packaged-boot port-conflict guard.
 //
-// The packaged app hosts the API on PORT (4040) + the channel listener on
-// CHANNEL_PORT (8788). If a dev stack (`pnpm dev`) or a second app instance is
-// already holding those ports, Hono's `serve()` throws EADDRINUSE during boot —
+// The packaged app hosts the API on PORT (4040). If a dev stack (`pnpm dev`)
+// or a second app instance is already holding that port, Hono's `serve()`
+// throws EADDRINUSE during boot —
 // which, before this guard, killed the main process silently (no window, no
 // message). This module detects the conflict, names the offender, and can free
 // the ports on explicit user action.

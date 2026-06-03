@@ -1,8 +1,7 @@
 // Section 10 Phase 1.4 — how to launch a Node script in the current runtime.
 //
-// PC's per-project `.mcp.json` bakes `"command": "node"` for two servers it
-// scaffolds: the pc-rig tools server (`packages/mcp/dist/server.mjs`) and the
-// channel webhook bridge (`channel-server/server.js`). That works under tsx
+// PC's per-session `mcp.json` bakes `"command": "node"` for the pc-rig tools
+// server (`packages/mcp/dist/server.mjs`). That works under tsx
 // dev (system `node` on PATH), but a packaged Electron app has NO system node —
 // so claude.exe's attempt to spawn those MCP children would fail silently and
 // the orchestrator would lose every pc-rig tool.

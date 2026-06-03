@@ -19,7 +19,6 @@ import { applyNodeLauncher } from './mcp-config-rewrite.ts';
 import { renderTemplate } from './project-scaffold.ts';
 
 const DEFAULT_SERVER_PORT = 4040;
-const DEFAULT_CHANNEL_PORT = 8788;
 const DEFAULT_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..');
 
 export interface ClaudeRuntimeFilesInput {
@@ -34,7 +33,6 @@ export interface ClaudeRuntimeFilesInput {
   templatesDir?: string;
   trunkPath?: string;
   serverPort?: number;
-  channelPort?: number;
 }
 
 export interface ClaudeRuntimeFiles {
@@ -98,7 +96,6 @@ interface RuntimeContext {
   templatesDir: string;
   trunkPath: string;
   serverPort: number;
-  channelPort: number;
   hookTokens: Record<string, string>;
   settingsTokens: Record<string, string>;
 }
@@ -113,12 +110,10 @@ function resolveRuntimeContext(input: ClaudeRuntimeFilesInput): RuntimeContext {
   const templatesDir = input.templatesDir ?? resolve(rootPath(input.trunkPath), 'templates');
   const trunkPath = rootPath(input.trunkPath);
   const serverPort = input.serverPort ?? Number(process.env.PORT ?? DEFAULT_SERVER_PORT);
-  const channelPort = input.channelPort ?? Number(process.env.CHANNEL_PORT ?? DEFAULT_CHANNEL_PORT);
   const runtimeRoot = resolve(input.scratchDir, 'claude-runtime');
   const baseTokens = {
     PC_TRUNK_PATH: posixPath(trunkPath),
     PC_SERVER_PORT: String(serverPort),
-    PC_CHANNEL_PORT: String(channelPort),
     PC_DB_PATH: posixPath(resolve(dataDir, 'pc.sqlite')),
     PROJECT_ID: projectId,
     PROJECT_SLUG: projectSlug,
@@ -135,7 +130,6 @@ function resolveRuntimeContext(input: ClaudeRuntimeFilesInput): RuntimeContext {
     templatesDir,
     trunkPath,
     serverPort,
-    channelPort,
     hookTokens: {
       ...baseTokens,
       PROJECT_FOLDER: posixPath(worktreeDir),
@@ -162,15 +156,8 @@ function renderPcMcpBaseline(ctx: RuntimeContext): Record<string, PodMcpServerCo
           PC_SERVER_PORT: String(ctx.serverPort),
         },
       },
-      webhook: {
-        command: 'node',
-        args: [posixPath(resolve(ctx.trunkPath, 'channel-server', 'server.js'))],
-        env: {
-          PC_PROJECT_ID: ctx.projectId,
-          PC_PROJECT_SLUG: ctx.projectSlug,
-          CHANNEL_PORT: String(ctx.channelPort),
-        },
-      },
+      // ☠ FD-3: the `webhook` channel-server entry is gone — the mailbox is
+      // the one notify door; no per-session channel child is spawned.
     },
   };
   applyNodeLauncher(config, resolveNodeLauncher());
@@ -182,7 +169,6 @@ function runtimeEnv(ctx: RuntimeContext): Record<string, string> {
     PC_PROJECT_ID: ctx.projectId,
     PC_PROJECT_SLUG: ctx.projectSlug,
     PC_SERVER_PORT: String(ctx.serverPort),
-    PC_CHANNEL_PORT: String(ctx.channelPort),
   };
 }
 

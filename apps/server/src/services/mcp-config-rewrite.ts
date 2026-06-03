@@ -11,7 +11,6 @@ import type { NodeLauncher } from '@pc/runtime';
 // changing between dev and a packaged/relocated install).
 const PC_NODE_SCRIPT_SUFFIXES = [
   '/packages/mcp/dist/server.mjs',
-  '/channel-server/server.js',
 ] as const;
 
 interface McpConfig {

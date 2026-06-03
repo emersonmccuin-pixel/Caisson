@@ -2,7 +2,6 @@ import type { Hono } from 'hono';
 import type { ULID } from '@pc/domain';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { isAbsolute, relative, resolve } from 'node:path';
 
@@ -41,21 +40,6 @@ export function createPendingAskStore(): PendingAskStore {
   return new InMemoryPendingAskStore();
 }
 
-export interface ChatBridgeRuntime {
-  project: { slug: string };
-}
-
-export interface ChannelSendInput {
-  port: number;
-  slug: string;
-  message: string;
-}
-
-export interface ChannelSendResult {
-  status: number;
-  body: string;
-}
-
 /** Slice 007 — durable ask-shadow seam. A SIDE write around the UNCHANGED
  *  in-memory resolver: the shadow `pending_interactions` row is inspectable, NOT
  *  the answer authority. `onAsk` is called when /api/ask arrives (creates the
@@ -70,14 +54,11 @@ export interface AskShadowPort {
 export interface ChatBridgeRouteDeps {
   broadcastTo(projectId: ULID, msg: unknown): void;
   pendingAsks: PendingAskStore;
-  resolveProject(projectId: string): ChatBridgeRuntime | null;
-  channelPort: number;
   askTimeoutMs?: number;
   scheduleAskTimeout?: (callback: () => void, delayMs: number) => unknown;
   claudeProjectsDir?: string;
   fileExists?: (path: string) => boolean;
   readFileText?: (path: string) => Promise<string>;
-  sendChannelMessage?: (input: ChannelSendInput) => Promise<ChannelSendResult>;
   askShadow?: AskShadowPort;
 }
 
@@ -101,35 +82,6 @@ function derivePrompt(toolInput: unknown): string {
   return typeof toolInput === 'string' ? toolInput : '';
 }
 
-function defaultSendChannelMessage(input: ChannelSendInput): Promise<ChannelSendResult> {
-  const path = `/channel/${encodeURIComponent(input.slug)}/test`;
-  return new Promise((res, rej) => {
-    const req = httpRequest(
-      {
-        host: '127.0.0.1',
-        port: input.port,
-        method: 'POST',
-        path,
-        headers: {
-          'X-Sender': 'test',
-          'Content-Type': 'text/plain',
-          'Content-Length': Buffer.byteLength(input.message),
-        },
-      },
-      (r) => {
-        const chunks: Buffer[] = [];
-        r.on('data', (chunk) => chunks.push(chunk as Buffer));
-        r.on('end', () =>
-          res({ status: r.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf-8') }),
-        );
-      },
-    );
-    req.on('error', rej);
-    req.write(input.message);
-    req.end();
-  });
-}
-
 export function registerChatBridgeRoutes(app: Hono, deps: ChatBridgeRouteDeps): void {
   const services = {
     askTimeoutMs: deps.askTimeoutMs ?? 10 * 60 * 1000,
@@ -138,7 +90,6 @@ export function registerChatBridgeRoutes(app: Hono, deps: ChatBridgeRouteDeps): 
       deps.claudeProjectsDir ?? resolve(homedir(), '.claude', 'projects'),
     fileExists: deps.fileExists ?? existsSync,
     readFileText: deps.readFileText ?? defaultReadFileText,
-    sendChannelMessage: deps.sendChannelMessage ?? defaultSendChannelMessage,
   };
 
   /**
@@ -221,25 +172,5 @@ export function registerChatBridgeRoutes(app: Hono, deps: ChatBridgeRouteDeps): 
     }
   });
 
-  // Proxy to the channel server. POSTs the UI's test message to the path-routed
-  // channel entry at `/channel/<slug>/test` so the channel server accepts it.
-  app.post('/api/projects/:projectId/channel-send', async (c) => {
-    const id = c.req.param('projectId');
-    const runtime = deps.resolveProject(id);
-    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
-    const body = await c.req.json<{ message?: string }>();
-    const message = typeof body.message === 'string' ? body.message : '';
-    if (!message) return c.json({ ok: false, error: 'empty message' }, 400);
-
-    try {
-      const result = await services.sendChannelMessage({
-        port: deps.channelPort,
-        slug: runtime.project.slug,
-        message,
-      });
-      return c.json({ ok: result.status === 200, status: result.status, body: result.body });
-    } catch (err) {
-      return c.json({ ok: false, error: (err as Error).message }, 503);
-    }
-  });
+  // ☠ FD-3: the `/channel-send` test-proxy route is gone with the channel server.
 }

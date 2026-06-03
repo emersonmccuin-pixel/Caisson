@@ -111,9 +111,6 @@ export interface LowLevelSpawnInput {
    *  bracketed-paste/handshake signals. Used by the main orchestrator chat
    *  without depending on the remote-control phone bridge. */
   requireReadySignal?: boolean;
-  /** Load the webhook dev channel. Main orchestrator needs this; dispatched
-   *  agents leave it off. */
-  loadDevChannels?: boolean;
   /** Optional handshake timeout. Default 60s. */
   handshakeTimeoutMs?: number;
   /** Main resume spawns can load historical Claude sessions that do not honor
@@ -172,7 +169,6 @@ export class LowLevelSpawn extends EventEmitter {
   private state: SpawnState = 'spawning';
   private rawBuffer = '';
   private trustConfirmSent = false;
-  private channelConfirmSent = false;
   private readonly input: LowLevelSpawnInput;
   private readonly gate: ReadyGate;
   private tailer: JsonlTailer | null = null;
@@ -415,22 +411,8 @@ export class LowLevelSpawn extends EventEmitter {
       }
     }
 
-    if ((this.input.loadDevChannels ?? false) && !this.channelConfirmSent) {
-      const cleanAll = collapseAnsiToWhitespace(this.rawBuffer);
-      if (
-        /local\s*development/i.test(cleanAll) ||
-        /Loading\s*development\s*channels/i.test(cleanAll) ||
-        /Enter\s*to\s*confirm/i.test(cleanAll) ||
-        /I\s*am\s*using\s*this/i.test(cleanAll)
-      ) {
-        this.channelConfirmSent = true;
-        try {
-          this.child?.write('\r');
-        } catch {
-          /* exited mid-press */
-        }
-      }
-    }
+    // ☠ FD-3: the dev-channels confirmation auto-press is gone — PC no
+    // longer passes the dev-channels flag, so the prompt never appears.
 
     this.gate.feedChunk(data);
   }
@@ -573,9 +555,6 @@ export function buildLowLevelSpawnArgs(
     args.push('--resume', input.ccProviderSessionId);
   }
 
-  if (input.loadDevChannels ?? false) {
-    args.push('--dangerously-load-development-channels', 'server:webhook');
-  }
-
+  // ☠ FD-3: no dev-channels flag — the mailbox is the one notify door.
   return args;
 }

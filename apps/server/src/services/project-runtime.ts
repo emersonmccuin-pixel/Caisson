@@ -76,8 +76,6 @@ function resizePty(
 export interface ProjectRuntimeOptions {
   /** Trunk data dir. Per-project subpaths derived from this. */
   dataDir: string;
-  /** Channel server port for subagent dispatch + UI proxy. */
-  channelPort: number;
   /** HTTP server port for hook callbacks and pc-rig MCP. */
   serverPort: number;
   /** WS broadcaster pre-bound to this project — registry produces it. */
@@ -278,7 +276,6 @@ export class ProjectRuntime {
     return {
       projectId: this.project.id,
       workspaceDir: this.project.folderPath,
-      channelPort: this.opts.channelPort,
       serverPort: this.opts.serverPort,
       dataDir: this.opts.dataDir,
       templatesDir: this.opts.templatesDir,
@@ -478,7 +475,6 @@ export class ProjectRuntime {
         templatesDir: this.opts.templatesDir,
         trunkPath: this.opts.trunkPath,
         serverPort: this.opts.serverPort,
-        channelPort: this.opts.channelPort,
         projectSlug: this.project.slug,
         projectName: this.project.name,
       });
@@ -527,7 +523,6 @@ export class ProjectRuntime {
       // handshake do not deliver into the dev-channel confirmation prompt.
       remoteControl: false,
       requireReadySignal: true,
-      loadDevChannels: true,
       requireMcpHandshake: !session.resume,
       maxSpawnAttempts: 2,
       retryBackoffMs: 1500,
@@ -773,12 +768,10 @@ export class ProjectRuntime {
       projectId: this.project.id,
       worktreeDir: this.project.folderPath,
       scratchDir: sessionDir,
-      filterMcpToReferencedTools: false,
       dataDir: this.opts.dataDir,
       templatesDir: this.opts.templatesDir,
       trunkPath: this.opts.trunkPath,
       serverPort: this.opts.serverPort,
-      channelPort: this.opts.channelPort,
       projectSlug: this.project.slug,
       projectName: this.project.name,
     });
@@ -915,12 +908,10 @@ export class ProjectRuntime {
       projectId: this.project.id,
       worktreeDir: this.project.folderPath,
       scratchDir: sessionDir,
-      filterMcpToReferencedTools: false,
       dataDir: this.opts.dataDir,
       templatesDir: this.opts.templatesDir,
       trunkPath: this.opts.trunkPath,
       serverPort: this.opts.serverPort,
-      channelPort: this.opts.channelPort,
       projectSlug: this.project.slug,
       projectName: this.project.name,
     });
@@ -1010,7 +1001,6 @@ export class ProjectRuntime {
       templatesDir: this.opts.templatesDir,
       trunkPath: this.opts.trunkPath,
       serverPort: this.opts.serverPort,
-      channelPort: this.opts.channelPort,
     });
     this.setupWizardCleanup = runtimeFiles.cleanup;
     this.setupWizard = new PtySession({

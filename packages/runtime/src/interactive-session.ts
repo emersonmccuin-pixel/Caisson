@@ -76,7 +76,6 @@ export interface InteractiveSessionInput {
   model?: string;
   remoteControl?: boolean;
   requireReadySignal?: boolean;
-  loadDevChannels?: boolean;
   handshakeTimeoutMs?: number;
   requireMcpHandshake?: boolean;
   readyTimeoutMs?: number;
@@ -279,7 +278,6 @@ export class InteractiveSession extends EventEmitter {
       model: this.input.model,
       remoteControl: this.input.remoteControl,
       requireReadySignal: this.input.requireReadySignal,
-      loadDevChannels: this.input.loadDevChannels,
       handshakeTimeoutMs: this.input.handshakeTimeoutMs,
       requireMcpHandshake: this.input.requireMcpHandshake,
       readyTimeoutMs: this.input.readyTimeoutMs,

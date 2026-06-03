@@ -2,23 +2,21 @@
 //
 // electron-builder ships this dir as `extraResources` → `<resources>/pcserver/`.
 // The desktop main process sets PC_ROOT to it, so the server's ROOT-relative
-// path resolution (apps/web/dist, templates, packages/mcp/dist, channel-server)
-// lands here unchanged. Layout mirrors the repo's sub-paths:
+// path resolution (apps/web/dist, templates, packages/mcp/dist) lands here
+// unchanged. Layout mirrors the repo's sub-paths:
 //
 //   pcserver/
-//     server.mjs                     bundled API+channel server
+//     server.mjs                     bundled API server
 //     agent-host.mjs                 bundled out-of-process agent host
 //     apps/web/dist/                 web UI (PUBLIC)
 //     templates/                     project scaffold templates
 //     packages/mcp/dist/server.mjs   pc-rig MCP server (self-contained; spawned)
-//     channel-server/server.js       webhook bridge (bundled; spawned)
 //     node_modules/                  server externals (better-sqlite3, node-pty)
 //
 // Native deps are the only non-bundled pieces: node-pty ships N-API prebuilds
 // (ABI-stable, copied as-is); better-sqlite3 is V8-ABI and gets rebuilt for
 // Electron by rebuild-native.mjs after this stages it.
 
-import { build } from 'esbuild';
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -65,19 +63,7 @@ copy(resolve(TRUNK, 'packages/db/drizzle'), 'packages/db/drizzle');
 copy(resolve(TRUNK, 'packages/mcp/dist/server.mjs'), 'packages/mcp/dist/server.mjs');
 copy(resolve(TRUNK, 'packages/mcp/dist/server.mjs.map'), 'packages/mcp/dist/server.mjs.map');
 
-// 5. channel-server — bundle it self-contained so no node_modules ship for it
-await build({
-  entryPoints: [resolve(TRUNK, 'channel-server/server.js')],
-  outfile: join(OUT, 'channel-server/server.js'),
-  bundle: true,
-  platform: 'node',
-  format: 'esm',
-  target: 'node20',
-  banner: {
-    js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);",
-  },
-  logLevel: 'info',
-});
+// ☠ FD-3: the channel-server bundle step is gone with the channel system.
 
 // 6. native externals for the server bundle
 const NM = 'node_modules';

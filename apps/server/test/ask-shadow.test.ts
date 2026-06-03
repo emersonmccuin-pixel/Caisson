@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Hono } from 'hono';
-import type { ULID } from '@pc/domain';
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-ask-shadow-'));
 process.env.PC_DATA_DIR = tmpDir;
@@ -37,8 +36,6 @@ function setup(opts: { askTimeoutMs?: number; realTimeout?: boolean } = {}) {
   registerChatBridgeRoutes(app, {
     broadcastTo: () => {},
     pendingAsks,
-    resolveProject: () => ({ project: { slug: 'x' } }),
-    channelPort: 0,
     askShadow,
     // Default: a no-op scheduler so the long timeout never holds the process
     // open (the resolver-wins tests don't rely on it). The timeout test opts in

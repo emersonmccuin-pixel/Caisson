@@ -5,7 +5,6 @@ import { Hono } from 'hono';
 import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
 
 import type {
   Project,
@@ -53,7 +52,6 @@ import { createHostConnection, toHostHealthSnapshot } from './services/host-conn
 import { announceHostHealth } from './services/host-health-writer.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
 import { backfillStageFlags } from './services/stage-flags-backfill.ts';
-import { ChannelServer, type ChannelEvent } from './services/channel-server.ts';
 import { ProjectCreate } from './services/project-create.ts';
 import { ProjectRegistry } from './services/project-registry.ts';
 import type { ProjectRuntime } from './services/project-runtime.ts';
@@ -124,7 +122,6 @@ const DATA = getDataDir();
 const TEMPLATES = resolve(ROOT, 'templates');
 
 const PORT = Number(process.env.PORT ?? 4040);
-const CHANNEL_PORT = Number(process.env.CHANNEL_PORT ?? 8788);
 
 // ROOT-relative so the staged `drizzle/` is found in a packaged build (where
 // migrate.ts's __dirname points inside the bundle). Dev resolves to the trunk.
@@ -259,7 +256,6 @@ const projectScaffold = new ProjectScaffold({
   templatesDir: TEMPLATES,
   dataDir: DATA,
   serverPort: PORT,
-  channelPort: CHANNEL_PORT,
 });
 
 // T1.2 — host-mode discriminator. After D1, boot reattach runs on `hostConnection`
@@ -300,7 +296,6 @@ const projectRegistry = new ProjectRegistry({
   templatesDir: TEMPLATES,
   trunkPath: ROOT,
   serverPort: PORT,
-  channelPort: CHANNEL_PORT,
   getHostClient: () => hostConnection,
   broadcastFor: (projectId) => (event) => broadcastTo(projectId, event),
   // Workflow-review delivery seam. The closure runs at workflow-fire time
@@ -315,19 +310,10 @@ projectRegistry.loadAll();
 
 const projectCreate = new ProjectCreate(projectScaffold, projectRegistry);
 
-// Multiplexed channel server on :8788. Per-project channel-stdio children
-// register via WS; external webhooks POST /channel/<slug>/<source>; we route
-// to the matching child + emit a UI broadcast tagged with projectId.
-const channelServer = new ChannelServer({
-  port: CHANNEL_PORT,
-  allowedSenders: new Set((process.env.CHANNEL_ALLOWED_SENDERS ?? 'test').split(',').filter(Boolean)),
-  onEvent: (projectId, event) => {
-    broadcastTo(projectId, { type: 'channel-event', projectId, event });
-  },
-  // 017 Phase C — external webhooks route unconditionally to the mailbox.
-  webhookSink: deliverWebhookToMailbox,
-});
-channelServer.start();
+// ☠ FD-3: the channel server (:8788) is gone — no inbound webhook door, no
+// per-CC channel children, no `channel-event` UI bypass. The mailbox is the
+// one notify door; if inbound integrations ever return, they come back as a
+// plain HTTP endpoint that enqueues a mailbox message.
 
 // Section 18.8 — JSONL retention sweep at boot. Fire-and-forget so a slow
 // or failing sweep can't block startup. Reads `jsonl.retentionDays` from
@@ -631,8 +617,6 @@ const askShadow = new AskShadow({ interactions: pendingInteractionService });
 registerChatBridgeRoutes(app, {
   broadcastTo,
   pendingAsks,
-  resolveProject,
-  channelPort: CHANNEL_PORT,
   askShadow,
 });
 
@@ -733,42 +717,9 @@ function deliverWorkflowRunFailed(input: {
   });
 }
 
-// Flow C — external-webhook cutover sink. Hoisted so the ChannelServer built at
-// boot can reference it. When the gate = `channel` (default) it returns false →
-// the unchanged fan-to-children path runs. When `mailbox`, the event lands
-// durably in the project inbox (ui-inbox; no silent drop on a missing
-// registrant). Idempotency is best-effort: external `/channel` bodies carry no
-// event id, so we hash slug+source+body and include the arrival timestamp.
-function deliverWebhookToMailbox(event: ChannelEvent): boolean {
-  const hash = createHash('sha256')
-    .update(`${event.slug}|${event.source}|${event.body}`)
-    .digest('hex')
-    .slice(0, 16);
-  enqueueMailboxAndFanout({
-    message: {
-      id: newId(),
-      projectId: event.projectId,
-      kind: 'external-webhook',
-      subject: `${event.source} webhook`,
-      body: event.body,
-      payload: { slug: event.slug, source: event.source, sender: event.sender, at: event.at },
-      sourceKind: 'external-webhook',
-      sourceId: event.source,
-      idempotencyKey: `webhook:${event.slug}:${event.source}:${hash}:${String(event.at)}`,
-    },
-    recipients: [
-      {
-        id: newId(),
-        addressKind: 'project-inbox',
-        addressJson: { kind: 'project-inbox', projectId: event.projectId },
-        channel: 'ui-inbox',
-        deliveryId: newId(),
-      },
-    ],
-    now: Date.now(),
-  });
-  return true;
-}
+// ☠ FD-3: the external-webhook sink (`deliverWebhookToMailbox`) is gone with
+// the channel server. Inbound integrations, if ever needed, return as a plain
+// mailbox-writer endpoint.
 
 // Lease-driven delivery drain. Single in-process worker; the lease keeps the
 // model restart-safe. Unref'd so it never blocks shutdown.
@@ -1232,7 +1183,6 @@ function gracefulShutdown(): void {
   try { wss.close(); } catch { /* best-effort */ }
   hostConnection.close();
   projectRegistry.shutdownAll();
-  channelServer.shutdown();
 }
 
 process.on('SIGINT', () => {

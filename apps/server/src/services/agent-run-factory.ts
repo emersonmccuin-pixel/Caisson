@@ -370,7 +370,6 @@ export async function dispatchFreshAgent(
       projectId: input.projectId,
       worktreeDir: input.worktreeDir,
       scratchDir,
-      filterMcpToReferencedTools: true,
       workItem: workItem ?? undefined,
     });
   } catch (err) {
@@ -586,7 +585,6 @@ export async function dispatchContinueAgent(
       projectId: input.projectId,
       worktreeDir: input.worktreeDir,
       scratchDir,
-      filterMcpToReferencedTools: true,
       workItem: continueWorkItem ?? undefined,
     });
   } catch (err) {

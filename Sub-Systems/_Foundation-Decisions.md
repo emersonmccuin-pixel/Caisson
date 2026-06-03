@@ -101,7 +101,16 @@ spike is solely about the **tools** transport.
 
 ## FD-3 — The channel notification system dies entirely; the mailbox is the ONE notify door
 
-**Status:** 🟢 Locked — 2026-06-03 (Emerson: "entirely dead and no piece of it must survive")
+**Status:** ✅ **EXECUTED — 2026-06-03** (locked same day; Emerson: "entirely dead and no piece of it must survive")
+
+> **Demolition shipped:** channel-server package · `ChannelServer` service (:8788) · the
+> `--dangerously-*` flag + auto-confirm regex (both spawn paths) · `channel-event` UI bypass ·
+> `/channel-send` route · webhook mcp.json entry · the referenced-tools config filter · all port
+> plumbing (dev-supervisor, restart-stack, desktop port guard, stage-resources). Verified: workspace
+> typecheck + all suites green · live acceptance (fire → agent delivers on new spawn path → gate →
+> approve → completed) · mailbox notification confirmed · :8788 connection-refused.
+> The legacy-cleanup service intentionally keeps its channel references — it *removes* old channel
+> files from user projects. The no-bypass-gate resurrection detector still guards against revival.
 
 **The decision:**
 - The **entire channel notification path is removed** in the rebuild. Nothing survives:

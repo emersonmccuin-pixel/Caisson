@@ -71,12 +71,11 @@ function logLine(msg) {
   }
 }
 
-// Dev-stack ports the server binds (locked: API 4040, channel 8788). The
-// channel server has no EADDRINUSE retry, so a respawn that races the dying
-// process's port release (or a lingering orphan that inherited the listening
-// socket) crashes the fresh child with EADDRINUSE. Wait for both to free up
-// before (re)spawning instead.
-const BOUND_PORTS = [4040, 8788];
+// Dev-stack port the server binds (locked: API 4040). A respawn that races
+// the dying process's port release (or a lingering orphan that inherited the
+// listening socket) crashes the fresh child with EADDRINUSE. Wait for it to
+// free up before (re)spawning instead.
+const BOUND_PORTS = [4040];
 const PORT_FREE_TIMEOUT_MS = 12_000;
 const PORT_PROBE_INTERVAL_MS = 300;
 const HOST_LOCK_WAIT_MS = 5_000;
@@ -203,7 +202,7 @@ function spawnAgentHostChild() {
 
 async function spawnApiChild() {
   if (signalled) return;
-  // Don't bind until the previous process has released 4040/8788.
+  // Don't bind until the previous process has released 4040.
   if (!(await waitForPortsFree())) {
     logLine(`ports ${BOUND_PORTS.join('/')} still busy after ${PORT_FREE_TIMEOUT_MS}ms — spawning anyway`);
   }

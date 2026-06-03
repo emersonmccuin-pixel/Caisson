@@ -17,7 +17,6 @@ export interface ProjectRegistryDeps {
    *  the inbox-drain hook's `createRequire` of `better-sqlite3`. */
   trunkPath: string;
   serverPort: number;
-  channelPort: number;
   getHostClient?: () => AgentHostReattachClient | null;
   /** Factory: produces a broadcast fn pre-bound to the given project id. */
   broadcastFor: (projectId: ULID) => BroadcastFn;
@@ -100,7 +99,6 @@ export class ProjectRegistry {
       templatesDir: this.deps.templatesDir,
       trunkPath: this.deps.trunkPath,
       serverPort: this.deps.serverPort,
-      channelPort: this.deps.channelPort,
       broadcast: this.deps.broadcastFor(project.id),
       ...(this.deps.getHostClient ? { getHostClient: this.deps.getHostClient } : {}),
       ...(this.deps.deliverWorkflowReview

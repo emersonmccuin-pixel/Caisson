@@ -96,7 +96,6 @@ function emitReviewFact(
 export interface DagRunServiceOptions {
   projectId: ULID;
   workspaceDir: string;
-  channelPort: number;
   serverPort?: number;
   dataDir?: string;
   templatesDir?: string;

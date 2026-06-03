@@ -142,7 +142,7 @@ You never have to look here — but if you're the kind of person who wants to kn
 | **Tool layer (MCP)** | ~57 tools the orchestrator and agents use to read/move tasks, run workflows, ask you questions, and reach external systems |
 | **Desktop shell** | A Windows app that boots the whole thing in-process with a first-run setup wizard |
 
-Under the hood it's a TypeScript monorepo: an API + channel server (`apps/server`), a React web UI (`apps/web`), an Electron desktop shell (`apps/desktop`), and shared packages for the domain model, database, workflow engine, agent host, and the MCP tool server.
+Under the hood it's a TypeScript monorepo: an API server (`apps/server`), a React web UI (`apps/web`), an Electron desktop shell (`apps/desktop`), and shared packages for the domain model, database, workflow engine, agent host, and the MCP tool server.
 
 ## Status — v0.1.0
 
@@ -184,7 +184,7 @@ pnpm dev
 pnpm --filter @pc/web dev
 ```
 
-The API/channel server runs on `http://127.0.0.1:4040` and `:8788`. The Vite frontend runs on `http://127.0.0.1:5173`.
+The API server runs on `http://127.0.0.1:4040`. The Vite frontend runs on `http://127.0.0.1:5173`.
 
 ## Desktop builds
 

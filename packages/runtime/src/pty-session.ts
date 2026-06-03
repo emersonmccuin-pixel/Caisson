@@ -149,12 +149,8 @@ export interface PtySessionOptions {
   /** `--model` override. Defaults to `'opus'` (orchestrator-locked per
    *  chat.md). Subagents pass the agent file's declared model. */
   model?: string;
-  /** When false, skip the `--dangerously-load-development-channels` flag +
-   *  the dev-channels boot-prompt auto-press. Defaults to true (orchestrator
-   *  shape). Section 4d subagents pass false — they don't listen on channels. */
-  loadDevChannels?: boolean;
   /** Override the `--mcp-config` path. Defaults to `'.mcp.json'` (relative to
-   *  cwd — the project-scaffolded pc-rig + webhook config). Section 17a.5
+   *  cwd — the project-scaffolded pc-rig config). Section 17a.5
    *  passes a materialised pod's temp `mcp.json` here so pod-declared MCP
    *  servers merge in alongside the baseline. */
   mcpConfigPath?: string;
@@ -268,14 +264,8 @@ export function buildPtySessionArgs(opts: PtySessionOptions): string[] {
       args.push('--session-id', opts.claudeSessionId);
     }
   }
-  // Load the webhook channel registered in workspace/.mcp.json. CC will
-  // prompt once on boot to confirm dev-channel usage; we auto-press
-  // Enter below. Variadic — keep at the end of the arg list so any future
-  // flags don't get gobbled. Subagent dispatches (loadDevChannels=false)
-  // skip this — they don't listen on channels.
-  if (opts.loadDevChannels ?? true) {
-    args.push('--dangerously-load-development-channels', 'server:webhook');
-  }
+  // ☠ FD-3: the `--dangerously-load-development-channels` flag and its
+  // boot-prompt auto-confirm are gone — the mailbox is the one notify door.
   return args;
 }
 
@@ -297,7 +287,6 @@ export class PtySession extends EventEmitter {
   private state: SessionState = 'spawning';
   private rawBuffer = '';
   private bannerSeen = false;
-  private channelConfirmSent = false;
   private trustConfirmSent = false;
   private stopMarkerPath: string;
   private eventsPath: string;
@@ -317,7 +306,6 @@ export class PtySession extends EventEmitter {
   private claudeProjectsDir: string;
   private spawnedAt = 0;
   private excludeJsonlPaths: Set<string>;
-  private loadDevChannels = true;
   private tailer: JsonlTailer | null = null;
   private discoveryTimer: NodeJS.Timeout | null = null;
   private cursorPersistTimer: NodeJS.Timeout | null = null;
@@ -370,7 +358,6 @@ export class PtySession extends EventEmitter {
     // Section 23.5 — tasks.json went away with the hook-side accumulator;
     // todos derive client-side from JSONL tool-call envelopes.
 
-    this.loadDevChannels = opts.loadDevChannels ?? true;
     const args = buildPtySessionArgs(opts);
     const env = scrubIdeIntegrationEnv({
       ...process.env,
@@ -418,27 +405,8 @@ export class PtySession extends EventEmitter {
         }
       }
 
-      // Dev-channels confirmation prompt fires once at boot. Auto-press Enter
-      // to accept the preselected "I am using this for local development".
-      // claude.exe v2+ renders banner text with `\x1b[1C` cursor-right escapes
-      // *in place of* literal spaces — once stripAnsi removes them, the words
-      // collide. All "Foo bar" matchers use `\s*` so they match both renderings
-      // (modern collided + legacy spaced).
-      // Subagent dispatches (loadDevChannels=false) skip this — the prompt
-      // never appears, and gating prevents a false-match on agent content
-      // (e.g. an agent body containing "local development" phrasing).
-      if (this.loadDevChannels && !this.channelConfirmSent) {
-        const cleanAll = stripAnsi(this.rawBuffer);
-        if (
-          /local\s*development/i.test(cleanAll) ||
-          /Loading\s*development\s*channels/i.test(cleanAll) ||
-          /Enter\s*to\s*confirm/i.test(cleanAll) ||
-          /I\s*am\s*using\s*this/i.test(cleanAll)
-        ) {
-          this.channelConfirmSent = true;
-          this.child.write('\r');
-        }
-      }
+      // ☠ FD-3: the dev-channels confirmation auto-press is gone — PC no
+      // longer passes the dev-channels flag, so the prompt never appears.
 
       // First time we see a Claude-ready terminal signal, mark ready.
       if (!this.bannerSeen) {

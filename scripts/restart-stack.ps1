@@ -9,7 +9,7 @@
     1. Kill the dev:app COORDINATOR tree first (scripts/dev-app.mjs) via taskkill /T,
        so the server's manual-restart supervisor can't respawn the server mid-kill.
        The coordinator tree is: pnpm dev -> supervisor -> server -> agent host; Vite; Electron.
-    2. Defensively free ports 4040 (server) / 5173 (Vite) / 8788 (channel).
+    2. Defensively free ports 4040 (server) / 5173 (Vite).
     3. Kill repo Electron + the agent host (host re-spawns fresh under the new dev:app,
        so the new server discovers its new port — avoids the stale-host-endpoint bug).
     4. Wait until the ports are free.
@@ -32,7 +32,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo     = Split-Path -Parent $PSScriptRoot   # scripts/.. = repo root
-$ports    = 4040, 5173, 8788
+$ports    = 4040, 5173
 $hostLock = Join-Path $repo 'data/agent-host/host.lock.json'
 $logFile  = Join-Path $repo 'data/dev-app.log'
 

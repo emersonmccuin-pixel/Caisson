@@ -49,7 +49,6 @@ test('attach-to-git writes a tracked Caisson scaffold file before committing', a
     templatesDir,
     dataDir: tmpDir,
     serverPort: 4040,
-    channelPort: 8788,
   });
   const registry = {
     register(project: Project) {
