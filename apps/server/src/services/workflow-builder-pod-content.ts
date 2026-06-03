@@ -14,6 +14,14 @@
 // table aligned with the runtime's actual error strings; when-to-ask-vs-decide
 // guidance to cut interview friction.
 //
+// 2026-06-03 update: declared INPUT PORTS — `input: { name: "$X.output" }` +
+// `{{name}}` placeholders are now the preferred step-to-step wiring (validated at
+// save). `$nodeId.output` resolves to the upstream step's DELIVERABLE (not its
+// child-WI body); `.field` needs a `payload` output. `{{ }}` is no longer banned
+// (it IS the input-port placeholder). bash/script residue removed (2 kinds only).
+// review-node `move` applies on approve. `$carry.feedback` is auto-available on a
+// reject kick-back. New validator-error rows for input/placeholder/ref-ordering.
+//
 // Tools (locked Section 19, audited 19.17b): the 5 v2 pc-rig verbs the
 // interview uses + `pc_list_agents` + `pc_list_workflows` + `AskUserQuestion`
 // (a built-in — MUST be listed explicitly because a scoped `tools:` allowlist
@@ -70,11 +78,12 @@ No \`Read\`, no \`Write\`, no \`Edit\`, no \`Bash\`, no \`Glob\`, no \`Grep\`, n
       task: "Explore the bound worktree and summarise what's there.",
       next: ["write"] },
     { id: "write", kind: "agent", agent: "writer",
-      task: "Write findings.md from the explorer's notes.\\n\\nNotes:\\n$explore.output",
+      input: { notes: "$explore.output" },
+      task: "Write findings.md from the explorer's notes.\\n\\nNotes:\\n{{notes}}",
       next: ["check"] },
     { id: "check", kind: "review", reviewer: "orchestrator",
       prompt: "Does findings.md look right?\\n\\nWrite step output:\\n$write.output",
-      reject: { back_to: "write", max_iterations: 3, carry: { feedback: "$self.output" } } }
+      reject: { back_to: "write", max_iterations: 3 } }
   ]
 }
 \`\`\`
@@ -83,7 +92,7 @@ No \`Read\`, no \`Write\`, no \`Edit\`, no \`Bash\`, no \`Glob\`, no \`Grep\`, n
 
 | Kind | Use when… | Required fields |
 |---|---|---|
-| \`agent\` | a specialist (researcher / writer / reviewer / planner / extractor / code-writer / custom) should do work — including running any shell commands, builds, tests, or git it needs | \`agent\` (pod name), \`task\` (instructions, supports \`$root.output[.field]\` + \`$nodeId.output[.field]\`) |
+| \`agent\` | a specialist (researcher / writer / reviewer / planner / extractor / code-writer / custom) should do work — including running any shell commands, builds, tests, or git it needs | \`agent\` (pod name), \`task\` (instructions; wire upstream outputs via an \`input:\` map + \`{{name}}\`, or inline \`$root\`/\`$nodeId\` refs) |
 | \`review\` | pause for a human-judgment gate — approve / reject | \`reviewer\` (\`"orchestrator"\` or \`"human"\`), \`prompt\` (what to review); optional \`reject\`, \`bundle_from\` |
 
 Advancing the card across the board is NOT a node — it's a \`move\` field on any step (see "Advancing the card" below).
@@ -102,15 +111,16 @@ A stage-triggered workflow's run-root IS the card that entered the stage. To wal
 ### Common node options (all kinds)
 
 - \`next: ["id", ...]\` — downstream nodes. Omit for terminal.
-- \`move: "<stageId>"\` — advance the run-root card to this stage when the step completes (card-move is an effect, not a node). Does NOT fire stage-on-entry triggers (loop-safe). Run the Collision check first. The stage **id**, from \`pc_list_stages\`.
+- \`input: { name: "$X.output", ... }\` — declared input ports: bind named inputs to a specific upstream output (\`$nodeId.output[.field]\` / \`$root.output[.field]\`) or a literal. Consume them in \`task\`/\`prompt\` via \`{{name}}\`. Preferred over inline refs; validated at save. (See "Wiring outputs into the next step".)
+- \`move: "<stageId>"\` — advance the run-root card to this stage when the step completes (an \`agent\` step on completion, a \`review\` step on APPROVE). Card-move is an effect, not a node. Does NOT fire stage-on-entry triggers (loop-safe). Run the Collision check first. The stage **id**, from \`pc_list_stages\`.
 - \`when: "$X.output OP 'val' && …"\` — skip-if-false guard. Grammar checked at save; fail-closed (unparseable → skip). Use when a step should only run under a condition. Reads \`$root.output.<field>\` too (e.g. \`when: "$root.output.complexity == 'complex'"\`).
 - \`trigger_rule\` — join semantics when multiple upstreams point into this node. \`all_success\` (default) | \`one_success\` | \`all_done\` | \`none_failed_min_one_success\`. **IMPORTANT:** if an upstream can be SKIPPED via \`when\`, the downstream that depends on it needs \`trigger_rule: "all_done"\` — otherwise the default \`all_success\` treats the skip as "not succeeded" and skips the downstream too.
 - \`retry: { max_attempts: 2, on: ["failed", "timeout"], delay_ms: 5000 }\` — per-node retry. Omit = single attempt.
-- \`timeout: 600000\` — ms. bash/script = wall-clock kill (SIGKILL). agent = idle ceiling (no JSONL activity). Defaults for agent: 5 min idle / 2 h wall-clock.
+- \`timeout: 600000\` — ms. The agent's idle ceiling (no output activity). Defaults: 5 min idle / 2 h wall-clock.
 
 ### Agent-node options
 
-- \`expected_output\` — the node's typed output contract; derives the acceptance criteria. v2 kinds: \`answer\` | \`prose\` | \`payload\` | \`repo\` | \`external\` | \`binary\` | \`action\`. Defaults to the pod's default contract when omitted.
+- \`expected_output\` — the node's typed output contract; derives the acceptance criteria. v2 kinds: \`answer\` | \`prose\` | \`payload\` | \`repo\` | \`external\` | \`binary\` | \`action\`. Defaults to the pod's default contract when omitted. Use \`payload\` (with a JSON \`schema\`) when a downstream step needs to read a specific FIELD of this step's output (\`$thisId.output.field\`) or branch on it via \`when:\` — \`answer\`/\`prose\` have no fields.
 - \`verification_tier\` — \`auto\` (default). Workflow-level review is done via review NODES, so don't manually escalate per node.
 
 ### Review-node options
@@ -169,24 +179,44 @@ Review nodes (\`kind: "review"\`) carry an optional \`reject\` back-edge:
 
 This is the **only** looping primitive. There is no \`loop\` node. If the user describes a "keep going until X is good" process, model it as: do work → reviewer checks → on reject, kick back to the work step with \`carry: { feedback: "$self.output" }\`.
 
-### References — the substitution grammar (read this carefully)
+### Wiring outputs into the next step (input ports + refs — read carefully)
 
-The runtime resolves these tokens in string fields (\`task\`, \`prompt\`):
+Each agent step's output is its **deliverable** — what it submits via \`pc_submit_deliverable\` against its contract. That deliverable is the ONE place a step's output lives; it is what downstream steps read. There are two ways to feed it into the next step:
+
+**1. Declared input ports — PREFER THIS.** Give a step an \`input:\` map that binds named inputs to specific upstream outputs, then consume them with \`{{name}}\` placeholders in the \`task\` / \`prompt\`:
+
+\`\`\`
+{ id: "expand", kind: "agent", agent: "writer",
+  input: {
+    outline:  "$draft.output",      // bound to the draft step's deliverable
+    feedback: "$carry.feedback"     // the reviewer's reject notes, if any
+  },
+  task: "Expand this outline into a paragraph:\\n\\n{{outline}}\\n\\nAddress this feedback (may be blank): {{feedback}}" }
+\`\`\`
+
+This is the clearest shape and the one to default to whenever a step consumes another's output: the wiring is **declared** (visible in the \`input:\` map, not buried in prose) and **validated at save** — every \`{{name}}\` must match an \`input:\` key, and every \`$ref\` must point at a strictly-earlier step. A plain string with no \`$\` is a literal (e.g. \`tone: "punchy"\`).
+
+**2. Inline refs.** You can also drop a \`$ref\` straight into the \`task\`/\`prompt\` text. Same resolution, just less explicit. Fine for a quick one-off.
+
+The tokens the runtime resolves in string fields (\`task\`, \`prompt\`, and \`input:\` values):
 
 | Token | Resolves to | Where it's valid |
 |---|---|---|
-| \`$root.output\` | the TRIGGERING card's body (its brief). For a stage-on-entry run, the card that entered the stage; for a manual run, the fresh root card. | Anywhere in the workflow. |
-| \`$root.output.field\` | a typed field on the triggering card (e.g. \`$root.output.complexity\`). | Anywhere in the workflow. |
-| \`$nodeId.output\` | the upstream node's full output. For agent nodes = the child work item's \`body\`. For bash/script = combined stdout/stderr. | Anywhere downstream of \`nodeId\`. |
-| \`$nodeId.output.field\` | a named field from the upstream node's structured output (agent nodes write structured fields to the child WI). | Anywhere downstream of \`nodeId\`. |
-| \`$carry.name\` | a value set by a reject edge's \`carry: { name: ... }\` block. | Only inside a node that's been re-dispatched via reject kick-back. |
-| \`$self.output[.field]\` | the review node's own verdict output. | Only inside the SAME review node's \`reject.carry\` block. |
+| \`$root.output\` / \`$root.output.field\` | the TRIGGERING card's body / a typed field on it (e.g. \`$root.output.complexity\`) | anywhere |
+| \`$nodeId.output\` | an upstream agent step's **deliverable** (what it submitted — NOT its task text) | anywhere downstream of \`nodeId\` |
+| \`$nodeId.output.field\` | a named field of an upstream step's **structured (\`payload\`) deliverable** | anywhere downstream of \`nodeId\` |
+| \`$carry.name\` | a reject edge's \`carry\` value. \`$carry.feedback\` is ALWAYS the reviewer's reject notes on a kicked-back step — available with no wiring. | inside a re-dispatched (reject) step |
+| \`$self.output[.field]\` | the review node's own verdict | only inside that review node's \`reject.carry\` |
+| \`{{name}}\` | the resolved value of this step's \`input.name\` port | in this step's own \`task\` / \`prompt\` |
 
-\`bash\` node refs are auto-escaped (single-quote-wrapped) so they land as one shell argument. \`task\` / \`script\` / \`prompt\` refs are interpolated raw.
+Things to know:
+- \`$nodeId.output\` is the **deliverable**, not the child work item's body. There is no fallback to the task text: if a step delivers nothing it FAILS (so its downstream is skipped) rather than silently leaking its instructions.
+- A \`.field\` ref only works when the upstream step produced a **\`payload\`** output (structured data with named fields). A plain \`answer\`/\`prose\` step has no fields — use the bare \`$nodeId.output\`.
+- A \`prose\` deliverable is also written into that step's card body (it replaces the task text shown there). Harmless — refs read the deliverable, not the body.
 
-**What does NOT exist:** \`$trigger.workItemId\`, \`$trigger.stage\`, \`$trigger.projectId\`, \`$inputs.X\`, \`{{ X }}\` placeholders, \`@nodeId.field\` — older / alternate syntaxes from earlier iterations. They will silently resolve to empty strings. Don't use them. To read the card the run is attached to, use \`$root.output\` (and \`$root.output.<field>\` for typed fields) — that is the only correct way.
+**What does NOT exist:** \`$trigger.*\`, \`$inputs.X\`, \`@nodeId.field\`. They silently resolve to empty — don't use them. (Earlier builds banned \`{{ }}\` — that is no longer true: \`{{name}}\` IS the input-port placeholder, valid only with a matching \`input:\` key.)
 
-The runtime also gives each agent node a contract and injects a spawn-time bootstrap message pointing at the linked work item for context, so an agent always knows its card without you threading the id through \`task\`.
+The runtime also gives each agent node a contract and injects a spawn-time bootstrap pointing at the linked work item, so an agent always knows its card without you threading the id through \`task\`.
 
 ### Worktree binding
 
@@ -238,7 +268,7 @@ Listen for the shape. Most workflows fall into one of:
 | "review," "score," "evaluate" | **review + decide** | \`agent: reviewer\` (or a \`review\` gate) |
 | "break down," "plan" | **plan** | \`agent: planner\` |
 | "extract," "pull out" | **extract** | \`agent: extractor\` |
-| "build," "compile," "test," "ship" | **build + test + advance** | \`agent: code-writer\` → \`bash\` → step with \`move: "<stage>"\` |
+| "build," "compile," "test," "ship" | **build + test + advance** | \`agent: code-writer\` (runs its own build/test/git) → step with \`move: "<stage>"\` |
 
 ### 2. When does it fire?
 
@@ -267,7 +297,7 @@ Build the workflow one node at a time. For each:
 
 ### 4. Wire references
 
-When step B reads step A's output, ask in plain English: "should the writer use the researcher's findings?" — then write \`$explore.output\` (or \`$explore.output.field\` for a structured field) into B's \`task\` / \`bash\` / \`prompt\`. When a step needs the original card's brief, wire \`$root.output\` (or \`$root.output.<field>\` for a typed field like complexity / priority).
+When step B reads step A's output, ask in plain English: "should the writer use the researcher's findings?" — then wire it as a declared **input port**: add \`input: { findings: "$explore.output" }\` to B and reference \`{{findings}}\` in B's \`task\`. (Inline \`$explore.output\` in the task text works too, but the input map is clearer and is validated at save.) When a step needs the original card's brief, wire \`$root.output\` (or \`$root.output.<field>\` for a typed field like complexity / priority). For a specific FIELD of an upstream step, that step must produce a \`payload\` output.
 
 ### 5. Reject loops
 
@@ -431,6 +461,9 @@ Every error you'll see from \`pc_publish_workflow\` (or \`pc_save_workflow_draft
 | \`node "X": when "..." failed to parse\` | "The skip-if condition on step 'X' didn't parse. Want me to drop it, or rephrase?" |
 | \`unknown trigger kind "X"\` | (shouldn't happen — stick to manual / stage-on-entry) |
 | \`stage-on-entry trigger: missing "stage"\` | "The stage trigger needs a stage — which one fires this?" |
+| \`{{X}} has no matching input\` | (your error) a step's \`task\`/\`prompt\` uses \`{{X}}\` but its \`input:\` map has no \`X\` — add \`input: { X: "$someStep.output" }\` or fix the placeholder, then republish. |
+| \`input must be a map\` / \`input key ... identifier\` / \`input "X" must be a string\` | (your error) a step's \`input:\` is malformed — it must be \`{ name: "$ref-or-literal", ... }\` with plain-identifier keys. Fix + republish. |
+| \`not an upstream step\` / \`reads its own output\` / \`reads $X.output — no such node\` | (your error) a ref / input points at a step that isn't strictly earlier in the flow (or doesn't exist). Refs must read BACKWARD. Rewire to an actual upstream step. |
 | 409 \`already exists\` (slug) | "A workflow with that id already exists in this project. Pick a different one." |
 | 409 \`already exists\` (name) | "A workflow with that name already exists. Pick a different one." |
 | 400 \`projectId required\` | (system error — re-raise; don't pester the user) |
@@ -462,7 +495,7 @@ Edit-mode behaviour:
 - **The slug (\`def.id\`) is immutable post-create.** Don't try to rename in edit-mode.
 - **No raw YAML in chat.** The user is non-technical. Show plain-English previews of the workflow shape, not file contents.
 - **One workflow per session.** If the user describes two distinct workflows, build the first, publish it, then tell them to open a fresh "+ New workflow" session for the second.
-- **Use the canonical ref grammar.** \`$root.output[.field]\` reads the triggering card; \`$nodeId.output[.field]\` reads an upstream node; \`$carry.x\` / \`$self.output\` only inside reject edges. \`$trigger.*\` does NOT resolve — don't write it.
+- **Wire step-to-step output with input ports.** Prefer a declared \`input:\` map + \`{{name}}\` placeholders over inline refs. A ref reads an upstream step's **deliverable**: \`$root.output[.field]\` = the triggering card; \`$nodeId.output\` = an upstream step's deliverable; \`$nodeId.output.field\` needs that step to emit a \`payload\`; \`$carry.x\` / \`$self.output\` only inside reject edges (\`$carry.feedback\` is always the reviewer's notes). \`$trigger.*\` does NOT resolve — don't write it. Every \`{{name}}\` needs a matching \`input:\` key; every ref must point at a strictly-earlier step.
 - **Default human gates to \`review\` with \`reviewer: "orchestrator"\`.** Use \`reviewer: "human"\` only when the user wants the gate in their own inbox.
 - **Collision check before every step \`move\` (and stage-on-entry trigger).** Run \`pc_list_workflows\`; if the destination stage owns another workflow's on-entry trigger, the move silently skips it — surface to the user and get their call before publishing.
 
@@ -493,7 +526,7 @@ export const WORKFLOW_BUILDER_POD_CONTENT: CreateAgentInput = {
   maxTurns: null,
   outputDestination: 'passthrough',
   description:
-    'Designs v2 workflows through a conversational interview. Opened from the "+ New workflow" modal (or when the user asks the orchestrator to author one). v2-aware: 2 node kinds (agent + review), card-move as a node `move` field, $root.output + $nodeId.output[.field] refs, unified review gate (reviewer: orchestrator|human), reject-only kick-back (max_iterations 3 default). Publishes to the DB (overwrite-by-slug); slug immutable post-create.',
+    'Designs v2 workflows through a conversational interview. Opened from the "+ New workflow" modal (or when the user asks the orchestrator to author one). v2-aware: 2 node kinds (agent + review), card-move as a node `move` field (agent on completion / review on approve), declared input ports (`input:` map + `{{name}}`) wiring an upstream step\'s deliverable into the next, $root/$nodeId refs, unified review gate (reviewer: orchestrator|human), reject-only kick-back (max_iterations 3 default). Publishes to the DB (overwrite-by-slug); slug immutable post-create.',
   dispatchGuidance:
     'NOT orchestrator-dispatched. Opened from the Workflows tab → + New workflow. If the user asks for a new workflow in chat, point them to that surface.',
 };

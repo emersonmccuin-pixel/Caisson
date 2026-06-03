@@ -716,7 +716,7 @@
         "properties": {
           "def": {
             "type": "object",
-            "description": "in-progress v2 workflow object: { id, name, triggers?, nodes: [...], ... }",
+            "description": "in-progress v2 workflow object: { id, name, triggers?, worktree?, nodes: [...] }. Nodes are 2 kinds. agent: { id, kind:'agent', agent:<podName>, task, input?, expected_output?, move?, next?, when? }. review: { id, kind:'review', reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire a step's output into a later step via DECLARED INPUT PORTS — `input: { name: \"$earlierId.output\" }` consumed as `{{name}}` in task/prompt (preferred) — or inline `$earlierId.output` refs. `$nodeId.output` is the upstream step's submitted deliverable; `.field` needs a `payload` output. `move:'<stageId>'` advances the card (agent on completion, review on approve).",
             "additionalProperties": true
           }
         },
@@ -741,7 +741,7 @@
         "properties": {
           "def": {
             "type": "object",
-            "description": "v2 workflow object: { id, name, triggers: [...], nodes: [...], description?, worktree?, max_concurrency? }",
+            "description": "v2 workflow object: { id, name, triggers: [...], nodes: [...], description?, worktree? }. Nodes are kind 'agent' { agent, task, input?, expected_output?, move?, next?, when? } or 'review' { reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire step-to-step output via input ports — `input: { name: \"$earlierId.output\" }` + `{{name}}` in task/prompt (preferred) — or inline `$earlierId.output` refs (= the upstream step's deliverable; `.field` needs a `payload` output). Every `{{name}}` needs an `input:` key and every ref must point at a strictly-earlier step, else the publish returns a validation error.",
             "additionalProperties": true
           }
         },
@@ -886,11 +886,11 @@
         "properties": {
           "yaml": {
             "type": "string",
-            "description": "raw YAML workflow definition (preferred for plain-text authoring)"
+            "description": "raw YAML v2 workflow. NOTE: double-quote any `task:`/`prompt:` scalar that contains a colon-space (e.g. `task: \"Write X: do Y\"`) or YAML mis-parses it. Prefer `def` (object) to avoid quoting traps. See `def` for the node shape."
           },
           "def": {
             "type": "object",
-            "description": "workflow graph object (alternative to yaml)",
+            "description": "v2 workflow graph object (alternative to yaml). { id, name, triggers:[...], nodes:[...] }. Nodes are kind 'agent' { agent, task, input?, expected_output?, move?, next?, when? } or 'review' { reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire step output→input via input ports `input:{ name:\"$earlierId.output\" }` + `{{name}}` (preferred) or inline `$earlierId.output` refs (the upstream deliverable; `.field` needs a `payload` output). Refs must point at strictly-earlier steps.",
             "additionalProperties": true
           },
           "scope": {

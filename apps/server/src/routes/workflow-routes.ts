@@ -206,8 +206,14 @@ function normaliseDef(input: {
   }
 
   if (!parsed.ok) {
-    // Yaml-path parse failure → invalid row.
-    const slug = input.expectedSlug ?? '';
+    // Yaml-path parse/validation failure → invalid row. Peek the raw `id:` so the
+    // row still carries a slug even when the body failed to parse/validate —
+    // mirrors the def-path, which populates slug from `def.id`. Without this the
+    // create route reports a MISLEADING "def.id required" (the empty-slug guard)
+    // and swallows the real parseError, so an authoring agent can't see what's
+    // actually wrong (e.g. an unquoted colon in a `task:` scalar).
+    const peeked = yamlText.match(/^\s*id\s*:\s*['"]?([A-Za-z0-9_-]+)['"]?\s*$/m);
+    const slug = input.expectedSlug ?? peeked?.[1] ?? '';
     return {
       yaml: yamlText,
       yamlHash: sha256(yamlText),

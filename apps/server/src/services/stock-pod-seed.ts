@@ -695,7 +695,11 @@ Loop nodes and nested sub-workflows are deferred.
 
 ## How nodes read the triggering card
 
-A stage-on-entry workflow's run root IS the card that entered the stage. Node instructions can read that card's body via $root.output, and a typed field via $root.output.<field> (e.g. $root.output.complexity). A prior node's output is $node-id.output. There is no $trigger.* — that older syntax resolves to empty.
+A stage-on-entry workflow's run root IS the card that entered the stage. Node instructions can read that card's body via $root.output, and a typed field via $root.output.<field> (e.g. $root.output.complexity). There is no $trigger.* — that older syntax resolves to empty.
+
+## How a step's output feeds the next step (input ports)
+
+A step's output is its **deliverable** — what the agent submits (its one output slot). To feed it into a later step, give that step a declared input port: \`input: { name: "$earlierId.output" }\`, then reference \`{{name}}\` in the step's task. (An inline \`$earlierId.output\` in the task text works too, but the input map is clearer and is validated when you save — every \`{{name}}\` must match an input key and every ref must point at a strictly-earlier step.) \`$earlierId.output\` is that step's deliverable, not its task text; a \`.field\` ref (\`$earlierId.output.field\`) only works when the earlier step produces a \`payload\` (structured) output. On a review reject, the reviewer's notes are available to the kicked-back step as \`$carry.feedback\`. The \`move\` field advances the card when a step finishes (an agent on completion, a review on approve).
 
 ## Contracts vs. work items
 
