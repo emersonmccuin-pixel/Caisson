@@ -13,7 +13,7 @@ import { persist } from 'zustand/middleware';
 
 import type { WorkItemStatus, WorkItemType } from '@/features/work-items/client';
 
-// Slice 010 — the first sub-tab is labelled "Focus" in the UI (Area cards);
+// FD-19 — the first sub-tab is labelled "Areas" in the UI (Area cards);
 // the internal key stays 'dashboard' so persisted view state migrates cleanly.
 export type WorkItemsSubTab = 'dashboard' | 'kanban' | 'table';
 

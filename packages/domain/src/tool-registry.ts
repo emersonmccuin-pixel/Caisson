@@ -54,7 +54,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_create_work_item",
     "family": "work-item",
     "label": "Create work item",
-    "description": "Create a new work item in the given stage. Returns the new WorkItem with its generated ULID id. Use this when the user asks for a fresh card / task / item; do not seed one via pc_update_work_item. Pass `targetProjectId` to write into a different project (cross-project capture); omit to write into the current project. When `targetProjectId` is set, `stageId` is optional — the server defaults to the target project's first (intake) stage.",
+    "description": "Create a new work item in the given stage. Returns the new WorkItem with its generated ULID id. Use this when the user asks for a fresh card / task / item; do not seed one via pc_update_work_item. Pass `targetProjectId` to write into a different project (cross-project capture); omit to write into the current project. When `targetProjectId` is set, `stageId` is optional — the server defaults to the target project's first (intake) stage. EVERY create should consider which Area the item belongs to: check pc_list_areas (each Area carries a summary of what belongs in it) and pass the best-fit `area_id`; leave it unset only when nothing genuinely fits (Uncaptured). If an Area's summary is missing or stale, improve it with pc_update_area.",
     "catalogDescription": "Make a new card in one of the project's stages.",
     "inputSchema": {
       "type": "object",
@@ -77,7 +77,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "area_id": {
           "type": "string",
-          "description": "optional Area id (ULID) to file the work item under. Omit (or pass null) for Uncaptured. See pc_list_areas."
+          "description": "the Area (ULID) this item belongs to — consider this on EVERY create; pc_list_areas has ids + summaries. Omit only when no Area fits (Uncaptured)."
         }
       },
       "required": [
@@ -822,6 +822,33 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "inputSchema": {
       "type": "object",
       "properties": {}
+    }
+  },
+  {
+    "name": "pc_update_area",
+    "family": "work-item",
+    "label": "Update area",
+    "description": "Update an Area's name and/or summary. Areas are the project's mental map — every Area should carry a good plain-language summary of what belongs in it so work items get filed accurately. Write or improve a summary whenever it is missing, vague, or stale; the human is not expected to maintain these by hand. Get ids from pc_list_areas.",
+    "catalogDescription": "Rename an Area or write/improve its plain-language summary.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "area_id": {
+          "type": "string",
+          "description": "Area id (ULID) — see pc_list_areas"
+        },
+        "name": {
+          "type": "string",
+          "description": "optional new name"
+        },
+        "summary": {
+          "type": "string",
+          "description": "optional new plain-language summary — what belongs in this Area, written for filing decisions"
+        }
+      },
+      "required": [
+        "area_id"
+      ]
     }
   },
   {

@@ -6,10 +6,10 @@
 import { useWorkItemsView, type WorkItemsSubTab } from '@/store/work-items-view';
 
 const ORDER: readonly WorkItemsSubTab[] = ['dashboard', 'kanban', 'table'] as const;
-// Slice 010 — the first sub-tab is now "Focus" (Area cards). Internal key stays
-// 'dashboard' for persisted-state compatibility.
+// FD-19 — the first sub-tab is "Areas" (Area cards; was Slice 010's "Focus").
+// Internal key stays 'dashboard' for persisted-state compatibility.
 const LABEL: Record<WorkItemsSubTab, string> = {
-  dashboard: 'Focus',
+  dashboard: 'Areas',
   kanban: 'Kanban',
   table: 'Table',
 };

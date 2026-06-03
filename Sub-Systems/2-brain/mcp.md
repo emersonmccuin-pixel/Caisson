@@ -38,13 +38,13 @@ Orchestrator and modal spawns don't send this signal — they don't use programm
 
 After the handshake, the messenger writes `data/projects/<projectId>/mcp-status.json` (pid, timestamp, tool list) and refreshes it every 2 seconds (`server.ts:73–114`). `GET /api/mcp-status?projectId=<id>` reads that file and reports `{ alive, toolCount, tools }` — `alive` is true only when the file's timestamp is within 8 seconds of now (i.e., four missed heartbeats counts as dead). This is a file-based signal, not a database row.
 
-### 4. The tool families (52 tools total)
+### 4. The tool families (51 tools total)
 
-All 52 tool definitions live in one place: `packages/domain/src/tool-registry.ts:PC_RIG_TOOL_REGISTRY` (line 52). The messenger's tool list (`TOOLS`) and the server's wildcard-expansion catalog (`PC_RIG_TOOL_NAMES`) both derive from this single registry by `.map()`. A build test (Slice-016) asserts they stay in sync — a half-added tool fails the build.
+All 51 tool definitions live in one place: `packages/domain/src/tool-registry.ts:PC_RIG_TOOL_REGISTRY` (line 52). The messenger's tool list (`TOOLS`) and the server's wildcard-expansion catalog (`PC_RIG_TOOL_NAMES`) both derive from this single registry by `.map()`. A build test (Slice-016) asserts they stay in sync — a half-added tool fails the build.
 
 | Family | What the tools do | Tool names |
 |---|---|---|
-| **work-item** | Create, read, update, move, resolve, and attach things to cards | `pc_create_work_item`, `pc_create_agent_work_item`, `pc_resolve_work_item`, `pc_log_bug`, `pc_move_work_item`, `pc_update_work_item`, `pc_get_work_item`, `pc_list_work_items`, `pc_list_areas`, `pc_attach_to_work_item` |
+| **work-item** | Create, read, update, move, resolve, and attach things to cards | `pc_create_work_item`, `pc_create_agent_work_item`, `pc_resolve_work_item`, `pc_log_bug`, `pc_move_work_item`, `pc_update_work_item`, `pc_get_work_item`, `pc_list_work_items`, `pc_list_areas`, `pc_update_area`, `pc_attach_to_work_item` |
 | **agent** | Create, edit, delete, and read agents/pods; manage their knowledge docs, secrets, and extra tool servers | `pc_create_agent`, `pc_get_agent`, `pc_update_agent`, `pc_delete_agent`, `pc_list_agents`, `pc_create_knowledge`, `pc_update_knowledge`, `pc_delete_knowledge`, `pc_knowledge_read`, `pc_create_agent_secret`, `pc_delete_agent_secret`, `pc_add_agent_mcp_server`, `pc_delete_agent_mcp_server`, `pc_list_agent_audit` |
 | **agent-run** | Dispatch agents, continue them, pause-and-ask, inspect/kill runs, submit finished work | `pc_invoke_agent`, `pc_continue_agent`, `pc_list_my_runs`, `pc_inspect_agent_run`, `pc_kill_agent_run`, `pc_ask_orchestrator`, `pc_ask_user`, `pc_request_approval`, `pc_answer_pending`, `pc_submit_deliverable` |
 | **workflow** | Author and control workflows | `pc_save_workflow_draft`, `pc_read_workflow_draft`, `pc_publish_workflow`, `pc_list_workflows`, `pc_fire_workflow`, `pc_complete_node`, `pc_node_failed`, `pc_create_workflow`, `pc_update_workflow`, `pc_delete_workflow`, `pc_get_workflow` |

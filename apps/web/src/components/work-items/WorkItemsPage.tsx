@@ -15,7 +15,7 @@ import type { WorkItem } from '@/features/work-items/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useWorkItemsView, type WorkItemsSubTab } from '@/store/work-items-view';
 import { KanbanBoard } from '../KanbanBoard';
-import { FocusTab } from './FocusTab';
+import { AreasTab } from './AreasTab';
 import { InitiativeInspector } from './InitiativeInspector';
 import { WorkItemsSubTabs } from './WorkItemsSubTabs';
 import { WorkItemsTable } from './WorkItemsTable';
@@ -79,7 +79,7 @@ export function WorkItemsPage({ project, events }: WorkItemsPageProps) {
             onOpenInspector={(item) => openInspector(item, 'table')}
           />
         ) : (
-          <FocusTab project={project} events={events} />
+          <AreasTab project={project} events={events} />
         )}
       </div>
     </div>
@@ -89,7 +89,7 @@ export function WorkItemsPage({ project, events }: WorkItemsPageProps) {
 function labelForSubTab(t: WorkItemsSubTab): string {
   switch (t) {
     case 'dashboard':
-      return 'Focus';
+      return 'Areas';
     case 'kanban':
       return 'Kanban';
     case 'table':

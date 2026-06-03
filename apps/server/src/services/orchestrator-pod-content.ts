@@ -350,6 +350,8 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_list_workflows',
     'mcp__pc-rig__pc_list_field_schemas',
     'mcp__pc-rig__pc_list_areas',
+    // FD-19 — the orchestrator maintains Area summaries itself.
+    'mcp__pc-rig__pc_update_area',
   ],
   model: 'opus',
   effort: null,

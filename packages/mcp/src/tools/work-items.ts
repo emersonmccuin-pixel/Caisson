@@ -461,6 +461,66 @@ export async function handleWorkItemTool(
       }
     }
 
+    case 'pc_update_area': {
+      // FD-19 — the orchestrator maintains Area names/summaries itself. The
+      // PATCH route needs the current version (optimistic concurrency), so
+      // read the live row first and send its version as expectedVersion.
+      const areaId = typeof args.area_id === 'string' ? args.area_id.trim() : '';
+      if (!areaId) {
+        return {
+          content: [{ type: 'text', text: 'pc_update_area: area_id required' }],
+          isError: true,
+        };
+      }
+      const name = typeof args.name === 'string' ? args.name.trim() : undefined;
+      const summary = typeof args.summary === 'string' ? args.summary : undefined;
+      if (name === undefined && summary === undefined) {
+        return {
+          content: [
+            { type: 'text', text: 'pc_update_area: at least one of name or summary required' },
+          ],
+          isError: true,
+        };
+      }
+      try {
+        const list = await ctx.client.listAreas(ctx.projectPath('areas'));
+        if (!list.parsed.ok) {
+          return {
+            content: [
+              { type: 'text', text: `pc_update_area failed (${list.status}): ${list.body}` },
+            ],
+            isError: true,
+          };
+        }
+        const area = list.parsed.value.find((a) => a.id === areaId);
+        if (!area) {
+          return {
+            content: [
+              { type: 'text', text: `pc_update_area: unknown area ${areaId} — see pc_list_areas` },
+            ],
+            isError: true,
+          };
+        }
+        const res = await ctx.patchServer(ctx.projectPath(`areas/${areaId}`), {
+          expectedVersion: area.version,
+          ...(name !== undefined ? { name } : {}),
+          ...(summary !== undefined ? { summary } : {}),
+        });
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `pc_update_area failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_update_area failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
     case 'pc_attach_to_work_item': {
       const ref = typeof args.workItemId === 'string' ? args.workItemId : '';
       const nameArg = typeof args.name === 'string' ? args.name : '';

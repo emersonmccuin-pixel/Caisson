@@ -117,6 +117,76 @@ test('pc_list_areas success: emits raw body (no hint)', async () => {
   assert.equal(calls[0].path, '/api/projects/P01/areas');
 });
 
+// FD-19 — pc_update_area: list-for-version then PATCH with expectedVersion.
+const AREA_ROW = {
+  id: 'A1',
+  projectId: 'P01',
+  name: 'Old name',
+  summary: 'old summary',
+  sortOrder: 0,
+  version: 3,
+  createdAt: 1,
+  updatedAt: 1,
+  deletedAt: null,
+};
+
+test('pc_update_area success: reads areas for version, PATCHes with expectedVersion', async () => {
+  const patchBody = JSON.stringify({ ok: true, area: { ...AREA_ROW, summary: 'new' } });
+  const { ctx, calls } = makeFakeContext({
+    responder: (method) =>
+      method === 'GET' ? ok({ areas: [AREA_ROW] }) : ok(patchBody),
+  });
+  const res = await handleWorkItemTool('pc_update_area', { area_id: 'A1', summary: 'new' }, ctx);
+  assert.equal(firstText(res), patchBody);
+  assert.equal(res!.isError, undefined);
+  assert.deepEqual(calls, [
+    { method: 'GET', path: '/api/projects/P01/areas' },
+    {
+      method: 'PATCH',
+      path: '/api/projects/P01/areas/A1',
+      body: { expectedVersion: 3, summary: 'new' },
+    },
+  ] as RecordedCall[]);
+});
+
+test('pc_update_area: name is trimmed and sent alongside summary', async () => {
+  const { ctx, calls } = makeFakeContext({
+    responder: (method) => (method === 'GET' ? ok({ areas: [AREA_ROW] }) : ok('{"ok":true}')),
+  });
+  await handleWorkItemTool('pc_update_area', { area_id: 'A1', name: '  New  ', summary: 's' }, ctx);
+  assert.deepEqual(calls[1].body, { expectedVersion: 3, name: 'New', summary: 's' });
+});
+
+test('pc_update_area unknown area: exact error, no PATCH issued', async () => {
+  const { ctx, calls } = makeFakeContext({
+    responder: () => ok({ areas: [AREA_ROW] }),
+  });
+  const res = await handleWorkItemTool('pc_update_area', { area_id: 'NOPE', name: 'x' }, ctx);
+  assert.equal(firstText(res), 'pc_update_area: unknown area NOPE — see pc_list_areas');
+  assert.equal(res!.isError, true);
+  assert.equal(calls.length, 1); // GET only
+});
+
+test('pc_update_area missing args: exact validation strings', async () => {
+  const { ctx } = makeFakeContext({ responder: () => ok('{}') });
+  const noId = await handleWorkItemTool('pc_update_area', { name: 'x' }, ctx);
+  assert.equal(firstText(noId), 'pc_update_area: area_id required');
+  assert.equal(noId!.isError, true);
+  const noFields = await handleWorkItemTool('pc_update_area', { area_id: 'A1' }, ctx);
+  assert.equal(firstText(noFields), 'pc_update_area: at least one of name or summary required');
+  assert.equal(noFields!.isError, true);
+});
+
+test('pc_update_area PATCH failure: exact failure string + isError', async () => {
+  const { ctx } = makeFakeContext({
+    responder: (method) =>
+      method === 'GET' ? ok({ areas: [AREA_ROW] }) : err(409, 'version conflict'),
+  });
+  const res = await handleWorkItemTool('pc_update_area', { area_id: 'A1', summary: 's' }, ctx);
+  assert.equal(firstText(res), 'pc_update_area failed (409): version conflict');
+  assert.equal(res!.isError, true);
+});
+
 test('pc_move_work_item success: emits raw body; posts move with resolved id', async () => {
   const serverBody = JSON.stringify({ ok: true });
   const { ctx, calls } = makeFakeContext({
