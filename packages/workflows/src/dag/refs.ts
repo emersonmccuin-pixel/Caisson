@@ -18,6 +18,34 @@ export type RefResolver = (nodeId: string, field: string | undefined) => string;
  *  hyphens (slugs); field is a plain identifier. */
 const REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g;
 
+/** Matches a `{{name}}` input placeholder — consumes a value from the node's
+ *  declared `input:` map. `name` is a plain identifier; surrounding whitespace
+ *  inside the braces is tolerated. */
+const INPUT_PLACEHOLDER_PATTERN = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+
+/** Every distinct `{{name}}` placeholder in a template (one entry per match,
+ *  duplicates preserved). Used by the save-time validator to require that each
+ *  placeholder binds to a declared `input:` key. */
+export function extractInputPlaceholders(template: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp(INPUT_PLACEHOLDER_PATTERN.source, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(template)) !== null) out.push(m[1]!);
+  return out;
+}
+
+/** Replace every `{{name}}` placeholder with the resolved input value for that
+ *  name (the node's `input:` map, already ref-resolved by the caller). An
+ *  unbound placeholder resolves to '' — the validator rejects those at save, so
+ *  this only fires for a runnable workflow. The replacer form avoids `$`-mangling
+ *  when a resolved value itself contains `$`. */
+export function substituteInputs(
+  template: string,
+  inputs: Record<string, string>,
+): string {
+  return template.replace(INPUT_PLACEHOLDER_PATTERN, (_m, name: string) => inputs[name] ?? '');
+}
+
 /** POSIX single-quote escape: wrap in '…' and replace ' with '\''. */
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;

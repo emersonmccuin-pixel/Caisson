@@ -7,7 +7,13 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ExpectedOutput, Project, ULID, WorkflowV2 } from '@pc/domain';
-import { substituteRefs, type RefResolver, type ReviewDecision, type RunStatus } from '@pc/workflows';
+import {
+  substituteRefs,
+  substituteInputs,
+  type RefResolver,
+  type ReviewDecision,
+  type RunStatus,
+} from '@pc/workflows';
 import {
   getWorkItem,
   moveWorkItemStage,
@@ -122,6 +128,24 @@ function render(template: string, ctx: DagNodeContext, escapedForBash = false): 
   return withRefs.replace(/\$carry\.([a-zA-Z_][a-zA-Z0-9_]*)/g, (_m, key: string) => ctx.carry[key] ?? '');
 }
 
+/** Render a node body (task / prompt) with its DECLARED input ports wired in:
+ *  resolve each `input:` value (a `$ref`/literal → the upstream deliverable),
+ *  then substitute the node's `{{name}}` placeholders. The body's own inline
+ *  `$node.output` / `$carry.*` refs are still rendered (back-compat), but the
+ *  input map is the declared, save-validated wiring — the "specific place an
+ *  output feeds the next node's input". */
+function renderBody(
+  template: string,
+  input: Record<string, string> | undefined,
+  ctx: DagNodeContext,
+): string {
+  const resolvedInputs: Record<string, string> = {};
+  for (const [name, expr] of Object.entries(input ?? {})) {
+    resolvedInputs[name] = render(expr, ctx);
+  }
+  return substituteInputs(render(template, ctx), resolvedInputs);
+}
+
 interface RunHandle {
   id: ULID;
   workItemId: ULID | null;
@@ -160,18 +184,16 @@ export function makeExecutorDeps(
       const wiId = rec?.workItemId;
       if (!wiId) return '';
 
-      // `$nodeId.output` = the agent's PRODUCED DELIVERABLE (submitted via
-      // pc_submit_deliverable, stored on the linked contract) — NOT the child WI
-      // body, which holds the TASK the agent was given. Downstream steps consume
-      // the result, not the instructions. Fall back to the WI body/fields only
-      // when no deliverable was captured (a node that produced none).
+      // `$nodeId.output` = the agent's PRODUCED DELIVERABLE — the ONE output
+      // port — submitted via pc_submit_deliverable and stored on the linked
+      // contract. It is NOT the child WI body (that holds the TASK the agent was
+      // given). There is deliberately NO fallback to the body: a step that
+      // produced no deliverable fails the completion gate (→ its run fails → the
+      // downstream consumer is skipped), so a missing deliverable can never leak
+      // the task text into a downstream input.
       const contract = contractService.listByWorkItem(wiId as ULID).slice(-1)[0] ?? null;
       if (!field) {
-        const text = contract
-          ? contractDeliverableText(contract.deliverable, contract.report)
-          : '';
-        if (text) return text;
-        return getWorkItem(wiId as ULID)?.body ?? '';
+        return contract ? contractDeliverableText(contract.deliverable, contract.report) : '';
       }
       // Field form: a structured `payload` deliverable's data field wins; else
       // the child WI's stored field (legacy).
@@ -192,7 +214,7 @@ export function makeExecutorDeps(
     node: WorkflowV2.AgentNode,
     ctx: DagNodeContext
   ): Promise<NodeOutcome> => {
-    const task = render(node.task, ctx);
+    const task = renderBody(node.task, node.input, ctx);
 
     // Project-scope enforcement: workflow nodes must use project-scoped pods.
     // Global pods must first be cloned into the project (POST
@@ -333,14 +355,15 @@ export function makeExecutorDeps(
 
   const requestReview = async (
     node: WorkflowV2.ReviewNode,
-    _ctx: DagNodeContext,
+    ctx: DagNodeContext,
     bundle: { nodeId: string; output: string }[]
   ): Promise<void> => {
     const flavor = node.reviewer;
     const summary = bundle.map((b) => `### ${b.nodeId}\n${b.output}`).join('\n\n');
+    const prompt = node.prompt ? renderBody(node.prompt, node.input, ctx) : 'Please review the work below.';
     const body =
       `[pc:workflow-review run=${run.id} node=${node.id} flavor=${flavor}]\n` +
-      `${node.prompt ?? 'Please review the work below.'}\n\n${summary}\n\n` +
+      `${prompt}\n\n${summary}\n\n` +
       `Approve: pc_complete_node-equivalent (v2 review endpoint) · Reject sends it back.`;
     if (node.reviewer === 'orchestrator') {
       // 017 Phase C — the review prompt is enqueued as a durable mailbox message

@@ -10,7 +10,7 @@
 import type { WorkflowV2 } from '@pc/domain';
 import { computeUpstreams, findForwardCycle } from './topo.ts';
 import { evaluateCondition } from './when.ts';
-import { extractRefs, type RefResolver } from './refs.ts';
+import { extractRefs, extractInputPlaceholders, type RefResolver } from './refs.ts';
 
 export interface ValidationResult {
   ok: boolean;
@@ -80,6 +80,20 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
       errors.push(`agent node "${id}": missing "task"`);
     if (kind === 'review' && !REVIEWERS.has(n.reviewer as string))
       errors.push(`review node "${id}": reviewer must be "human" or "orchestrator"`);
+
+    // input map shape — an object of identifier → string (a `$ref` or literal).
+    if (n.input !== undefined) {
+      if (typeof n.input !== 'object' || n.input === null || Array.isArray(n.input)) {
+        errors.push(`node "${id}": input must be a map of name → ref`);
+      } else {
+        for (const [k, v] of Object.entries(n.input as Record<string, unknown>)) {
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k))
+            errors.push(`node "${id}": input key "${k}" must be a plain identifier`);
+          if (typeof v !== 'string')
+            errors.push(`node "${id}": input "${k}" must be a string ref or literal`);
+        }
+      }
+    }
   }
 
   // ── ref integrity ──
@@ -129,8 +143,16 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
     for (const n of nodes) {
       const id = typeof n.id === 'string' ? n.id : '';
       if (!id) continue;
-      // The substitutable text bodies a step renders refs from.
-      const bodies = [n.task, n.prompt].filter(
+      // The substitutable text bodies a step renders refs from — its task /
+      // prompt AND every value in its declared `input:` map (each value is a
+      // `$ref` bound to an upstream port, subject to the same ordering rule).
+      const inputVals =
+        n.input && typeof n.input === 'object' && !Array.isArray(n.input)
+          ? Object.values(n.input as Record<string, unknown>).filter(
+              (v): v is string => typeof v === 'string',
+            )
+          : [];
+      const bodies = [n.task, n.prompt, ...inputVals].filter(
         (v): v is string => typeof v === 'string',
       );
       if (bodies.length === 0) continue;
@@ -160,6 +182,28 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
               `node "${id}": reads $${ref.nodeId}.output${fieldSuffix} but "${ref.nodeId}" is not an upstream step — a ref must point at a strictly-earlier step`,
             );
           }
+        }
+      }
+    }
+  }
+
+  // ── input placeholders ({{name}}) must bind to a declared input key ──
+  // "Saved ⇒ runnable": a task/prompt that consumes `{{x}}` must declare `x`
+  // under `input:`, so the wiring is always resolvable (no silent empty value).
+  for (const n of nodes) {
+    const id = typeof n.id === 'string' ? n.id : '?';
+    const inputKeys = new Set(
+      n.input && typeof n.input === 'object' && !Array.isArray(n.input)
+        ? Object.keys(n.input as Record<string, unknown>)
+        : [],
+    );
+    const seen = new Set<string>();
+    for (const body of [n.task, n.prompt].filter((v): v is string => typeof v === 'string')) {
+      for (const name of extractInputPlaceholders(body)) {
+        if (seen.has(name)) continue;
+        seen.add(name);
+        if (!inputKeys.has(name)) {
+          errors.push(`node "${id}": {{${name}}} has no matching input — declare it under input:`);
         }
       }
     }

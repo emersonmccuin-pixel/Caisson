@@ -24,6 +24,8 @@ export {
   selectStageEntryWorkflows,
   type StageMove,
   substituteRefs,
+  substituteInputs,
+  extractInputPlaceholders,
   shellQuote,
   type RefResolver,
   initDagState,

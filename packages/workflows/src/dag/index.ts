@@ -10,7 +10,13 @@ export {
   selectStageEntryWorkflows,
   type StageMove,
 } from './triggers.ts';
-export { substituteRefs, shellQuote, type RefResolver } from './refs.ts';
+export {
+  substituteRefs,
+  substituteInputs,
+  extractInputPlaceholders,
+  shellQuote,
+  type RefResolver,
+} from './refs.ts';
 export {
   initDagState,
   selectReady,

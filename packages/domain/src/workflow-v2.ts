@@ -130,6 +130,15 @@ export interface RejectEdge {
 /** Fields common to every node. */
 export interface WorkflowNodeBase {
   id: string;
+  /** Declared input ports. Each entry binds a named input to a specific upstream
+   *  output via a `$nodeId.output[.field]` / `$root.output[.field]` ref (a plain
+   *  string with no `$` is a literal). The bound value is rendered into the
+   *  node's `task`/`prompt` wherever `{{name}}` appears — so the wiring from one
+   *  step's output to the next step's input is DECLARED + validated at save
+   *  ("Saved ⇒ runnable": every ref must point at a strictly-earlier step, and
+   *  every `{{name}}` placeholder must match a key here), not buried in prose.
+   *  The upstream output is its CONTRACT DELIVERABLE (the one output slot). */
+  input?: Record<string, string>;
   /** Forward edges — downstream node ids. Absent/empty = terminal node.
    *  For review nodes this is the on-approve path. */
   next?: string[];
