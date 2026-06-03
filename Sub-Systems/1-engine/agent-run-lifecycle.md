@@ -5,7 +5,7 @@
 > **Code anchors:**
 > `packages/runtime/src/agent-run.ts` · `agent-run-registry.ts`
 > `apps/server/src/services/agent-run-factory.ts` · `agent-active-runs.ts` · `agent-run-terminal-effects.ts`
-> `agent-host-reattach.ts` · `agent-run-boot-reconcile.ts` · `agent-run-server-boot.ts`
+> `agent-run-reconciler.ts` · `agent-host-reattach.ts` (☠ Step 2 2026-06-03: `agent-run-boot-reconcile.ts` + `agent-run-server-boot.ts` deleted — boot is the loop's first tick)
 > `agent-run-liveness-sweep.ts` · `agent-run-idle.ts` · `agent-run-settle.ts`
 > `agent-run-stall-warn.ts` · `agent-run-control.ts` · `agent-run-writer.ts`
 > `host-connection.ts` · `agent-host-client.ts` · `process-control.ts`
@@ -112,26 +112,34 @@ All fire through `toTerminal()` with their typed cause. These are correct and su
 
 The **spawn-exit handler** (`onSpawnExit`, agent-run.ts:555) is the sibling to these timers: if the process exits without the run being terminal (and not cancelling/paused), it fires `toTerminal('failed', 'unexpected-exit')`.
 
-### 8. Boot reconcile — what happens when the server restarts mid-run
+### 8. THE one reconciler — `agent-run-reconciler.ts` (Step 2 ✅ 2026-06-03)
 
-When the server starts, `reattachAgentRunsDuringServerBoot` (`agent-run-server-boot.ts:35`) runs once and sweeps all non-terminal DB rows to decide their fate:
+`createAgentRunReconciler` owns every "what state is this run actually in?" answer. **Boot is the
+loop's first tick** — no boot-only code path exists (☠ `agent-run-boot-reconcile.ts` +
+`agent-run-server-boot.ts` deleted; the DB bulk-fail helpers that killed paused rows deleted with
+them). Per tick (15 s, the ONLY liveness interval — guard-tested):
 
-- **Host mode** (production): asks the agent host which runs are still live. Runs the host still has → re-attach them (bypass the queue). Runs the host reports as terminal → apply terminal effects. Runs missing from the host → mark `host-lost` after confirmation. Paused runs with an open question are left paused.
-- **Legacy mode** (no host client — dead in production, still reached by some tests): bulk-fails ALL non-terminal rows, including paused ones. ⚠️ This is a correctness gap: paused runs with a valid open question shouldn't be failed. The Step-2 one-loop merge will close it.
+- **Host mode** (production): refresh the host's run list, then re-derive every non-terminal DB
+  row. Terminal snapshot → the one authority. Status drift → update + announce. Host-owned run
+  with no registry entry → register a live handle (self-healing reattach, any tick — not just
+  boot). Missing rows → consecutive-tick counters: `running` fails `host-lost` after 2 ticks,
+  `queued`/`spawning` after 8 (closes the old stuck-forever gap), `paused` **NEVER** (FD-14 law).
+- **HOLD invariant (structural now):** a `refreshRuns()` that throws, or a disconnected host,
+  withholds the absence signal, the counters, AND handle registration — nothing can finalize on
+  no-information, boot included. Verified live 2026-06-03: a dead host held three seeded rows
+  untouched for 5+ minutes; reconnect converged them correctly.
+- **In-process mode** (legacy, P2 deletes): pid-dead → `unexpected-exit`; idle → `idle-timeout`;
+  queued row with no registry entry → `server-restart` after 2 ticks (replaces the bulk-fail);
+  paused never touched.
 
-### 9. Liveness sweep — the ongoing in-process watcher
+Guards in `apps/server/test/agent-run-reconciler.test.ts`: ONE-RECONCILER (deleted path stays
+deleted, index.ts can't import raw sweeps, one interval owner) · HOLD · PAUSED-SURVIVES ·
+queued-orphan. Spawn-threshold + self-heal cases in `agent-host-reattach.test.ts`.
 
-`sweepAgentRunLiveness` (`agent-run-liveness-sweep.ts:65`) runs on an interval (non-host mode). It reads all non-terminal DB rows, checks whether the OS process is alive (pid check) and whether the JSONL file has recent activity (mtime). Finalizes dead runs via `applyAgentRunTerminalEffects`. Merging into the one loop is Step-2 work.
+### 9–10. The sweeps — subroutines of the loop, not processes
 
-### 10. Host-reconcile sweep — the ongoing host-vs-DB checker
-
-`reconcileAgentRunsAgainstHost` (`agent-host-reattach.ts:217`) runs on an interval post-boot (host mode). It asks the host for its current list of live runs and re-derives every non-terminal DB row from that snapshot:
-
-- Host reports a run terminal → apply terminal effects.
-- Host has never heard of a run (after N consecutive missing ticks) → `host-lost`.
-- Run appeared on the host but not in DB → triggers an S3 envelope-replay safety net.
-
-**The key discipline:** if `refreshRuns()` throws (the host was unreachable), the caller must NOT pass the `hostAuthoritativelyAbsent` signal. A failed host call must not trigger `host-lost` finalization — that would kill runs that are fine but temporarily invisible. Today this discipline lives entirely in the caller (`index.ts`), not structurally in the loop. Step 2 will bake it as a structural HOLD invariant.
+`sweepAgentRunLiveness` and `reconcileAgentRunsAgainstHost` still exist as functions but are
+callable ONLY from the reconciler (guard-tested). They have no intervals of their own.
 
 ### 11. Stall-warn sweep — the "something looks slow" badge
 
@@ -139,13 +147,20 @@ When the server starts, `reattachAgentRunsDuringServerBoot` (`agent-run-server-b
 
 ### 12. The persistent host event listener — live terminal signals
 
-Wired at boot in `reattachAgentRunsOnBoot` (`agent-host-reattach.ts:165`): a single `hostClient.onEvent(applyAgentHostEvent)` listener handles all host events for all runs. When the host sends a `run-terminal` event, it reaches `applyHostTerminalSnapshot` → `applyAgentRunTerminalEffects` (the one authority). After the Step-1 fix, `applyHostTerminalSnapshot` no longer short-circuits on already-terminal rows — it always falls through to the authority, which handles the idempotent case and still fires the waiter. (`agent-host-reattach.ts:424–426` comment.)
+Subscribed ONCE by the reconciler's `boot()` (rides `HostConnection`'s multiplexed emitter, so it
+survives host respawns): a single `onEvent(applyAgentHostEvent)` listener handles all host events
+for all runs. A `run-terminal` event reaches `applyHostTerminalSnapshot` →
+`applyAgentRunTerminalEffects` (the one authority). After the Step-1 fix, the snapshot apply never
+short-circuits on already-terminal rows — the authority handles the idempotent case and still
+fires the waiter. Events are the **latency** path; the reconciler tick is the **correctness** path
+that converges anything the stream drops.
 
 ### Where the mechanisms overlap (and why that's OK now)
 
-Mechanisms 7 (timers), 8 (boot reconcile), 9 (liveness sweep), 10 (host-reconcile sweep), and 12 (persistent listener) can all independently decide a run is done. Before Step 1, this was a race that produced two different outcomes. Now: all of them route through `applyAgentRunTerminalEffects`, which is idempotent — the first one to fire wins; the rest are no-ops that still safely settle the waiter.
-
-Step 2 removes mechanisms 8, 9, and 10 as separate processes and folds them into one loop with a structural HOLD guard.
+Per-run timers (7), the reconciler tick (8), and the persistent listener (12) can all decide a run
+is done. All routes converge on `applyAgentRunTerminalEffects` — idempotent; first to fire wins,
+the rest are no-ops that still safely settle the waiter. Steps 1 + 2 are DONE: one authority, one
+loop, boot = first tick.
 
 ### 13. State broadcasting — how the UI sees run changes
 

@@ -265,60 +265,11 @@ export function findActiveContinuation(priorRunId: ULID): AgentRunRow | null {
   return row ?? null;
 }
 
-/** Boot-time reconciliation sweep. Any row stuck in a non-terminal status
- *  when the server starts means the prior process died mid-flight. Flip
- *  them to `failed / server-restart` so subsequent queries don't treat
- *  them as live. Returns the count of rows affected. */
-export function reconcileOrphanedRunningRuns(now: number): number {
-  const res = getDb()
-    .update(agentRuns)
-    .set({
-      status: 'failed',
-      failureReason: 'server restarted before this run completed',
-      failureCause: 'server-restart',
-      completedAt: now,
-      rev: REV_INC,
-    })
-    .where(inArray(agentRuns.status, ['queued', 'spawning', 'running', 'paused']))
-    .run();
-  return res.changes;
-}
-
-/** Boot-time reconciliation sweep — announcing variant. Lists non-terminal
- *  rows first, bulk-updates to failed (with rev++), then reads them back so
- *  the caller can broadcast a `agent-run-changed` delta for each. Used by
- *  the boot reconcile path to make `reconcileOrphanedRunningRuns` visible
- *  in the right rail. */
-export function listAndReconcileOrphanedRuns(now: number): AgentRunRow[] {
-  const NON_TERMINAL: AgentRunStatus[] = ['queued', 'spawning', 'running', 'paused'];
-  const rows = getDb()
-    .select()
-    .from(agentRuns)
-    .where(inArray(agentRuns.status, NON_TERMINAL))
-    .all() as AgentRunRow[];
-
-  if (rows.length === 0) return [];
-
-  const ids = rows.map((r) => r.id);
-  getDb()
-    .update(agentRuns)
-    .set({
-      status: 'failed',
-      failureReason: 'server restarted before this run completed',
-      failureCause: 'server-restart',
-      completedAt: now,
-      rev: REV_INC,
-    })
-    .where(inArray(agentRuns.id, ids))
-    .run();
-
-  // Read updated rows back so callers have the correct rev for announcement.
-  return getDb()
-    .select()
-    .from(agentRuns)
-    .where(inArray(agentRuns.id, ids))
-    .all() as AgentRunRow[];
-}
+// Step 2 (2026-06-03) — the boot-time bulk-fail sweeps (`reconcileOrphanedRunningRuns`,
+// `listAndReconcileOrphanedRuns`) are DELETED. They flipped rows terminal with a raw
+// UPDATE — bypassing the one terminal authority — and killed `paused` rows (FD-14
+// violation). The agent-run reconciler loop (apps/server agent-run-reconciler.ts)
+// owns orphan detection now; every finalize routes through applyAgentRunTerminalEffects.
 
 // ── Slice 013 — agent_runs.contract_id link (additive) ───────────────────────
 

@@ -34,7 +34,7 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 
 | Wave | Work | Why this order | FDs |
 |---|---|---|---|
-| P1 | **Step 2 — one reconciler, all states.** Fold boot + sweep + liveness into the Step-1 loop; HOLD on unreachable Engine; paused runs survive boot (kills the legacy bulk-fail path). | Everything later assumes one loop. FD-14's "paused always survives" lands here as law. | FD-14 |
+| P1 ✅ | **Step 2 — one reconciler, all states. DONE 2026-06-03.** `agent-run-reconciler.ts`; boot = first tick; legacy bulk-fail + boot-reconcile path DELETED; HOLD structural; paused-survives = law (guard-tested); live acceptance green. Scope: `step2-reconciler-scope-2026-06-03.md`. | Everything later assumes one loop. FD-14's "paused always survives" lands here as law. | FD-14 |
 | P2 | **In-process fork DELETE** (ledger row 3). | Dead in prod; needs P1 + null-host tests moved to a host fake. | FD-12 (one spawn path) |
 | P3 | **Step 7 — Supervisor** *(in flight now; parallel with P1–P2)*. One spawn→watch→respawn module, dev + packaged. | Independent; fixes packaged-host-never-respawns. | — |
 | P4 | **Step 3 — Engine re-resolution + reattach.** Brain re-finds the Engine after a respawn. | Needs P3 (a respawn to test against). Hard prereq for P6. | — |
@@ -84,8 +84,8 @@ Running now: **P3 Supervisor** (in flight) · **dispatch-payload audit** (backgr
 
 Next up, parallel-safe, in value order:
 
-1. **M1 — FD-3 channel demolition** (pure deletion, big de-risk)
-2. **P1 — Step 2 one reconciler** (the next structural move)
+1. ~~**M1 — FD-3 channel demolition**~~ ✅ shipped 2026-06-03 (14715cc8)
+2. ~~**P1 — Step 2 one reconciler**~~ ✅ shipped 2026-06-03 (live acceptance green)
 3. **S1 — Areas** + **S3 — version pin** (small, user-visible, independent)
 4. **P5 — FD-2 spike** (decides the MCP shape before the orchestrator migrates)
 5. **M2 — write-door guard** (cheap insurance while everything moves)

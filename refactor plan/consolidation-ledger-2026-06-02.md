@@ -104,16 +104,17 @@ live/foundational. The genuinely-dead in-process branch is gated behind a test r
 | boot/reconcile PERSISTENT listener (agent-host-reattach.ts:165) | **✅ routes through one authority** | HIGH | Listener-merge done; loop unification is separate Step 2 work. |
 | `resolveDone`/`onSettled`/`settleDone` → `ActiveRunRegistry` | **✅ MOVED to run-keyed registry** (agent-active-runs.ts) | HIGH | Registered before start (factory.ts:465,635); fires by runId. Fire-exactly-once test green. |
 
-### Reconcilers / sweeps / registries (target: ONE control loop, all states) — **STEP 2**
-| boot reconcile (agent-run-boot-reconcile.ts) | **MERGE→one loop** | HIGH | Becomes "the loop at boot." |
-| reconcile-against-host sweep (agent-host-reattach.ts:222) | **MERGE→one loop** | HIGH | The continuous loop. Fix: never act on unreachable/empty host. |
-| in-process liveness sweep (agent-run-liveness-sweep.ts) | **MERGE→one loop** | HIGH | Mode-agnostic loop subsumes it. |
+### Reconcilers / sweeps / registries (target: ONE control loop, all states) — **STEP 2 ✅ DONE (2026-06-03) — `agent-run-reconciler.ts`, live acceptance green**
+| boot reconcile (agent-run-boot-reconcile.ts) | **✅ DELETED** (+ `agent-run-server-boot.ts` + db bulk-fail fns) | HIGH | Boot IS the loop's first tick. The bulk-fail killed paused rows (FD-14) + bypassed the terminal authority — gone. |
+| reconcile-against-host sweep (agent-host-reattach.ts) | **✅ MERGED — loop subroutine** | HIGH | Only the reconciler may call it (guard). HOLD structural; self-healing handle registration any tick; queued/spawning host-lost after 8 ticks (stuck-forever gap closed); paused NEVER. |
+| in-process liveness sweep (agent-run-liveness-sweep.ts) | **✅ MERGED — loop subroutine** | HIGH | Paused never touched (was: paused-without-ask idle-killed). Queued-orphan → `server-restart` after 2 registry-missing ticks. |
 | per-run timers (agent-run.ts) | **KEEP** | HIGH | Local timeout enforcement feeding typed-failure; not a sweep. |
-| envelope replay (agent-run-terminal-effects.ts:replay…) | **KEEP-as-subroutine** | HIGH | Idempotent notify safety net. |
-| workflow boot reconcile | **CREATE / confirm** | VERIFY(V5) | Sweeps disagree it exists (`reconcileWorkflowRunsOnBoot` referenced from index but unverified). |
+| envelope replay (agent-run-terminal-effects.ts:replay…) | **KEEP-as-subroutine** | HIGH | Idempotent notify safety net; rides every tick. |
+| workflow boot reconcile | **✅ CONFIRMED exists** (index.ts; paused skipped) | HIGH | Fail-closed for running/pending stays until M3/S5 (resumable runs). |
 | `ActiveRunRegistry` (agent-active-runs.ts) | **KEEP** | HIGH | Live-run lookup + the run-keyed waiter's home. |
 | `AgentRunRegistry` cap/queue (runtime) | **KEEP** | HIGH | Concurrency control (the Engine's pool). |
-| host `runs`/`ccSessionIndex` maps · `HostConnection.lastRuns` · `hostMissingTicks` | **KEEP-as-projection** | HIGH | Caches of the DB truth; not authoritative. |
+| host `runs`/`ccSessionIndex` maps · `HostConnection.lastRuns` · loop-owned tick counters | **KEEP-as-projection** | HIGH | Caches of the DB truth; not authoritative. |
+| **Guards** | ONE-RECONCILER · HOLD · PAUSED-SURVIVES · queued-orphan (`agent-run-reconciler.test.ts`) + spawn-threshold/self-heal (`agent-host-reattach.test.ts`) | — | Live acceptance 2026-06-03: restart mid-run → reattach+complete · paused gates survive restart · dead-host HOLD 5min → reconnect converges · spawning ghost → host-lost ≈2min. |
 
 ### Notification / delivery (target: one door each)
 | dispatch `done` promise | **KEEP** (awaited-caller door) | HIGH | Resolved via the run-keyed waiter. |
@@ -186,7 +187,7 @@ Each row independently shippable. Risky moves after prereqs. `✅` = code alread
 | # | Concern | Action | Prereq | Guard | Risk |
 |---|---------|--------|--------|-------|------|
 | 1 | Step 1 close-out | ✅ code done; add guards + close rows | — | ONE-TERMINAL-AUTHORITY | low |
-| 2 | Step 2 one reconciler | fold boot+host+liveness sweeps into one mode-agnostic loop; HOLD on unreachable host | 1 | ONE-RECONCILER (one setInterval; HOLD test) | med |
+| 2 | Step 2 one reconciler | **✅ DONE 2026-06-03** — `agent-run-reconciler.ts`; boot = first tick; old path deleted; live acceptance green (scope: `step2-reconciler-scope-2026-06-03.md`) | 1 | ONE-RECONCILER + HOLD + PAUSED-SURVIVES ✅ | med |
 | 3 | in-process fork DELETE | cut `constructAndStart` else-branch (dead in prod) | 2 + move null-host tests to host-fake | ONE-SPAWN-OWNER (partial) | low |
 | 4 | **Step 7 Supervisor** ◀ NEAR-TERM | one spawn→watch→respawn module, dev + packaged; fix packaged respawn | — (parallel w/ 2) | ONE-SUPERVISOR | med |
 | 5 | Step 3 Engine re-resolution | Brain re-finds Engine after respawn | 4 (need a respawn to test) | RECONNECT | med |

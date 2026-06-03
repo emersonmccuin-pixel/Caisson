@@ -97,10 +97,7 @@ import { cleanupLegacyProjectRuntimeFiles } from './services/legacy-runtime-clea
 import { resetStockPodToDefault } from './services/stock-pod-reset.ts';
 import { detectStockPodDrift, listCanonicalStockPodNames } from './services/pod-drift.ts';
 import { seedStockPods } from './services/stock-pod-seed.ts';
-import { reattachAgentRunsDuringServerBoot } from './services/agent-run-server-boot.ts';
-import { reconcileAgentRunsAgainstHost } from './services/agent-host-reattach.ts';
-import { sweepAgentRunLiveness } from './services/agent-run-liveness-sweep.ts';
-import { sweepStallWarn } from './services/agent-run-stall-warn.ts';
+import { createAgentRunReconciler } from './services/agent-run-reconciler.ts';
 import { getActiveRunRegistry } from './services/agent-active-runs.ts';
 import { writeRunStatus } from './services/workflow-run-writer.ts';
 
@@ -258,13 +255,6 @@ const projectScaffold = new ProjectScaffold({
   serverPort: PORT,
 });
 
-// T1.2 — host-mode discriminator. After D1, boot reattach runs on `hostConnection`
-// and `result.mode === 'host'` is the authoritative host-mode signal that gates
-// the reconcile + liveness sweeps (one reconciler owns non-terminal rows). NOT
-// `hostConnection.isConnected()` — the always-on host may be mid-respawn
-// (disconnected) while still in host-mode.
-let hostMode = false;
-
 // T1.1 — the one long-lived HostConnection for the DISPATCH path. Lock-file is
 // the sole source of host identity; `sendCommand` re-discovers + reconnects on a
 // dead baseUrl, so a host respawn on a new port is picked up with NO API restart
@@ -408,60 +398,25 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
   return mailboxService.enqueue(input);
 }
 
-// Boot-time agent-run reconciliation. T1.2 (D1) — boot reattach now consumes the
-// ONE `hostConnection`: refresh its run cache FIRST (it connects lazily + the
-// sync reattach enumeration reads `listRuns()`), then pass `getHostClient: () =>
-// hostConnection` so reattach's persistent `onEvent` rides the shared multiplexed
-// emitter (truly one stream). `mode === 'host'` is the host-mode discriminator.
-{
-  try {
-    // S1 — refreshRuns() on an unreachable host returns an EMPTY cache (the
-    // throw is swallowed inside ensureConnected), so a boot reattach against
-    // that empty list would mark every live run host-lost. Only reconcile when
-    // the host was actually reached this boot; otherwise stay host-mode and let
-    // the continuous sweep (which has the hostAuthoritativelyAbsent +
-    // consecutive-tick guard) converge safely.
-    let refreshOk = true;
-    await hostConnection.refreshRuns().catch(() => {
-      refreshOk = false;
-    });
-    const hostReached = refreshOk && hostConnection.isConnected();
-    const result = hostReached
-      ? await reattachAgentRunsDuringServerBoot({
-          getHostClient: () => hostConnection,
-          broadcast: broadcastTo,
-          mailboxEnqueue: enqueueMailboxAndFanout,
-        })
-      : null;
-    if (!result) {
-      // Host expected but not reachable this boot — skip the destructive
-      // reconcile. The sweep converges once the host comes back; dispatch
-      // self-heals on reconnect. The UI surfaces it via the host-health banner.
-      hostMode = true;
-      console.warn(
-        '[agent-host] boot: host not reachable; skipped boot reconcile (sweep will converge), dispatch will retry on reconnect',
-      );
-    } else if (result.mode === 'host') {
-      hostMode = true;
-      const reattach = result.reattach;
-      const changed =
-        reattach.reconcile.reconciled +
-        reattach.registered +
-        reattach.backfilledEvents +
-        reattach.terminalReplayed;
-      if (changed > 0) {
-        console.log(
-          `[agent-runs] host boot reattach: registered=${reattach.registered}, backfilled=${reattach.backfilledEvents}, terminal=${reattach.terminalReplayed}, reconciled=${reattach.reconcile.reconciled}`,
-        );
-      }
-    } else if (result.reconcile.reconciled > 0) {
-      console.log(
-        `[agent-runs] reconciled ${result.reconcile.reconciled} agent run row(s) on boot (${result.reconcile.mode})`,
-      );
-    }
-  } catch (err) {
-    console.error('[agent-runs] boot reattach failed:', (err as Error).message);
-  }
+// Step 2 — THE one agent-run reconciler (north-star §5: one loop, all states;
+// boot is the same loop). Boot = the first tick: registers host-backed handles
+// (self-healing on ANY tick after a held boot), backfills JSONL, applies
+// terminal snapshots through the ONE terminal authority, and subscribes the ONE
+// persistent host event stream (rides `hostConnection`'s multiplexed emitter).
+// An unreachable host at boot ⇒ HOLD — never finalize on no-information; the
+// loop converges when the host returns. Paused runs are NEVER finalized by the
+// loop, any mode, boot included (FD-14 law).
+const agentRunReconciler = createAgentRunReconciler({
+  mode: 'host',
+  host: hostConnection,
+  activeRunRegistry: getActiveRunRegistry(),
+  broadcast: broadcastTo,
+  mailboxEnqueue: enqueueMailboxAndFanout,
+});
+try {
+  await agentRunReconciler.boot();
+} catch (err) {
+  console.error('[agent-runs] boot reconcile failed:', (err as Error).message);
 }
 
 // Slice 017 Fix 4 — workflow-run boot reconciliation (slice 004 was imported
@@ -494,98 +449,10 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
   }
 }
 
-// T2.2 — ONE mode-agnostic agent-run watchdog (folds the prior reconcile +
-// liveness sweeps). State-propagation Step 1 (docs/state-propagation-decision.md):
-// events = latency, reconcile = correctness. Per tick, in order:
-//   1. host-mode: refresh host snapshots through the ONE self-healing
-//      `hostConnection` (picks up a respawned host on a new port, no API
-//      restart) + reconcile non-terminal rows — a terminal transition the live
-//      stream dropped still converges here (full effects: DB flip + orchestrator
-//      notify + rail broadcast). T1.4: a non-terminal row absent from the host
-//      for >= PC_HOST_LOST_TICKS consecutive ticks (and the connection
-//      authoritatively unreachable this tick) is finalized terminal `host-lost`,
-//      so a dead host no longer leaves runs stuck "running" forever.
-//   2. in-process mode: liveness kill — pid-dead → `unexpected-exit`; idle past
-//      KILL_MS → kill + `idle-timeout`. Runs BEFORE stall-warn so a just-killed
-//      row is already terminal and skipped below.
-//   3. BOTH modes: stall-warn — a run quiet past WARN_MS gets a visible,
-//      non-terminal `stalled` badge (the intermediate state). Stall-warn stays
-//      the intermediate signal in both modes; T1.4 adds the host-mode TERMINAL
-//      path above (host-mode is no longer warn-only).
-const AGENT_RUN_WATCHDOG_MS = 15_000;
-const watchdogStalledRuns = new Set<string>();
-// T1.4 — consecutive ticks each host-mode run has been missing from the host's
-// list-runs. Owned here (persists across sweeps); reconcile resets it when a row
-// reappears or finalizes. The threshold is the false-positive guard.
-const hostMissingTicks = new Map<string, number>();
-const HOST_LOST_TICKS = (() => {
-  const raw = Number(process.env.PC_HOST_LOST_TICKS);
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 2;
-})();
-const agentRunWatchdogSweep = setInterval(() => {
-  void (async () => {
-    try {
-      if (hostMode) {
-        // T1.4 — only run the host-lost finalize when refreshRuns COMPLETED. A
-        // thrown refresh is the transient case: skip the finalize AND do not
-        // increment counters.
-        let refreshed = true;
-        try {
-          await hostConnection.refreshRuns();
-        } catch {
-          refreshed = false;
-        }
-        const res = reconcileAgentRunsAgainstHost({
-          hostClient: hostConnection,
-          activeRunRegistry: getActiveRunRegistry(),
-          broadcast: broadcastTo,
-          mailboxEnqueue: enqueueMailboxAndFanout,
-          // hasOpenPendingAskForRun defaults to the real @pc/db repo inside the
-          // reconcile (the paused-with-open-ask guard) — no need to thread it.
-          // Authoritative absence = we are CONNECTED to a host whose fresh
-          // list-runs we just refreshed (so `listRuns()` is the live inner list,
-          // not the stale `lastRuns` cache that disconnected returns) AND the run
-          // is absent from it. After a dev-supervisor respawn the new host has no
-          // memory of pre-respawn runs, so a still-`running` row missing from its
-          // list for HOST_LOST_TICKS ticks is genuinely lost. The reconcile gates
-          // finalize on `status==='running'`, so a slow-spawning/queued run that
-          // legitimately isn't listed yet is never false-killed.
-          hostAuthoritativelyAbsent: refreshed && hostConnection.isConnected(),
-          missingFromHostTicks: refreshed ? hostMissingTicks : undefined,
-          hostLostAfterTicks: HOST_LOST_TICKS,
-        });
-        if (res.terminalApplied > 0 || res.statusUpdated > 0 || res.hostLost > 0) {
-          console.log(
-            `[agent-runs] reconcile: terminal=${res.terminalApplied}, status=${res.statusUpdated}, hostLost=${res.hostLost}, checked=${res.checked}`,
-          );
-        }
-      } else {
-        const res = sweepAgentRunLiveness({
-          activeRunRegistry: getActiveRunRegistry(),
-          broadcast: broadcastTo,
-          mailboxEnqueue: enqueueMailboxAndFanout,
-        });
-        if (res.failedDead > 0 || res.failedIdle > 0) {
-          console.log(
-            `[agent-runs] liveness: dead=${res.failedDead}, idle=${res.failedIdle}, killed=${res.killed}, checked=${res.checked}`,
-          );
-        }
-      }
-
-      const warn = sweepStallWarn({
-        stalledRuns: watchdogStalledRuns,
-        broadcast: broadcastTo,
-      });
-      if (warn.warned > 0 || warn.cleared > 0) {
-        console.log(`[agent-runs] stall-warn: warned=${warn.warned}, cleared=${warn.cleared}`);
-      }
-    } catch (err) {
-      console.warn('[agent-runs] watchdog sweep failed:', (err as Error).message);
-    }
-  })();
-}, AGENT_RUN_WATCHDOG_MS);
-// Don't let the sweep timer keep the process alive on shutdown.
-if (typeof agentRunWatchdogSweep.unref === 'function') agentRunWatchdogSweep.unref();
+// Step 2 — start THE loop (the same tick boot just ran; the only liveness
+// interval in the codebase — ONE-RECONCILER guard). Events = latency,
+// reconcile = correctness: anything the live stream drops converges here.
+agentRunReconciler.start();
 
 const app = new Hono();
 
@@ -1170,7 +1037,7 @@ const wss = registerRuntimeHostWebSocketServer<ReturnType<ProjectRuntime['ensure
 });
 
 function gracefulShutdown(): void {
-  clearInterval(agentRunWatchdogSweep);
+  agentRunReconciler.stop();
   clearInterval(mailboxWorkerSweep);
   clearInterval(liveRelayDrainSweep);
   clearInterval(liveOutboxPruneSweep);

@@ -8,7 +8,6 @@ import type { AgentRunChangedReason } from '@pc/contracts';
 import {
   getAgentRunRow as defaultGetAgentRunRow,
   getProjectById as defaultGetProjectById,
-  hasOpenPendingAskForRun as defaultHasOpenPendingAskForRun,
   listNonTerminalAgentRuns as defaultListNonTerminalAgentRuns,
   markAgentRunTerminal as defaultMarkAgentRunTerminal,
   updateAgentRunStatus as defaultUpdateAgentRunStatus,
@@ -21,16 +20,10 @@ import {
 } from '@pc/runtime';
 
 import {
-  getActiveRunRegistry,
   HostBackedActiveRunHandle,
   type ActiveRunRegistry,
   type AgentHostCommandSender,
 } from './agent-active-runs.ts';
-import {
-  HOST_LOST_REASON,
-  reconcileAgentRunsOnBoot,
-  type AgentRunBootReconcileResult,
-} from './agent-run-boot-reconcile.ts';
 import {
   applyAgentRunTerminalEffects,
   replayMissingTerminalEnvelopes,
@@ -41,6 +34,10 @@ import {
   runVerificationOnTerminal,
   type VerificationDeps,
 } from './agent-verification.ts';
+
+export const HOST_LOST_REASON = 'agent host no longer owns this non-terminal run';
+const HOST_LOST_NEVER_STARTED_REASON =
+  'agent host never reported this run after dispatch (lost before it started)';
 
 type NonTerminalAgentState = Extract<
   AgentHostRunSnapshot['state'],
@@ -58,7 +55,6 @@ export interface AgentHostReattachDeps {
   now?: () => number;
   listNonTerminalRuns?: () => AgentRunRow[];
   getAgentRun?: (id: ULID) => AgentRunRow | null;
-  hasOpenPendingAskForRun?: (runId: ULID) => boolean;
   markTerminal?: typeof defaultMarkAgentRunTerminal;
   updateStatus?: typeof defaultUpdateAgentRunStatus;
   resolveJsonlPath?: (row: AgentRunRow) => string | null;
@@ -90,6 +86,19 @@ export interface AgentHostReattachDeps {
   /** T1.4 (D1) — finalize host-lost only after this many CONSECUTIVE missing
    *  ticks (default 2 ≈ 30s at the 15s cadence; env `PC_HOST_LOST_TICKS`). */
   hostLostAfterTicks?: number;
+  /** Step 2 — a `queued`/`spawning` row missing from a reachable host finalizes
+   *  after this many consecutive ticks (default 8 ≈ 2min). Longer than the
+   *  running threshold because a slow spawn legitimately isn't listed yet;
+   *  closes the stuck-forever gap (pre-Step-2 these rows NEVER finalized). */
+  spawnLostAfterTicks?: number;
+  /** Step 2 — self-healing reattach: a matched non-terminal host run with NO
+   *  ActiveRunRegistry entry gets a HostBackedActiveRunHandle registered on any
+   *  tick (not just boot), so pause/cancel/resume work after a held boot. */
+  registerMissingHandles?: boolean;
+  /** Step 2 — broadcast the on-disk JSONL backlog when registering a handle
+   *  (boot tick only: catches the UI up on events missed while the server was
+   *  down; post-boot the live stream covers it). */
+  backfillOnRegister?: boolean;
   /** T1.4 — injectable terminal-effects seam (tests spy on it). Defaults to the
    *  real full-effects helper so the `failed` live-event + orchestrator notify
    *  fire through the gateway/outbox door (never a direct broadcast). */
@@ -100,93 +109,16 @@ export interface AgentHostReattachDeps {
   replayEnvelopes?: typeof replayMissingTerminalEnvelopes;
 }
 
-export interface AgentHostReattachResult {
-  reconcile: AgentRunBootReconcileResult;
-  registered: number;
-  backfilledEvents: number;
-  terminalReplayed: number;
-}
-
-export function reattachAgentRunsOnBoot(
-  deps: AgentHostReattachDeps,
-): AgentHostReattachResult {
-  const rows = (deps.listNonTerminalRuns ?? defaultListNonTerminalAgentRuns)();
-  const hostRuns = deps.hostClient.listRuns();
-  const hostByRunId = new Map(hostRuns.map((run) => [run.runId, run]));
-
-  const reconcile = reconcileAgentRunsOnBoot({
-    now: deps.now,
-    hostClient: { listRuns: () => hostRuns },
-    listNonTerminalRuns: () => rows,
-    hasOpenPendingAskForRun: deps.hasOpenPendingAskForRun,
-    markTerminal: deps.markTerminal,
-    updateStatus: deps.updateStatus,
-    resolveJsonlPath: deps.resolveJsonlPath,
-    jsonlExists: deps.jsonlExists,
-  });
-
-  const registry = deps.activeRunRegistry ?? getActiveRunRegistry();
-  const handles = new Map<string, HostBackedActiveRunHandle>();
-  let registered = 0;
-  let backfilledEvents = 0;
-  let terminalReplayed = 0;
-
-  for (const row of rows) {
-    const hostRun = hostByRunId.get(row.id);
-    if (!hostRun || !hostSnapshotMatchesRow(row, hostRun)) continue;
-
-    if (isTerminalState(hostRun.state)) {
-      terminalReplayed += applyHostTerminalSnapshot(hostRun, deps);
-      continue;
-    }
-    if (!isNonTerminalState(hostRun.state)) continue;
-
-    const handle = new HostBackedActiveRunHandle(hostRun, deps.hostClient, {
-      now: deps.now,
-      onCommandError: deps.onHostCommandError
-        ? (error) => deps.onHostCommandError?.(error)
-        : undefined,
-    });
-    registry.register({
-      run: handle,
-      projectId: row.projectId,
-      dispatcherSessionId: row.dispatcherSessionId,
-      ccSessionId: row.ccSessionId,
-      podName: row.podName,
-      parentWorkItemId: row.parentWorkItemId,
-      podRevisionAtDispatch: row.podRevisionAtDispatch,
-      now: deps.now?.(),
-    });
-    handles.set(row.id, handle);
-    registered += 1;
-    backfilledEvents += backfillAgentRunJsonl(row, hostRun, deps);
-  }
-
-  deps.hostClient.onEvent?.((event) => {
-    applyAgentHostEvent(event, {
-      ...deps,
-      activeRunRegistry: registry,
-    });
-    if (event.type === 'run-state' || event.type === 'run-terminal') {
-      const handle = handles.get(event.run.runId);
-      handle?.applySnapshot(event.run);
-    }
-  });
-
-  return {
-    reconcile,
-    registered,
-    backfilledEvents,
-    terminalReplayed,
-  };
-}
-
 export interface ReconcileSweepResult {
   checked: number;
   terminalApplied: number;
   statusUpdated: number;
   /** T1.4 — non-terminal rows finalized `host-lost` this sweep (host gone). */
   hostLost: number;
+  /** Step 2 — host-backed handles registered this sweep (self-healing reattach). */
+  registered: number;
+  /** Step 2 — JSONL backlog events broadcast for newly registered handles. */
+  backfilledEvents: number;
 }
 
 /**
@@ -222,10 +154,13 @@ export function reconcileAgentRunsAgainstHost(
   const hostByRunId = new Map(hostRuns.map((run) => [run.runId, run]));
   const missingTicks = deps.missingFromHostTicks;
   const lostAfter = deps.hostLostAfterTicks ?? 2;
+  const spawnLostAfter = deps.spawnLostAfterTicks ?? 8;
 
   let terminalApplied = 0;
   let statusUpdated = 0;
   let hostLost = 0;
+  let registered = 0;
+  let backfilledEvents = 0;
 
   for (const row of rows) {
     const hostRun = hostByRunId.get(row.id);
@@ -235,6 +170,7 @@ export function reconcileAgentRunsAgainstHost(
         deps,
         missingTicks,
         lostAfter,
+        spawnLostAfter,
       });
       continue;
     }
@@ -245,6 +181,39 @@ export function reconcileAgentRunsAgainstHost(
     if (isTerminalState(hostRun.state)) {
       terminalApplied += applyHostTerminalSnapshot(hostRun, deps);
       continue;
+    }
+
+    // Step 2 — self-healing reattach: a host-owned non-terminal run with no
+    // live registry entry (server restarted, or boot was held on an unreachable
+    // host) gets its HostBackedActiveRunHandle registered on THIS tick, so
+    // pause / cancel / settle paths work again. Dispatch registers before
+    // start, so a freshly dispatched run is never double-registered here.
+    if (
+      deps.registerMissingHandles &&
+      deps.activeRunRegistry &&
+      isNonTerminalState(hostRun.state) &&
+      !deps.activeRunRegistry.get(row.id)
+    ) {
+      const handle = new HostBackedActiveRunHandle(hostRun, deps.hostClient, {
+        now: deps.now,
+        onCommandError: deps.onHostCommandError
+          ? (error) => deps.onHostCommandError?.(error)
+          : undefined,
+      });
+      deps.activeRunRegistry.register({
+        run: handle,
+        projectId: row.projectId,
+        dispatcherSessionId: row.dispatcherSessionId,
+        ccSessionId: row.ccSessionId,
+        podName: row.podName,
+        parentWorkItemId: row.parentWorkItemId,
+        podRevisionAtDispatch: row.podRevisionAtDispatch,
+        now: deps.now?.(),
+      });
+      registered += 1;
+      if (deps.backfillOnRegister) {
+        backfilledEvents += backfillAgentRunJsonl(row, hostRun, deps);
+      }
     }
 
     if (shouldUpdateFromHost(row, hostRun)) {
@@ -280,45 +249,56 @@ export function reconcileAgentRunsAgainstHost(
     }).catch(() => {});
   }
 
-  return { checked: rows.length, terminalApplied, statusUpdated, hostLost };
+  return {
+    checked: rows.length,
+    terminalApplied,
+    statusUpdated,
+    hostLost,
+    registered,
+    backfilledEvents,
+  };
 }
 
-/** T1.4 — decide a single host-missing row. Increments the consecutive-miss
- *  counter and finalizes `host-lost` once ALL of the false-positive guards pass:
+/** T1.4 + Step 2 — decide a single host-missing row. Increments the
+ *  consecutive-miss counter and finalizes `host-lost` once ALL of the
+ *  false-positive guards pass:
  *  (1) the caller asserted authoritative host absence this tick (we are CONNECTED
  *  to a host whose fresh list-runs we just pulled, and this run is absent from
- *  it), (2) a counter is wired, (3) the row is `running` — a confirmed-started
- *  run; `queued`/`spawning` may legitimately not be listed yet (slow spawn) and a
- *  `paused` run is host-less while it waits on an ask, so none of those are
- *  host-lost-eligible, (4) the row has been missing for `>= lostAfter` consecutive
- *  ticks. Else leaves the row untouched (counter standing for an eligible row,
- *  dropped for an ineligible one). Returns 1 if finalized, else 0. */
+ *  it), (2) a counter is wired, (3) the row's status is eligible with its own
+ *  threshold — `running` after `lostAfter` ticks; `queued`/`spawning` after the
+ *  longer `spawnLostAfter` (a slow spawn legitimately isn't listed yet, but a
+ *  row the host NEVER reports is genuinely lost — pre-Step-2 it stuck forever);
+ *  `paused` NEVER (FD-14 law: a paused run is host-less by design while it
+ *  waits on an ask — only the ask flow may end it), (4) the row has been
+ *  missing for enough consecutive ticks. Else leaves the row untouched.
+ *  Returns 1 if finalized, else 0. */
 function handleHostMissingRow(
   row: AgentRunRow,
   ctx: {
     deps: AgentHostReattachDeps;
     missingTicks: Map<string, number> | undefined;
     lostAfter: number;
+    spawnLostAfter: number;
   },
 ): number {
-  const { deps, missingTicks, lostAfter } = ctx;
+  const { deps, missingTicks, lostAfter, spawnLostAfter } = ctx;
 
   // Conservative gates: without the authoritative-absence signal or a counter,
   // we cannot trust that the run is genuinely gone — leave the row alone.
   if (!deps.hostAuthoritativelyAbsent || !missingTicks) return 0;
 
-  // Only a confirmed-started `running` run is host-lost-eligible. A queued/
-  // spawning run may not be in the host's list yet (slow spawn), and a paused
-  // run is legitimately host-less while it waits on an ask. None are "lost" —
-  // drop any standing counter so they never accrue toward finalize.
-  if (row.status !== 'running') {
+  // FD-14 law — the reconciler NEVER finalizes a paused run. Drop any standing
+  // counter so it can never accrue toward finalize.
+  if (row.status === 'paused') {
     missingTicks.delete(row.id);
     return 0;
   }
 
+  const threshold = row.status === 'running' ? lostAfter : spawnLostAfter;
+
   const ticks = (missingTicks.get(row.id) ?? 0) + 1;
   missingTicks.set(row.id, ticks);
-  if (ticks < lostAfter) return 0;
+  if (ticks < threshold) return 0;
 
   const applied = (deps.applyTerminalEffects ?? applyAgentRunTerminalEffects)(
     {
@@ -332,7 +312,7 @@ function handleHostMissingRow(
       status: 'failed',
       result: null,
       failureCause: 'host-lost',
-      failureReason: HOST_LOST_REASON,
+      failureReason: row.status === 'running' ? HOST_LOST_REASON : HOST_LOST_NEVER_STARTED_REASON,
       completedAt: deps.now?.() ?? Date.now(),
       startedAt: row.queuedAt,
       workItemId: row.parentWorkItemId,

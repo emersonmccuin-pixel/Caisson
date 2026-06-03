@@ -20,7 +20,6 @@ import { statSync } from 'node:fs';
 import type { AgentRunRow, ULID } from '@pc/domain';
 import {
   getProjectById as defaultGetProjectById,
-  hasOpenPendingAskForRun as defaultHasOpenPendingAskForRun,
   listNonTerminalAgentRuns as defaultListNonTerminalAgentRuns,
 } from '@pc/db';
 import { jsonlPathFor } from '@pc/runtime';
@@ -42,11 +41,21 @@ export interface LivenessSweepDeps {
   now?: () => number;
   idleTimeoutMs?: number;
   listNonTerminalRuns?: () => AgentRunRow[];
-  hasOpenPendingAskForRun?: (runId: ULID) => boolean;
   resolveJsonlPath?: (row: AgentRunRow) => string | null;
   jsonlMtime?: (path: string) => number | null;
   isProcessAlive?: (pid: number) => boolean;
   killProcess?: (pid: number) => void;
+  /** Step 2 — caller-owned consecutive-tick counter for `queued` rows with no
+   *  ActiveRunRegistry entry (the in-memory admission layer lost them — i.e.
+   *  the server restarted before they spawned). Replaces the legacy boot
+   *  bulk-fail: such a row finalizes `server-restart` after
+   *  `queuedOrphanAfterTicks` consecutive misses. Absent ⇒ queued rows are
+   *  never touched (the original conservatism). */
+  queuedOrphanTicks?: Map<string, number>;
+  /** Step 2 — finalize an orphaned queued row only after this many CONSECUTIVE
+   *  registry-missing ticks (default 2; the false-positive guard for a row
+   *  inserted moments before its registry entry lands). */
+  queuedOrphanAfterTicks?: number;
   /** Test seam — defaults to the real terminal-effects pipeline. */
   applyTerminalEffects?: typeof applyAgentRunTerminalEffects;
   /** S3 — replay the orchestrator envelope for any recently-terminal run whose
@@ -59,6 +68,8 @@ export interface LivenessSweepResult {
   checked: number;
   failedDead: number;
   failedIdle: number;
+  /** Step 2 — orphaned queued rows finalized `server-restart` this sweep. */
+  failedOrphanedQueued: number;
   killed: number;
 }
 
@@ -66,23 +77,42 @@ export function sweepAgentRunLiveness(deps: LivenessSweepDeps = {}): LivenessSwe
   const now = (deps.now ?? Date.now)();
   const idleTimeoutMs = deps.idleTimeoutMs ?? resolveIdleTimeoutMs();
   const rows = (deps.listNonTerminalRuns ?? defaultListNonTerminalAgentRuns)();
-  const hasOpenAsk = deps.hasOpenPendingAskForRun ?? defaultHasOpenPendingAskForRun;
   const resolveJsonlPath = deps.resolveJsonlPath ?? defaultResolveJsonlPath;
   const jsonlMtime = deps.jsonlMtime ?? defaultJsonlMtime;
   const isAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
   const kill = deps.killProcess ?? defaultKill;
+  const orphanTicks = deps.queuedOrphanTicks;
+  const orphanAfter = deps.queuedOrphanAfterTicks ?? 2;
 
   let failedDead = 0;
   let failedIdle = 0;
+  let failedOrphanedQueued = 0;
   let killed = 0;
 
   for (const row of rows) {
-    // Not yet spawned — admission/cap layer owns queued runs.
-    if (row.status === 'queued') continue;
+    // Queued — the admission/cap layer owns it WHILE a registry entry exists.
+    // Step 2: a queued row with NO registry entry was orphaned by a restart
+    // (the legacy boot bulk-fail used to catch these); finalize `server-restart`
+    // after consecutive confirmed misses. No counter wired ⇒ never touched.
+    if (row.status === 'queued') {
+      if (!orphanTicks) continue;
+      if (deps.activeRunRegistry?.get(row.id)) {
+        orphanTicks.delete(row.id);
+        continue;
+      }
+      const ticks = (orphanTicks.get(row.id) ?? 0) + 1;
+      orphanTicks.set(row.id, ticks);
+      if (ticks < orphanAfter) continue;
+      finalize(row, 'server-restart', now, deps);
+      orphanTicks.delete(row.id);
+      failedOrphanedQueued += 1;
+      continue;
+    }
 
-    // A paused run legitimately has no live process while it waits on a
-    // pending ask (Claude exits clean, resumes from JSONL on answer). Leave it.
-    if (row.status === 'paused' && hasOpenAsk(row.id)) continue;
+    // FD-14 law — the reconciler NEVER finalizes a paused run. It legitimately
+    // has no live process while it waits on an ask (Claude exits clean, resumes
+    // from JSONL on answer); only the ask flow may end it.
+    if (row.status === 'paused') continue;
 
     const pid = row.pid;
 
@@ -117,12 +147,12 @@ export function sweepAgentRunLiveness(deps: LivenessSweepDeps = {}): LivenessSwe
     }).catch(() => {});
   }
 
-  return { checked: rows.length, failedDead, failedIdle, killed };
+  return { checked: rows.length, failedDead, failedIdle, failedOrphanedQueued, killed };
 }
 
 function finalize(
   row: AgentRunRow,
-  cause: 'unexpected-exit' | 'idle-timeout',
+  cause: 'unexpected-exit' | 'idle-timeout' | 'server-restart',
   now: number,
   deps: LivenessSweepDeps,
 ): void {

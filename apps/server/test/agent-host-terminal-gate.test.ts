@@ -20,9 +20,7 @@ const { applyHostTerminalSnapshot, reconcileAgentRunsAgainstHost } = await impor
 const { applyAgentRunTerminalEffects, replayMissingTerminalEnvelopes } = await import(
   '../src/services/agent-run-terminal-effects.ts'
 );
-const { reattachAgentRunsDuringServerBoot } = await import(
-  '../src/services/agent-run-server-boot.ts'
-);
+const { createAgentRunReconciler } = await import('../src/services/agent-run-reconciler.ts');
 const { sweepAgentRunLiveness } = await import('../src/services/agent-run-liveness-sweep.ts');
 const { ActiveRunRegistry } = await import('../src/services/agent-active-runs.ts');
 
@@ -110,15 +108,17 @@ function runningSnapshot(runId: ULID, projectId: ULID): AgentHostRunSnapshot {
   return { ...terminalSnapshot(runId, projectId), state: 'running', terminalAt: null, terminalResult: undefined };
 }
 
-/** Fake host client. Boot reattach registers a live handle for a non-terminal
- *  snapshot and subscribes via onEvent; emitting a run-terminal then drives the
- *  threaded terminal-effects deps. */
+/** Fake host port. The reconciler's boot tick registers a live handle for a
+ *  non-terminal snapshot and subscribes the ONE event stream; emitting a
+ *  run-terminal then drives the threaded terminal-effects deps. */
 function fakeHostClient(snapshot: AgentHostRunSnapshot) {
   let listener: ((event: unknown) => void) | null = null;
   return {
     client: {
       sendCommand: () => undefined,
       listRuns: () => [snapshot],
+      refreshRuns: () => Promise.resolve([snapshot]),
+      isConnected: () => true,
       onEvent: (l: (event: unknown) => void) => {
         listener = l;
         return () => {};
@@ -129,24 +129,31 @@ function fakeHostClient(snapshot: AgentHostRunSnapshot) {
   };
 }
 
-test('boot-reattach: a host terminal event routes ONE mailbox turn', async () => {
+test('reconciler boot: a host terminal event routes ONE mailbox turn', async () => {
   const { runId, projectId } = seedRun(`htg-boot-mbox-${Date.now()}`);
   const mb = fakeMailbox();
   const host = fakeHostClient(runningSnapshot(runId, projectId));
 
-  const result = await reattachAgentRunsDuringServerBoot({
-    getHostClient: () => host.client as never,
+  const reconciler = createAgentRunReconciler({
+    mode: 'host',
+    host: host.client as never,
     activeRunRegistry: new ActiveRunRegistry(),
     mailboxEnqueue: mb.port,
     broadcast: () => {},
-    terminalCleanup: () => {},
+    log: () => {},
+    warn: () => {},
+    // Fake mailbox port doesn't persist; the S3 replay would re-emit envelopes
+    // for OTHER tests' terminal rows in the shared DB. Own test covers replay.
+    replayEnvelopes: () => Promise.resolve({ scanned: 0, replayed: 0 }),
   });
-  assert.equal(result.mode, 'host');
+  const res = await reconciler.boot();
+  assert.equal(res.held, false);
+  assert.equal(res.hostReconcile!.registered, 1, 'boot tick registers the live host handle');
 
   host.emitTerminal(terminalSnapshot(runId, projectId));
   await new Promise((r) => setTimeout(r, 150));
 
-  assert.equal(mb.calls.length, 1, 'boot-reattach terminal event must enqueue ONE mailbox turn');
+  assert.equal(mb.calls.length, 1, 'boot terminal event must enqueue ONE mailbox turn');
   assert.equal(getAgentRunRow(runId)!.status, 'completed');
 });
 
@@ -181,7 +188,6 @@ test('liveness-sweep finalize: a swept failure routes to the mailbox', async () 
     mailboxEnqueue: mb.port,
     broadcast: () => {},
     listNonTerminalRuns: () => [{ ...row, pid: 4242 }],
-    hasOpenPendingAskForRun: () => false,
     // Process is gone => unexpected-exit, finalize immediately.
     isProcessAlive: () => false,
     killProcess: () => {},

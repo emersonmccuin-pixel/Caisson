@@ -352,9 +352,9 @@ test('T1.4 row reappears in list-runs before threshold → counter resets, no fi
   assert.equal(missingTicks.has('run-back'), false); // reset on reappearance
 });
 
-test('T1.4 paused row with open pending ask, host absent → never host-lost', () => {
+test('FD-14 LAW: paused row, host absent → NEVER host-lost, counter dropped', () => {
   const calls: TerminalCall[] = [];
-  const missingTicks = new Map<string, number>([['run-paused', 5]]);
+  const missingTicks = new Map<string, number>([['run-paused', 50]]);
   const { deps } = hostLostDeps({
     rows: [row('run-paused', { status: 'paused' })],
     hostRuns: [],
@@ -368,14 +368,35 @@ test('T1.4 paused row with open pending ask, host absent → never host-lost', (
   const res = reconcileAgentRunsAgainstHost(deps);
   assert.equal(res.hostLost, 0);
   assert.equal(calls.length, 0);
-  // A paused (non-running) row is not host-lost-eligible — its counter is dropped.
+  // The reconciler can never finalize paused — its counter is dropped, so it
+  // can never accrue toward finalize, no matter how many ticks pass.
   assert.equal(missingTicks.has('run-paused'), false);
 });
 
-test('T1.4 spawning row absent + authoritative → NOT finalized (only running is eligible)', () => {
+test('FD-14 LAW: paused row WITHOUT an open ask is still never finalized', () => {
+  // Pre-Step-2 the BOOT reconcile killed paused-without-ask rows. The law has
+  // no exceptions: only the ask flow may end a paused run.
   const calls: TerminalCall[] = [];
-  // A slow-spawning run may legitimately not be in the host list yet — even at
-  // threshold it must never be host-lost'd. Only a confirmed `running` run is.
+  const missingTicks = new Map<string, number>([['run-paused-stray', 50]]);
+  const { deps } = hostLostDeps({
+    rows: [row('run-paused-stray', { status: 'paused' })],
+    hostRuns: [],
+    missingTicks,
+    hostAuthoritativelyAbsent: true,
+    hostLostAfterTicks: 2,
+    hasOpenAsk: () => false,
+    calls,
+  });
+
+  const res = reconcileAgentRunsAgainstHost(deps);
+  assert.equal(res.hostLost, 0);
+  assert.equal(calls.length, 0);
+});
+
+test('Step 2: spawning row absent below spawn threshold → counter stands, no finalize', () => {
+  const calls: TerminalCall[] = [];
+  // A slow-spawning run may legitimately not be in the host list yet — it gets
+  // a LONGER threshold than running, not immunity.
   const missingTicks = new Map<string, number>([['run-spawning', 5]]);
   const { deps } = hostLostDeps({
     rows: [row('run-spawning', { status: 'spawning' })],
@@ -386,8 +407,85 @@ test('T1.4 spawning row absent + authoritative → NOT finalized (only running i
     calls,
   });
 
-  const res = reconcileAgentRunsAgainstHost(deps);
+  const res = reconcileAgentRunsAgainstHost({ ...deps, spawnLostAfterTicks: 8 });
   assert.equal(res.hostLost, 0);
   assert.equal(calls.length, 0);
+  // Counter advances toward the spawn threshold (was 5, now 6) — pre-Step-2 it
+  // was dropped every tick, so a lost spawning row stuck forever.
+  assert.equal(missingTicks.get('run-spawning'), 6);
+});
+
+test('Step 2: spawning row the host never reports → host-lost at spawn threshold (stuck-forever gap closed)', () => {
+  const calls: TerminalCall[] = [];
+  const missingTicks = new Map<string, number>([['run-spawning', 7]]);
+  const { deps } = hostLostDeps({
+    rows: [row('run-spawning', { status: 'spawning' })],
+    hostRuns: [],
+    missingTicks,
+    hostAuthoritativelyAbsent: true,
+    hostLostAfterTicks: 2,
+    calls,
+  });
+
+  const res = reconcileAgentRunsAgainstHost({ ...deps, spawnLostAfterTicks: 8 });
+  assert.equal(res.hostLost, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].status, 'failed');
+  assert.equal(calls[0].failureCause, 'host-lost');
   assert.equal(missingTicks.has('run-spawning'), false);
+});
+
+test('Step 2: queued row missing from a reachable host → same spawn-threshold path', () => {
+  const calls: TerminalCall[] = [];
+  const missingTicks = new Map<string, number>([['run-queued', 7]]);
+  const { deps } = hostLostDeps({
+    rows: [row('run-queued', { status: 'queued' })],
+    hostRuns: [],
+    missingTicks,
+    hostAuthoritativelyAbsent: true,
+    hostLostAfterTicks: 2,
+    calls,
+  });
+
+  const res = reconcileAgentRunsAgainstHost({ ...deps, spawnLostAfterTicks: 8 });
+  assert.equal(res.hostLost, 1);
+  assert.equal(calls[0].failureCause, 'host-lost');
+});
+
+test('Step 2: self-healing reattach — matched host run with no registry entry gets registered on a tick', () => {
+  let currentRow = row('run-selfheal', { status: 'running' });
+  const host = new FakeHostClient([hostRun('run-selfheal', 'running')]);
+  const registry = new ActiveRunRegistry();
+  assert.ok(!registry.get('run-selfheal' as ULID), 'starts unregistered');
+
+  const res = reconcileAgentRunsAgainstHost({
+    hostClient: host,
+    activeRunRegistry: registry,
+    registerMissingHandles: true,
+    listNonTerminalRuns: () => [currentRow],
+    getAgentRun: () => currentRow,
+    updateStatus: (input) => {
+      currentRow = { ...currentRow, status: input.status };
+    },
+    announce: () => {},
+    broadcast: () => {},
+  });
+
+  assert.equal(res.registered, 1, 'tick registers the missing handle');
+  const entry = registry.get('run-selfheal' as ULID);
+  assert.ok(entry, 'handle is registered');
+  assert.ok(entry!.run instanceof HostBackedActiveRunHandle);
+
+  // Second tick: already registered → no double-register.
+  const res2 = reconcileAgentRunsAgainstHost({
+    hostClient: host,
+    activeRunRegistry: registry,
+    registerMissingHandles: true,
+    listNonTerminalRuns: () => [currentRow],
+    getAgentRun: () => currentRow,
+    updateStatus: () => {},
+    announce: () => {},
+    broadcast: () => {},
+  });
+  assert.equal(res2.registered, 0, 'no double-register on the next tick');
 });
