@@ -71,7 +71,7 @@ Four rules applied consistently across all tables:
 | `workflows` | Workflow definitions: YAML source, parsed logic, scope, status (active/invalid), origin. Soft-deleted. |
 | `workflow_audit` | Append-only change log for workflow definitions. |
 | `workflow_runs_v2` | One row per live or recent run: current DAG state blob (`dag_state`), status, trigger context, frozen workflow snapshot, rev. The run itself is a `work_item` (flagged `is_workflow_root=true`); this table holds only the bookkeeping the work-item table can't. |
-| `workflow_run_events` | **⚠️ Currently dead writes** — an append-only diary for each step of a run. `appendEvent` writes here but the entries bypass the live-event bus and the UI discards them. `dag_state` is still the actual store of truth. See Target shape. |
+| `workflow_run_events` | **✅ THE run diary (truth-grade since M3a 2026-06-04)** — append-only story of each run; every line written through `WorkflowRunMutationGateway.appendRunEvent` (row + `workflow.run.event` live fact, one txn; DIARY-DOOR gate). Read by `pc_get_workflow_run` + the Workflows run panel. `dag_state` remains the EXECUTION store until M6 projects from the diary. |
 | `failed_run_dismissals` | Timestamps for when a user dismissed a "Failed recently" notice per run. |
 | `worktrees` | Git worktree paths tied to a card or run. |
 
@@ -176,21 +176,24 @@ The north star (`unified-process-supervision-2026-06-02.md §2`) says: **append-
 
 The DB is primarily **row-state** (mutable rows with `updatedAt`/`rev` that overwrite each other). The only genuinely append-only tables today are `live_outbox`, `work_items.history` (a JSON column that's appended, never mutated), the `*_audit` tables, and the insert-only telemetry tables.
 
-`workflow_run_events` is the most direct attempt at a real event log — it exists and `appendEvent` writes to it — but the writes currently bypass the live-event bus and the UI discards them (`WorkflowsList.tsx:871`). The `dag_state` JSON blob on `workflow_runs_v2` is still the actual truth. This is the **#1 open decision** in the Foundation Decisions backlog.
+`workflow_run_events` became the first REAL event log in M3a (2026-06-04): one gateway door,
+complete lifecycle lines, every line a live fact, read by tool + UI. The `dag_state` JSON blob on
+`workflow_runs_v2` is still the *execution* truth — projecting it from the diary is the M6 leg.
+(The #1 store decision itself was resolved as FD-13: the split.)
 
 **What changes toward the target (ledger verdicts, `consolidation-ledger-2026-06-02.md §2`):**
 
 - `agent_runs`, `live_outbox`, `work_items.history`, `orchestrator_sessions`, `field_schemas` — **KEEP** as truth.
 - `agent_contracts.deliverable` — **KEEP** (the typed deliverable store).
 - `work_items.body` — **KEEP**; it is read live by `dag-run-service.ts:173` to resolve `$root.output` workflow variable references — do not remove.
-- `workflow_runs_v2.dag_state` → **CREATE** a live events log; make `dag_state` a derived projection. (Ledger row 12, Slice-3 work — high effort, not yet built.)
+- `workflow_runs_v2.dag_state` → ✅ the live events log EXISTS (M3a, ledger row 12 done); making `dag_state` a derived projection rides M6 (step-model v3 — build the new semantics on the spine once).
 - Long-term: `agent_runs` status transitions could become appended events rather than mutations, making run history reconstructible. Not yet scoped.
 
 ---
 
 ## Known issues / scar tissue
 
-- **`dag_state` vs `workflow_run_events` — two truths exist simultaneously.** `dag_state` is authoritative today; `workflow_run_events` receives writes that the UI discards. Any code treating `workflow_run_events` as truth would be wrong right now. (Ledger §0 confirmed 2026-06-03.)
+- **`dag_state` vs `workflow_run_events` — a deliberate split since M3a (2026-06-04).** `dag_state` is the EXECUTION truth (resume/state); `workflow_run_events` is the truth-grade STORY (one gateway door, complete, read by tool + UI). They converge when M6 projects state from the diary. Code must still not derive execution state from events until then.
 - **`agent_inbox` is alive in the DB, dead in TypeScript, live in a hook.** The server's TypeScript code has zero callers of `repos/agent-inbox.ts`, but the hook script at `templates/.claude/hooks/inbox-drain.cjs` (lines 66/74/77) still reads and writes these tables via raw SQL on every user prompt. The tables cannot be dropped until the hook is refactored to the mailbox. (Ledger §0 confirmed 2026-06-03.)
 - **`work_items.body` does double duty.** It stores the human-readable card description AND is the live source for `$root.output` workflow variable references (`dag-run-service.ts:173`). Removing or moving it breaks the workflow engine. (Ledger §0 confirmed 2026-06-03.)
 - **`agentRuns.pid` is vestigial in production.** The `pid` column is only populated for in-process spawns. The real production path always uses a host connection (`index.ts:279,304`) and leaves `pid` NULL. The in-process branch is dead on the production path.

@@ -124,7 +124,7 @@ Per the north-star design (`unified-process-supervision-2026-06-02.md`): stage a
 
 - **Area delete creates a silent bulk move.** Soft-deleting an area nulls out every member card's area reference in one transaction — but no per-card `work-item.changed` event is emitted. The board works around this by detecting the deleted-area frame and doing a full card-list refetch. (`KanbanBoard.tsx:161–169`, `area-live-events.ts`) If that refetch window is missed (race), cards show as "Uncaptured" only after the next navigation.
 - **Stage ids are slugs, not auto-generated ids.** If a stage id (the short slug field, not the display name) is changed after a workflow has been published, that workflow's trigger silently stops matching. The save-time validator checks that referenced stage ids exist at publish time, but doesn't track renames after the fact.
-- **`workflow_run_events` bypasses the live-relay.** `dag-run-service.ts` writes step-diary entries to `workflow_run_events` directly — not through `live_outbox`. The UI discards those entries (`WorkflowsList.tsx:871`). These are dead observability writes today (ledger §2, slice-3 gap).
+- ~~**`workflow_run_events` bypasses the live-relay.**~~ ✅ fixed in M3a (2026-06-04): every diary line through the run gateway + a `workflow.run.event` live fact; the run panel renders the timeline.
 - **Stage list staleness window.** The in-memory stage list in `ProjectRuntime` is refreshed via `deps.refreshProject` after a `PATCH /stages`. A concurrent card move in the gap between the DB write and the refresh would trigger-match against a stale stage list — it would fail open (treated as a forward move).
 
 ---
@@ -140,5 +140,5 @@ Per the north-star design (`unified-process-supervision-2026-06-02.md`): stage a
 
 **Technical:**
 - Should `area.changed` (delete) emit per-card `work-item.changed` rows instead of relying on the board's full-refetch workaround? The refetch is cheap today but fragile.
-- `workflow_run_events`: route `appendEvent` through the gateway/`live_outbox` so the step diary becomes an observable truth source (slice-3 work, no current owner).
+- ~~`workflow_run_events`: route `appendEvent` through the gateway/`live_outbox`~~ ✅ done (M3a 2026-06-04).
 - `refreshProject` race: moot under FD-10 for trigger matching (no triggers); the stage list is still used for move validation, where staleness only risks rejecting a valid move — fail-safe.

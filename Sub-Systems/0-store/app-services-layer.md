@@ -119,9 +119,9 @@ Yes: one known bypass exists today, and a second gap.
 > legacy `inbox-drain.cjs` raw SQL) are all sentenced, plus a structural guard test so a new bypass
 > can't quietly appear.
 
-1. **Work-item writes are a two-step, not one-step.** The old `work-item-writer.ts` (predates the gateway) does the product mutation first, *then* calls `announceWorkItemRow` as a separate transaction. So the write and the receipt are in two separate database transactions — if the second one fails, the outbox row is never written and the UI doesn't see the change. The newer `WorkItemMutationGateway.commitWorkItemChange()` is the correct form (mutation + outbox in one txn) and is the keeper. The old shim has not yet been cut. This is the main scar.
+1. ~~**Work-item writes are a two-step, not one-step.**~~ ✅ EXECUTED in M2 (2026-06-03): `work-item-writer.ts` deleted; every write-site runs inside `WorkItemMutationGateway` (one txn) with the structural no-bypass gate.
 
-2. **The workflow run-event diary bypasses the gateway entirely.** `appendEvent` writes to the `workflow_run_events` table but those writes skip the gateway and skip `live_outbox`. The UI discards them (`res.events`). Until Slice 3 of the workflow rebuild ships, these are orphaned writes — the table exists but nothing reads it. (Ledger §0, row 3.)
+2. ~~**The workflow run-event diary bypasses the gateway entirely.**~~ ✅ EXECUTED in M3a (2026-06-04): `WorkflowRunMutationGateway.appendRunEvent` is THE diary door (event row + `workflow.run.event` fact, one txn; DIARY-DOOR gate); `pc_get_workflow_run` + the run panel read it.
 
 3. **Dead `broadcast` arg on the run writer shims.** `agent-run-writer.ts` and `workflow-run-writer.ts` each accept a broadcast callback and immediately no-op it. Kept for caller compatibility but adds noise and creates a false impression. Cleanup deferred.
 

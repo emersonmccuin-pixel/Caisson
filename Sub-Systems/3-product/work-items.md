@@ -143,7 +143,7 @@ Per the consolidation ledger (`refactor plan/consolidation-ledger-2026-06-02.md 
 
 - **`work_items.history` → KEEP as truth** (HIGH confidence). `position` and `status` are projections; `history` is the append-only log.
 - **`work_items.body` → KEEP, do NOT delete** (HIGH confidence, re-scoped 2026-06-03). `dag-run-service.ts:173` reads it live for `$root.output` workflow refs. A round-trip guard test should be added (`ledger §6 row 11`). ☠ The dual-purpose tension (brief AND deliverable in one column) feeds `_Foundation-Decisions.md` — see Decisions below.
-- **`workflow_run_events` → aspirational** — the "events = truth" path is unbuilt; `dag_state` JSON is the workflow store today. Routing `appendEvent` through the gateway is Slice-3 work (`ledger §6 row 12`).
+- **`workflow_run_events` → ✅ truth-grade since M3a (2026-06-04)** — every diary line through the run gateway's `appendRunEvent` + a `workflow.run.event` live fact; read by `pc_get_workflow_run` + the run panel. `dag_state` stays the execution store until M6 projects from the diary (`ledger §6 row 12` closed).
 
 In the five-role target, the work-item store is owned by **Brain** (control plane). Every mutation goes through the gateway → `live_outbox` → live relay. The `history` array grows into a proper append-only event log in Slice-3. No behavioral change to the mutation interface is needed — the gateway pattern already matches the target shape.
 
@@ -153,7 +153,7 @@ In the five-role target, the work-item store is owned by **Brain** (control plan
 
 - **`wi.body` does double duty.** The `body` column holds the original task brief *and* the agent's prose deliverable. `dag-run-service.ts:173` reads it live as `$root.output`. Before a prior fix, agents wrote their output into `fields.body` instead, silently freezing the column and breaking both workflow refs and `body_contains` acceptance-criteria checks. Fixed: `updateWorkItemFields` now promotes `body`/`title` keys from the fields map onto their real columns (`packages/db/src/repos/work-items.ts:306-348`). The deeper structural question is resolved — **FD-5**: the deliverable moves to the Work Contract; `body` returns to human-description-only in the rebuild.
 - **The agent-update route bypasses `WorkItemService`.** `POST /api/projects/:id/work-items/update` calls `dbUpdateWorkItemFields` directly then announces separately. It skips field-schema validation (intentional for agent writes — agents don't use custom field schemas), but it's a second write path. (`apps/server/src/features/work-items/routes.ts`)
-- **`workflow_run_events` writes go nowhere.** `appendEvent` writes to this table but bypasses the gateway/live_outbox pipeline, and the UI discards `res.events`. Observability stubs only — Slice-3 unbuilt. (`ledger §0 row 3`)
+- ~~**`workflow_run_events` writes go nowhere.**~~ ✅ fixed in M3a (2026-06-04) — one gateway door, live facts, tool + UI readers. (`ledger §0 row 3` closed)
 - **Callsign suffix scan is linear.** The per-parent suffix scan to find the next child number reads all siblings. Correct and safe today; not indexed; will slow at scale. (`packages/db/src/repos/work-items.ts:196-213`)
 
 ---

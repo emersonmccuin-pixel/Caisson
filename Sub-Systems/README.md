@@ -50,7 +50,7 @@ path"). The unified design says **one job, one owner, one path**. Most issues be
 | [Orchestrator](2-brain/orchestrator.md) | The persistent conversational Claude that is the user's chat | **rebuild → Engine-owned** | A separate lifecycle/ready-detector/reader from agents (the dual path the whole effort targets). Moves to the Engine in Step 4. |
 | [Asks, deliverables & review](2-brain/asks-deliverables-review.md) | The explicit positive signals: ask-and-pause, submit-deliverable, human review | **keep — this is the backbone** | The deliverable fix once landed on the wrong path (in-process while host-backed stalled). Any "done" handling added outside the one terminal authority re-strands host runs. |
 | [Mailbox & notifications](2-brain/mailbox-notifications.md) | Durable queue to notify a human/orchestrator even when offline | **keep** | A legacy hook (`inbox-drain.cjs`) still drains old `agent_inbox` tables via raw SQL — a parallel delivery path inside the orchestrator process. Blocks dropping those tables. |
-| [Workflow engine (DAG)](2-brain/workflow-engine.md) | Chains steps; each step = agent + optional review gate; deliverable = done | **rebuild (in progress)** | `workflow_run_events` is written but bypasses the gateway and the UI discards it; the real store is a mutable `dag_state` JSON blob. "A frozen run is never a mystery" isn't delivered yet. |
+| [Workflow engine (DAG)](2-brain/workflow-engine.md) | Chains steps; each step = agent + optional review gate; deliverable = done | **rebuild (in progress)** | ✅ M3a (2026-06-04): the run diary is truth-grade — one gateway door, complete lifecycle lines + agentRunId cross-link, `pc_get_workflow_run`, live UI timeline. `dag_state` remains the EXECUTION store until M6 projects state from the diary (deliberate sequencing). |
 
 ### Product domains (what the user actually works with)
 
@@ -76,7 +76,7 @@ path"). The unified design says **one job, one owner, one path**. Most issues be
 | [Desktop / Electron shell](5-supervisor-ops/desktop-electron.md) | The ONE runtime: Electron main supervises API + host children, serves the UI window | ✅ **rebuilt (Step 7)** | ☠ in-process API + one-shot host spawn deleted; dev and packaged are the same tree now. Remaining: Electron 35 pin, lock-file drift twin. |
 | [Onboarding & setup](5-supervisor-ops/onboarding-setup.md) | First-run gate + project factory (preflight, auth, install, scaffold) | **keep** (setup-wizard modal ☠ FD-21; version pin → FD-22) | Self-contained and clean. Carries the same `inbox-drain.cjs` scaffold blocker. |
 | [Dev controls & diagnostics](5-supervisor-ops/dev-controls-diagnostics.md) | Restart endpoint, process-control, crash capture, host-health pill | **keep dev-only; restart rides the one Supervisor** | ✅ Respawn gap closed by Step 7. Restart endpoint unchanged (exit 75 → supervisor respawns the API child). |
-| [Live events & relay](5-supervisor-ops/live-events-relay.md) | DB fact → all browser tabs: write `live_outbox` row in-txn, relay fans out over WS | **keep + finish migration** | Dual delivery still live for several domains (some code calls `broadcastTo()` directly alongside the relay). `workflow_run_events` bypasses the outbox entirely. |
+| [Live events & relay](5-supervisor-ops/live-events-relay.md) | DB fact → all browser tabs: write `live_outbox` row in-txn, relay fans out over WS | **keep + finish migration** | Dual delivery still live for several domains (some code calls `broadcastTo()` directly alongside the relay). ✅ M3a: `workflow_run_events` rides the outbox (`workflow.run.event` fact per diary line). |
 
 ---
 
@@ -90,9 +90,9 @@ These are the systemic threads — fixing them once helps everywhere:
 2. **Inference vs positive receipt.** "Done" was guessed from log files; the fix is explicit signals
    (`pc_submit_deliverable`). Mostly landed; `pc_node_failed` and the workflow done-path are the
    stragglers.
-3. **Row-state vs event-log.** The DB stores mutable rows; the north star wants an append-only event
-   log with projections. `workflow_run_events` and `dag_state` are the clearest symptom (events
-   written but ignored; the JSON blob is the real store).
+3. **Row-state vs event-log.** Resolved by FD-13 (the split) + M3a: `workflow_run_events` is now a
+   truth-grade diary (one door, complete, read by tool + UI). `dag_state` remains the execution
+   store until M6 projects state from the diary — the last leg, sequenced deliberately.
 4. **`inbox-drain.cjs` legacy hook.** A raw-SQL hook inside the orchestrator process drains old
    `agent_inbox` tables — a hidden parallel notify path. Blocks dropping those tables. Touches
    mailbox, agents-pods, and onboarding.

@@ -330,14 +330,17 @@ likely as the orchestrator *noticing* the move and choosing to fire, keeping one
 
 ## FD-11 — Workflow observability + repair are core requirements
 
-**Status:** 🟢 Locked — 2026-06-03
+**Status:** 🟢 Locked — 2026-06-03 · **req 1 SHIPPED in M3a (2026-06-04)**
 
 **The decision:**
 1. **The run diary becomes the truth.** Every run keeps a readable step-by-step story (started step 2
    · agent delivered · review rejected with notes · retried…), and **the orchestrator can read all of
-   it** to debug. A stuck or dead run is never a mystery. (This is the engine's flagged biggest gap —
-   now fix-priority, and it interacts with the store event-log decision in the backlog.)
-2. **Restart at a specific step** after repair — not from scratch.
+   it** to debug. A stuck or dead run is never a mystery.
+   **✅ M3a:** ONE gateway door writes every line + its live fact; lifecycle bookends + the
+   `agent_dispatched` cross-link (the diary hands you the agentRunId); `pc_get_workflow_run`
+   renders the plain-English story; the Workflows run panel shows the live timeline. Live-proof:
+   a 12-line reject-loop story end-to-end. (State PROJECTION from the diary rides M6.)
+2. **Restart at a specific step** after repair — not from scratch. *(M6-era; needs the diary spine — now in place.)*
 3. **Repair loop until reliable:** broken workflow → orchestrator helps work through it → resume from
    the failed step → once it succeeds, it's locked in as the repeatable, reliable workflow.
 4. **The workflow-builder agent must be expert-level** — complete knowledge of how the engine works,
@@ -356,11 +359,13 @@ unbreakable step. Zero bypasses.**
 
 **The three known bypasses, all sentenced:**
 1. ☠ The old two-step work-item writer (`work-item-writer.ts` — save, then announce separately) —
-   cut in favor of the one-step gateway form that already exists.
-2. ☠ The workflow run-diary writes that skip the gateway and `live_outbox` (`appendEvent`) — routed
-   through the door when the diary becomes truth (FD-11 / FD-13).
+   ✅ EXECUTED in M2 (2026-06-03): cut for the one-step gateway form.
+2. ☠ The workflow run-diary writes that skip the gateway and `live_outbox` (`appendEvent`) —
+   ✅ EXECUTED in M3a (2026-06-04): every diary line through
+   `WorkflowRunMutationGateway.appendRunEvent` (event row + `workflow.run.event` fact, one txn);
+   DIARY-DOOR structural gate keeps it dead.
 3. ☠ The legacy `inbox-drain.cjs` hook's raw-SQL writes — dies with the mailbox migration
-   (ledger row 9).
+   (ledger row 9 / M4). The last one standing.
 
 **Plus a guard:** a structural test that a new bypass can't quietly appear (e.g., no direct
 table-write imports outside the gateway layer). Vigilance is not a strategy; the build enforces it.

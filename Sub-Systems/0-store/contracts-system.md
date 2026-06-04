@@ -224,10 +224,10 @@ truth (ledger row 12 / slice 3), `appendEvent` will route through the live-outbo
   `$root.output` workflow refs, so the body field is both a display field and a workflow-ref source.
   Ledger verdict is KEEP + document; a round-trip guard is recommended but not written
   (`consolidation-ledger-2026-06-02.md §0`).
-- **The workflow run-events diary is write-only.** `appendEvent` writes the `workflow_run_events`
-  table but bypasses the gateway/live_outbox, and the UI discards `res.events`
-  (`consolidation-ledger-2026-06-02.md §0`). The `workflow.run.changed` live event contract exists
-  and is correct, but the full "events = truth" path is unbuilt (ledger row 12 / slice 3).
+- ~~**The workflow run-events diary is write-only.**~~ ✅ M3a (2026-06-04): every line through the
+  run gateway's `appendRunEvent` + a `workflow.run.event` live fact (new contract in
+  `workflow-runs.ts`: `WorkflowRunEventLivePayload`); read by `pc_get_workflow_run` + the run
+  panel (ledger row 12 closed).
 - **Legacy envelope adapters not yet retired.** `agent-runs.ts` and `workflow-runs.ts` still export
   `toLegacyAgentRunChanged` and `buildWorkflowRunChangedRefetchEnvelope`. These exist because the
   server still emits old WebSocket envelope shapes alongside canonical events. ☠ Delete when the

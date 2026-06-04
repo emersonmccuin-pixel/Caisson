@@ -88,11 +88,18 @@ The agent calls `pc_submit_deliverable` — "here's my finished work." That posi
 - Reject-kickback (above) is the built-in "try again with feedback" mechanism.
 - **Server restart mid-run:** runs that were actively executing are failed with reason `interrupted-on-boot` (the work isn't silently lost — it's visibly failed). Runs paused at a review are left exactly as they were. Re-dispatching automatically is deliberately not attempted yet. (`boot-reconcile.ts`)
 
-### 8. The run's story (the diary) — ⚠️ the biggest gap
+### 8. The run's story (the diary) — ✅ truth-grade since M3a (2026-06-04)
 
-Every run *should* keep a step-by-step diary — *started step 2 · agent delivered · review rejected with notes · retried…* — so a stuck or dead run is **never a mystery**, and a live run can be watched step by step.
+Every run keeps a step-by-step diary — *started · agent dispatched (with the inspectable
+agentRunId) · step completed · review rejected · retried · completed/cancelled/interrupted* — so a
+stuck or dead run is **never a mystery**, and a live run can be watched line by line.
 
-Today: the diary table exists and entries are written (`workflow_run_events`), but **the entries bypass the proper write door and the UI throws them away.** The run's real state lives in an opaque JSON blob (`dag_state`) on the run row. So the spec's promise — "a frozen run is never a mystery" — is **not delivered yet**. This connects directly to the store decision in the backlog (event-log vs row-state).
+As built (M3a): every line flows through ONE gateway door (`appendRunEvent` — the
+`workflow_run_events` row + its `workflow.run.event` live fact in one transaction; the DIARY-DOOR
+gate keeps direct writes dead). The orchestrator reads the story via `pc_get_workflow_run`; the
+Workflows run panel shows the live timeline. The run's EXECUTION state still lives in `dag_state`
+on the run row — projecting state from the diary is the M6 step-model-v3 leg (deliberate: build
+the new semantics on the spine once).
 
 ### 9. Saving safely (validation + publishing)
 
@@ -101,8 +108,8 @@ Today: the diary table exists and entries are written (`workflow_run_events`), b
 
 ### 10. Watching and stopping a run
 
-- **Watching:** run status changes fan to the UI live (every state write also writes a live-event row in the same transaction — structurally impossible to "forget to announce"). True step-by-step watching needs the diary (#8).
-- **Stopping:** a run can be cancelled; the loop checks for cancellation each tick and persists `cancelled`.
+- **Watching:** run status changes fan to the UI live (every state write also writes a live-event row in the same transaction — structurally impossible to "forget to announce"). ✅ M3a: step-by-step watching is real — every diary line fans as `workflow.run.event`.
+- **Stopping:** ⚠️ M3a finding — `gateway.cancelRun` exists (and writes the `workflow_cancelled` diary line) but has **no production caller**: no cancel-a-run button or tool exists anywhere; the executor polls `isCancelled` for a setter that never fires. The affordance lands M6/FD-7 era.
 
 ---
 
@@ -110,7 +117,7 @@ Today: the diary table exists and entries are written (`workflow_run_events`), b
 
 - **Depends on:** the one agent-dispatch door (`dispatchFreshAgent`) · the Work Contract service (reads deliverables for `$step.output`) · the run gateway (all writes = row + live-event in one transaction) · the mailbox (reviews + failure notices) · card moves (`moveWorkItemStage`) · optional git worktrees per run.
 - **Used by:** stage-entry firing (`ProjectRuntime`), the HTTP routes, boot reconciliation, the orchestrator (reviews via mailbox), the human inbox (reviews via UI).
-- **Crossing the boundary:** `workflow.run.changed` / `workflow.review.changed` / `workflow.definition.changed` live events; the `workflow_runs_v2` table (run + state blob + frozen workflow snapshot); the `workflow_run_events` diary table (currently write-only).
+- **Crossing the boundary:** `workflow.run.changed` / `workflow.run.event` (M3a — one fact per diary line) / `workflow.review.changed` / `workflow.definition.changed` live events; the `workflow_runs_v2` table (run + state blob + frozen workflow snapshot); the `workflow_run_events` diary table (read by `pc_get_workflow_run` + the run panel).
 
 ---
 

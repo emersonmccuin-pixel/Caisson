@@ -203,7 +203,7 @@ The north star (`unified-process-supervision-2026-06-02.md §2`) says the UI she
 
 **What still changes toward the target:**
 
-- **Slice-3 (workflow-run events):** when `appendEvent` is routed through `live_outbox` → relay, the UI will receive workflow-run events through the existing live-store path with no UI-side structural change needed.
+- ~~**Slice-3 (workflow-run events)**~~ ✅ M3a (2026-06-04): diary lines ride `live_outbox` → relay as `workflow.run.event`; the run panel's "Run diary" timeline consumes them via `useLiveEntitySignature('workflow-run-event')` → one refetch per genuine line.
 - **Steps 4–5 (orchestrator + modals → Engine):** server-side moves; the UI consumes them through the same WS envelopes. No structural UI change unless envelope shapes change.
 - **`_events` param cleanup:** the dead `_events: WsEnvelope[]` parameter on `useResourceList` can be removed once all callers are confirmed to use only the live store.
 
@@ -213,7 +213,7 @@ The north star (`unified-process-supervision-2026-06-02.md §2`) says the UI she
 
 - **Rails must not be adjustable (Emerson, 2026-06-03 — open bug).** Left and right rails are meant to be fixed-width, but both still render resize-adjuster arrows, and the right-rail adjuster can actually collapse the rail. Fix: remove the adjuster affordances on both rails; kill the right-rail collapse behavior.
 
-- **`WorkflowsList.tsx:871` throws away `res.events`** — `appendEvent` writes `workflow_run_events` rows in the server, but the UI discards them on receipt. Until Slice-3 routes those through the live relay, they are dead observability writes that never reach the screen. (Ledger §2.)
+- ~~**`WorkflowsList.tsx` throws away `res.events`**~~ ✅ fixed in M3a — `RunInlineDetail` renders the events as the "Run diary" timeline with live updates.
 
 - **`useResourceList` `_events` param is dead** (`use-resource-list.ts:57`) — still in every call signature for compatibility. The old positional-cursor scan it powered was replaced by the live-store overlay (Slice 018). Safe to remove once confirmed.
 

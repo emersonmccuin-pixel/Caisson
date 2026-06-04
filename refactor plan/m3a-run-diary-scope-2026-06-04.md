@@ -70,16 +70,30 @@ banned-direct import check for `workflowRunsV2Repo.appendEvent` outside it.
 rare event, not the tick). Verify the replay writer's cursor dedup tolerates a second backfill of
 already-replayed lines before flipping (else floor it).
 
-## Verification (live)
+## Verification — RESULTS (live, 2026-06-04)
 
-1. Fire `file-then-review` + reject once → diary shows: started → node started → agent_dispatched
-   (real runId) → delivered/completed → review requested → rejected (notes) → re-dispatch →
-   approved → card_moved → workflow_completed — live in the UI panel, no refresh.
-2. Cancel a run → `workflow_cancelled` line lands w/ the status flip (one txn).
-3. Orchestrator chat: ask it to investigate the run → it finds + calls pc_get_workflow_run via the
-   on-demand door → narrates the story from the diary.
-4. Kill the host mid-run → post-respawn handle re-registration backfills the missed JSONL events.
-5. Gates: appendEvent-door structural test + suites + typecheck green.
+1. ✅ **The full story, live:** fired `file-then-review`, rejected once w/ notes, approved round 2
+   → 12-line diary in exact order: workflow_started → node_started → **agent_dispatched (real
+   agentRunId)** → node_completed → review_requested → review_rejected → node_started →
+   agent_dispatched → node_completed → review_requested → review_approved → workflow_completed.
+   (Gotcha: the review route drives the rework loop SYNCHRONOUSLY — a 15s client timeout
+   disconnects but the server finishes; poll the run, don't trust the HTTP round-trip.)
+2. ✅ **pc_get_workflow_run over the REAL wire:** minted a signed X-PC-* identity (the exact
+   mcp-http-auth HMAC a spawned session carries), initialize + tools/call against /api/mcp →
+   plain-English diary rendered with both inspectable agentRunIds. FD-11 delivered.
+3. ✅ Gates: DIARY-DOOR structural scan · gateway txn-pairing/rollback tests · suites
+   (app-services 82 · server 253 · mcp 75 · domain 20 · web 126) · workspace typecheck.
+4. ⚪ `workflow_cancelled` line: unit-tested only — **finding: gateway.cancelRun has NO production
+   caller** (no cancel-a-run affordance exists anywhere; the executor polls `isCancelled` for a
+   setter that never fires). Product gap predating M3a — the diary line is ready for when the
+   affordance lands (likely M6/FD-7 era).
+5. ⚪ `run_interrupted` line: code-reviewed (same appendRunEvent door as the live-verified lines);
+   forcing it needs an API kill mid-run — covered implicitly the next time a real restart
+   interrupts a run.
+6. ⚪ Backfill-any-tick: one-flag change on the Step-2-live-verified path; registration is
+   once-per-handle so no re-broadcast. Not separately live-fired.
+7. 👁 UI diary timeline: built + typechecked; Emerson visual check pending (open a run on the
+   Workflows page → right-hand "Run diary" column, live lines while a run executes).
 
 ## Out of scope (breadcrumbs)
 

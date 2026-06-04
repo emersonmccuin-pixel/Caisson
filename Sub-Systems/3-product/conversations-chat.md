@@ -135,7 +135,7 @@ The north star (`unified-process-supervision-2026-06-02.md §2`): **chat is a pu
 **What stays:** the `orchestrator_sessions` table (source of truth for conversation identity and JSONL cursor) · the `live_outbox`-driven title and ask-shadow flow (already correct) · `rowPolicy` / `chat-policy.ts` as the single suppression table · the canonical JSONL-only renderer path (`buildCanonicalChatEnvelopes`) · the seq-ordered timeline in `chat-session-reducer`.
 
 **What changes:**
-- **Replay source moves to the DB.** Today `session-replay.ts` reads a file (`jsonl-events.jsonl`) written by the Brain's tailer. In the target, events are the append-only event log in SQLite; replay is a DB query. Slice-3 work (same ledger row as `workflow_run_events`).
+- **Replay source moves to the DB — now named M3b.** Today `session-replay.ts` reads a file (`jsonl-events.jsonl`) written by the Brain's tailer. In the target, events are the append-only event log in SQLite; replay is a DB query. Split out of M3 in the M3a pass (2026-06-04 — the workflow diary shipped; this shares zero code with it): own pass, scope at `refactor plan/m3a-run-diary-scope-2026-06-04.md` §Scope-split.
 - **Send path re-routes.** `ConversationSendService` today reaches into `ProjectRuntime` → `InteractiveSession`. After Steps 4–5, the orchestrator session moves to the Engine, and the send path adapts: the Brain routes the send to the Engine rather than into its own PTY.
 - **Post-turn summaries get a read surface.** Write path stays; UI to be built in the slow migration.
 - **Legacy render path deleted.** The `type:'event'` dual-source path in `useChatRenderItems.ts` is frozen as A/B baseline. Once the canonical path has enough production time, the legacy branch is deleted (one-path rule).

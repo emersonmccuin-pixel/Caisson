@@ -99,7 +99,7 @@ Components subscribe via `useLiveEvents(entity, projectId)` or `useLiveGlobalEve
 
 - **015b (in flight):** delete all remaining direct `broadcastTo()` hand-fanout calls domain by domain until the relay is the sole live-delivery path. Agent-run changes are already fully relay-delivered (`agent-run-writer.ts:36` is a no-op `/* relay-delivered; no hand fanout */`). Remaining: orchestrator snapshots, JSONL streaming events.
 - **Drain timing:** the blanket 250ms `setInterval` drain should become an explicit post-commit `relay.drain()` call at each gateway's commit site (the `015b` comment names this). Cuts the up-to-250ms lag on terminal transitions.
-- **Workflow run events:** `appendEvent` writes to `workflow_run_events` but bypass the `live_outbox` gateway and the UI discards them (ledger §0, row 3). Ledger plan item 12: route `appendEvent` through the gateway so workflow events become first-class live facts.
+- ~~**Workflow run events:** route `appendEvent` through the gateway~~ ✅ M3a (2026-06-04): every diary line is a first-class `workflow.run.event` live fact (entity `workflow-run-event`, version null — append-only; clients key off the event id / use `useLiveEntitySignature` as a refetch trigger). Ledger item 12 closed.
 
 > ☠ **The channel notification system is sentenced — FD-3 (locked 2026-06-03):** the per-orchestrator channel child, the `--dangerously-load-development-channels` flag + regex auto-confirm, channel MCP push notifications, the `channel-event` direct-to-UI broadcast, and inbound external webhook ingestion are ALL removed in the rebuild — **no piece survives.** The mailbox is the one notify door. See demolition map below.
 
@@ -138,5 +138,5 @@ The channel server is the **inbound external-event** door for the orchestrator's
 **Technical:**
 - When does 015b finish? Worth auditing remaining `broadcastTo()` call sites to enumerate dual-path domains and create a tracked deletion list.
 - Should the blanket polling drain become explicit post-commit drain calls (one per gateway) to cut the 250ms lag? Low priority for correctness, relevant for perceived responsiveness.
-- `workflow_run_events`: route `appendEvent` through the gateway (ledger plan item 12) — is this a slice-3 prerequisite, or can it be done independently?
+- ~~`workflow_run_events`: route `appendEvent` through the gateway~~ ✅ done independently (M3a 2026-06-04) — it needed no other slice-3 piece.
 - Should `live-reset` clear only the affected scope/project rather than the entire client store, to reduce the visible blank-then-reload flash on reconnect?

@@ -25,8 +25,10 @@ single-path guard. When no `MERGE`/`DELETE` rows remain unresolved, the app is u
    them via raw SQL (lines 66/74/77). Refactor that hook → mailbox BEFORE dropping tables.
 2. `work_items.body` mirror — DO NOT delete: `dag-run-service.ts:173` reads it live to resolve
    `$root.output` workflow refs. Re-scoped to KEEP + document dual purpose.
-3. `workflow_run_events` — table exists + `appendEvent` writes, but they bypass the gateway/live_outbox
-   and the UI discards `res.events`. Currently dead observability writes; "events = truth" is unbuilt.
+3. ~~`workflow_run_events` — dead observability writes~~ **✅ M3a 2026-06-04: every diary line
+   through `WorkflowRunMutationGateway.appendRunEvent` (event row + `workflow.run.event` outbox
+   fact, one txn; DIARY-DOOR gate); UI renders the timeline; `pc_get_workflow_run` reads it.
+   State PROJECTION stays with M6 (dag_state remains the execution store — by design).**
 
 **One refute OVERREACHED (trace stands):** `reattach-path` — the `AgentRunInput.reattach` field +
 `reattachLifecycle()` method ARE dead (no caller sets `reattach`); the skeptic confused them with the
@@ -128,7 +130,7 @@ live/foundational. The genuinely-dead in-process branch is gated behind a test r
 | `live_outbox` | **KEEP-as-truth** (live events) | HIGH | Append-only; relay cursor is a projection. |
 | `work_items.history` | **KEEP-as-truth** (WI transitions) | HIGH | Denormalized position/status are projections. |
 | `agent_contracts.deliverable` vs legacy `work_items.body` mirror | **KEEP contract; KEEP wi.body — DO NOT delete** | HIGH (re-scoped 06-03) | ⚠️ wi.body is read LIVE by `dag-run-service.ts:173` to resolve `$root.output` workflow refs. Dual purpose (deliverable store + workflow-ref store). Add round-trip guard, do not remove. |
-| `workflow_runs_v2.dag_state` (today's store) → `workflow_run_events` (target truth) | **CREATE live events log; dag_state→projection** | HIGH (re-scoped 06-03) | ⚠️ Table EXISTS + `appendEvent` writes, BUT they bypass the gateway/live_outbox and the UI discards `res.events` (`WorkflowsList.tsx:871`). Today = dead observability writes. Slice-3 work = route appendEvent through gateway/live_outbox so events become truth. |
+| `workflow_runs_v2.dag_state` (today's store) → `workflow_run_events` (target truth) | **✅ M3a 2026-06-04: diary truth-GRADE (one door + complete + readable + visible). dag_state→projection deferred to M6 (build the new step-model semantics on the spine once).** | HIGH (re-scoped 06-03) | appendRunEvent = event row + outbox fact in one txn (DIARY-DOOR gate); lifecycle bookends + `agent_dispatched` cross-link added; pc_get_workflow_run + UI timeline read it. M3b (chat-replay file→DB) split out — own pass. |
 | `PC_RIG_TOOL_REGISTRY` → `TOOLS`/`PC_RIG_TOOL_NAMES`/catalog | **DONE — single source** | HIGH (V3) | Already unified (Slice 016): all `.map()` off the registry + parity check. Not a target. |
 | web `STOCK_POD_NAMES` mirror | **N/A — already gone** | HIGH (V4) | No mirror in `apps/web/src`. Not a target. |
 | `field_schemas`, `orchestrator_sessions` tables | **KEEP-as-truth** | HIGH (V7) | Real repo'd tables. |
@@ -197,7 +199,7 @@ Each row independently shippable. Risky moves after prereqs. `✅` = code alread
 | 9 | agent-inbox tables DELETE | refactor `inbox-drain.cjs` → mailbox, archive, drop tables | mailbox-stable + hook refactor | NO-INBOX-WRITE | med |
 | 10 | sync-invoke types DELETE | remove `PcInvokeAgentResultSync` + `wait` | — | self-guarding (compile) | low |
 | 11 | wi.body re-scope | KEEP; document dual purpose | — | $root.output round-trip | low |
-| 12 | workflow events = truth | route `appendEvent` through gateway/live_outbox | slice 3 | EVENTS-ARE-TRUTH | high |
+| 12 | workflow events = truth | **✅ M3a 2026-06-04** — appendRunEvent door + DIARY-DOOR gate + tool + UI timeline; projection → M6 | slice 3 | DIARY-DOOR ✅ | high |
 
 **Ready now (no prereq):** sync-invoke DELETE · wi.body re-scope. (Rows 1–8 ✅ AND Step 8/P9
 timeout-ladder ✅ 2026-06-04 — **the whole north-star process track, Steps 1–8, is CLOSED**.
