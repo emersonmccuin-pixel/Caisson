@@ -43,6 +43,26 @@ export class Supervisor {
     for (const child of this.children) child.stop(signal);
   }
 
+  /**
+   * Graceful stop with a deadline: signal everyone, wait, then SIGKILL any
+   * child still running. A graceful stop that can't complete escalates — it
+   * never hangs (the host shutdown-never-exits lesson). Returns true if every
+   * child exited gracefully.
+   */
+  async stopAndWait(signal: NodeJS.Signals = 'SIGINT', timeoutMs = 4_000): Promise<boolean> {
+    this.stopAll(signal);
+    const results = await Promise.all(this.children.map((c) => c.waitForExit(timeoutMs)));
+    let allGraceful = true;
+    results.forEach((exited, i) => {
+      if (exited) return;
+      allGraceful = false;
+      const child = this.children[i];
+      this.log(`[supervisor] ${child.name} missed the ${timeoutMs}ms stop deadline — SIGKILL`);
+      child.killHard();
+    });
+    return allGraceful;
+  }
+
   get isStopping(): boolean {
     return this.signalled;
   }

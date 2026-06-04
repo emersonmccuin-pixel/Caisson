@@ -136,6 +136,31 @@ export class SupervisedChild {
     if (this.child) this.child.kill(signal);
   }
 
+  /** Resolve true once the current child has exited (immediately if none).
+   *  False = still running at the deadline (caller escalates, e.g. SIGKILL). */
+  waitForExit(timeoutMs: number): Promise<boolean> {
+    const child = this.child;
+    if (!child) return Promise.resolve(true);
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        child.off('exit', onExit);
+        resolve(false);
+      }, timeoutMs);
+      const onExit = (): void => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      child.once('exit', onExit);
+    });
+  }
+
+  /** Last resort after a graceful stop misses its deadline. */
+  killHard(): void {
+    this.stopping = true;
+    if (this.child) this.child.kill('SIGKILL');
+  }
+
   private async spawnOnce(): Promise<void> {
     if (this.stopping) return;
     if (this.hooks.preSpawn) await this.hooks.preSpawn();
