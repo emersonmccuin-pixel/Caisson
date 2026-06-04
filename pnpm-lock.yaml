@@ -94,6 +94,9 @@ importers:
         specifier: ^8.18.0
         version: 8.20.1
     devDependencies:
+      '@pc/agent-host':
+        specifier: workspace:*
+        version: link:../../packages/agent-host
       '@types/node':
         specifier: ^22.10.2
         version: 22.19.19

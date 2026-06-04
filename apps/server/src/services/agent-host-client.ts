@@ -626,6 +626,9 @@ function isAgentHostCommandResponse(
     case 'notify-mcp-handshake':
     case 'shutdown':
       return true;
+    // FD-15 — the effective (clamped) cap is the push's positive receipt.
+    case 'set-config':
+      return typeof value.maxConcurrent === 'number';
     default:
       return false;
   }
