@@ -15,6 +15,7 @@ import { PC_RIG_TOOL_REGISTRY } from '@pc/domain/tool-registry';
 import type { ToolContext, ToolResult } from './context.ts';
 import { handleAgentRunTool } from './agent-runs.ts';
 import { handleAgentTool } from './agents.ts';
+import { handleMetaTool } from './meta.ts';
 import { handleProjectConfigTool } from './project-config.ts';
 import { handleWorkItemTool } from './work-items.ts';
 import { handleWorkflowTool } from './workflows.ts';
@@ -42,6 +43,10 @@ export async function dispatchPcRigTool(
   if (projectConfigResult) return projectConfigResult;
   const agentRunResult = await handleAgentRunTool(name, args, ctx);
   if (agentRunResult) return agentRunResult;
+  // FD-16 — the find/call door. Last in the chain; receives the chain itself
+  // so pc_call_tool re-enters dispatch for its on-demand target.
+  const metaResult = await handleMetaTool(name, args, ctx, dispatchPcRigTool);
+  if (metaResult) return metaResult;
   throw new Error(`unknown tool: ${name}`);
 }
 

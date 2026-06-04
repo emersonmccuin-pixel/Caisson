@@ -1606,8 +1606,121 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "kind"
       ]
     }
+  },
+  {
+    "name": "pc_find_tool",
+    "family": "none",
+    "label": "Find a tool",
+    "description": "Search the full Caisson tool catalog by keyword when none of your granted tools fits the job. Returns up to 5 matches with each tool's tier: a tool you already hold (call it directly), an on-demand tool (call it via pc_call_tool — the match includes its input schema), or a worker-side tool (flows INTO you from dispatched agents; not callable from your seat). Use this for rare diagnostic/config work — reading a workflow definition, checking an agent's audit trail, inspecting knowledge — instead of guessing tool names.",
+    "catalogDescription": "Search the full tool catalog for a tool you don't carry day-to-day.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "keywords describing what you need, e.g. \"read workflow definition\" or \"agent audit history\""
+        }
+      },
+      "required": [
+        "query"
+      ]
+    }
+  },
+  {
+    "name": "pc_call_tool",
+    "family": "none",
+    "label": "Call an on-demand tool",
+    "description": "Execute an on-demand catalog tool discovered via pc_find_tool. `name` is the bare tool name (e.g. pc_get_workflow); `args` is that tool's input object per the schema pc_find_tool returned. ONLY on-demand tier tools are callable — tools you already hold are called directly, and worker-side tools are refused. Calls route through the exact same server paths and audit logs as the specialist surfaces; nothing happens invisibly. DEFAULT TO SPECIALISTS for substantive authoring (agent-designer, workflow-builder) — reach through this door when the user asked you to inspect or fix something directly, or you are debugging. CAUTION: editing a workflow definition while one of its runs is in flight has undefined interaction — finish or kill the run first, or warn the user.",
+    "catalogDescription": "Run a catalog tool found with Find a tool (on-demand tier only; audited).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "bare on-demand tool name from pc_find_tool, e.g. pc_get_workflow"
+        },
+        "args": {
+          "type": "object",
+          "description": "the input object for that tool, matching its schema",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
   }
 ];
+
+/** FD-16 — every registry tool's tier. `first-order` = meant to be carried in
+ *  a pod's everyday allowlist; `on-demand` = reachable only through
+ *  pc_find_tool → pc_call_tool (diagnostic/config surface; audited);
+ *  `worker` = dispatched-agent-side (flows INTO the orchestrator — never
+ *  callable through the door). Kept as ONE map (not a per-entry field) so the
+ *  wire-frozen entries above stay untouched; the registry guard test asserts
+ *  this map and the registry cover exactly the same names. */
+export type PcRigToolTier = 'first-order' | 'on-demand' | 'worker';
+
+export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
+  // Work items / dispatch / comms / orientation — the everyday surface.
+  pc_create_work_item: 'first-order',
+  pc_create_agent_work_item: 'first-order',
+  pc_get_work_item: 'first-order',
+  pc_list_work_items: 'first-order',
+  pc_update_work_item: 'first-order',
+  pc_move_work_item: 'first-order',
+  pc_resolve_work_item: 'first-order',
+  pc_log_bug: 'first-order',
+  pc_invoke_agent: 'first-order',
+  pc_continue_agent: 'first-order',
+  pc_list_my_runs: 'first-order',
+  pc_inspect_agent_run: 'first-order',
+  pc_kill_agent_run: 'first-order',
+  pc_answer_pending: 'first-order',
+  pc_fire_workflow: 'first-order',
+  pc_complete_node: 'first-order',
+  pc_list_agents: 'first-order',
+  pc_list_stages: 'first-order',
+  pc_list_workflows: 'first-order',
+  pc_list_field_schemas: 'first-order',
+  pc_list_areas: 'first-order',
+  pc_update_area: 'first-order',
+  pc_find_tool: 'first-order',
+  pc_call_tool: 'first-order',
+  // Agent config + knowledge + secrets + audit — specialist/UI-owned defaults.
+  pc_create_agent: 'on-demand',
+  pc_get_agent: 'on-demand',
+  pc_update_agent: 'on-demand',
+  pc_delete_agent: 'on-demand',
+  pc_create_agent_secret: 'on-demand',
+  pc_delete_agent_secret: 'on-demand',
+  pc_add_agent_mcp_server: 'on-demand',
+  pc_delete_agent_mcp_server: 'on-demand',
+  pc_list_agent_audit: 'on-demand',
+  pc_create_knowledge: 'on-demand',
+  pc_update_knowledge: 'on-demand',
+  pc_delete_knowledge: 'on-demand',
+  pc_knowledge_read: 'on-demand',
+  // Workflow authoring — workflow-builder-owned default.
+  pc_create_workflow: 'on-demand',
+  pc_get_workflow: 'on-demand',
+  pc_update_workflow: 'on-demand',
+  pc_delete_workflow: 'on-demand',
+  pc_publish_workflow: 'on-demand',
+  pc_save_workflow_draft: 'on-demand',
+  pc_read_workflow_draft: 'on-demand',
+  // Project structure config.
+  pc_replace_stages: 'on-demand',
+  pc_replace_field_schemas: 'on-demand',
+  pc_write_claude_md: 'on-demand',
+  // Worker-side — these flow INTO the orchestrator from dispatched agents.
+  pc_ask_orchestrator: 'worker',
+  pc_ask_user: 'worker',
+  pc_request_approval: 'worker',
+  pc_node_failed: 'worker',
+  pc_submit_deliverable: 'worker',
+  pc_attach_to_work_item: 'worker',
+};
 
 /** Bare tool names in registry (= ListTools) order. */
 export const PC_RIG_TOOL_REGISTRY_NAMES: readonly string[] = PC_RIG_TOOL_REGISTRY.map(

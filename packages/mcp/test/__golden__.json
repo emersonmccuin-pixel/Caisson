@@ -1403,6 +1403,43 @@
           "kind"
         ]
       }
+    },
+    {
+      "name": "pc_find_tool",
+      "description": "Search the full Caisson tool catalog by keyword when none of your granted tools fits the job. Returns up to 5 matches with each tool's tier: a tool you already hold (call it directly), an on-demand tool (call it via pc_call_tool — the match includes its input schema), or a worker-side tool (flows INTO you from dispatched agents; not callable from your seat). Use this for rare diagnostic/config work — reading a workflow definition, checking an agent's audit trail, inspecting knowledge — instead of guessing tool names.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "keywords describing what you need, e.g. \"read workflow definition\" or \"agent audit history\""
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "pc_call_tool",
+      "description": "Execute an on-demand catalog tool discovered via pc_find_tool. `name` is the bare tool name (e.g. pc_get_workflow); `args` is that tool's input object per the schema pc_find_tool returned. ONLY on-demand tier tools are callable — tools you already hold are called directly, and worker-side tools are refused. Calls route through the exact same server paths and audit logs as the specialist surfaces; nothing happens invisibly. DEFAULT TO SPECIALISTS for substantive authoring (agent-designer, workflow-builder) — reach through this door when the user asked you to inspect or fix something directly, or you are debugging. CAUTION: editing a workflow definition while one of its runs is in flight has undefined interaction — finish or kill the run first, or warn the user.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "bare on-demand tool name from pc_find_tool, e.g. pc_get_workflow"
+          },
+          "args": {
+            "type": "object",
+            "description": "the input object for that tool, matching its schema",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
     }
   ],
   "pcRigToolNames": [
@@ -1456,7 +1493,9 @@
     "mcp__pc-rig__pc_ask_user",
     "mcp__pc-rig__pc_request_approval",
     "mcp__pc-rig__pc_answer_pending",
-    "mcp__pc-rig__pc_submit_deliverable"
+    "mcp__pc-rig__pc_submit_deliverable",
+    "mcp__pc-rig__pc_find_tool",
+    "mcp__pc-rig__pc_call_tool"
   ],
   "toolCatalog": [
     {
@@ -1823,6 +1862,18 @@
       "slug": "mcp__pc-rig__pc_submit_deliverable",
       "label": "Submit your deliverable",
       "description": "Submit the typed deliverable for your contract (the verified output source).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_find_tool",
+      "label": "Find a tool",
+      "description": "Search the full tool catalog for a tool you don't carry day-to-day.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_call_tool",
+      "label": "Call an on-demand tool",
+      "description": "Run a catalog tool found with Find a tool (on-demand tier only; audited).",
       "source": "pc-rig"
     }
   ],

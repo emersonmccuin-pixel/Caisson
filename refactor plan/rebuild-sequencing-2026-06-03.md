@@ -68,7 +68,7 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 | S1 **Areas first-class** — rename page, cards→modal, descriptions, orchestrator assigns + maintains | nothing — **ready now** | FD-19 |
 | S2 **Authoring handoffs** — Create agent / Create workflow buttons → orchestrator chat with pre-filled intent; specialist agents do the building | orchestrator prompt + dispatch work; prereq for P7 | FD-21, FD-11 (expert builder) |
 | S3 **FD-22 version pin** — exact preflight check, pinned installer, auto-updater off for spawned sessions, warn-not-wall | nothing — **ready now**, small | FD-22 |
-| S4 **FD-15 concurrency setting** ✅ shipped 2026-06-03 (87b33b27: live `set-config` push, Settings field, `/health` receipt) + **FD-16 two-tier tools** (still open) | nothing — small | FD-15, FD-16 |
+| S4 ✅ **FD-15 concurrency setting** shipped 2026-06-03 (87b33b27: live `set-config` push, Settings field, `/health` receipt) + **FD-16 two-tier tools** shipped 2026-06-03 (tier map + `pc_find_tool`/`pc_call_tool` door, on-demand-only dispatch, audited; orchestrator+caisson granted live) | nothing — small | FD-15, FD-16 |
 | S5 **FD-14 "resume interrupted job"** affordance | P1 (one loop knows what's resumable) | FD-14 |
 | S6 **FD-18 loading states** on agent views | mechanism exists; orchestrator surface rides P6 | FD-18 |
 | S7 **FD-20 Patterns** — design pass, then build | M5 (contract = job spec) + S1 (areas) + dispatch-payload audit verdict | FD-20 |

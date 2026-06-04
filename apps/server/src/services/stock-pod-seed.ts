@@ -339,7 +339,7 @@ Before mutating anything:
 1. Read current state with MCP tools or HTTP GET.
 2. Describe the proposed change in product terms.
 3. Ask for approval when the change is broad, destructive, or hard to undo.
-4. Apply the change with the typed pc-rig tool when one exists (pc_replace_stages, pc_replace_field_schemas, pc_write_claude_md, pc_create_workflow, pc_update_workflow, pc_delete_workflow). Fall back to curl through Bash only for config the typed tools don't cover (e.g. global app settings).
+4. Apply the change with the typed pc-rig tool when one exists (pc_replace_stages, pc_replace_field_schemas, pc_write_claude_md, pc_create_workflow, pc_update_workflow, pc_delete_workflow). For catalog tools you don't carry (agent config, knowledge management, audit reads), search with pc_find_tool and execute via pc_call_tool — same routes, same audit logs. Fall back to curl through Bash only for config no typed tool covers (e.g. global app settings).
 5. Check the response and report the result.
 
 You may skip approval for simple reads, renaming a project, renaming a stage without changing its id, or adding a new stage at the end of the board.
@@ -1212,6 +1212,10 @@ const CAISSON_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_replace_stages',
     'mcp__pc-rig__pc_replace_field_schemas',
     'mcp__pc-rig__pc_write_claude_md',
+    // FD-16 — the on-demand door: reach the rest of the catalog (agent config,
+    // knowledge mgmt, audit reads) without carrying it day-to-day.
+    'mcp__pc-rig__pc_find_tool',
+    'mcp__pc-rig__pc_call_tool',
   ]),
   model: 'sonnet',
   effort: 'high',

@@ -153,14 +153,23 @@ All agent edits — prompt tweaks, model swaps, tool changes, renames, big rewor
 
 ## Managing knowledge on an agent
 
-Knowledge add / update / delete / read all live in the **Agents tab** — open the pod, go to the Knowledge sub-tab. Agent-designer handles knowledge during fresh design automatically. You do not have knowledge-management tools; point the user to the tab or dispatch a code-capable agent if the change is scriptable.
+Knowledge add / update / delete / read all live in the **Agents tab** — open the pod, go to the Knowledge sub-tab. Agent-designer handles knowledge during fresh design automatically. You don't carry knowledge-management tools day-to-day; point the user to the tab, or reach through the on-demand door (\`pc_find_tool\` → \`pc_call_tool\`, see Tool surface) when the user asked you to handle it directly.
 
 ## Tool surface
 
 - **Direct local tools:** \`Read\`, \`Glob\`, \`Grep\`, \`Edit\`, \`Write\`, \`Bash\` — small direct fixes, runtime recovery, quick checks, and enough orientation to pick the right lever.
 - **Caisson tools (\`mcp__pc-rig__pc_*\`):** work items (create / read / list / update / move / resolve [approve|reject]), dispatch (\`pc_invoke_agent\` + \`pc_continue_agent\` + \`pc_list_my_runs\`), comms (\`pc_answer_pending\`), run a workflow (\`pc_fire_workflow\`) + resolve a review pause (\`pc_complete_node\`), bug logging (\`pc_log_bug\`). You hold a **curated subset**, not the whole server — the \`## Tool reference\` appendix below is your exact allowlist.
 
-Structurally absent: \`NotebookEdit\`, \`Task\`, \`WebFetch\`, \`WebSearch\`. Also not in your kit: workflow **authoring** (create / edit / publish — that's workflow-builder + the Workflows tab), worktree management, agent create / edit / delete / knowledge management (Agents tab), and agent secrets / MCP-server config (Agents tab). Dispatch or point the user to the tab for those. Calling any absent tool is impossible — it isn't in your spawn config.
+Structurally absent: \`NotebookEdit\`, \`Task\`, \`WebFetch\`, \`WebSearch\`. Also not carried day-to-day: workflow **authoring** (create / edit / publish — that's workflow-builder + the Workflows tab), worktree management, agent create / edit / delete / knowledge management (Agents tab), and agent secrets / MCP-server config (Agents tab). Dispatch or point the user to the tab for those by default.
+
+### The on-demand door (FD-16)
+
+For the rare moments the curated kit isn't enough — the user asked YOU to inspect or fix something directly, or you're debugging the engine — you carry a two-tool search door:
+
+- \`pc_find_tool({ query })\` — search the full Caisson catalog by keywords. Matches come back with a tier: tools you already hold (call directly), **on-demand** tools (schema included), or worker-side tools (not callable).
+- \`pc_call_tool({ name, args })\` — execute an on-demand match. Same server routes, same audit logs as the specialist surfaces — nothing happens invisibly.
+
+Ground rules: specialists and tabs stay the DEFAULT for authoring work — the door is for inspection, diagnosis, and direct fixes the user explicitly asked of you. Never edit a workflow definition while one of its runs is in flight (finish or kill the run first, or warn the user). If \`pc_call_tool\` refuses a name, that refusal is the answer — don't retry variations.
 
 Also absent: any user-global MCP server (Gmail, Calendar, HubSpot, Drive, etc.). Caisson spawns you with \`--strict-mcp-config\`; only \`pc-rig\` + the project's webhook server are loaded.
 
@@ -352,6 +361,11 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_list_areas',
     // FD-19 — the orchestrator maintains Area summaries itself.
     'mcp__pc-rig__pc_update_area',
+    // FD-16 — the on-demand door: search the full catalog + execute on-demand
+    // tier tools (diagnostics/config; audited). Defaults still steer to
+    // specialists; see "The on-demand door" prompt section.
+    'mcp__pc-rig__pc_find_tool',
+    'mcp__pc-rig__pc_call_tool',
   ],
   model: 'opus',
   effort: null,

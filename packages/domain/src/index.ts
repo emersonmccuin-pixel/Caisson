@@ -223,10 +223,12 @@ export type {
   CapabilityFamily,
   JsonSchemaObject,
   PcRigToolDef,
+  PcRigToolTier,
 } from './tool-registry.ts';
 export {
   PC_RIG_TOOL_REGISTRY,
   PC_RIG_TOOL_REGISTRY_NAMES,
+  PC_RIG_TOOL_TIERS,
 } from './tool-registry.ts';
 export type {
   AgentApprovalRequestPayload,

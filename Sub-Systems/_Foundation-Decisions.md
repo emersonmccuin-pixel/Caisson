@@ -430,7 +430,7 @@ connect-push set it to the stored value; PATCH → host effective cap followed.
 
 ## FD-16 — Orchestrator tooling is two-tier: lifecycle first-order, diagnostics on demand
 
-**Status:** 🟢 Locked — 2026-06-03
+**Status:** ✅ Shipped — 2026-06-03
 
 **The decision:**
 - **Agent-lifecycle tools are first-order** — the orchestrator natively knows them in its prompt:
@@ -441,6 +441,17 @@ connect-push set it to the stored value; PATCH → host effective cap followed.
 
 **Why:** Emerson wants debugging power available without prompt-bloat. The on-demand pattern is
 proven (Claude Code itself uses deferred tool search for big catalogs).
+
+**As built:** every catalog tool carries a tier (`PC_RIG_TOOL_TIERS` in the one registry; parity
+guard test): `first-order` / `on-demand` / `worker`. Two new first-order tools form the door:
+`pc_find_tool` (keyword search; returns matches with tier + input schema) and `pc_call_tool`
+(executes ONLY `on-demand` tier through the same handler chain — same routes and audit rows as
+the specialist surfaces; typed refusal for first-order/worker/unknown, so the door can't bypass a
+withheld grant and can't recurse). Emerson's call (2026-06-03): full reach including config
+WRITES, audited — Option B over read-only. Orchestrator + caisson granted the door (live in DB
+via boot reseed, 34/23 tools); prompts steer authoring to specialists by default and warn against
+editing a workflow def while a run is in flight (open question rides M6). Worker comms + sentenced
+tools (`pc_ask_user` et al.) are permanently outside the door.
 
 ---
 

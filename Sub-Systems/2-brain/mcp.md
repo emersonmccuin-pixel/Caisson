@@ -38,9 +38,11 @@ Orchestrator and modal spawns don't send this signal — they don't use programm
 
 After the handshake, the messenger writes `data/projects/<projectId>/mcp-status.json` (pid, timestamp, tool list) and refreshes it every 2 seconds (`server.ts:73–114`). `GET /api/mcp-status?projectId=<id>` reads that file and reports `{ alive, toolCount, tools }` — `alive` is true only when the file's timestamp is within 8 seconds of now (i.e., four missed heartbeats counts as dead). This is a file-based signal, not a database row.
 
-### 4. The tool families (51 tools total)
+### 4. The tool families (53 tools total)
 
-All 51 tool definitions live in one place: `packages/domain/src/tool-registry.ts:PC_RIG_TOOL_REGISTRY` (line 52). The messenger's tool list (`TOOLS`) and the server's wildcard-expansion catalog (`PC_RIG_TOOL_NAMES`) both derive from this single registry by `.map()`. A build test (Slice-016) asserts they stay in sync — a half-added tool fails the build.
+All 53 tool definitions live in one place: `packages/domain/src/tool-registry.ts:PC_RIG_TOOL_REGISTRY` (line 52). The messenger's tool list (`TOOLS`) and the server's wildcard-expansion catalog (`PC_RIG_TOOL_NAMES`) both derive from this single registry by `.map()`. A build test (Slice-016) asserts they stay in sync — a half-added tool fails the build.
+
+**FD-16 tiers (shipped 2026-06-03):** every tool also carries a tier in `PC_RIG_TOOL_TIERS` (same file; parity guard `packages/domain/test/tool-tiers.test.ts`): `first-order` (meant for everyday pod allowlists), `on-demand` (reachable only through the door below), `worker` (dispatched-agent-side; never callable through the door).
 
 | Family | What the tools do | Tool names |
 |---|---|---|
@@ -50,7 +52,9 @@ All 51 tool definitions live in one place: `packages/domain/src/tool-registry.ts
 | **workflow** | Author and control workflows | `pc_save_workflow_draft`, `pc_read_workflow_draft`, `pc_publish_workflow`, `pc_list_workflows`, `pc_fire_workflow`, `pc_complete_node`, `pc_node_failed`, `pc_create_workflow`, `pc_update_workflow`, `pc_delete_workflow`, `pc_get_workflow` |
 | **project** | Read/write project config, stages, and field schemas | `pc_write_claude_md`, `pc_list_stages`, `pc_list_field_schemas`, `pc_replace_stages`, `pc_replace_field_schemas` |
 
-When a tool call arrives, the messenger looks it up in a name-keyed handler map first, then falls back to an ordered chain that runs all five family handlers until one returns a non-null result (`handlers.ts:30–51`). (The chain is O(N) per call — a known cleanup deferred in `handlers.ts:8–9`.)
+| **none (meta)** | The FD-16 on-demand door | `pc_find_tool` (keyword-search the catalog; returns matches with tier + input schema), `pc_call_tool` (execute an `on-demand` tier tool through the SAME handler chain — same routes, same audit rows; refuses `first-order`/`worker`/unknown with a typed message) |
+
+When a tool call arrives, the messenger looks it up in a name-keyed handler map first, then falls back to an ordered chain that runs the family handlers until one returns a non-null result (`handlers.ts:30–51`); the meta door runs last and re-enters the same chain for its target. (The chain is O(N) per call — a known cleanup deferred in `handlers.ts:8–9`.)
 
 ### 5. The done-signal tool (`pc_submit_deliverable`)
 
