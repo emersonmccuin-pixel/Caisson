@@ -453,6 +453,10 @@ via boot reseed, 34/23 tools); prompts steer authoring to specialists by default
 editing a workflow def while a run is in flight (open question rides M6). Worker comms + sentenced
 tools (`pc_ask_user` et al.) are permanently outside the door.
 
+**Live-verified 2026-06-04:** fresh orchestrator, one natural-language turn → `pc_find_tool`
+("agent audit log") returned `pc_list_agent_audit` + tier + schema → `pc_call_tool` executed it
+(`ok:true`, real rows) → clean end_turn in 18s. Find → schema → audited call, end to end.
+
 ---
 
 ## FD-17 — Timeouts escalate before they execute
