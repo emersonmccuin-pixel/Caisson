@@ -271,7 +271,10 @@ M7's): the resume's answer send is eaten by the `--resume` replay repaint (echo-
 JSONL user row, empty composer, run wedged 'running') + the pre-pause claude.exe never exits
 (code assumed "CC exits cleanly when paused" — it doesn't), leaving two processes on one
 session. The known quiet-window class ([[resume-needs-quiet-window]]) landing on the ONE door —
-fixed in the same session (see M7 scope doc addendum).**
+FIXED same session (cd92e784: pre-pause spawn killed at resume · quiet-gated send · positive
+JSONL-user-row receipt w/ bounded re-sends → typed failure). Third live fire end-to-end GREEN:
+ask → answer → resume → "Human chose: fetch-report" deliverable → completed, zero zombie
+processes. Full ask loop now positively verified on the one door.**
 
 **The decision:**
 - **Agents never ask the human directly. Every agent question goes to the orchestrator** through the

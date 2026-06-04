@@ -84,10 +84,16 @@ the identical flow predates it):
    without killing the old child → two claude.exe on ONE session id; `pc_kill_agent_run` kills
    only the current handle (`processKilled:false` left the original alive).
 
-**Fix (same session):** (a) identity-guard the spawn event handlers + kill the old spawn at
-resume; (b) resume send waits for a PTY quiet window (1500ms, the lab-proven precondition);
-(c) positive receipt: the answer must appear as a JSONL user row within a deadline, else bounded
-re-send → typed `resume-input-lost` failure. Silence never wedges.
+**Fix ✅ SHIPPED + LIVE-VERIFIED (cd92e784):** (a) `_resumeWithAnswer` kills the pre-pause spawn;
+spawn event handlers identity-guarded so that kill's exit can't misfire `onSpawnExit`; (b) resume
+send gated on `LowLevelSpawn.awaitOutputQuiet(1500ms)` (the lab-proven precondition); (c) positive
+receipt — the answer's JSONL user row past the pre-send cursor floor (replayed historical rows
+can't satisfy it), bounded re-sends (3) → typed `send-failed: resume-input-lost`. Silence never
+wedges. 5 new tests (`agent-run-resume.test.ts`); runtime 46 · agent-host 12 · server 277 green.
+**Third live fire end-to-end GREEN:** ask → answer → resume → agent echoed "Human chose:
+fetch-report" → deliverable → `completed` w/ delivered_at; ZERO leftover claude.exe (runs 1+2 each
+left a zombie). Reload ritual that worked: one-shot agent-host build (watcher gotcha) → kill host
+pid (verify cmdline) → POST /api/dev/restart.
 
 ## Fire recipes (from P9/M5, verified)
 
