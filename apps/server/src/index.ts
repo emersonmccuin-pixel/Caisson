@@ -104,6 +104,7 @@ import { cleanupLegacyProjectRuntimeFiles } from './services/legacy-runtime-clea
 import { resetStockPodToDefault } from './services/stock-pod-reset.ts';
 import { detectStockPodDrift, listCanonicalStockPodNames } from './services/pod-drift.ts';
 import { seedStockPods } from './services/stock-pod-seed.ts';
+import { scrubDeadToolGrants } from './services/agent-tools-scrub.ts';
 import { migrateStoredWorkflowDefsToV3 } from './services/workflow-def-migrate-v3.ts';
 import { cancelWorkflowRunCascade } from './services/workflow-run-cancel.ts';
 import { createAgentRunReconciler } from './services/agent-run-reconciler.ts';
@@ -192,6 +193,17 @@ applyClaudeRuntimeSettings(readSettings());
       case 'unchanged':
         break;
     }
+  }
+}
+
+// M7 (FD-6) — scrub dead tool grants (☠ pc_ask_user) from ALL stored agent
+// rows; the stock reseed above only covers global stock pods. Idempotent.
+{
+  const res = scrubDeadToolGrants();
+  if (res.scrubbed > 0) {
+    console.log(
+      `[pc] M7 dead-grant scrub: removed dead tool grants from ${res.scrubbed}/${res.scanned} agents: ${res.rows.join(' · ')}`,
+    );
   }
 }
 
