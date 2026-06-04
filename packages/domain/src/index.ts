@@ -247,7 +247,6 @@ export type {
   PcInvokeAgentResult,
   PcInvokeAgentResultAsync,
   PcInvokeAgentResultError,
-  PcInvokeAgentResultSync,
   PcRequestApprovalInput,
   PcRequestApprovalResult,
   PendingAskOption,

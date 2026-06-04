@@ -479,7 +479,6 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       agentName,
       sessionId: result.ccSessionId,
       runId: result.agentRunId,
-      mode: 'async',
       input,
       now: services.now(),
     });
@@ -583,7 +582,6 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       agentName: result.podName,
       sessionId: result.ccSessionId,
       runId: result.agentRunId,
-      mode: 'async',
       input,
       now: services.now(),
     });

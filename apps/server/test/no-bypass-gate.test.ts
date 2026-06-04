@@ -122,6 +122,10 @@ const BANNED_RESURRECTION = [
   // do not re-grow it on pods OR the contract without a real consumer.
   'outputDestination',
   'output_destination',
+  // M5 (ledger sync-invoke DELETE): ☠ the never-wired blocking dispatch mode.
+  // pc_invoke_agent is ALWAYS async — receipt now, terminal via mailbox +
+  // deliverable door.
+  'PcInvokeAgentResultSync',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 

@@ -43,25 +43,23 @@ export interface RecordInvokeInput {
   agentName: string;
   sessionId: string;
   runId: ULID;
-  mode: 'sync' | 'async';
   input: string;
   now: number;
 }
 
+/** M5 (sync-invoke DELETE): dispatch is ALWAYS async — the `mode` param +
+ *  its dead 'sync' branch are gone. `invokeMode` stays on the history row
+ *  (historical rows carry it; new rows pin 'async'). */
 export function recordAgentInvoke(input: RecordInvokeInput): void {
   if (!input.workItemId) return;
-  const note =
-    input.mode === 'sync'
-      ? `Invoked ${input.agentName} (sync) — ${clip(input.input)}`
-      : `Dispatched ${input.agentName} (async) — ${clip(input.input)}`;
   safeAppend(input.workItemId, {
     ts: ts(input.now),
     kind: 'agent-invoke',
     agentName: input.agentName,
     sessionId: input.sessionId,
     runId: input.runId,
-    invokeMode: input.mode,
-    note,
+    invokeMode: 'async',
+    note: `Dispatched ${input.agentName} (async) — ${clip(input.input)}`,
   });
 }
 

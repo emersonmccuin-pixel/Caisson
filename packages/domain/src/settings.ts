@@ -16,7 +16,7 @@ export interface ActivityPanelSettings {
 /** Section 18.6 + 18.7 — dispatch-side controls for `pc_invoke_agent`. */
 export interface AgentDispatchSettings {
   /**
-   * Async-dispatch ack window. `pc_invoke_agent` (wait: false) blocks until
+   * Async-dispatch ack window. `pc_invoke_agent` blocks only until
    * the spawned agent emits its first non-system JSONL event OR this timer
    * fires. Default 60s — Section 20.A.4 bumped from 30s after 4-back-to-back
    * cold spawns under the legacy `npx -y tsx ...` MCP command blew past 30s.

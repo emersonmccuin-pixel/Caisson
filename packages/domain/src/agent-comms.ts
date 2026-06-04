@@ -7,11 +7,10 @@
 // pause-state shapes live in `agent-system.ts` (the `agent_runs` /
 // `pending_asks` / `agent_inbox` / `agent_delivery_audit` rows).
 //
-// Pause semantics (locked in Planning 2026-05-20):
-// - `pc_invoke_agent` is NOT a pause kind. With `wait: true` the caller blocks
-//   inside its own turn until the child returns. With `wait: false` the call
-//   returns immediately and an `agent-completed` / `agent-failed` event lands
-//   on the caller's stream when the child finishes.
+// Pause semantics (locked in Planning 2026-05-20; M5 sync-invoke DELETE):
+// - `pc_invoke_agent` is NOT a pause kind. The call returns immediately and an
+//   `agent-completed` / `agent-failed` event lands on the caller's stream when
+//   the child finishes. (☠ the never-wired `wait: true` blocking mode.)
 // - `pc_ask_orchestrator` / `pc_ask_user` / `pc_request_approval` ARE pause
 //   kinds. Tool returns a pending-ask handle; the agent's process exits
 //   cleanly at turn end; runtime re-spawns with `--resume <sessionId>` once
@@ -140,41 +139,25 @@ export type AgentChannelEventPayload =
 
 // pc_invoke_agent ─────────────────────────────────────────────────────────
 
-/** `pc_invoke_agent` — dispatch an agent. With `wait: true` the call blocks
- *  inside the caller's turn until the child returns. With `wait: false` it
- *  returns immediately and a terminal `agent-completed` / `agent-failed`
- *  channel event lands on the caller's stream. Orchestrator's prompt
- *  defaults to `wait: false` (don't block the chat composer). Background
- *  agents' prompts default to `wait: true` (child's result is the next
- *  input). */
+/** `pc_invoke_agent` — dispatch an agent. ALWAYS async: returns immediately
+ *  with the run handle; the terminal result arrives via the mailbox
+ *  (`agent-completed` / `agent-failed`) + the deliverable door.
+ *  M5 (ledger sync-invoke DELETE): ☠ `wait` flag + `PcInvokeAgentResultSync` —
+ *  a sync mode that was typed but never wired (no handler read `wait`; the
+ *  route hardcoded async). */
 export interface PcInvokeAgentInput {
   /** Pod-row name (kebab-case). */
   name: string;
   /** Free-form input passed to the child as its first user message. */
   input: string;
-  /** Defaults to `true` (sync). Orchestrator pod prompt overrides to
-   *  `false` per handler convention. */
-  wait?: boolean;
   /** Optional: the work-item the child is operating on. Carried forward
-   *  on every `pc_ask_*` the child emits and on its terminal event. */
+   *  on every ask the child emits and on its terminal event. */
   parentWorkItemId?: ULID;
 }
 
-export type PcInvokeAgentResult =
-  | PcInvokeAgentResultSync
-  | PcInvokeAgentResultAsync
-  | PcInvokeAgentResultError;
+export type PcInvokeAgentResult = PcInvokeAgentResultAsync | PcInvokeAgentResultError;
 
-/** `wait: true` return — child completed in-line. */
-export interface PcInvokeAgentResultSync {
-  ok: true;
-  mode: 'sync';
-  sessionId: string;
-  runId: ULID;
-  result: string;
-}
-
-/** `wait: false` return — child is running; terminal event will land
+/** The dispatch receipt — child is running; terminal event will land
  *  separately. */
 export interface PcInvokeAgentResultAsync {
   ok: true;
