@@ -158,6 +158,22 @@ test('turn-state: ready at prompt, busy on send/user-row, ready on turn-end', as
   assert.deepEqual(transitions, ['ready', 'busy', 'ready', 'busy']);
 });
 
+test('turn-state: interrupt mid-turn reports ready (CC writes no jsonl on an interrupted turn)', async () => {
+  const { run, spawn } = makeRun({ policy: 'persistent-interactive' });
+  run.start();
+  await awaitState(run, 'running');
+
+  await run.send('write something long');
+  assert.equal(run.getTurnState(), 'busy');
+
+  // Escape discards the in-flight turn — NO assistant row, NO turn boundary
+  // lands in the JSONL (live-fired 2026-06-04). Without an explicit ready
+  // here the send-queue deadlocks on a turn-end that never comes.
+  run.interrupt();
+  assert.equal(spawn.interrupts, 1);
+  assert.equal(run.getTurnState(), 'ready');
+});
+
 test('turn-state: fresh dispatch with initialInput goes straight to busy', async () => {
   const { run } = makeRun({ initialInput: 'do the work' });
   run.start();

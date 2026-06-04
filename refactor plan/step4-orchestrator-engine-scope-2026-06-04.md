@@ -140,9 +140,21 @@ file. Suites: server 251 · runtime 44 · agent-host 12 · typecheck green.
 
 **Slice 3 — live acceptance gauntlet. MOSTLY COVERED by Slice 2's live-fire; remainder below.**
 ✅ already verified live: chat send/stream/queued/title · kill host mid-chat → loading →
-auto-resume with history · API restart → adopt. ⬜ remaining: interrupt live-fire · reload-replay
-visual check (Emerson, in-app) · agents dispatch normally alongside the chat · packaged-mode
-pass · spike harness green · Sessions-tab resume/new-session flows.
+auto-resume with history · API restart → adopt.
+✅ **interrupt live-fired 2026-06-04 — found + fixed a wedge bug.** CC (2.1.162) writes NOTHING
+to the JSONL on an interrupted turn (no assistant row, no turn boundary — empirically: 232s of
+silence vs a 39s baseline reply), so G1's jsonl-turn-end→ready never fired: the chat stuck
+'busy' forever and the send-queue deadlocked. Fix: `AgentRun.interrupt()` reports
+turn-state 'ready' after Escape — the reattach rationale verbatim (a send into a still-streaming
+CC queues safely; busy-with-no-coming-turn-end deadlocks). Adapter needed nothing: its
+busy→ready snapshot edge already emits 'turn-end'. Live: interrupt→turn-end **5ms**,
+follow-up delivered immediately, replied in 8s. Quirk noted: CC *may* late-finalize an
+interrupted turn (~270ms, empty usage+turn-end) — harmless ready-flap, handled by the same
+idempotent edge. +1 runtime guard test (45).
+⬜ remaining: reload-replay visual check (Emerson, in-app) · agents dispatch normally
+alongside the chat · packaged-mode pass · spike harness green (5/6 on a loaded box 2026-06-04
+— concurrency window check is timing-sensitive under load; re-run solo) · Sessions-tab
+resume/new-session flows.
 
 ## Open questions (carried, not blocking Slice 0)
 

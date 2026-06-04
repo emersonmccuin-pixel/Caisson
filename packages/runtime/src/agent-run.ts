@@ -409,6 +409,12 @@ export class AgentRun extends EventEmitter {
     } catch {
       /* already dead */
     }
+    // G1 — CC writes NOTHING to the JSONL on an interrupted turn (no assistant
+    // row, no turn boundary — live-fired 2026-06-04), so the jsonl-turn-end
+    // that normally flips us ready never comes. Same rationale as reattach:
+    // report 'ready' — if CC is somehow still streaming, a send queues in CC;
+    // staying 'busy' with no future turn-end deadlocks the send-queue forever.
+    this.setTurnState('ready');
   }
 
   /** Terminal-grade resize (G6). No-op when the spawn (or a test fake)
