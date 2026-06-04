@@ -223,6 +223,18 @@ agent's baseline set, carrying expected output + acceptance criteria. The compan
 **attachments unreachable by tool** — is logged in the audit backlog as a baseline-tools rebuild
 requirement.
 
+**Amendments (2026-06-04, M5 trace+refute — Emerson confirmed):**
+- **`output_destination` is DELETED, not moved.** Refute showed it is a dead knob: stored,
+  editable, seeded — consumed by **zero** runtime code (results route via terminal envelope →
+  orchestrator relay; prose placement is `expectedOutput.store`). Migrating it would carry rot
+  onto the contract. If a "send results to X" feature is wanted later, it gets designed on the
+  contract in M6 as a working feature.
+- **Pod-level `expected_output` survives as an explicit DEFAULT** (dispatch always wins; contract
+  row is the per-run authority — that half of the migration shipped pre-M5). Custom pods are job
+  templates in practice; killing the default would force every dispatch to restate the spec. The
+  "silently overridden" risk this FD feared is structurally gone (explicit precedence chain).
+- Scope + evidence: `refactor plan/m5-work-contract-scope-2026-06-04.md`.
+
 ---
 
 ## FD-6 — One ask door: agents only ask the orchestrator
