@@ -650,6 +650,14 @@ These came up and need their own entries once we talk them through:
   worktree creation + teardown lifecycle**, which is its own design conversation. Revisit alongside
   FD-5.
 
+- 🔴 **An agent's ask trips the engine's watchdogs** — observed live 2026-06-04 (S2 live-fire): a
+  dispatched workflow-builder called `pc_ask_orchestrator` during its FIRST turn; the run sat
+  waiting on the tool result, produced no turn-end, and the 90s `firstTurnMs` watchdog killed it
+  as failed/idle-timeout — twice (continuation died the same way). The orchestrator self-healed
+  (answered + re-dispatched fresh; third run published clean), but a waiting-by-design agent must
+  not be killed for silence. Same exposure for `idleMs` mid-run. **This is the FD-17 class** —
+  the escalate-don't-kill ladder (P9) is the fix; an interim rule worth considering there: a
+  registered pending ask suspends the run's watchdogs until answered.
 - ⚪ **Work Item vs Work Contract model** — what each is, how they relate (goal vs. assignment), and
   the rule for a contract with no work item. *(See `0-store/contracts-system.md` and `3-product/work-items.md`.)*
   Also owns: **passing work down the line** in workflows (hand-off control lives in the contract) —

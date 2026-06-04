@@ -59,13 +59,30 @@ it: `POST /api/workflows` with a minimal skeleton def carrying `disabled: true` 
 6. `CreatePodModal`: remove Conversational tab + `AgentDesignerChat` import; add banner.
 7. `ProjectSettingsPanel` `SetupWizardNag`: banner text + Open chat (drop `SetupWizardModal` mount).
 
-### C — Live-verify (gate before P7)
+### C — Live-verify (gate before P7) — ✅ ALL THREE FLOWS GREEN 2026-06-04
 
-- Chat: "I want a workflow that …" → interview → dispatch → published row visible on Workflows
-  tab → ask for a change → re-dispatch → row updated.
-- Chat: "make me an agent that …" → dispatch → pod on Agents tab.
-- Chat: setup ask on a CLAUDE.md-less project → file written, nag clears.
-- Manual: name → disabled skeleton → YAML tab edit → enable.
+Throwaway project `s2live` (FD-16 recipe: POST /api/projects snake_case → WS first-send spawns
+→ poll REST for the artifact; deleted after):
+
+- **Workflow ✅** — one natural turn (complete spec) → orchestrator dispatched `workflow-builder`
+  in 9s, NO needless interview → published `draft-and-check` with the EXACT requested shape
+  (manual trigger · writer node w/ `$carry.feedback` · orchestrator review gate · reject
+  back_to draft, max 3, carry `$self.output`). **Self-heal observed:** builder run 1 asked the
+  orchestrator a (needless) writer-pod question and DIED at the 90s first-turn watchdog while
+  waiting; continuation died the same way; orchestrator answered, amended the spec inline, and
+  re-dispatched fresh → run 3 published clean in 35s. User never involved; total ~6 min.
+- **Agent ✅** — one turn → `agent-designer` dispatched in 6s → `haiku-weather` pod 24s later:
+  project scope, haiku/low (correctly sized from "cheap and fast"), minimal tool set.
+- **Setup ✅** — one turn → CLAUDE.md written in 20s, terse, conventions honored — via the
+  on-demand door (`pc_call_tool` → `pc_write_claude_md`, 3 calls in transcript), so the
+  nag-clearing `project-claude-md` live event fires.
+
+**🔴 Engine finding (logged, NOT fixed here — FD-17/P9 class):** `pc_ask_orchestrator` during a
+worker's FIRST turn leaves the run waiting on the tool result → no turn-end → the 90s
+`firstTurnMs` watchdog (agent-run.ts:203) kills the run as failed/idle-timeout. Same exposure
+for `idleMs` on later turns. An ask should suspend the watchdogs (the agent is waiting by
+design, not stuck). FD-17's escalate-don't-kill ladder is the proper fix; until then the
+orchestrator's revise loop recovers, and the reshaped prompts minimize asks (decide-don't-ask).
 
 ### D — P7: the deletion (FD-21, separate commits)
 
