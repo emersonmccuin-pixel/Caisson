@@ -1,8 +1,10 @@
-// Slice 015b — work-items + stages migrated to the relay live-event door.
+// FD-12 (M2) — the ONE work-item write door + the other outbox writers.
 //
-// announceWorkItemRow / announceWorkItem write a durable `work-item.changed`
-// fact to the live outbox in-txn (the relay drains + delivers the canonical
-// frame). announceStageList writes a `stage.list.changed` fact. No hand-fanout.
+// ☠ work-item-writer.ts (announceWorkItemRow/announceWorkItem — the two-step
+// save-then-announce pattern) is DELETED. WorkItemMutationGateway commits the
+// repo write AND the `work-item.changed` receipt in the SAME transaction; a
+// throw mid-mutation rolls back BOTH (no change without a receipt, no receipt
+// without a change). announceStageList writes a `stage.list.changed` fact.
 
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,14 +21,14 @@ const {
   closeDb,
   createProject,
   createWorkItem,
+  getWorkItem,
+  patchWorkItem,
   runMigrations,
   listLiveOutboxRowsAfter,
   getLiveEventHighWater,
   updateProjectStages,
 } = await import('@pc/db');
-const { announceWorkItem, announceWorkItemRow } = await import(
-  '../src/services/work-item-writer.ts'
-);
+const { WorkItemMutationGateway } = await import('@pc/app-services');
 const { announceStageList } = await import('../src/services/stage-writer.ts');
 const { FieldSchemaService } = await import('../src/services/field-schema.ts');
 const { announceSessionTitle } = await import('../src/services/session-title-writer.ts');
@@ -57,29 +59,62 @@ function seedWorkItem(projectId: ULID) {
   return createWorkItem({ projectId, title: 'Do it', stageId: 'todo' });
 }
 
-test('announceWorkItemRow writes a project-scoped work-item.changed outbox row', () => {
+test('gateway commit: repo write + work-item.changed receipt in ONE transaction', () => {
   const projectId = seedProject();
   const wi = seedWorkItem(projectId);
   const before = getLiveEventHighWater() ?? '0';
 
-  announceWorkItemRow(wi, projectId, 'patched');
+  const gateway = new WorkItemMutationGateway();
+  gateway.commitWorkItemChange({
+    projectId,
+    reason: 'patched',
+    mutate: () => patchWorkItem(wi.id, { expectedVersion: wi.version, title: 'Renamed' }),
+  });
 
+  const updated = getWorkItem(wi.id)!;
+  assert.equal(updated.title, 'Renamed');
   const rows = listLiveOutboxRowsAfter(before, 500);
   const row = rows.find((r) => r.entity === 'work-item' && r.entityId === wi.id);
   assert.ok(row, 'expected a work-item row in the live outbox');
   assert.equal(row?.type, 'work-item.changed');
   assert.equal(row?.scope, 'project');
   assert.equal(row?.projectId, projectId);
-  // Per-entity rev = the work item's version counter.
-  assert.equal(row?.version, wi.version);
+  // Per-entity rev = the POST-mutation version counter.
+  assert.equal(row?.version, updated.version);
   assert.equal((row?.payload as { reason?: string }).reason, 'patched');
 });
 
-test('announceWorkItem on a missing row writes no outbox row', () => {
+test('gateway tryCommit: mutate → null commits nothing and emits nothing', () => {
   const projectId = seedProject();
   const before = getLiveEventHighWater() ?? '0';
-  announceWorkItem('nope-work-item-id' as ULID, projectId, 'patched');
+  const gateway = new WorkItemMutationGateway();
+  const res = gateway.tryCommitWorkItemChange({ projectId, mutate: () => null });
+  assert.equal(res, null);
   assert.equal(listLiveOutboxRowsAfter(before, 500).length, 0);
+});
+
+test('gateway FD-12 guarantee: a throw after the write rolls back row AND receipt', () => {
+  const projectId = seedProject();
+  const wi = seedWorkItem(projectId);
+  const before = getLiveEventHighWater() ?? '0';
+
+  const gateway = new WorkItemMutationGateway();
+  assert.throws(() =>
+    gateway.commitWorkItemChange({
+      projectId,
+      reason: 'patched',
+      mutate: () => {
+        const row = patchWorkItem(wi.id, { expectedVersion: wi.version, title: 'Doomed' });
+        if (!row) throw new Error('unreachable');
+        throw new Error('crash between write and receipt');
+      },
+    }),
+  );
+
+  const after = getWorkItem(wi.id)!;
+  assert.equal(after.title, 'Do it', 'mutation must roll back');
+  assert.equal(after.version, wi.version, 'version must roll back');
+  assert.equal(listLiveOutboxRowsAfter(before, 500).length, 0, 'no receipt may survive');
 });
 
 test('announceStageList writes a stage.list.changed outbox row with the new rev', () => {

@@ -46,10 +46,13 @@ import {
 } from './dag-run-service.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import { WorkItemService } from './work-item.ts';
-import { announceWorkItemRow } from './work-item-writer.ts';
 import { AttachmentService } from './attachment.ts';
 import { FieldSchemaService } from './field-schema.ts';
 import { getWorkItem, listFieldSchemas } from '@pc/db';
+import { WorkItemMutationGateway } from '@pc/app-services';
+
+/** FD-12 — the one write door (repo write + outbox receipt in one txn). */
+const workItemGateway = new WorkItemMutationGateway();
 
 /** WS broadcast bound to a single project. Was originally exported from the
  *  now-deleted workflow-runtime.ts; lives here so consumers don't need to
@@ -347,13 +350,20 @@ export class ProjectRuntime {
       moved = this.workItemService().move(args.id as ULID, input, args.notes ?? undefined);
     } else {
       // Legacy path (no expectedVersion) — MCP `pc_move_work_item` lands here.
+      // FD-12 — move + receipt in one gateway transaction.
       const targetStatus = postMoveStatusForStage(destStage);
-      const out = moveWorkItemStage(args.id as ULID, args.toStage, targetStatus, args.notes ?? null);
-      if (!out) throw new Error(`unknown work item: ${args.id}`);
+      let out!: WorkItem;
+      workItemGateway.commitWorkItemChange({
+        projectId: this.project.id,
+        reason: 'moved',
+        mutate: () => {
+          const row = moveWorkItemStage(args.id as ULID, args.toStage, targetStatus, args.notes ?? null);
+          if (!row) throw new Error(`unknown work item: ${args.id}`);
+          out = row;
+          return row;
+        },
+      });
       moved = out;
-      // Slice 015b — announce through the durable door (outbox row); the relay
-      // delivers the canonical work-item.changed frame. No hand-fanout.
-      announceWorkItemRow(moved, this.project.id, 'moved');
     }
 
     if (fromStageId !== args.toStage) {

@@ -37,8 +37,11 @@ import {
   WorkItemVersionConflictError,
   type WorkItemService,
 } from '../../services/work-item.ts';
-import { announceWorkItemRow } from '../../services/work-item-writer.ts';
 import { announceStageList } from '../../services/stage-writer.ts';
+import { WorkItemMutationGateway } from '@pc/app-services';
+
+/** FD-12 — the one write door (repo write + outbox receipt in one txn). */
+const workItemGateway = new WorkItemMutationGateway();
 
 export interface WorkItemRoutesRuntime {
   project: Project;
@@ -213,12 +216,18 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
         const workItem = runtime.workItemService().patch(wiId as ULID, patchInput);
         return c.json({ ok: true, workItem });
       }
-      const workItem = dbUpdateWorkItemFields(wiId as ULID, fields!);
-      if (!workItem) return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
-      // dbUpdateWorkItemFields bypasses the service; announce through the durable
-      // door (outbox row). The relay delivers the canonical work-item.changed frame.
-      announceWorkItemRow(workItem, id as ULID, 'patched');
-      return c.json({ ok: true, workItem });
+      // FD-12 — fields write + receipt in one gateway transaction. Respond
+      // with the domain row (keeps the wire shape: history included).
+      let row: WorkItem | null = null;
+      workItemGateway.tryCommitWorkItemChange({
+        projectId: id as ULID,
+        mutate: () => {
+          row = dbUpdateWorkItemFields(wiId as ULID, fields!);
+          return row ? { row, reason: 'patched' } : null;
+        },
+      });
+      if (!row) return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
+      return c.json({ ok: true, workItem: row });
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 500);
     }

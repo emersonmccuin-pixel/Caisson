@@ -203,6 +203,37 @@ export class WorkItemMutationGateway {
     });
   }
 
+  /** FD-12 — null-tolerant one-step commit for call sites where "row gone /
+   *  nothing to do" is a normal outcome (verification roll-ups, best-effort
+   *  card moves). `mutate` runs INSIDE the transaction and returns the changed
+   *  row + the reason (some sites only know the reason after mutating, e.g.
+   *  auto-advanced vs verified) — or null to commit nothing and emit nothing. */
+  tryCommitWorkItemChange(input: {
+    projectId: ULID;
+    mutate: (tx: DbExecutor) => { row: WorkItem; reason: WorkItemMutationReason } | null;
+    attachments?: AttachmentDto[];
+  }): ({ workItem: WorkItemDto } & WorkItemChangedPublication) | null {
+    return this.tx((tx) => {
+      const out = input.mutate(tx);
+      if (!out) return null;
+      const dto = toWorkItemDto(out.row);
+      const liveEvent = this.insert(
+        tx,
+        buildWorkItemChangedDraft({
+          projectId: input.projectId,
+          workItem: dto,
+          reason: out.reason,
+          ...(input.attachments ? { attachments: input.attachments } : {}),
+        }),
+      );
+      const legacyEvent = buildWorkItemChangedRefetchEnvelope({
+        projectId: input.projectId,
+        workItem: dto,
+      });
+      return { workItem: dto, liveEvent, legacyEvent };
+    });
+  }
+
   /** Record a work-item fact when the product mutation already happened
    *  outside this gateway transaction (used while routing the legacy
    *  verification / auto-advance / DAG paths through the gateway without

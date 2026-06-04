@@ -11,11 +11,13 @@
 // becomes a shim that delegates here (per the 2b spec — single place that does
 // stage + field validation).
 //
-// Announces: every successful mutation writes a durable `work-item.changed`
-// live_outbox row (Slice 015b) via announceWorkItemRow; the live-relay fans the
-// canonical frame to subscribers. The version stamp is the work item's existing
-// `version` counter — the frontend discards stale or duplicate deliveries where
-// incoming version ≤ stored version.
+// FD-12 (M2): every mutation goes through the ONE write door —
+// WorkItemMutationGateway.commitWorkItemChange runs the repo write AND the
+// durable `work-item.changed` live_outbox row in the SAME transaction (the
+// old save-then-announce two-step left a crash window where a change landed
+// with no receipt). The live-relay fans the canonical frame post-commit. The
+// version stamp is the work item's existing `version` counter — the frontend
+// discards stale or duplicate deliveries where incoming version ≤ stored.
 
 import type {
   FieldSchema,
@@ -39,7 +41,7 @@ import {
   softDeleteWorkItem as dbSoftDeleteWorkItem,
   WorkItemVersionConflictError,
 } from '@pc/db';
-import { announceWorkItemRow } from './work-item-writer.ts';
+import { WorkItemMutationGateway } from '@pc/app-services';
 
 /** Crockford base-32 ULID — 26 chars, no I/L/O/U. Case-insensitive.
  *  Used to discriminate a ULID reference from a callsign in the modal
@@ -192,6 +194,9 @@ export class UnknownStageError extends Error {
 }
 
 export class WorkItemService {
+  /** FD-12 — the one write door: repo write + outbox receipt in one txn. */
+  private readonly gateway = new WorkItemMutationGateway();
+
   constructor(private readonly opts: WorkItemServiceOptions) {}
 
   list(opts: ListWorkItemsServiceOptions = {}): ListWorkItemsServiceResult {
@@ -253,19 +258,26 @@ export class WorkItemService {
       throw new FieldValidationError((validated as ValidateFieldsErrors).errors);
     }
 
-    const workItem = dbCreateWorkItem({
+    let workItem!: WorkItem;
+    this.gateway.commitWorkItemChange({
       projectId: this.opts.projectId,
-      title,
-      stageId: input.stageId,
-      ...(input.body !== undefined ? { body: input.body } : {}),
-      ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
-      ...(input.position !== undefined ? { position: input.position } : {}),
-      ...(input.type !== undefined ? { type: input.type } : {}),
-      fields: validated.value,
-      ...(input.isWorkflowRoot !== undefined ? { isWorkflowRoot: input.isWorkflowRoot } : {}),
-      ...(input.areaId !== undefined ? { areaId: input.areaId } : {}),
+      reason: 'created',
+      mutate: () => {
+        workItem = dbCreateWorkItem({
+          projectId: this.opts.projectId,
+          title,
+          stageId: input.stageId,
+          ...(input.body !== undefined ? { body: input.body } : {}),
+          ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
+          ...(input.position !== undefined ? { position: input.position } : {}),
+          ...(input.type !== undefined ? { type: input.type } : {}),
+          fields: validated.value,
+          ...(input.isWorkflowRoot !== undefined ? { isWorkflowRoot: input.isWorkflowRoot } : {}),
+          ...(input.areaId !== undefined ? { areaId: input.areaId } : {}),
+        });
+        return workItem;
+      },
     });
-    announceWorkItemRow(workItem, this.opts.projectId, 'created');
     return workItem;
   }
 
@@ -287,19 +299,27 @@ export class WorkItemService {
       fields = validated.value;
     }
 
-    const patched = dbPatchWorkItem(id, {
-      expectedVersion: input.expectedVersion,
-      ...(input.title !== undefined ? { title: input.title } : {}),
-      ...(input.body !== undefined ? { body: input.body } : {}),
-      ...(input.stageId !== undefined ? { stageId: input.stageId } : {}),
-      ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
-      ...(input.position !== undefined ? { position: input.position } : {}),
-      ...(input.type !== undefined ? { type: input.type } : {}),
-      ...(fields !== undefined ? { fields } : {}),
-      ...(input.areaId !== undefined ? { areaId: input.areaId } : {}),
+    let patched!: WorkItem;
+    this.gateway.commitWorkItemChange({
+      projectId: this.opts.projectId,
+      reason: 'patched',
+      mutate: () => {
+        const row = dbPatchWorkItem(id, {
+          expectedVersion: input.expectedVersion,
+          ...(input.title !== undefined ? { title: input.title } : {}),
+          ...(input.body !== undefined ? { body: input.body } : {}),
+          ...(input.stageId !== undefined ? { stageId: input.stageId } : {}),
+          ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
+          ...(input.position !== undefined ? { position: input.position } : {}),
+          ...(input.type !== undefined ? { type: input.type } : {}),
+          ...(fields !== undefined ? { fields } : {}),
+          ...(input.areaId !== undefined ? { areaId: input.areaId } : {}),
+        });
+        if (!row) throw new Error(`unknown work item: ${id}`);
+        patched = row;
+        return row;
+      },
     });
-    if (!patched) throw new Error(`unknown work item: ${id}`);
-    announceWorkItemRow(patched, this.opts.projectId, 'patched');
     return patched;
   }
 
@@ -321,48 +341,71 @@ export class WorkItemService {
     }
     // If only position is changing (same stage), use patch with the new position.
     // If stage is changing, delegate to moveWorkItemStage so history gets a
-    // 'move' entry, then optionally re-patch the position.
-    let result: WorkItem;
-    if (current.stageId === input.stageId) {
-      const patched = dbPatchWorkItem(id, {
-        expectedVersion: input.expectedVersion,
-        ...(input.position !== undefined ? { position: input.position } : {}),
-      });
-      if (!patched) throw new Error(`unknown work item: ${id}`);
-      result = patched;
-    } else {
-      // Section 27 — compute the target status from the destination stage's
-      // flags. is_done → 'complete', is_cancelled → 'cancelled', else 'pending'.
-      const destStage = this.opts.getProject().stages.find((s) => s.id === input.stageId)!;
-      const targetStatus = postMoveStatusForStage(destStage);
-      const moved = moveWorkItemStage(id, input.stageId, targetStatus, noteOnHistory ?? null);
-      if (!moved) throw new Error(`unknown work item: ${id}`);
-      if (input.position !== undefined) {
-        const patched = dbPatchWorkItem(id, {
-          expectedVersion: moved.version,
-          position: input.position,
-        });
-        if (!patched) throw new Error(`unknown work item: ${id}`);
-        result = patched;
-      } else {
-        result = moved;
-      }
-    }
-    announceWorkItemRow(result, this.opts.projectId, 'moved');
+    // 'move' entry, then optionally re-patch the position. Both writes land in
+    // the ONE gateway transaction with the receipt (FD-12).
+    let result!: WorkItem;
+    this.gateway.commitWorkItemChange({
+      projectId: this.opts.projectId,
+      reason: 'moved',
+      mutate: () => {
+        if (current.stageId === input.stageId) {
+          const patched = dbPatchWorkItem(id, {
+            expectedVersion: input.expectedVersion,
+            ...(input.position !== undefined ? { position: input.position } : {}),
+          });
+          if (!patched) throw new Error(`unknown work item: ${id}`);
+          result = patched;
+        } else {
+          // Section 27 — compute the target status from the destination stage's
+          // flags. is_done → 'complete', is_cancelled → 'cancelled', else 'pending'.
+          const destStage = this.opts.getProject().stages.find((s) => s.id === input.stageId)!;
+          const targetStatus = postMoveStatusForStage(destStage);
+          const moved = moveWorkItemStage(id, input.stageId, targetStatus, noteOnHistory ?? null);
+          if (!moved) throw new Error(`unknown work item: ${id}`);
+          if (input.position !== undefined) {
+            const patched = dbPatchWorkItem(id, {
+              expectedVersion: moved.version,
+              position: input.position,
+            });
+            if (!patched) throw new Error(`unknown work item: ${id}`);
+            result = patched;
+          } else {
+            result = moved;
+          }
+        }
+        return result;
+      },
+    });
     return result;
   }
 
   softDelete(id: ULID): WorkItem {
-    const deleted = dbSoftDeleteWorkItem(id);
-    if (!deleted) throw new Error(`unknown work item: ${id}`);
-    announceWorkItemRow(deleted, this.opts.projectId, 'soft-deleted');
+    let deleted!: WorkItem;
+    this.gateway.commitWorkItemChange({
+      projectId: this.opts.projectId,
+      reason: 'soft-deleted',
+      mutate: () => {
+        const row = dbSoftDeleteWorkItem(id);
+        if (!row) throw new Error(`unknown work item: ${id}`);
+        deleted = row;
+        return row;
+      },
+    });
     return deleted;
   }
 
   restore(id: ULID): WorkItem {
-    const restored = dbRestoreWorkItem(id);
-    if (!restored) throw new Error(`unknown work item: ${id} (or not archived)`);
-    announceWorkItemRow(restored, this.opts.projectId, 'restored');
+    let restored!: WorkItem;
+    this.gateway.commitWorkItemChange({
+      projectId: this.opts.projectId,
+      reason: 'restored',
+      mutate: () => {
+        const row = dbRestoreWorkItem(id);
+        if (!row) throw new Error(`unknown work item: ${id} (or not archived)`);
+        restored = row;
+        return row;
+      },
+    });
     return restored;
   }
 

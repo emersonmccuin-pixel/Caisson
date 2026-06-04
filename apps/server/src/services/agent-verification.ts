@@ -39,7 +39,7 @@ import {
   listChildWorkItems,
 } from '@pc/db';
 import type { Contract } from '@pc/contracts';
-import { ContractService } from '@pc/app-services';
+import { ContractService, WorkItemMutationGateway } from '@pc/app-services';
 import type {
   EvaluationContext,
   PredicateExecutors,
@@ -51,7 +51,9 @@ import type {
 import { ContractV2, KINDS_REQUIRING_EVIDENCE, evaluateAcceptance } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
-import { announceWorkItemRow } from './work-item-writer.ts';
+
+/** FD-12 — the one write door (repo write + outbox receipt in one txn). */
+const gateway = new WorkItemMutationGateway();
 
 /** Default cap on a single `bash_exit_zero` predicate. Keeps the terminal
  *  handler from blocking on a runaway verifier script. Override per test. */
@@ -314,20 +316,22 @@ function acceptContract(args: {
   // Roll-up: the WI advance fires only for output-linked contracts. The
   // contract owns verification status/notes now; the WI roll-up only flips
   // status + appends a history note.
-  if (workItemId) {
-    const updated = applyRunOutcome(workItemId, 'complete', null, historyNote);
-    if (updated) {
-      if (input.project) {
-        const advanced = autoAdvanceToDoneStage(workItemId, input.project);
-        if (advanced) {
-          announceWorkItemRow(advanced, advanced.projectId, 'auto-advanced');
-        } else {
-          announceWorkItemRow(updated, updated.projectId, 'verified');
+  // FD-12 — outcome flip + optional auto-advance + the receipt land in ONE
+  // gateway transaction. Row gone mid-flight → commit nothing, emit nothing.
+  const wiRow = workItemId ? getWorkItem(workItemId) : null;
+  if (workItemId && wiRow) {
+    gateway.tryCommitWorkItemChange({
+      projectId: wiRow.projectId,
+      mutate: () => {
+        const updated = applyRunOutcome(workItemId, 'complete', null, historyNote);
+        if (!updated) return null;
+        if (input.project) {
+          const advanced = autoAdvanceToDoneStage(workItemId, input.project);
+          if (advanced) return { row: advanced, reason: 'auto-advanced' };
         }
-      } else {
-        announceWorkItemRow(updated, updated.projectId, 'verified');
-      }
-    }
+        return { row: updated, reason: 'verified' };
+      },
+    });
   }
   return {
     contractId,

@@ -61,11 +61,16 @@ const DECL_RE = new RegExp(
 // apps/server/src means the legacy Channel push path is coming back — a
 // regression with NO allowlist. The gate trips on the bare identifier anywhere
 // in source (calls, imports, decls), ignoring comments.
+// FD-12 (M2): `announceWorkItem`/`announceWorkItemRow` (the deleted two-step
+// work-item-writer — save in one txn, receipt in another, crash window in
+// between) join the banned set. The one door is WorkItemMutationGateway.
 const BANNED_RESURRECTION = [
   'enqueueAndPush',
   'drainPendingForSession',
   'emitToSession',
   'forwardToProjectChildren',
+  'announceWorkItemRow',
+  'announceWorkItem',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 
@@ -125,6 +130,49 @@ const ALLOWLIST: Record<string, string> = {
 // hand-fans `pod-changed`; the pod-writer writes a `pod.changed` live_outbox
 // row in-txn and the relay delivers it. The pod-routes DEFERRED allowlist entry
 // was removed (no gated symbol remains there).
+
+// ── FD-12 (M2) — work-item WRITE-DOOR gate ────────────────────────────────────
+// Every durable work_items mutation must run INSIDE a WorkItemMutationGateway
+// commit (repo write + work-item.changed receipt in ONE transaction). The @pc/db
+// mutator functions are the raw table writers; importing one into a NEW
+// apps/server file is how a bypass quietly appears. Importing them is allowed
+// ONLY in the files below — each routes the call through the gateway (or is an
+// explicitly-tombstoned legacy writer with a dated fate).
+const WORK_ITEM_MUTATORS = [
+  'createWorkItem',
+  'moveWorkItemStage',
+  'updateWorkItemFields',
+  'updateWorkItemStatus',
+  'patchWorkItem',
+  'softDeleteWorkItem',
+  'restoreWorkItem',
+  'reassignStage',
+  'applyRunOutcome',
+  'appendWorkItemHistory',
+];
+// Matches the whole (possibly multiline) `import {...} from '@pc/db'` statement.
+const DB_IMPORT_RE = /import\s*(type\s+)?\{([^}]*)\}\s*from\s*['"]@pc\/db['"]/g;
+
+const MUTATOR_IMPORT_ALLOWLIST: Record<string, string> = {
+  'apps/server/src/services/work-item.ts':
+    'WorkItemService — create/patch/move/softDelete/restore all run inside gateway.commitWorkItemChange.',
+  'apps/server/src/services/agent-verification.ts':
+    'applyRunOutcome + auto-advance inside gateway.tryCommitWorkItemChange (verified/auto-advanced receipt).',
+  'apps/server/src/services/agent-verification-review.ts':
+    'applyRunOutcome inside gateway commits (approved/auto-advanced/rejected receipts).',
+  'apps/server/src/services/dag-run-service.ts':
+    'moveCard transition effect — moveWorkItemStage inside gateway.tryCommitWorkItemChange.',
+  'apps/server/src/services/project-runtime.ts':
+    'legacy no-expectedVersion move (pc_move_work_item) — moveWorkItemStage inside gateway.commitWorkItemChange.',
+  'apps/server/src/services/apply-deliverable-store.ts':
+    'prose→work_item_body store — updateWorkItemFields inside gateway.tryCommitWorkItemChange.',
+  'apps/server/src/services/auto-advance-done.ts':
+    'helper ONLY: returns the moved row to callers that wrap it in their own gateway commit (verification paths).',
+  'apps/server/src/services/agent-audit.ts':
+    '☠ M3 — appendWorkItemHistory is audit-only (no version bump, deliberately no receipt); folds into the FD-13 diary.',
+  'apps/server/src/features/work-items/routes.ts':
+    'fields-only PATCH via gateway; reassignStage = stage-delete bulk fallback whose receipt rides stage.list.changed.',
+};
 
 function listSourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -273,6 +321,70 @@ test('no-bypass gate: deleted Channel-delivery primitives stay deleted (017 Phas
       `door (017 Phase C); these were deleted and must not return:\n` +
       offenders.map((o) => `  - ${o}`).join('\n'),
   );
+});
+
+/** All work-item mutators named in this file's `@pc/db` VALUE imports.
+ *  `import type {...}` carries no runtime write capability and is ignored. */
+function mutatorImportsIn(content: string): string[] {
+  const found: string[] = [];
+  DB_IMPORT_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = DB_IMPORT_RE.exec(content)) !== null) {
+    if (m[1]) continue; // type-only import
+    const names = m[2]!;
+    for (const mut of WORK_ITEM_MUTATORS) {
+      if (new RegExp(String.raw`\b${mut}\b`).test(names)) found.push(mut);
+    }
+  }
+  return found;
+}
+
+test('FD-12 gate: work-item mutator imports only in gateway-routed files', () => {
+  const offenders: string[] = [];
+  const filesWithImports = new Set<string>();
+  const serverSrc = join(repoRoot, 'apps', 'server', 'src');
+  for (const file of listSourceFiles(serverSrc)) {
+    const muts = mutatorImportsIn(readFileSync(file, 'utf8'));
+    if (muts.length === 0) continue;
+    const rel = toPosix(relative(repoRoot, file));
+    filesWithImports.add(rel);
+    if (!(rel in MUTATOR_IMPORT_ALLOWLIST)) {
+      offenders.push(`${rel} — imports ${muts.join(', ')}`);
+    }
+  }
+  assert.equal(
+    offenders.length,
+    0,
+    `Found ${offenders.length} file(s) importing raw work-item mutators from @pc/db ` +
+      `outside the FD-12 allowlist. A durable work-item change goes through ` +
+      `WorkItemMutationGateway (write + receipt in ONE transaction); route the call ` +
+      `through the gateway, then add the file here WITH a justification:\n` +
+      offenders.map((o) => `  - ${o}`).join('\n'),
+  );
+
+  // Self-maintaining: stale allowlist entries must be removed.
+  const stale = Object.keys(MUTATOR_IMPORT_ALLOWLIST).filter((p) => !filesWithImports.has(p));
+  assert.equal(
+    stale.length,
+    0,
+    `Stale FD-12 allowlist entr${stale.length === 1 ? 'y' : 'ies'} — no mutator import ` +
+      `remains; delete from MUTATOR_IMPORT_ALLOWLIST:\n` +
+      stale.map((p) => `  - ${p}`).join('\n'),
+  );
+});
+
+test('FD-12 gate: would FAIL on a planted mutator import (self-check)', () => {
+  const planted = `import { getWorkItem, patchWorkItem } from '@pc/db';\n`;
+  assert.deepEqual(mutatorImportsIn(planted), ['patchWorkItem']);
+  // Multiline import blocks must match too.
+  const multiline = `import {\n  createWorkItem as dbCreateWorkItem,\n  listWorkItems,\n} from '@pc/db';\n`;
+  assert.deepEqual(mutatorImportsIn(multiline), ['createWorkItem']);
+  // Type-only imports carry no write capability.
+  const typeOnly = `import type { patchWorkItem } from '@pc/db';\n`;
+  assert.deepEqual(mutatorImportsIn(typeOnly), []);
+  // Read-only imports stay clean.
+  const readOnly = `import { getWorkItem, listWorkItems } from '@pc/db';\n`;
+  assert.deepEqual(mutatorImportsIn(readOnly), []);
 });
 
 test('no-bypass gate: would FAIL on a planted bypass (self-check)', () => {

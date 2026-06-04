@@ -26,18 +26,20 @@
 // contract-native.)
 
 import type { Contract } from '@pc/contracts';
-import { ContractService } from '@pc/app-services';
+import { ContractService, WorkItemMutationGateway } from '@pc/app-services';
 import { applyRunOutcome, getWorkItem } from '@pc/db';
 import type { Project, ULID, WorkItem } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
-import { announceWorkItemRow } from './work-item-writer.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
 import {
   dispatchContinueAgent,
   type DispatchAgentResult,
 } from './agent-run-factory.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
+
+/** FD-12 — the one write door (repo write + outbox receipt in one txn). */
+const gateway = new WorkItemMutationGateway();
 
 /** Error class for v1 422 surfaces (precondition / not-found that the route
  *  maps to a clean HTTP status). Carrying the cause through lets the route
@@ -92,26 +94,40 @@ export function approveAgentWorkItem(
   if (!contract.workItemId) return null;
   const wiId = contract.workItemId as ULID;
   const actor = input.actor ?? 'orchestrator';
-  // The contract owns verification status/notes; the WI roll-up only flips
-  // status + appends a history note.
-  const updated = applyRunOutcome(
-    wiId,
-    'complete',
-    null,
-    note ? `approved by ${actor}: ${note}` : `approved by ${actor}`,
-  );
-  if (!updated) {
+  const pre = getWorkItem(wiId);
+  if (!pre) {
     throw new VerificationReviewError('wi-not-found', `work item ${wiId} disappeared mid-write`);
   }
-  if (input.project) {
-    const advanced = autoAdvanceToDoneStage(wiId, input.project);
-    if (advanced) {
-      announceWorkItemRow(advanced, advanced.projectId, 'auto-advanced');
-      return advanced;
-    }
-  }
-  announceWorkItemRow(updated, updated.projectId, 'approved');
-  return updated;
+  // FD-12 — status flip + optional auto-advance + the ONE receipt in ONE
+  // gateway transaction (reason = auto-advanced when the stage move fires,
+  // else approved — same single-event surface as before). The contract owns
+  // verification status/notes; the WI roll-up only flips status + appends a
+  // history note.
+  let result!: WorkItem;
+  gateway.tryCommitWorkItemChange({
+    projectId: pre.projectId,
+    mutate: () => {
+      const updated = applyRunOutcome(
+        wiId,
+        'complete',
+        null,
+        note ? `approved by ${actor}: ${note}` : `approved by ${actor}`,
+      );
+      if (!updated) {
+        throw new VerificationReviewError('wi-not-found', `work item ${wiId} disappeared mid-write`);
+      }
+      result = updated;
+      if (input.project) {
+        const advanced = autoAdvanceToDoneStage(wiId, input.project);
+        if (advanced) {
+          result = advanced;
+          return { row: advanced, reason: 'auto-advanced' };
+        }
+      }
+      return { row: updated, reason: 'approved' };
+    },
+  });
+  return result;
 }
 
 export interface RejectAgentWorkItemInput {
@@ -179,18 +195,25 @@ export async function rejectAgentWorkItem(
     verificationNotes: feedback,
   });
 
-  // Roll the WI back to in-progress, if one is linked.
+  // Roll the WI back to in-progress, if one is linked. FD-12 — the flip + its
+  // receipt land in one gateway transaction; row gone → nothing emitted.
   let updated: WorkItem | null = null;
-  if (contract.workItemId) {
+  const rejectWi = contract.workItemId ? getWorkItem(contract.workItemId as ULID) : null;
+  if (contract.workItemId && rejectWi) {
     const wiId = contract.workItemId as ULID;
     const truncated = feedback.length > 240 ? `${feedback.slice(0, 240)}…` : feedback;
-    updated = applyRunOutcome(
-      wiId,
-      'in-progress',
-      'rejected on verification — feedback wired to continuation',
-      `rejected by ${actor}: ${truncated}`,
-    );
-    if (updated) announceWorkItemRow(updated, updated.projectId, 'rejected');
+    gateway.tryCommitWorkItemChange({
+      projectId: rejectWi.projectId,
+      mutate: () => {
+        updated = applyRunOutcome(
+          wiId,
+          'in-progress',
+          'rejected on verification — feedback wired to continuation',
+          `rejected by ${actor}: ${truncated}`,
+        );
+        return updated ? { row: updated, reason: 'rejected' } : null;
+      },
+    });
   }
 
   // Phrase the resumed-agent's next user message so the agent treats this as

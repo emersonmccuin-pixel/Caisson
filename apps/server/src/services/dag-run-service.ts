@@ -22,7 +22,11 @@ import {
 } from '@pc/db';
 import { DagExecutor, type DagExecutorDeps, type DagNodeContext, type NodeOutcome } from './dag-executor.ts';
 import { announceRunCreated, writeDagAndStatus } from './workflow-run-writer.ts';
-import { ContractService, WorkflowRunMutationGateway } from '@pc/app-services';
+import {
+  ContractService,
+  WorkItemMutationGateway,
+  WorkflowRunMutationGateway,
+} from '@pc/app-services';
 import {
   contractDeliverableText,
   type WorkflowReviewFlavor,
@@ -35,8 +39,10 @@ import { createAgentWorkItem } from './agent-work-item.ts';
 import { dispatchFreshAgent } from './agent-run-factory.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import type { WorkItemService } from './work-item.ts';
-import { announceWorkItemRow } from './work-item-writer.ts';
 import type { WorktreeService } from './worktree.ts';
+
+/** FD-12 — the one write door (repo write + outbox receipt in one txn). */
+const workItemGateway = new WorkItemMutationGateway();
 
 /** Workflow-review delivery seam. The DAG executor calls this to enqueue a
  *  durable `workflow-review` mailbox message (active-orchestrator +
@@ -343,12 +349,14 @@ export function makeExecutorDeps(
     if (!getWorkItem(run.workItemId)) {
       return { ok: false, error: `run root work item ${run.workItemId} not found` };
     }
-    const moved = moveWorkItemStage(run.workItemId, stage);
-    if (moved) {
-      // Slice 015b — announce through the durable door (outbox row); the relay
-      // delivers the canonical work-item.changed frame. No hand-fanout.
-      announceWorkItemRow(moved, opts.projectId, 'moved');
-    }
+    // FD-12 — move + receipt in one gateway transaction; row gone → no event.
+    workItemGateway.tryCommitWorkItemChange({
+      projectId: opts.projectId,
+      mutate: () => {
+        const moved = moveWorkItemStage(run.workItemId!, stage);
+        return moved ? { row: moved, reason: 'moved' } : null;
+      },
+    });
     return { ok: true };
   };
 

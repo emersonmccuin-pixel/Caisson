@@ -21,6 +21,12 @@ import { createAttachment, getWorkItem, updateWorkItemFields } from '@pc/db';
 import type { Contract, Deliverable } from '@pc/contracts';
 import type { ULID } from '@pc/domain';
 import { ContractV2, proseAttachmentName } from '@pc/domain';
+import { WorkItemMutationGateway } from '@pc/app-services';
+
+/** FD-12 — the one write door (repo write + outbox receipt in one txn). The
+ *  body write was previously SILENT (no work-item.changed receipt) — the UI
+ *  only saw the deliverable land on a lucky refetch. */
+const workItemGateway = new WorkItemMutationGateway();
 
 export type StoreApplyOutcome =
   | 'none' // not a prose/store deliverable — nothing to place
@@ -82,7 +88,13 @@ export function applyDeliverableStore(input: ApplyDeliverableStoreInput): StoreA
       const wi = requireLiveWorkItem(contract.workItemId, 'work_item_body');
       if (!wi.ok) return wi;
       try {
-        updateWorkItemFields(wi.id, { body: text });
+        workItemGateway.tryCommitWorkItemChange({
+          projectId: wi.projectId,
+          mutate: () => {
+            const row = updateWorkItemFields(wi.id, { body: text });
+            return row ? { row, reason: 'patched' } : null;
+          },
+        });
       } catch (err) {
         return writeFailed('work item body', err);
       }
@@ -150,7 +162,9 @@ function resolveStore(
 function requireLiveWorkItem(
   workItemId: string | null,
   store: string,
-): { ok: true; id: ULID } | { ok: false; cause: 'store-target-missing'; error: string } {
+):
+  | { ok: true; id: ULID; projectId: ULID }
+  | { ok: false; cause: 'store-target-missing'; error: string } {
   if (!workItemId) {
     return {
       ok: false,
@@ -160,14 +174,15 @@ function requireLiveWorkItem(
   }
   const id = workItemId as ULID;
   // getWorkItem returns null for archived/soft-deleted rows — treat as missing.
-  if (!getWorkItem(id)) {
+  const row = getWorkItem(id);
+  if (!row) {
     return {
       ok: false,
       cause: 'store-target-missing',
       error: `work item ${workItemId} not found or archived`,
     };
   }
-  return { ok: true, id };
+  return { ok: true, id, projectId: row.projectId };
 }
 
 function writeFailed(
