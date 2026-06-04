@@ -85,6 +85,65 @@ test('createAgentWorkItem creates a contract linked to the WI', () => {
   assert.equal(contracts[0]!.verificationTier, 'auto');
 });
 
+test('defaulted repo spec inherits worktree isolation (2026-06-03 wrong-directory AC bug)', () => {
+  // code-writer's stock default is { kind: 'repo', isolation: 'in_place' } —
+  // which derives git_diff_nonempty with cwd 'project'. A WORKTREE dispatch
+  // (every workflow run) must flip the defaulted spec to 'worktree' or the
+  // acceptance check inspects the main repo (it passed/failed on the HUMAN's
+  // uncommitted changes, live-caught 2026-06-03).
+  const p = mkProject('caw-worktree-iso');
+  const svc = new WorkItemService({
+    projectId: p.id as ULID,
+    getProject: () => p,
+    getFieldSchemas: () => [],
+  });
+  const contractService = new ContractService();
+
+  const wi = createAgentWorkItem(
+    {
+      title: 'Write a file',
+      task: 'write it',
+      pod: 'code-writer',
+      // no expectedOutput → pod default resolves
+      parentWorkItemId: null,
+      worktree: join(tmpDir, 'wf-fake-worktree'),
+    },
+    { workItemService: svc, getProject: () => p, contractService },
+  );
+  const c = listContractsForWorkItem(wi.id)[0]!;
+  const spec = c.expectedOutput as { kind: string; isolation?: string };
+  assert.equal(spec.kind, 'repo');
+  assert.equal(spec.isolation, 'worktree', 'defaulted repo spec must inherit worktree isolation');
+  const diffPred = (c.acceptanceCriteria as Array<{ kind: string; cwd?: string }>).find(
+    (pr) => pr.kind === 'git_diff_nonempty',
+  );
+  assert.ok(diffPred, 'repo spec derives a git_diff_nonempty predicate');
+  assert.equal(diffPred!.cwd, 'worktree', 'the diff check must aim at the WORKTREE');
+
+  // No worktree (orchestrator-style in-place dispatch) keeps the pod default.
+  const wi2 = createAgentWorkItem(
+    { title: 'Patch the repo', task: 'patch it', pod: 'code-writer', parentWorkItemId: null },
+    { workItemService: svc, getProject: () => p, contractService },
+  );
+  const c2 = listContractsForWorkItem(wi2.id)[0]!;
+  assert.equal((c2.expectedOutput as { isolation?: string }).isolation, 'in_place');
+
+  // Explicit caller-supplied spec is respected as written, worktree or not.
+  const wi3 = createAgentWorkItem(
+    {
+      title: 'Explicit in-place',
+      task: 'do it',
+      pod: 'code-writer',
+      expectedOutput: { kind: 'repo', isolation: 'in_place' },
+      parentWorkItemId: null,
+      worktree: join(tmpDir, 'wf-fake-worktree'),
+    },
+    { workItemService: svc, getProject: () => p, contractService },
+  );
+  const c3 = listContractsForWorkItem(wi3.id)[0]!;
+  assert.equal((c3.expectedOutput as { isolation?: string }).isolation, 'in_place');
+});
+
 // ── verification reads AC from the contract; WI advance is a roll-up ──────────
 
 test('verification sources AC from the contract and rolls up the linked WI', async () => {

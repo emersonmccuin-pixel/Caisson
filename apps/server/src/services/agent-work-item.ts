@@ -108,6 +108,16 @@ export function createAgentWorkItem(
       const def = getPodDefaultExpectedOutput(pod);
       expectedOutput = def ?? null;
     }
+    // A DEFAULTED repo spec inherits the dispatch's isolation. Pod defaults
+    // declare `in_place` (orchestrator-style dispatches into the real repo),
+    // which aims the git-diff acceptance check at the PROJECT folder — but a
+    // worktree dispatch does its work in the worktree. Caught live 2026-06-03:
+    // every workflow acceptance run was passing/failing on the HUMAN's
+    // uncommitted changes in the main repo, not the agent's work. Explicit
+    // caller-supplied specs are respected as written.
+    if (expectedOutput?.kind === 'repo' && input.worktree?.trim() && expectedOutput.isolation === 'in_place') {
+      expectedOutput = { ...expectedOutput, isolation: 'worktree' };
+    }
   }
   if (expectedOutput === null) {
     throw new AgentWorkItemInputError(
