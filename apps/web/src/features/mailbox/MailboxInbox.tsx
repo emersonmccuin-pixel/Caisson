@@ -24,6 +24,7 @@ const KIND_LABELS: Record<MailboxMessageKind, string> = {
   'workflow-run-failed': 'Failed Runs',
   'runtime-hook-ask': 'Runtime Asks',
   'agent-terminal':   'Completed Agents',
+  'agent-stalled':    'Stalled Agents',
   'external-webhook': 'Webhooks',
   'system-notice':    'System Notices',
 };
@@ -36,16 +37,20 @@ const KIND_ORDER: MailboxMessageKind[] = [
   'workflow-run-failed',
   'runtime-hook-ask',
   'agent-terminal',
+  'agent-stalled',
   'external-webhook',
   'system-notice',
 ];
 
 // Kinds that are never surfaced in the inbox — filtered out unconditionally, no
 // UI control. Only Agent Questions and Workflow Review remain visible.
+// agent-stalled is the orchestrator's to handle (the human already sees the
+// run's `stalled` badge — rung 1 of the same ladder).
 const HIDDEN_KINDS: ReadonlySet<MailboxMessageKind> = new Set([
   'agent-approval',
   'runtime-hook-ask',
   'agent-terminal',
+  'agent-stalled',
   'external-webhook',
   'system-notice',
 ]);

@@ -206,7 +206,9 @@ export function inspectAgentRun(runId: ULID, deps: AgentRunControlDeps = {}): In
   };
 }
 
-function lastJsonlAction(
+/** Last JSONL event kind + short text. Shared verify-alive read: the inspect
+ *  route AND the stall ladder's notify rung both use it. */
+export function lastJsonlAction(
   jsonlPath: string,
 ): { kind: string; at: number | null; text: string | null } | null {
   if (!existsSync(jsonlPath)) return null;

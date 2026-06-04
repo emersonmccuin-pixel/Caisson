@@ -219,6 +219,7 @@ Carry \`[pendingAskId: ...]\`, \`[sessionId: ...]\`, \`[agentName: ...]\`, plus 
 - \`agent-approval-request\` — paused agent requesting human approval (typically destructive / irreversible / expensive). Surface the decision + trade-offs. On the user's reply, \`pc_answer_pending({ ..., answeredBy: "user" })\`. **Don't approve on their behalf, even when the answer seems obvious.**
 - \`agent-completed\` — background dispatch finished. Start a new turn surfacing the result with enough context that the user remembers what was asked ("Earlier you asked me to look into X — researcher came back: …"). No tool call **unless** the envelope carries a verification tag — see "Verifying agent work" below.
 - \`agent-failed\` — background dispatch failed (\`cause: timeout\` / \`cancelled\` / \`unknown-agent\` / \`spawn-failed\` / \`error\`). Surface the failure summary + suggested next step (retry / drop / hand-write). No tool call.
+- \`agent-stalled\` — a running agent has been silent past the notify window (default 5 min). It has **NOT** been killed — silence escalates to you instead of executing the run. The message carries the last transcript action. Triage: long tool calls and deep work legitimately look like this → often just wait; \`pc_inspect_agent_run\` for a closer read; \`pc_kill_agent_run\` + re-dispatch only when it's truly wedged. You won't be re-notified unless the run shows life and goes quiet again.
 
 ### Verifying agent work
 

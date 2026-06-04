@@ -44,6 +44,11 @@ export const MAILBOX_MESSAGE_KINDS = [
   'agent-question',
   'agent-approval',
   'agent-terminal',
+  /** P9/FD-17 stall ladder rung 2 — a running agent has been silent past the
+   *  notify window. Delivered to the project orchestrator (active-orchestrator,
+   *  orchestrator-turn) with the verify-alive read; the orchestrator decides
+   *  wait / inspect / kill. Never accompanies a kill — silence doesn't execute. */
+  'agent-stalled',
   'workflow-review',
   /** Workflow-engine redesign — a run failed. Delivered to BOTH the human
    *  user-inbox AND the project orchestrator (active-orchestrator); when no

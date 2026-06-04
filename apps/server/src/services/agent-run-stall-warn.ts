@@ -1,38 +1,61 @@
-// Non-terminal `stalled` warn pass — rung 1 of the P9/FD-17 stall ladder.
+// The P9/FD-17 stall ladder — silence escalates, it never executes.
 //
-// A run that has gone quiet past WARN_MS gets a visible `stalled` badge
-// instead of looking identical to a healthy run. Warn-only, never terminal —
-// there is NO idle kill anywhere anymore (Step 8: silence escalates, it never
-// executes; kills are wall-clock or confirmed-dead only).
+// One sweep, two rungs, driven by THE reconciler tick:
+//   rung 1 (WARN_MS, 3min)    → non-terminal `stalled` badge. Visible, never kills.
+//   rung 2 (NOTIFY_MS, 5min)  → verify-alive read (last transcript action) +
+//                               ONE durable mailbox notify to the project
+//                               orchestrator. The old idle-KILL moment became
+//                               the notify moment. Never kills.
 //
-// Emit-once via a caller-owned `Set<runId>`: announce `stalled` the first tick a
-// run crosses WARN, announce `reconciled` (un-stall) the first tick it drops
-// back under WARN, and prune ids that have left the running set. Both emits bump
-// rev so they out-version the last frame and land in the version-deduped client
-// store (see agent-run-writer.announceAgentRunSignal).
+// There is NO rung 3. Kills happen only on wall-clock (AgentRun, 2h default)
+// or confirmed-dead (onSpawnExit unexpected-exit / the reconciler's host-lost
+// counters). ☠ The 5min AgentRun idle-kill + the 10min in-process sweep kill
+// died in P9 Slice A.
+//
+// Emit-once via caller-owned sets: `stalledRuns` (badge) + `notifiedRuns`
+// (mailbox). Both clear when the run shows life again, so a NEW quiet spell is
+// a new episode (new badge, new notify). The mailbox idempotency key embeds the
+// episode's last-activity floor — stable across ticks AND API restarts, so a
+// restart can't double-notify the same episode.
 
 import { statSync } from 'node:fs';
 
 import type { AgentRunRow, ULID } from '@pc/domain';
+import { newId } from '@pc/db';
 import {
   getProjectById as defaultGetProjectById,
   listNonTerminalAgentRuns as defaultListNonTerminalAgentRuns,
 } from '@pc/db';
 import { jsonlPathFor } from '@pc/runtime';
 
-import { computeIdleMs, resolveStallWarnMs } from './agent-run-idle.ts';
+import {
+  computeIdleMs,
+  resolveStallNotifyMs,
+  resolveStallWarnMs,
+} from './agent-run-idle.ts';
 import { announceAgentRunSignal as defaultAnnounceSignal } from './agent-run-writer.ts';
+import { lastJsonlAction } from './agent-run-control.ts';
+import type { MailboxEnqueuePort } from './agent-delivery.ts';
 
 export interface StallWarnDeps {
   /** Caller-owned, persists across ticks — tracks which runs we've already
    *  badged so we emit exactly one frame per WARN crossing / un-stall. */
   stalledRuns: Set<string>;
+  /** Caller-owned, persists across ticks — runs already mailbox-notified this
+   *  stall episode (rung 2 emit-once). Cleared with the badge on un-stall. */
+  notifiedRuns?: Set<string>;
+  /** Rung 2's door — the durable mailbox enqueue. Absent ⇒ badge-only. */
+  mailboxEnqueue?: MailboxEnqueuePort | null;
   broadcast?: (projectId: ULID, msg: unknown) => void;
   now?: () => number;
   warnMs?: number;
+  notifyMs?: number;
   listNonTerminalRuns?: () => AgentRunRow[];
   resolveJsonlPath?: (row: AgentRunRow) => string | null;
   jsonlMtime?: (path: string) => number | null;
+  /** Verify-alive read for the notify body — the last transcript action.
+   *  Test seam; defaults to the inspect helper's tailer read. */
+  lastAction?: (jsonlPath: string) => { kind: string; text: string | null } | null;
   /** Test seam — defaults to the real rev-bump + outbox announce. */
   announceSignal?: typeof defaultAnnounceSignal;
 }
@@ -41,6 +64,8 @@ export interface StallWarnResult {
   checked: number;
   warned: number;
   cleared: number;
+  /** Rung 2 — orchestrator mailbox notifies emitted this tick. */
+  notified: number;
 }
 
 /** Only spawned, non-paused runs can be "quiet" in the sense we badge: a paused
@@ -53,15 +78,18 @@ function isStallCandidate(status: AgentRunRow['status']): boolean {
 export function sweepStallWarn(deps: StallWarnDeps): StallWarnResult {
   const now = (deps.now ?? Date.now)();
   const warnMs = deps.warnMs ?? resolveStallWarnMs();
+  const notifyMs = deps.notifyMs ?? resolveStallNotifyMs();
   const rows = (deps.listNonTerminalRuns ?? defaultListNonTerminalAgentRuns)();
   const resolveJsonlPath = deps.resolveJsonlPath ?? defaultResolveJsonlPath;
   const jsonlMtime = deps.jsonlMtime ?? defaultJsonlMtime;
   const announce = deps.announceSignal ?? defaultAnnounceSignal;
   const broadcast = deps.broadcast;
+  const notifiedRuns = deps.notifiedRuns;
 
   const liveIds = new Set<string>();
   let warned = 0;
   let cleared = 0;
+  let notified = 0;
 
   for (const row of rows) {
     if (!isStallCandidate(row.status)) continue;
@@ -81,16 +109,93 @@ export function sweepStallWarn(deps: StallWarnDeps): StallWarnResult {
       deps.stalledRuns.delete(row.id);
       cleared += 1;
     }
+
+    // Rung 2 — verify-alive + ONE orchestrator notify per stall episode.
+    if (
+      idleMs > notifyMs &&
+      deps.mailboxEnqueue &&
+      notifiedRuns &&
+      !notifiedRuns.has(row.id)
+    ) {
+      const action = jsonlPath ? (deps.lastAction ?? defaultLastAction)(jsonlPath) : null;
+      enqueueStalledNotify(deps.mailboxEnqueue, {
+        row,
+        idleMs,
+        lastActivityAt: now - idleMs,
+        action,
+        now,
+      });
+      notifiedRuns.add(row.id);
+      notified += 1;
+    }
+    // Episode reset: any sign of life clears the notify latch with the badge.
+    if (!quiet) notifiedRuns?.delete(row.id);
   }
 
   // Prune ids that have left the running set (terminal / paused / gone) so the
-  // tracking set can't grow without bound. A terminal frame already dropped the
-  // card; a re-spawn mints a new ULID, so no stale carry-over.
+  // tracking sets can't grow without bound. A terminal frame already dropped
+  // the card; a re-spawn mints a new ULID, so no stale carry-over.
   for (const id of deps.stalledRuns) {
     if (!liveIds.has(id)) deps.stalledRuns.delete(id);
   }
+  if (notifiedRuns) {
+    for (const id of notifiedRuns) {
+      if (!liveIds.has(id)) notifiedRuns.delete(id);
+    }
+  }
 
-  return { checked: liveIds.size, warned, cleared };
+  return { checked: liveIds.size, warned, cleared, notified };
+}
+
+/** Rung 2's envelope. Kind `agent-stalled` → active-orchestrator over the
+ *  orchestrator-turn channel (the FD-3 marked injection door adds
+ *  `[pc:system kind=agent-stalled]`). The idempotency key embeds the episode's
+ *  last-activity floor: same episode ⇒ same key ⇒ a restarted API can't
+ *  double-notify; new activity ⇒ new floor ⇒ a fresh episode may notify again. */
+function enqueueStalledNotify(
+  mailboxEnqueue: MailboxEnqueuePort,
+  input: {
+    row: AgentRunRow;
+    idleMs: number;
+    lastActivityAt: number;
+    action: { kind: string; text: string | null } | null;
+    now: number;
+  },
+): void {
+  const { row, idleMs, action } = input;
+  const quietMin = Math.round(idleMs / 60_000);
+  const last = action
+    ? `${action.kind}${action.text ? ` — "${action.text.slice(0, 160)}"` : ''}`
+    : 'no transcript activity recorded';
+  const body =
+    `Agent ${row.podName} (run ${row.id}) has produced no output for ~${quietMin} minute(s). ` +
+    `It has NOT been killed — silence escalates to you instead of executing the run. ` +
+    `Last transcript action: ${last}. ` +
+    `Decide: keep waiting (long tool calls and deep work look like this), ` +
+    `peek with pc_inspect_agent_run, or pc_kill_agent_run and re-dispatch if it is truly wedged.`;
+
+  mailboxEnqueue({
+    message: {
+      id: newId(),
+      projectId: row.projectId,
+      kind: 'agent-stalled',
+      subject: `Agent ${row.podName} may be stalled`,
+      body,
+      sourceKind: 'agent',
+      sourceId: row.id,
+      idempotencyKey: `agent-stalled:${row.id}:${input.lastActivityAt}`,
+    },
+    recipients: [
+      {
+        id: newId(),
+        addressKind: 'active-orchestrator',
+        addressJson: { kind: 'active-orchestrator', projectId: row.projectId },
+        channel: 'orchestrator-turn',
+        deliveryId: newId(),
+      },
+    ],
+    now: input.now,
+  });
 }
 
 function scoped(
@@ -115,4 +220,13 @@ function defaultJsonlMtime(path: string): number | null {
   } catch {
     return null;
   }
+}
+
+/** The inspect helper's tailer read — ONE implementation of "what did this
+ *  run last do", shared with pc_inspect_agent_run. */
+function defaultLastAction(
+  jsonlPath: string,
+): { kind: string; text: string | null } | null {
+  const res = lastJsonlAction(jsonlPath);
+  return res ? { kind: res.kind, text: res.text } : null;
 }

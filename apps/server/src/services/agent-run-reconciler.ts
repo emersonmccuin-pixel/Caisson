@@ -118,6 +118,8 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
   // Loop-owned state (persists across ticks; the false-positive guards).
   const hostMissingTicks = new Map<string, number>();
   const stalledRuns = new Set<string>();
+  // P9 ladder rung 2 — runs already orchestrator-notified this stall episode.
+  const notifiedRuns = new Set<string>();
 
   let interval: NodeJS.Timeout | null = null;
   let subscribed = false;
@@ -182,9 +184,12 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
       ...(deps.replayEnvelopes ? { replayEnvelopes: deps.replayEnvelopes } : {}),
     });
 
-    // Never-terminal `stalled` badge (the ladder's first rung).
+    // The P9/FD-17 stall ladder: badge (rung 1) + verify-alive→orchestrator
+    // notify (rung 2). Never terminal — kills are wall-clock or confirmed-dead.
     const stallWarnRes = (deps.stallWarn ?? sweepStallWarn)({
       stalledRuns,
+      notifiedRuns,
+      mailboxEnqueue: deps.mailboxEnqueue,
       broadcast: deps.broadcast,
       now: deps.now,
     });
@@ -221,9 +226,13 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
               `[agent-runs] reconcile: terminal=${r.terminalApplied}, status=${r.statusUpdated}, hostLost=${r.hostLost}, registered=${r.registered}, checked=${r.checked}`,
             );
           }
-          if (res.stallWarn.warned > 0 || res.stallWarn.cleared > 0) {
+          if (
+            res.stallWarn.warned > 0 ||
+            res.stallWarn.cleared > 0 ||
+            res.stallWarn.notified > 0
+          ) {
             log(
-              `[agent-runs] stall-warn: warned=${res.stallWarn.warned}, cleared=${res.stallWarn.cleared}`,
+              `[agent-runs] stall-ladder: warned=${res.stallWarn.warned}, cleared=${res.stallWarn.cleared}, notified=${res.stallWarn.notified}`,
             );
           }
         })
