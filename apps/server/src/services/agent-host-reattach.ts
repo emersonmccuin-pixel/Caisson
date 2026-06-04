@@ -95,9 +95,10 @@ export interface AgentHostReattachDeps {
    *  ActiveRunRegistry entry gets a HostBackedActiveRunHandle registered on any
    *  tick (not just boot), so pause/cancel/resume work after a held boot. */
   registerMissingHandles?: boolean;
-  /** Step 2 — broadcast the on-disk JSONL backlog when registering a handle
-   *  (boot tick only: catches the UI up on events missed while the server was
-   *  down; post-boot the live stream covers it). */
+  /** Broadcast the on-disk JSONL backlog when registering a handle. M3a: ANY
+   *  registration (was boot-only — a held boot's late registration skipped the
+   *  backlog and the pre-restart events never reached the UI). Registration is
+   *  once-per-handle, so the backlog can't re-broadcast. */
   backfillOnRegister?: boolean;
   /** T1.4 — injectable terminal-effects seam (tests spy on it). Defaults to the
    *  real full-effects helper so the `failed` live-event + orchestrator notify

@@ -97,8 +97,10 @@ export interface AgentRunReconciler {
   /** Boot = the first tick (with JSONL backfill on newly registered handles) +
    *  the ONE persistent host event subscription. Await before serving routes. */
   boot(): Promise<ReconcileTickResult>;
-  /** One pass of the loop. Exposed for tests; production uses start(). */
-  tick(opts?: { boot?: boolean }): Promise<ReconcileTickResult>;
+  /** One pass of the loop. Exposed for tests; production uses start().
+   *  (M3a: the `boot` opt died with the boot-only backfill gate — boot IS the
+   *  same tick, now with zero behavioral differences.) */
+  tick(): Promise<ReconcileTickResult>;
   /** Start THE interval (the only liveness interval in the codebase). */
   start(): void;
   stop(): void;
@@ -186,7 +188,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
     });
   }
 
-  async function tick(opts: { boot?: boolean } = {}): Promise<ReconcileTickResult> {
+  async function tick(): Promise<ReconcileTickResult> {
     const host = deps.host;
     // HOLD principle — a refresh that THROWS withholds the absence signal AND
     // the counters, so nothing can finalize on stale/no information. The
@@ -217,7 +219,12 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
       spawnLostAfterTicks,
       // Self-healing reattach: only against a freshly confirmed host list.
       registerMissingHandles: reachable,
-      backfillOnRegister: opts.boot === true,
+      // M3a — backfill on ANY registration, not just the boot tick (the P4
+      // refute gap: a boot HELD on an unreachable host registered handles on a
+      // later tick WITHOUT backfill, so events the Engine emitted before the
+      // restart never reached the UI). Registration is once-per-handle, so the
+      // backlog can't re-broadcast.
+      backfillOnRegister: true,
       ...(deps.replayEnvelopes ? { replayEnvelopes: deps.replayEnvelopes } : {}),
     });
 
@@ -236,7 +243,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
 
   async function boot(): Promise<ReconcileTickResult> {
     subscribeHostEvents();
-    const res = await tick({ boot: true });
+    const res = await tick();
     if (res.held) {
       warn(
         '[agent-runs] boot: host not reachable; HOLDING (no finalize on no-information) — the loop converges when it returns',
