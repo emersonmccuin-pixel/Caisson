@@ -133,8 +133,26 @@ test('ui-inbox acceptance writes a committed delivery frame the relay delivers (
   assert.equal(getMailboxDelivery(deliveryId)!.status, 'accepted');
 });
 
+/** M4a — pinned orchestrator-session addresses must reference a REAL session
+ *  row (the worker now verifies existence; synthetic ids dead-letter). The
+ *  session FK needs a real project row too. */
+function realProject(): ULID {
+  const slug = `mwp-${newId().toLowerCase()}`;
+  return db.createProject({
+    slug,
+    name: slug,
+    stages: [{ id: 'todo', name: 'Todo', order: 0 }],
+    folderPath: join(tmpDir, slug),
+  }).id;
+}
+
+function realSessionAddress(projectId: ULID): MailboxAddress {
+  const sess = db.createOrchestratorSession({ projectId, providerSessionId: `cc-${newId()}` });
+  return { kind: 'orchestrator-session', projectId, sessionId: sess.id };
+}
+
 test('orchestrator-turn delivery wraps enqueueRuntimeTurn (stable clientMessageId, source mailbox, send-queue target_ref)', () => {
-  const addr: MailboxAddress = { kind: 'orchestrator-session', projectId: 'p1', sessionId: 's1' };
+  const addr = realSessionAddress(realProject());
   const { deliveryId } = makeDelivery('orchestrator-turn', addr, 'p1' as ULID);
   const { svc, calls } = fakeSendService();
   const w = worker(svc as never, addr, 'p1' as ULID);
@@ -149,7 +167,7 @@ test('orchestrator-turn delivery wraps enqueueRuntimeTurn (stable clientMessageI
 });
 
 test('orchestrator-turn idempotency: a retried delivery returns created:false (same row)', () => {
-  const addr: MailboxAddress = { kind: 'orchestrator-session', projectId: 'p1', sessionId: 's-idem' };
+  const addr = realSessionAddress(realProject());
   const { deliveryId } = makeDelivery('orchestrator-turn', addr, 'p1' as ULID);
   const { svc, calls } = fakeSendService();
   const w = worker(svc as never, addr, 'p1' as ULID);
@@ -165,7 +183,7 @@ test('orchestrator-turn idempotency: a retried delivery returns created:false (s
 });
 
 test('a thrown enqueue error → retrying with backoff (then dead-letter at max attempts)', () => {
-  const addr: MailboxAddress = { kind: 'orchestrator-session', projectId: 'p1', sessionId: 's-fail' };
+  const addr = realSessionAddress(realProject());
   const { deliveryId, messageId } = makeDelivery('orchestrator-turn', addr, 'p1' as ULID);
   // A send service that always throws.
   const alwaysThrow = {
@@ -186,13 +204,42 @@ test('a thrown enqueue error → retrying with backoff (then dead-letter at max 
   assert.equal(listDeadLettersForMessage(messageId).length, 1);
 });
 
-test('an unresolvable orchestrator recipient dead-letters (non-retryable, no silent drop)', () => {
-  const addr: MailboxAddress = { kind: 'active-orchestrator', projectId: 'p-no-session' };
-  const { deliveryId } = makeDelivery('orchestrator-turn', addr, 'p-no-session' as ULID);
+// ── M4a/FD-8 — no message silently dies ──────────────────────────────────────
+
+test('M4a: no active orchestrator yet → DEFERRED (no attempt burned), then delivers when one exists', () => {
+  const projectId = realProject();
+  const addr: MailboxAddress = { kind: 'active-orchestrator', projectId };
+  const { deliveryId } = makeDelivery('orchestrator-turn', addr, projectId);
   const { svc, calls } = fakeSendService();
-  const w = worker(svc as never, addr, 'p-no-session' as ULID);
+  const w = worker(svc as never, addr, projectId);
+
+  // Pass 1: the orchestrator is away — the old code dead-lettered HERE.
+  const first = w.runOnce();
+  assert.equal(first.deferred, 1);
+  assert.equal(first.deadLettered, 0);
+  const parked = getMailboxDelivery(deliveryId)!;
+  assert.equal(parked.status, 'pending', 'parked, not failed');
+  assert.equal(parked.attempts, 0, 'waiting is not a failed attempt');
+  assert.ok((parked.nextAttemptAt ?? 0) > Date.now(), 'recheck scheduled');
+  assert.equal(calls.length, 0);
+
+  // The orchestrator returns; make the delivery due and run again → delivered.
+  db.createOrchestratorSession({ projectId, providerSessionId: 'cc-return' });
+  db.markDeliveryDeferred({ deliveryId, reason: 'test-due', nextAttemptAt: Date.now() - 1, now: Date.now() });
+  const second = w.runOnce();
+  assert.equal(second.accepted, 1);
+  assert.equal(getMailboxDelivery(deliveryId)!.status, 'accepted');
+  assert.equal(calls.length, 1);
+});
+
+test('M4a: a pinned orchestrator-session that does NOT exist dead-letters non-retryably (synthetic dispatcher id)', () => {
+  const addr: MailboxAddress = { kind: 'orchestrator-session', projectId: 'p1', sessionId: 'wf-SYNTHETIC' };
+  const { deliveryId, messageId } = makeDelivery('orchestrator-turn', addr, 'p1' as ULID);
+  const { svc, calls } = fakeSendService();
+  const w = worker(svc as never, addr, 'p1' as ULID);
   const res = w.runOnce();
-  assert.equal(res.deadLettered, 1);
+  assert.equal(res.deadLettered, 1, 'permanently undeliverable — fail honestly, not after 5 burns');
   assert.equal(getMailboxDelivery(deliveryId)!.status, 'dead-lettered');
-  assert.equal(calls.length, 0); // never reached the send facade
+  assert.equal(listDeadLettersForMessage(messageId).length, 1);
+  assert.equal(calls.length, 0);
 });

@@ -598,8 +598,10 @@ function deliverWorkflowReview(input: {
 // ProjectRegistry built at boot; the body runs at run-finalize time). Enqueues
 // ONE durable `workflow-run-failed` message with TWO recipients: the human
 // user-inbox (ui-inbox) AND the project orchestrator (active-orchestrator,
-// orchestrator-turn). If no orchestrator is live the orchestrator delivery
-// persists and drains on its next liveness pass — the run failure is never lost.
+// orchestrator-turn). If no orchestrator is live the delivery DEFERS (M4a —
+// parked without consuming attempts, rechecked every 60s) and lands when one
+// exists — the run failure is never lost. (Pre-M4a this comment lied: the
+// worker dead-lettered an orchestrator-less delivery on its FIRST pass.)
 function deliverWorkflowRunFailed(input: {
   projectId: ULID;
   runId: ULID;

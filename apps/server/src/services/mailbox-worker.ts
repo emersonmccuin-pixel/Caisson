@@ -28,6 +28,7 @@ import type {
 } from '@pc/app-services';
 import {
   getActiveOrchestratorSession,
+  getOrchestratorSession,
   listDueDeliveries,
   type MailboxDeliveryRow,
 } from '@pc/db';
@@ -55,6 +56,8 @@ export interface MailboxWorkerDeps {
 
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_MAX_ATTEMPTS = 5;
+/** M4a/FD-8 — recheck cadence while waiting for an orchestrator to exist. */
+const DEFER_RECHECK_MS = 60_000;
 
 /** Exponential-ish backoff: 1s, 2s, 4s, … capped at 60s. */
 function backoffMs(attempts: number): number {
@@ -76,10 +79,17 @@ export class MailboxWorker {
   }
 
   /** Run one drain pass. Returns counts for logging/tests. */
-  runOnce(limit = 50): { leased: number; accepted: number; retried: number; deadLettered: number } {
+  runOnce(limit = 50): {
+    leased: number;
+    accepted: number;
+    retried: number;
+    deferred: number;
+    deadLettered: number;
+  } {
     let leased = 0;
     let accepted = 0;
     let retried = 0;
+    let deferred = 0;
     let deadLettered = 0;
     const now = this.d.now();
     const due = listDueDeliveries(now, limit);
@@ -95,12 +105,15 @@ export class MailboxWorker {
       const outcome = this.attempt(acquired);
       if (outcome === 'accepted') accepted += 1;
       else if (outcome === 'retried') retried += 1;
+      else if (outcome === 'deferred') deferred += 1;
       else if (outcome === 'dead-lettered') deadLettered += 1;
     }
-    return { leased, accepted, retried, deadLettered };
+    return { leased, accepted, retried, deferred, deadLettered };
   }
 
-  private attempt(delivery: MailboxDeliveryRow): 'accepted' | 'retried' | 'dead-lettered' {
+  private attempt(
+    delivery: MailboxDeliveryRow,
+  ): 'accepted' | 'retried' | 'deferred' | 'dead-lettered' {
     const now = this.d.now();
     const fail = (error: string, retryable: boolean): 'retried' | 'dead-lettered' => {
       // attempts on the row is the count BEFORE this attempt; +1 = this attempt.
@@ -140,8 +153,28 @@ export class MailboxWorker {
 
     if (delivery.channel === 'orchestrator-turn') {
       const address = this.d.getRecipientAddress(delivery.recipientId);
-      const session = address ? resolveOrchestratorSession(address) : null;
-      if (!session) return fail('no orchestrator session resolvable', false);
+      if (!address) return fail('recipient address missing', false);
+      const resolved = resolveOrchestratorSession(address);
+      // M4a/FD-8 — "no message silently dies":
+      //  · a pinned session that DOESN'T EXIST is permanently undeliverable
+      //    (synthetic dispatcher id / purged session) → dead-letter, honestly.
+      //  · a project whose orchestrator is merely AWAY is a wait, not a
+      //    failure → DEFER (no attempt consumed; recheck on a cadence). The
+      //    old code dead-lettered this on the FIRST pass — the
+      //    "persists and drains on its next pass" promise was false.
+      if (resolved.kind === 'never') {
+        return fail(resolved.reason, false);
+      }
+      if (resolved.kind === 'not-yet') {
+        this.d.service.deferDelivery({
+          deliveryId: delivery.id,
+          reason: resolved.reason,
+          nextAttemptAt: now + DEFER_RECHECK_MS,
+          now,
+        });
+        return 'deferred';
+      }
+      const session = resolved.session;
       const body = this.d.getMessageBody(delivery.messageId);
       if (body === null) return fail('message body missing', false);
       const result = this.d.orchestratorTurn.deliver({
@@ -173,16 +206,38 @@ interface ResolvedSession {
   sessionId: ULID;
 }
 
-function resolveOrchestratorSession(address: MailboxAddress): ResolvedSession | null {
+/** M4a — three-way resolution so the worker can tell "will never deliver"
+ *  (dead-letter) from "cannot deliver YET" (defer, no attempt consumed). */
+type SessionResolution =
+  | { kind: 'ok'; session: ResolvedSession }
+  | { kind: 'not-yet'; reason: string }
+  | { kind: 'never'; reason: string };
+
+function resolveOrchestratorSession(address: MailboxAddress): SessionResolution {
   if (address.kind === 'orchestrator-session') {
-    return { projectId: address.projectId as ULID, sessionId: address.sessionId as ULID };
+    // The address pins a SPECIFIC session — it must actually exist (the old
+    // code passed it through blindly; synthetic workflow dispatcher ids then
+    // burned five retries each before dead-lettering).
+    const session = getOrchestratorSession(address.sessionId as ULID);
+    if (!session) {
+      return { kind: 'never', reason: `orchestrator session does not exist: ${address.sessionId}` };
+    }
+    return {
+      kind: 'ok',
+      session: { projectId: address.projectId as ULID, sessionId: address.sessionId as ULID },
+    };
   }
   if (address.kind === 'active-orchestrator') {
     const active = getActiveOrchestratorSession(address.projectId as ULID);
-    if (!active) return null;
-    return { projectId: address.projectId as ULID, sessionId: active.id };
+    if (!active) {
+      return { kind: 'not-yet', reason: 'no active orchestrator yet — waiting' };
+    }
+    return {
+      kind: 'ok',
+      session: { projectId: address.projectId as ULID, sessionId: active.id },
+    };
   }
-  return null;
+  return { kind: 'never', reason: `unsupported orchestrator-turn address: ${address.kind}` };
 }
 
 export { parseMailboxAddress };

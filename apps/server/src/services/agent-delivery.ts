@@ -9,7 +9,7 @@
 // `drainPendingForSession` / the `PC_DELIVERY_*` gate) was deleted in 017 Phase C
 // once the mailbox was verified the sole delivery door. There is no fallback.
 
-import { newId, type EnqueueMailboxMessageInput } from '@pc/db';
+import { getOrchestratorSession, newId, type EnqueueMailboxMessageInput } from '@pc/db';
 import type { AgentInboxEventKind, ULID } from '@pc/domain';
 import type { MailboxMessageKind } from '@pc/contracts';
 
@@ -78,15 +78,70 @@ export interface DeliverAgentEnvelopeInput extends EnqueueAndPushInput {
 export interface DeliverAgentEnvelopeDeps {
   mailboxEnqueue: MailboxEnqueuePort;
   now?: () => number;
+  /** M4a — is `pcSessionId` a REAL orchestrator session (an
+   *  orchestrator_sessions row)? Workflow-engine dispatches mint synthetic
+   *  dispatcher ids; pre-M4a those envelopes burned five worker retries each
+   *  and dead-lettered. Defaults to the db lookup; tests inject. */
+  sessionExists?: (sessionId: string) => boolean;
 }
 
-/** Route ONE agent delivery envelope to the dispatcher's orchestrator session
- *  as a durable mailbox message. The slice-007 worker delivers exactly one
- *  runtime turn per event. */
+/** Asks MUST reach a human-adjacent brain (FD-6/FD-8): when the dispatcher
+ *  isn't a real orchestrator session (workflow worker), fall back to whichever
+ *  orchestrator IS (or next becomes) active for the project. */
+const ASK_KINDS: ReadonlySet<AgentInboxEventKind> = new Set([
+  'agent-asks-orchestrator',
+  'agent-asks-user',
+  'agent-approval-request',
+]);
+
+export interface DeliverAgentEnvelopeResult extends EnqueueAndPushResult {
+  /** M4a — true when the envelope was deliberately NOT enqueued: a terminal/
+   *  informational notice addressed to a synthetic dispatcher session. The
+   *  engine consumes the outcome itself; the run diary + workflow-run-failed /
+   *  review messages own the durable signal. (These never delivered in any
+   *  era — pre-mailbox they queued for a session id no hook would ever match.) */
+  skipped?: boolean;
+}
+
+/** Route ONE agent delivery envelope as a durable mailbox message. Real
+ *  dispatcher session → that session. Synthetic dispatcher (workflow worker):
+ *  asks fall back to the project's active orchestrator; informational
+ *  terminal notices are skipped (see DeliverAgentEnvelopeResult.skipped). */
 export function deliverAgentEnvelope(
   input: DeliverAgentEnvelopeInput,
   deps: DeliverAgentEnvelopeDeps,
-): EnqueueAndPushResult {
+): DeliverAgentEnvelopeResult {
+  const sessionExists =
+    deps.sessionExists ?? ((id: string) => getOrchestratorSession(id as ULID) !== null);
+  const real = sessionExists(input.pcSessionId);
+
+  if (!real && !ASK_KINDS.has(input.kind)) {
+    return { inboxId: null, channelDelivered: false, skipped: true };
+  }
+
+  const recipient = real
+    ? {
+        id: newId(),
+        addressKind: 'orchestrator-session' as const,
+        addressJson: {
+          kind: 'orchestrator-session' as const,
+          projectId: input.projectId,
+          sessionId: input.pcSessionId,
+        },
+        channel: 'orchestrator-turn' as const,
+        deliveryId: newId(),
+      }
+    : {
+        id: newId(),
+        addressKind: 'active-orchestrator' as const,
+        addressJson: {
+          kind: 'active-orchestrator' as const,
+          projectId: input.projectId,
+        },
+        channel: 'orchestrator-turn' as const,
+        deliveryId: newId(),
+      };
+
   deps.mailboxEnqueue({
     message: {
       id: newId(),
@@ -98,19 +153,7 @@ export function deliverAgentEnvelope(
       sourceId: input.sourceId ?? null,
       idempotencyKey: input.idempotencyKey,
     },
-    recipients: [
-      {
-        id: newId(),
-        addressKind: 'orchestrator-session',
-        addressJson: {
-          kind: 'orchestrator-session',
-          projectId: input.projectId,
-          sessionId: input.pcSessionId,
-        },
-        channel: 'orchestrator-turn',
-        deliveryId: newId(),
-      },
-    ],
+    recipients: [recipient],
     now: (deps.now ?? Date.now)(),
   });
   return { inboxId: null, channelDelivered: false };

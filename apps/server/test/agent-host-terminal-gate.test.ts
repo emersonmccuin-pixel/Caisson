@@ -11,8 +11,15 @@ import type { AgentHostRunSnapshot } from '@pc/runtime';
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-host-terminal-gate-'));
 process.env.PC_DATA_DIR = tmpDir;
 
-const { closeDb, createProject, getAgentRunRow, insertAgentRunRow, newId, runMigrations } =
-  await import('@pc/db');
+const {
+  closeDb,
+  createOrchestratorSession,
+  createProject,
+  getAgentRunRow,
+  insertAgentRunRow,
+  newId,
+  runMigrations,
+} = await import('@pc/db');
 const { ContractService } = await import('@pc/app-services');
 const { applyHostTerminalSnapshot, reconcileAgentRunsAgainstHost } = await import(
   '../src/services/agent-host-reattach.ts'
@@ -41,7 +48,7 @@ function terminalSnapshot(runId: ULID, projectId: ULID): AgentHostRunSnapshot {
   return {
     runId,
     projectId,
-    dispatcherSessionId: 'disp-1',
+    dispatcherSessionId: lastDispatcherId,
     ccSessionId: 'cc-1',
     podName: 'builder',
     worktreeDir: join(tmpDir, 'wt'),
@@ -57,6 +64,12 @@ function terminalSnapshot(runId: ULID, projectId: ULID): AgentHostRunSnapshot {
   };
 }
 
+// M4a — deliverAgentEnvelope is dispatcher-aware: a terminal envelope for a
+// dispatcher id with NO orchestrator_sessions row is deliberately skipped.
+// These tests assert routing, so the seed mints a REAL session per project
+// (tests run sequentially; the snapshot helper reads the latest).
+let lastDispatcherId = 'disp-1';
+
 function seedRun(slug: string): { runId: ULID; projectId: ULID } {
   const project = createProject({
     slug,
@@ -64,12 +77,17 @@ function seedRun(slug: string): { runId: ULID; projectId: ULID } {
     stages,
     folderPath: join(tmpDir, slug),
   });
+  const session = createOrchestratorSession({
+    projectId: project.id,
+    providerSessionId: `cc-${slug}`,
+  });
+  lastDispatcherId = session.id;
   const runId = newId();
   insertAgentRunRow({
     id: runId,
     projectId: project.id,
     podName: 'builder',
-    dispatcherSessionId: 'disp-1',
+    dispatcherSessionId: session.id,
     ccSessionId: 'cc-1',
     status: 'running',
     input: 'go',
@@ -274,12 +292,18 @@ test('completed contract dispatch with empty result surfaces the submitted deliv
     deliverable: { kind: 'answer', text: 'DONE' },
     report: null,
   });
+  // M4a — the dispatcher must be a REAL orchestrator session or the terminal
+  // envelope is (correctly) skipped.
+  const session = createOrchestratorSession({
+    projectId: project.id,
+    providerSessionId: 'cc-deliverable',
+  });
   const runId = newId();
   insertAgentRunRow({
     id: runId,
     projectId: project.id,
     podName: 'haiku',
-    dispatcherSessionId: 'disp-1',
+    dispatcherSessionId: session.id,
     ccSessionId: 'cc-1',
     status: 'running',
     input: 'Begin.',
@@ -294,7 +318,7 @@ test('completed contract dispatch with empty result surfaces the submitted deliv
       ccSessionId: 'cc-1',
       podName: 'haiku',
       projectId: project.id,
-      dispatcherSessionId: 'disp-1',
+      dispatcherSessionId: session.id,
       parentWorkItemId: null,
       worktreeDir: join(tmpDir, 'wt'),
       status: 'completed',

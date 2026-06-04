@@ -28,6 +28,7 @@ import {
   listRecipientsForMessage as defaultListRecipientsForMessage,
   markDeliveryAccepted as defaultMarkDeliveryAccepted,
   markDeliveryDeadLettered as defaultMarkDeliveryDeadLettered,
+  markDeliveryDeferred as defaultMarkDeliveryDeferred,
   markDeliveryRetrying as defaultMarkDeliveryRetrying,
   markRecipientActioned as defaultMarkRecipientActioned,
   markRecipientDismissed as defaultMarkRecipientDismissed,
@@ -69,6 +70,7 @@ export interface MailboxServiceDeps {
   acquireDeliveryLease?: typeof defaultAcquireDeliveryLease;
   markDeliveryAccepted?: typeof defaultMarkDeliveryAccepted;
   markDeliveryRetrying?: typeof defaultMarkDeliveryRetrying;
+  markDeliveryDeferred?: typeof defaultMarkDeliveryDeferred;
   markDeliveryDeadLettered?: typeof defaultMarkDeliveryDeadLettered;
   markRecipientRead?: typeof defaultMarkRecipientRead;
   markRecipientActioned?: typeof defaultMarkRecipientActioned;
@@ -85,6 +87,7 @@ export class MailboxService {
   private readonly acquireLease: typeof defaultAcquireDeliveryLease;
   private readonly accept: typeof defaultMarkDeliveryAccepted;
   private readonly retry: typeof defaultMarkDeliveryRetrying;
+  private readonly defer: typeof defaultMarkDeliveryDeferred;
   private readonly deadLetter: typeof defaultMarkDeliveryDeadLettered;
   private readonly readRecipient: typeof defaultMarkRecipientRead;
   private readonly actionRecipient: typeof defaultMarkRecipientActioned;
@@ -100,6 +103,7 @@ export class MailboxService {
     this.acquireLease = deps.acquireDeliveryLease ?? defaultAcquireDeliveryLease;
     this.accept = deps.markDeliveryAccepted ?? defaultMarkDeliveryAccepted;
     this.retry = deps.markDeliveryRetrying ?? defaultMarkDeliveryRetrying;
+    this.defer = deps.markDeliveryDeferred ?? defaultMarkDeliveryDeferred;
     this.deadLetter = deps.markDeliveryDeadLettered ?? defaultMarkDeliveryDeadLettered;
     this.readRecipient = deps.markRecipientRead ?? defaultMarkRecipientRead;
     this.actionRecipient = deps.markRecipientActioned ?? defaultMarkRecipientActioned;
@@ -181,6 +185,35 @@ export class MailboxService {
           action: 'retry-scheduled',
           actorKind: 'worker',
           details: { lastError: input.lastError, nextAttemptAt: input.nextAttemptAt },
+          now: input.now,
+        },
+        tx,
+      );
+      const liveEvent = this.insert(tx, buildDeliveryDraft(this.getMessage(delivery.messageId, tx)!, delivery));
+      return { liveEvent, delivery };
+    });
+  }
+
+  /** M4a/FD-8 — park a delivery whose recipient cannot be reached YET (no live
+   *  orchestrator). No attempt consumed; status returns to `pending` with a
+   *  scheduled recheck. A message never dead-letters for the orchestrator
+   *  being away — it waits. */
+  deferDelivery(input: {
+    deliveryId: ULID;
+    reason: string;
+    nextAttemptAt: number;
+    now: number;
+  }): MailboxDeliveryPublication | null {
+    return this.tx((tx) => {
+      const delivery = this.defer(input, tx);
+      if (!delivery) return null;
+      this.audit(
+        {
+          messageId: delivery.messageId,
+          deliveryId: delivery.id,
+          action: 'deferred',
+          actorKind: 'worker',
+          details: { reason: input.reason, nextAttemptAt: input.nextAttemptAt },
           now: input.now,
         },
         tx,

@@ -350,6 +350,29 @@ export function markDeliveryRetrying(
   return getMailboxDelivery(input.deliveryId, db);
 }
 
+/** M4a/FD-8 — park a delivery that CANNOT be attempted yet (no live
+ *  orchestrator to inject into). Unlike `markDeliveryRetrying` this consumes
+ *  NO attempt: waiting for a recipient to exist is not a failed try, and a
+ *  message must never dead-letter just because the orchestrator was away.
+ *  Status returns to `pending`; `nextAttemptAt` schedules the recheck. */
+export function markDeliveryDeferred(
+  input: { deliveryId: ULID; reason: string; nextAttemptAt: number; now: number },
+  db: DbExecutor = getDb(),
+): MailboxDeliveryRow | null {
+  db.update(mailboxDeliveries)
+    .set({
+      status: 'pending',
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      nextAttemptAt: input.nextAttemptAt,
+      lastError: input.reason,
+      updatedAt: input.now,
+    })
+    .where(eq(mailboxDeliveries.id, input.deliveryId))
+    .run();
+  return getMailboxDelivery(input.deliveryId, db);
+}
+
 export function markDeliveryDeadLettered(
   input: { deliveryId: ULID; messageId: ULID; recipientId: ULID; reason: string; lastError: string | null; now: number },
   db: DbExecutor = getDb(),

@@ -11,11 +11,18 @@ import {
 
 // 017 Phase C — the Channel delivery path is deleted; deliverAgentEnvelope is
 // mailbox-only. Every agent envelope enqueues exactly one mailbox message.
+// M4a — addressing is dispatcher-aware: a REAL orchestrator session is
+// addressed directly; a synthetic dispatcher (workflow worker) falls back to
+// active-orchestrator for asks and SKIPS informational terminal notices.
 
 function fakeMailbox() {
   const calls: EnqueueMailboxMessageInput[] = [];
   return { port: (input: EnqueueMailboxMessageInput) => (calls.push(input), {}), calls };
 }
+
+/** Tests run without a DB — pin the M4a session-existence seam explicitly. */
+const realSession = { sessionExists: () => true };
+const syntheticSession = { sessionExists: () => false };
 
 const baseInput: DeliverAgentEnvelopeInput = {
   projectId: 'p1' as ULID,
@@ -31,7 +38,7 @@ const baseInput: DeliverAgentEnvelopeInput = {
 
 test('enqueues an orchestrator-session + orchestrator-turn message with the stable key', () => {
   const mb = fakeMailbox();
-  const res = deliverAgentEnvelope(baseInput, { mailboxEnqueue: mb.port });
+  const res = deliverAgentEnvelope(baseInput, { mailboxEnqueue: mb.port, ...realSession });
   assert.equal(mb.calls.length, 1);
   const input = mb.calls[0]!;
   assert.equal(input.message.kind, 'agent-terminal');
@@ -64,7 +71,7 @@ test('message-kind mapping: asks ⟹ agent-question, approval ⟹ agent-approval
   ];
   for (const [kind, expected] of cases) {
     const mb = fakeMailbox();
-    deliverAgentEnvelope({ ...baseInput, kind }, { mailboxEnqueue: mb.port });
+    deliverAgentEnvelope({ ...baseInput, kind }, { mailboxEnqueue: mb.port, ...realSession });
     assert.equal(mb.calls[0]!.message.kind, expected, `kind ${kind}`);
   }
 });
@@ -77,16 +84,59 @@ test('mailbox subject — human title per kind (completed/failed/started use the
   ];
   for (const [kind, expected] of cases) {
     const mb = fakeMailbox();
-    deliverAgentEnvelope({ ...baseInput, kind }, { mailboxEnqueue: mb.port });
+    deliverAgentEnvelope({ ...baseInput, kind }, { mailboxEnqueue: mb.port, ...realSession });
     assert.equal(mb.calls[0]!.message.subject, expected, `subject for ${kind}`);
   }
 });
 
 test('idempotency key is stable per event (re-fire enqueues with the SAME key)', () => {
   const mb = fakeMailbox();
-  deliverAgentEnvelope(baseInput, { mailboxEnqueue: mb.port });
-  deliverAgentEnvelope(baseInput, { mailboxEnqueue: mb.port }); // a replay / sweep re-fire
+  deliverAgentEnvelope(baseInput, { mailboxEnqueue: mb.port, ...realSession });
+  deliverAgentEnvelope(baseInput, { mailboxEnqueue: mb.port, ...realSession }); // a replay / sweep re-fire
   assert.equal(mb.calls.length, 2);
   assert.equal(mb.calls[0]!.message.idempotencyKey, mb.calls[1]!.message.idempotencyKey);
   // The real MailboxService.enqueue dedupes by this key → at most one delivery.
+});
+
+// ── M4a — dispatcher-aware addressing (no message silently dies) ─────────────
+
+test('M4a: an ASK from a synthetic dispatcher falls back to active-orchestrator', () => {
+  for (const kind of [
+    'agent-asks-orchestrator',
+    'agent-asks-user',
+    'agent-approval-request',
+  ] as const) {
+    const mb = fakeMailbox();
+    const res = deliverAgentEnvelope(
+      { ...baseInput, kind, idempotencyKey: `agent-ask:${kind}` },
+      { mailboxEnqueue: mb.port, ...syntheticSession },
+    );
+    assert.equal(mb.calls.length, 1, `${kind} must still enqueue`);
+    const r = mb.calls[0]!.recipients[0]!;
+    assert.equal(r.addressKind, 'active-orchestrator', kind);
+    assert.deepEqual(r.addressJson, { kind: 'active-orchestrator', projectId: 'p1' });
+    assert.equal(r.channel, 'orchestrator-turn');
+    assert.notEqual(res.skipped, true);
+  }
+});
+
+test('M4a: a terminal notice for a synthetic dispatcher is SKIPPED (engine owns the outcome)', () => {
+  for (const kind of ['agent-completed', 'agent-failed', 'agent-queued-started'] as const) {
+    const mb = fakeMailbox();
+    const res = deliverAgentEnvelope(
+      { ...baseInput, kind },
+      { mailboxEnqueue: mb.port, ...syntheticSession },
+    );
+    assert.equal(mb.calls.length, 0, `${kind} must not enqueue a doomed envelope`);
+    assert.equal(res.skipped, true);
+  }
+});
+
+test('M4a: a REAL dispatcher session keeps the pinned orchestrator-session address', () => {
+  const mb = fakeMailbox();
+  deliverAgentEnvelope(
+    { ...baseInput, kind: 'agent-asks-orchestrator' },
+    { mailboxEnqueue: mb.port, ...realSession },
+  );
+  assert.equal(mb.calls[0]!.recipients[0]!.addressKind, 'orchestrator-session');
 });

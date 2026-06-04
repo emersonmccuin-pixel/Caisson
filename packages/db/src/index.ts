@@ -352,6 +352,7 @@ export {
   listRecipientsForMessage,
   markDeliveryAccepted,
   markDeliveryDeadLettered,
+  markDeliveryDeferred,
   markDeliveryRetrying,
   markRecipientActioned,
   markRecipientDismissed,
