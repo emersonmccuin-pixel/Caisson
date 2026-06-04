@@ -12,18 +12,16 @@
 import { useEffect, useState } from 'react';
 
 import { useLiveEntitySignature } from '@/store/live-store';
+import { useActiveCenterTab } from '@/store/active-center-tab';
 
 import { projectsApi, type Project } from '@/features/projects/client';
 import { projectContextApi } from '@/features/project-context/client';
-import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { DeleteProjectFilesModal, SoftDeleteProjectModal } from './ProjectDangerModals';
-import { SetupWizardModal } from './SetupWizardModal';
 import { FieldSchemasEditor } from './project-settings/FieldSchemasEditor';
 import { StagesEditor } from './project-settings/StagesEditor';
 
 interface ProjectSettingsPanelProps {
   project: Project;
-  events: WsEnvelope[];
   onProjectUpdated: (next: Project) => void;
   onProjectDeleted: (projectId: string) => void;
 }
@@ -39,7 +37,6 @@ const SECTIONS: { id: SectionId; label: string; danger?: boolean }[] = [
 
 export function ProjectSettingsPanel({
   project,
-  events,
   onProjectUpdated,
   onProjectDeleted,
 }: ProjectSettingsPanelProps) {
@@ -80,7 +77,7 @@ export function ProjectSettingsPanel({
 
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-2xl space-y-6 p-6 text-sm">
-            <SetupWizardNag project={project} events={events} />
+            <SetupWizardNag project={project} />
 
             {active === 'info' && (
               <Section title="Project info">
@@ -294,23 +291,21 @@ function DangerZone({
   );
 }
 
-// ─── Setup wizard nag (5.6 / D82) ────────────────────────────────────────────
+// ─── Setup nag (5.6 / D82 → S2/FD-21 chat handoff) ──────────────────────────
 //
 // Banner that appears in Project Settings when CLAUDE.md is missing or empty.
-// Offers "Run setup wizard…" + a per-session "Dismiss" option. Clears
-// automatically when the wizard finishes (project-claude-md-changed WS event)
-// or when CLAUDE.md gets a non-whitespace edit on disk.
+// Points at the orchestrator chat (it interviews + writes the setup file) +
+// a per-session "Dismiss" option. Clears automatically when CLAUDE.md gets a
+// non-whitespace edit on disk (project-claude-md live signature).
 
 function SetupWizardNag({
   project,
-  events,
 }: {
   project: Project;
-  events: WsEnvelope[];
 }) {
+  const setCenterTab = useActiveCenterTab((s) => s.setTab);
   const [needs, setNeeds] = useState<boolean | null>(null);
   const [dismissed, setDismissed] = useState(false);
-  const [wizardOpen, setWizardOpen] = useState(false);
 
   // Initial probe + reprobe on project switch.
   useEffect(() => {
@@ -341,54 +336,34 @@ function SetupWizardNag({
       });
   }, [claudeMdSig, project.id]);
 
-  if (needs !== true || dismissed) {
-    return (
-      <>
-        {wizardOpen && (
-          <SetupWizardModal
-            projectId={project.id}
-            events={events}
-            onClose={() => setWizardOpen(false)}
-          />
-        )}
-      </>
-    );
-  }
+  if (needs !== true || dismissed) return null;
 
   return (
-    <>
-      <div className="flex items-center justify-between gap-3 border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
-        <div className="flex-1">
-          <div className="font-medium text-foreground">No CLAUDE.md yet.</div>
-          <p className="text-muted-foreground">
-            Future Claude sessions in this project will start blank. Run a short
-            wizard to write one (you can always edit it later).
-          </p>
-        </div>
-        <div className="flex flex-shrink-0 items-center gap-2">
-          <button
-            onClick={() => setWizardOpen(true)}
-            className="bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-          >
-            Run setup wizard…
-          </button>
-          <button
-            onClick={() => setDismissed(true)}
-            className="border border-border px-3 py-1 text-xs hover:bg-muted"
-            title="Hide until next reload"
-          >
-            Dismiss
-          </button>
-        </div>
+    <div className="flex items-center justify-between gap-3 border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+      <div className="flex-1">
+        <div className="font-medium text-foreground">No CLAUDE.md yet.</div>
+        <p className="text-muted-foreground">
+          Future Claude sessions in this project will start blank. You can set
+          the project up through conversation in chat (you can always edit the
+          file later).
+        </p>
       </div>
-      {wizardOpen && (
-        <SetupWizardModal
-          projectId={project.id}
-          events={events}
-          onClose={() => setWizardOpen(false)}
-        />
-      )}
-    </>
+      <div className="flex flex-shrink-0 items-center gap-2">
+        <button
+          onClick={() => setCenterTab('orchestrator')}
+          className="bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          Open chat →
+        </button>
+        <button
+          onClick={() => setDismissed(true)}
+          className="border border-border px-3 py-1 text-xs hover:bg-muted"
+          title="Hide until next reload"
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
   );
 }
 

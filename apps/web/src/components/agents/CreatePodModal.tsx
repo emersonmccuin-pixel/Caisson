@@ -1,33 +1,26 @@
-// "+ Add agent" modal. Three tabs:
+// "+ Add agent" modal. Two tabs:
 //   - From global pool (default when pool has pickable globals): pick a
 //     user-promoted global pod and clone it into THIS project. Skips stock
 //     pods (always-visible in the Built-in section) + globals whose name is
 //     already a project pod here. Clone via POST /clone-to-project.
-//   - Conversational: dormant Start button → on click, spawns agent-designer
-//     (transient PtySession against the agent-designer pod) and renders
-//     AgentDesignerChat. Closing the modal tears down the session via the
-//     explicit close handler.
 //   - Manual: the plain inline form (name / description / prompt / model /
 //     effort / max-turns / tools / output destination).
 //
-// Tabs stay MOUNTED across switches (display toggle, not conditional
-// render) so a started chat survives a toggle to Manual and back.
+// Conversational creation moved to the orchestrator chat (S2 / FD-21) — the
+// banner below the header hands off. The old Conversational tab (transient
+// agent-designer PtySession in the modal) is gone.
+//
+// Tabs stay MOUNTED across switches (display toggle, not conditional render)
+// so half-filled form state survives a toggle to the pool tab and back.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { Project } from '@/features/projects/client';
-import { transientSessionsApi } from '@/features/transient-sessions/client';
 import { agentsApi, type CreatePodInput, type Pod } from '@/features/agents/client';
-import type { WsEnvelope } from '@/features/runtime/ws-types';
-import {
-  AgentDesignerChat,
-  isAgentDesignerState,
-  type AgentDesignerState,
-} from './AgentDesignerChat';
+import { ChatHandoffBanner } from '../ChatHandoffBanner';
 
 interface CreatePodModalProps {
   project: Project;
-  events: WsEnvelope[];
   /** Names of project-scope pods already in THIS project. Used by the
    *  global-pool picker to hide globals whose name would collide. */
   existingProjectPodNames?: string[];
@@ -35,11 +28,10 @@ interface CreatePodModalProps {
   onCreated: (pod: Pod) => void;
 }
 
-type TabKey = 'global-pool' | 'conversational' | 'manual';
+type TabKey = 'global-pool' | 'manual';
 
 export function CreatePodModal({
   project,
-  events,
   existingProjectPodNames,
   onClose,
   onCreated,
@@ -47,12 +39,6 @@ export function CreatePodModal({
   const [globalPool, setGlobalPool] = useState<Pod[] | null>(null);
   const [poolErr, setPoolErr] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>('global-pool');
-  const [convoStarted, setConvoStarted] = useState(false);
-  const [convoStarting, setConvoStarting] = useState(false);
-  const [convoStartError, setConvoStartError] = useState<string | null>(null);
-  const [convoSessionId, setConvoSessionId] = useState<string | null>(null);
-  const [convoInitialState, setConvoInitialState] =
-    useState<AgentDesignerState>('spawning');
   const initialTabSet = useRef(false);
 
   const projectNamesSet = useMemo(
@@ -85,45 +71,14 @@ export function CreatePodModal({
     };
   }, []);
 
-  // Once we know the pool is empty, snap to the Conversational tab the
-  // first time. After that, respect user navigation.
+  // Once we know the pool is empty, snap to the Manual tab the first time.
+  // After that, respect user navigation.
   useEffect(() => {
     if (initialTabSet.current) return;
     if (globalPool === null) return; // pool still loading
     initialTabSet.current = true;
-    if (pickableGlobals.length === 0) setTab('conversational');
+    if (pickableGlobals.length === 0) setTab('manual');
   }, [globalPool, pickableGlobals.length]);
-
-  // Explicit teardown — fire only from user-initiated close, NOT from
-  // useEffect cleanup (Strict Mode double-invoke would kill the spawn
-  // ~50ms after start, producing 16-byte silent transcripts).
-  function handleClose() {
-    if (convoStarted) {
-      void transientSessionsApi.stopAgentDesigner(project.id).catch(() => {
-        /* best-effort */
-      });
-    }
-    onClose();
-  }
-
-  async function handleStartConversation() {
-    if (convoStarting || convoStarted) return;
-    setConvoStartError(null);
-    setConvoStarting(true);
-    setConvoInitialState('spawning');
-    try {
-      const started = await transientSessionsApi.startAgentDesigner(project.id);
-      setConvoSessionId(started.sessionId);
-      setConvoInitialState(
-        isAgentDesignerState(started.state) ? started.state : 'spawning',
-      );
-      setConvoStarted(true);
-    } catch (e) {
-      setConvoStartError((e as Error).message);
-    } finally {
-      setConvoStarting(false);
-    }
-  }
 
   return (
     <div
@@ -131,18 +86,24 @@ export function CreatePodModal({
       role="dialog"
       aria-modal="true"
     >
-      <div className="flex h-[92vh] w-[96vw] max-w-[1600px] flex-col border border-border bg-card text-foreground shadow-xl">
+      <div className="flex h-[80vh] w-full max-w-[900px] flex-col border border-border bg-card text-foreground shadow-xl">
         <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
           <h2 className="text-base font-semibold text-foreground">Add agent</h2>
           <button
             type="button"
-            onClick={handleClose}
+            onClick={onClose}
             className="text-muted-foreground hover:text-foreground"
             aria-label="Close"
           >
             ×
           </button>
         </header>
+
+        <div className="px-4 pt-3">
+          <ChatHandoffBanner onNavigate={onClose}>
+            You can create an agent through conversation in chat.
+          </ChatHandoffBanner>
+        </div>
 
         <TabStrip value={tab} onChange={setTab} />
 
@@ -159,25 +120,8 @@ export function CreatePodModal({
             />
           </TabPanel>
 
-          <TabPanel active={tab === 'conversational'}>
-            {convoStarted ? (
-              <AgentDesignerChat
-                project={project}
-                events={events}
-                sessionId={convoSessionId}
-                initialState={convoInitialState}
-              />
-            ) : (
-              <StartScreen
-                starting={convoStarting}
-                error={convoStartError}
-                onStart={() => void handleStartConversation()}
-              />
-            )}
-          </TabPanel>
-
           <TabPanel active={tab === 'manual'}>
-            <ManualForm project={project} onClose={handleClose} onCreated={onCreated} />
+            <ManualForm project={project} onClose={onClose} onCreated={onCreated} />
           </TabPanel>
         </div>
       </div>
@@ -198,9 +142,6 @@ function TabStrip({
     <div className="flex shrink-0 items-end gap-1 border-b border-border bg-card px-4 pt-2">
       <TabButton active={value === 'global-pool'} onClick={() => onChange('global-pool')}>
         From global pool
-      </TabButton>
-      <TabButton active={value === 'conversational'} onClick={() => onChange('conversational')}>
-        Conversational
       </TabButton>
       <TabButton active={value === 'manual'} onClick={() => onChange('manual')}>
         Manual
@@ -312,7 +253,8 @@ function GlobalPoolPanel({
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
         <div className="max-w-md text-sm text-muted-foreground">
-          No agents in the global pool yet. Use <span className="font-medium text-foreground">Conversational</span> or{' '}
+          No agents in the global pool yet. Describe the agent in{' '}
+          <span className="font-medium text-foreground">chat</span> (banner above) or use{' '}
           <span className="font-medium text-foreground">Manual</span> to design one — then{' '}
           <span className="font-medium text-foreground">Promote to global</span> later to share across projects.
         </div>
@@ -357,40 +299,6 @@ function GlobalPoolPanel({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-// ── Conversational tab — dormant start screen ─────────────────────────────
-
-function StartScreen({
-  starting,
-  error,
-  onStart,
-}: {
-  starting: boolean;
-  error: string | null;
-  onStart: () => void;
-}) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
-      <div className="max-w-md text-sm text-muted-foreground">
-        Design a new agent by chatting with <span className="font-mono text-foreground">agent-designer</span>.
-        It will ask what the agent should do, what tools it needs, and create the pod when you're ready.
-      </div>
-      <button
-        type="button"
-        onClick={onStart}
-        disabled={starting}
-        className="bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-      >
-        {starting ? 'Starting…' : 'Start agent designer'}
-      </button>
-      {error && (
-        <div className="max-w-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          {error}
-        </div>
-      )}
     </div>
   );
 }

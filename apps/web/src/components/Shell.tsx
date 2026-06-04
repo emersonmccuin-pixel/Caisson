@@ -266,7 +266,7 @@ function Center({
             defaultOrchestratorSurface={defaultOrchestratorSurface}
           />
         ) : tab === 'workflows' ? (
-          <WorkflowsList project={activeProject} events={wsEvents} send={wsSend} />
+          <WorkflowsList project={activeProject} events={wsEvents} />
         ) : tab === 'agents' ? (
           <AgentsList project={activeProject} events={wsEvents} />
         ) : tab === 'files' ? (
@@ -274,7 +274,6 @@ function Center({
         ) : tab === 'project-settings' ? (
           <ProjectSettingsPanel
             project={activeProject}
-            events={wsEvents}
             onProjectUpdated={onProjectUpdated}
             onProjectDeleted={onProjectDeleted}
           />

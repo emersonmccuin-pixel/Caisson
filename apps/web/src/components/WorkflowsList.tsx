@@ -20,30 +20,28 @@ import { isWorkflowRunChangedLivePayload } from '@pc/contracts';
 
 import type { Project, ULID } from '@/features/projects/client';
 import { workflowsApi, type V2RunDetail, type V2RunStatus, type V2RunSummary, type WorkflowRow } from '@/features/workflows/client';
-import type { WsEnvelope, WsOutbound } from '@/features/runtime/ws-types';
+import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useProjectWorkflows } from '@/hooks/use-project-workflows';
 import { useProjectWorkflowV2Runs } from '@/hooks/use-project-workflow-v2-runs';
 import { useLiveEvents } from '@/store/live-store';
 import { useWorkflowsListNav } from '@/store/workflows-list-nav';
-import { WorkflowBuilderModal } from './WorkflowBuilderModal';
+import { CreateWorkflowModal } from './CreateWorkflowModal';
 import { WorkflowGraphV2 } from './WorkflowGraphV2';
 
 interface WorkflowsListProps {
   project: Project;
   events: WsEnvelope[];
-  send: (msg: WsOutbound) => boolean;
 }
 
 type StatusFilter = 'all' | 'enabled' | 'disabled' | 'invalid';
 type TriggerFilter = 'all' | 'manual' | 'stage-on-entry' | 'schedule' | 'event';
 type DetailTab = 'graph' | 'runs' | 'yaml';
 
-export function WorkflowsList({ project, events, send }: WorkflowsListProps) {
+export function WorkflowsList({ project, events }: WorkflowsListProps) {
   const { workflows, refetch } = useProjectWorkflows(project, events);
   const { runs } = useProjectWorkflowV2Runs(project, events);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [editingRow, setEditingRow] = useState<WorkflowRow | null>(null);
   const [selectedId, setSelectedId] = useState<ULID | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
@@ -340,7 +338,7 @@ export function WorkflowsList({ project, events, send }: WorkflowsListProps) {
               setTab={setTab}
               selectedRunId={selectedRunId}
               setSelectedRunId={setSelectedRunId}
-              onEdit={() => setEditingRow(selectedRow)}
+              onEdit={() => setTab('yaml')}
               onRunNow={() => void onRunNow(selectedRow)}
               onDuplicate={() => void onDuplicate(selectedRow)}
               onToggleDisabled={() => void onToggleDisabled(selectedRow)}
@@ -355,28 +353,13 @@ export function WorkflowsList({ project, events, send }: WorkflowsListProps) {
       </div>
 
       {createOpen && (
-        <WorkflowBuilderModal
-          projectId={project.id}
-          events={events}
-          send={send}
-          onClose={() => {
+        <CreateWorkflowModal
+          project={project}
+          onClose={() => setCreateOpen(false)}
+          onCreated={(row) => {
             setCreateOpen(false);
-            refetch();
-          }}
-        />
-      )}
-      {editingRow && editingRow.parsedDefinition && (
-        <WorkflowBuilderModal
-          projectId={project.id}
-          events={events}
-          send={send}
-          editingWorkflow={{
-            id: editingRow.slug,
-            def: editingRow.parsedDefinition as unknown as WorkflowV2.Workflow,
-            yamlText: editingRow.yaml,
-          }}
-          onClose={() => {
-            setEditingRow(null);
+            setSelectedId(row.id);
+            setTab('yaml');
             refetch();
           }}
         />
