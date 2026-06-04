@@ -160,8 +160,19 @@ cleanly — chat + worker + system injections coexist on the one Engine.
 required all THREE 2s slow-windows to share one instant (client thinking-time luck); a 5/6
 "fail" had a real 219ms A∩C overlap on the books. Now ANY pairwise overlap = the
 non-serialization proof. Green run observed A∩C + B∩C genuinely simultaneous.
-⬜ remaining: reload-replay visual check (Emerson, in-app) · packaged-mode pass ·
-Sessions-tab resume/new-session flows.
+✅ **Sessions flows live-fired 2026-06-04 — PASS 7/7 (server-side; tab UI rides Emerson's
+visual pass):** teach token → close (run exits, launcher state) → resume same session
+(`--resume`; token recalled — history survives) → new session (fresh context, no leak;
+NO-SECRET) → sessions list keeps both rows. Resume turn replied 6s after the resume POST.
+✅ **packaged-mode pass 2026-06-04** (`dist:dir` build of dfc39b10+, win-unpacked on :4070,
+scratch data dir, bundled CC = the pin 2.1.160 `pinnedMatch:true`): interrupt gauntlet PASS
+(turn-end 13ms, follow-up replied) · sessions flows PASS 7/7 (close/resume-with-history/
+new-session-clean/list) · graceful quit zero orphans. One-off: the FIRST packaged instance
+died mid-smoke via a graceful `SIGINT — forwarding to 2 children` shutdown — timing matched
+a desktop window-close (Emerson was at the machine), did NOT reproduce on an identical
+re-run, and no path exists from chat interrupt (ESC into the child ConPTY) to a supervisor
+SIGINT. Treated as window-close until it ever recurs.
+⬜ remaining: reload-replay visual check (Emerson, in-app) — the ONE open Slice 3 item.
 
 ## Open questions (carried, not blocking Slice 0)
 
