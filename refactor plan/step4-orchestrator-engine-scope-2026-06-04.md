@@ -168,11 +168,10 @@ NO-SECRET) → sessions list keeps both rows. Resume turn replied 6s after the r
 scratch data dir, bundled CC = the pin 2.1.160 `pinnedMatch:true`): interrupt gauntlet PASS
 (turn-end 13ms, follow-up replied) · sessions flows PASS 7/7 (close/resume-with-history/
 new-session-clean/list) · graceful quit zero orphans. One-off: the FIRST packaged instance
-died mid-smoke via a graceful `SIGINT — forwarding to 2 children` shutdown — timing matched
-a desktop window-close (Emerson was at the machine), did NOT reproduce on an identical
-re-run, and no path exists from chat interrupt (ESC into the child ConPTY) to a supervisor
-SIGINT. Treated as window-close until it ever recurs.
-⬜ remaining: reload-replay visual check (Emerson, in-app) — the ONE open Slice 3 item.
+died mid-smoke via a graceful `SIGINT — forwarding to 2 children` shutdown — **confirmed:
+Emerson closed the window.** Not a bug; the graceful path did its job.
+✅ **Emerson visual pass 2026-06-04: "everything looks good"** — reload-replay, Stop button,
+Sessions-tab flows confirmed in-app. **Slice 3 CLOSED → Step 4 COMPLETE.**
 
 ## Open questions (carried, not blocking Slice 0)
 
