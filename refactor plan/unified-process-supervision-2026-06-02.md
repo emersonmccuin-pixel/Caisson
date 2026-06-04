@@ -41,8 +41,11 @@ Current state appears only in §9 (the migration's starting point).
 | **Store** | append-only event log + projected read-models | the truth | durable |
 | **UI shell** | pure view + input | nothing | yes — reattaches to the Brain |
 
-Five roles. The per-session **MCP child** stays (it is the agent's hands; its tools call back into
-the Brain). It changes nothing about ownership — the Engine owns the parent `claude.exe`.
+Five roles. ~~The per-session **MCP child** stays~~ **Amended by FD-2 (spike PASSED 6/6,
+2026-06-03):** the per-session MCP child folds into the Brain as ONE shared HTTP tools endpoint.
+Identity rides a per-session header in each session's `.mcp.json`; claude.exe re-connects and
+re-initializes cleanly across a Brain restart. Ownership is unchanged — the Engine owns the parent
+`claude.exe`. Spike harness: `labs/fd2-shared-http-mcp/`.
 
 ---
 
@@ -205,8 +208,10 @@ backstops.
   orchestrator/modals.
 - **Don't preserve zombie `claude.exe` across an Engine restart.** Durability is the store's intent +
   re-dispatch, not orphaned PTYs (that path is fragile; principle 4).
-- **MCP children stay per-session.** This design changes who owns the *parent* `claude.exe`, nothing
-  about the per-session MCP model.
+- ~~**MCP children stay per-session.**~~ **Amended by FD-2 (spike PASSED, 2026-06-03):** tools move
+  to ONE shared HTTP endpoint in the Brain; per-session identity via mcp.json headers. The migration
+  rides Step 4 (orchestrator → Engine) so sessions move to the new transport as they move to the
+  Engine — no separate cutover.
 
 ---
 

@@ -26,10 +26,12 @@ export const MIN_CLAUDE_VERSION = '2.0.0';
 
 /** FD-22 — the ONE exact Claude Code version PC is tested against. Bump
  *  deliberately, only after verifying a new version against PC's quirk surface
- *  (banner rendering, queue protocol, transcript format — all have broken
- *  under us before). The installer installs exactly this; a mismatch is a
- *  loud warning, never a hard wall (dev machines may run ahead on purpose). */
-export const PINNED_CLAUDE_VERSION = '2.1.162';
+ *  (banner rendering, queue protocol, transcript format, the FD-2 spike
+ *  harness — all have broken under us before). The installer installs exactly
+ *  this; a mismatch is a loud warning, never a hard wall (dev machines may run
+ *  ahead on purpose). PC was built on 2.1.160; the dev box's CLI self-updated
+ *  to 2.1.162 before the FD-22 auto-update lockdown landed. */
+export const PINNED_CLAUDE_VERSION = '2.1.160';
 
 const PROBE_TIMEOUT_MS = 10_000;
 

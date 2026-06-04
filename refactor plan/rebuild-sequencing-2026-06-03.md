@@ -38,7 +38,7 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 | P2 | **In-process fork DELETE** (ledger row 3). | Dead in prod; needs P1 + null-host tests moved to a host fake. | FD-12 (one spawn path) |
 | P3 | **Step 7 — Supervisor** *(in flight now; parallel with P1–P2)*. One spawn→watch→respawn module, dev + packaged. | Independent; fixes packaged-host-never-respawns. | — |
 | P4 | **Step 3 — Engine re-resolution + reattach.** Brain re-finds the Engine after a respawn. | Needs P3 (a respawn to test against). Hard prereq for P6. | — |
-| P5 | **FD-2 spike — shared HTTP tools server.** Identity / timing / concurrency / restart. | MUST land before P6: if shared-HTTP wins, Engine sessions spawn without per-session messengers — deciding after the orchestrator migration means migrating twice. | FD-2 |
+| P5 ✅ | **FD-2 spike — shared HTTP tools server. PASSED 6/6, 2026-06-03.** Shared-HTTP WINS: identity via per-session mcp.json headers (`extra.requestInfo`) · turn-1 race gone (`deferred_tools_delta`) · concurrency clean · restart recovery ~5s via 404/-32001. Harness `labs/fd2-shared-http-mcp/` (re-run on every FD-22 version bump). Adoption rides P6. Bonus: caught + fixed the `encodeCwdForClaude` dot-divergence stall bug. | MUST land before P6: if shared-HTTP wins, Engine sessions spawn without per-session messengers — deciding after the orchestrator migration means migrating twice. | FD-2 |
 | P6 | **Step 4 — orchestrator → Engine** (policy `persistent, interactive, fire-and-watch`). | Needs P4. Validates the policy-flag model before anything is deleted. FD-18's ready-gate surfacing rides along (orchestrator chat gets "Claude is loading"). | FD-18 |
 | P7 | **Modals DELETE** (was Step 5 — ☠ FD-21). Delete the three modal paths outright. Needs S2 (authoring handoffs) live first so the product keeps its create flows. | Deletion, not migration. | FD-21 |
 | P8 | **Step 6 — converge the primitive.** Delete `PtySession`, `InteractiveSession`, banner-regex, file-watching, reattach field. One state machine, one ready-detector, one transcript reader. | Needs P6 + P7 (no callers left). | FD-12 |
@@ -86,9 +86,10 @@ Next up, parallel-safe, in value order:
 
 1. ~~**M1 — FD-3 channel demolition**~~ ✅ shipped 2026-06-03 (14715cc8)
 2. ~~**P1 — Step 2 one reconciler**~~ ✅ shipped 2026-06-03 (live acceptance green)
-3. **S1 — Areas** + **S3 — version pin** (small, user-visible, independent)
-4. **P5 — FD-2 spike** (decides the MCP shape before the orchestrator migrates)
-5. **M2 — write-door guard** (cheap insurance while everything moves)
+3. ~~**S1 — Areas** + **S3 — version pin**~~ ✅ shipped 2026-06-03 (52a3723f, bf9615db)
+4. ~~**P5 — FD-2 spike**~~ ✅ PASSED 6/6 2026-06-03 — shared HTTP tools server wins; adoption rides P6
+5. **M2 — write-door guard** (cheap insurance while everything moves) ← next
+6. **P2 — in-process fork delete** (unblocked by P1)
 
 Gate check before each wave: does the live system still pass the acceptance loop
 (synthetic-stall-check → card flow → human gate → completed)?

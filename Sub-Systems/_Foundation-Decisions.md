@@ -59,7 +59,28 @@
 
 ## FD-2 — One shared tools server vs. one messenger per agent
 
-**Status:** ⚪ Open — needs a spike before deciding — 2026-06-03
+**Status:** 🟢 Locked — spike PASSED 6/6, 2026-06-03 — **one shared HTTP tools server wins**
+
+> **Spike verdict (2026-06-03, CC 2.1.162, harness `labs/fd2-shared-http-mcp/`):** three live
+> claude.exe sessions against ONE Streamable-HTTP MCP server — all six criteria green:
+> - **Identity ✅ (the make-or-break):** per-session `.mcp.json` carries
+>   `{"type":"http","url":…,"headers":{"X-PC-…":…}}`; CC sends the headers on EVERY tool call and
+>   the SDK hands them to the handler (`extra.requestInfo.headers`). Zero cross-talk across A/B/C.
+> - **Turn-1 tools ✅:** all three clients called tools on turn 1, no warmup — CC 2.1.162 adds MCP
+>   tools mid-turn via `deferred_tools_delta`, so the historical "no tools on turn 1" race is gone
+>   over HTTP.
+> - **Concurrency ✅:** three server-side 2s calls ran overlapped, distinct MCP sessions per client.
+> - **Restart ✅:** server killed + restarted mid-session → answering `404` + JSON-RPC `-32001`
+>   ("Session not found") makes CC re-initialize and call again within ~5s, hands-off. (Quirk: CC
+>   opens TWO fresh MCP sessions on reconnect — one re-lists tools, one carries the call. Harmless;
+>   don't key server state on "one session per claude".)
+> - **Bonus catch:** the spike exposed that PC's `encodeCwdForClaude` kept `.`/`_` while CC 2.1.162
+>   replaces ALL non-alphanumerics (CC src `sessionStoragePortable.ts:311`) — the blind-tailer
+>   stall class waiting to fire on any dotted workspace path. Fixed same day (one copy, in
+>   `path-resolver.ts`).
+> - **Adoption path:** rides Step 4 / P6 (orchestrator → Engine) — sessions move to the shared
+>   endpoint as they move to the Engine. North-star doc amended. Re-run the harness on every FD-22
+>   CC version bump (it IS the quirk-surface test for the tools transport).
 
 **The idea (Emerson):** instead of every Claude process getting its own little tools-messenger,
 have **one shared PC-RIG tools server** that all Claude processes connect to.

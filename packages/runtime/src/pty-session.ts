@@ -67,14 +67,11 @@ function scrubIdeIntegrationEnv(env: Record<string, string | undefined>): Record
   return out;
 }
 
-/** CC encodes the absolute cwd as the dir name under `~/.claude/projects/`.
- *  Replace any non-[A-Za-z0-9._-] character with '-'. Empirically verified
- *  against `C:\\Users\\example\\AppData\\Local\\Temp\\cc-stream-test` →
- *  `C--Users-example-AppData-Local-Temp-cc-stream-test` and
- *  `E:\\Projects\\Caisson\\workspace` → `E--Projects-Caisson-workspace`. */
-export function encodeCwdForClaude(cwd: string): string {
-  return cwd.replace(/[^A-Za-z0-9._-]/g, '-');
-}
+// CWD→transcript-dir encoding lives in path-resolver.ts (ONE copy — the local
+// duplicate here kept dots/underscores and silently diverged from CC 2.1.162's
+// actual rule; caught live 2026-06-03 by the FD-2 spike).
+import { encodeCwdForClaude } from './path-resolver.ts';
+export { encodeCwdForClaude };
 
 export function terminalBufferLooksReady(rawBuffer: string): boolean {
   const normalized = collapseAnsiToWhitespace(rawBuffer);

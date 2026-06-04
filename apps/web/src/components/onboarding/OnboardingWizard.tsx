@@ -55,7 +55,7 @@ function freshMachinePreflight(): PreflightReport {
       source: 'not-found',
       version: null,
       minVersion: '2.0.0',
-      pinnedVersion: '2.1.162',
+      pinnedVersion: '2.1.160',
       pinnedMatch: null,
     },
     auth: { status: 'login-required', note: 'Simulated blank machine.' },
@@ -170,13 +170,13 @@ export function OnboardingWizard({
           status: 'ok',
           path: 'C:\\Users\\you\\.local\\bin\\claude.exe',
           source: 'default-location',
-          version: '2.1.162',
+          version: '2.1.160',
           minVersion: '2.0.0',
-          pinnedVersion: '2.1.162',
+          pinnedVersion: '2.1.160',
           pinnedMatch: true,
         };
         setPreflight({ ...simPreflight.current });
-        setLog('Simulated: Claude Code installed (2.1.162).');
+        setLog('Simulated: Claude Code installed (2.1.160).');
       } else {
         const r = await settingsApi.installClaude();
         setPreflight(r.preflight);

@@ -1,0 +1,38 @@
+{
+  "criteria": {
+    "connect": {
+      "pass": true,
+      "note": "A:2 receipts  B:2 receipts  C:2 receipts"
+    },
+    "identity": {
+      "pass": true,
+      "note": "A→[A]  B→[B]  C→[C]  (source: extra.requestInfo)"
+    },
+    "session-isolation": {
+      "pass": true,
+      "note": "mcp sessions per client: 1/1/1, no cross-sharing"
+    },
+    "concurrency": {
+      "pass": true,
+      "note": "slow-call windows OVERLAP (parallel)"
+    },
+    "turn1-tools": {
+      "pass": true,
+      "note": "all clients called tools on turn 1, no warmup needed"
+    },
+    "restart-recovery": {
+      "pass": true,
+      "note": "client A got a receipt from boot ac4f955f (was f676a411) — reconnect + re-init works"
+    }
+  },
+  "notes": [
+    "[A] prompt→whoami-served: 8654ms",
+    "[B] prompt→whoami-served: 8743ms",
+    "[C] prompt→whoami-served: 8054ms"
+  ],
+  "bootIds": [
+    "f676a411",
+    "ac4f955f"
+  ],
+  "finishedAt": "2026-06-04T00:24:11.001Z"
+}
