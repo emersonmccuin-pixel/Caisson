@@ -79,6 +79,12 @@ export class AgentHostService extends EventEmitter {
     return { ...this.identity };
   }
 
+  /** FD-15 — effective concurrency cap (exposed on /health for positive
+   *  receipt that a set-config push landed). */
+  getMaxConcurrent(): number {
+    return this.registry.getMaxConcurrent();
+  }
+
   getLastSeq(): number {
     return this.seq;
   }
@@ -138,6 +144,15 @@ export class AgentHostService extends EventEmitter {
         return this.completeRun(command.runId, command.result);
       case 'notify-mcp-handshake':
         return this.notifyMcpHandshake(command.ccSessionId);
+      case 'set-config':
+        // FD-15 — live cap update. Raising admits queued runs immediately;
+        // lowering never revokes admitted slots (over-cap drains on release).
+        return {
+          ok: true,
+          command: 'set-config',
+          maxConcurrent: this.registry.setMaxConcurrent(command.maxConcurrent),
+          lastSeq: this.seq,
+        };
       case 'shutdown':
         return this.shutdown(command.mode);
       default:

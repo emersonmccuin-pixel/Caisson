@@ -41,6 +41,10 @@ export interface SettingsOnboardingRouteDeps {
   startLogin?: typeof defaultStartLogin;
   getLoginState?: typeof defaultGetLoginState;
   cancelLogin?: typeof defaultCancelLogin;
+  /** FD-15 — called after a PATCH persists, with the merged settings. The
+   *  server uses this to push live config (e.g. agent concurrency cap) to the
+   *  agent host. Fire-and-forget; must not block the response. */
+  onSettingsApplied?: (settings: GlobalSettings) => void;
 }
 
 export function readSettings(): GlobalSettings {
@@ -158,6 +162,7 @@ export function registerSettingsOnboardingRoutes(
     const merged = mergeSettingsPatch(body, current);
     setGlobalSettings(merged);
     applyClaudeRuntimeSettings(merged);
+    deps.onSettingsApplied?.(merged);
     const restartRequired = merged.dataDir !== current.dataDir;
     return c.json({ ok: true, settings: merged, restartRequired });
   });

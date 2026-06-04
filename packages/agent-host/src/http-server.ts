@@ -79,7 +79,12 @@ async function handleRequest(
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   if (req.method === 'GET' && url.pathname === '/health') {
-    writeJson(res, 200, { ok: true, identity: service.getIdentity() });
+    writeJson(res, 200, {
+      ok: true,
+      identity: service.getIdentity(),
+      // FD-15 — effective cap, so a set-config push is verifiable from outside.
+      maxConcurrent: service.getMaxConcurrent(),
+    });
     return;
   }
 

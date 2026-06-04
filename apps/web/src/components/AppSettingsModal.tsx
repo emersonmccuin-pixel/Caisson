@@ -182,7 +182,8 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
     draft.fontScale !== settings.fontScale ||
     draft.hideCancelledStage !== settings.hideCancelledStage ||
     draft.defaultOrchestratorSurface !== settings.defaultOrchestratorSurface ||
-    draft.claudeConfigDir !== settings.claudeConfigDir;
+    draft.claudeConfigDir !== settings.claudeConfigDir ||
+    draft.agentDispatch.maxConcurrent !== settings.agentDispatch.maxConcurrent;
 
   async function saveGeneral() {
     if (busy || !generalDirty) return;
@@ -197,6 +198,7 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
         hideCancelledStage: draft.hideCancelledStage,
         defaultOrchestratorSurface: draft.defaultOrchestratorSurface,
         claudeConfigDir: draft.claudeConfigDir,
+        agentDispatch: draft.agentDispatch,
       };
       const r = await settingsApi.patchSettings(patch);
       initialFontScale.current = r.settings.fontScale;
@@ -546,6 +548,44 @@ function GeneralTab({
             </option>
           ))}
         </select>
+      </FieldRow>
+
+      <FieldRow
+        label="Max agents at once"
+        help="How many agents may run at the same time (1–50). Extra dispatches wait in line. Applies immediately on Save — running agents are never interrupted."
+      >
+        <div className="flex items-center gap-3">
+          <input
+            type="number"
+            min={1}
+            max={50}
+            step={1}
+            value={draft.agentDispatch.maxConcurrent}
+            onChange={(e) => {
+              const n = Math.trunc(Number(e.target.value));
+              if (!Number.isFinite(n)) return;
+              onDraftChange({
+                agentDispatch: {
+                  ...draft.agentDispatch,
+                  maxConcurrent: Math.max(1, Math.min(50, n)),
+                },
+              });
+            }}
+            className="w-20 border border-border bg-background px-2 py-1 text-sm text-foreground"
+          />
+          <button
+            type="button"
+            onClick={() =>
+              onDraftChange({
+                agentDispatch: { ...draft.agentDispatch, maxConcurrent: 5 },
+              })
+            }
+            disabled={draft.agentDispatch.maxConcurrent === 5}
+            className="border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+          >
+            Reset to 5
+          </button>
+        </div>
       </FieldRow>
 
       <FieldRow

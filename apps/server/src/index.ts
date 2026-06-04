@@ -265,6 +265,30 @@ const projectScaffold = new ProjectScaffold({
 const hostConnection = createHostConnection({ dataDir: DATA });
 hostConnection.onHealthChange((h) => announceHostHealth(toHostHealthSnapshot(h)));
 
+// FD-15 — push the stored agent concurrency cap to the host. The host boots
+// with its built-in default (it has no DB access); the SERVER owns the setting,
+// so it re-pushes on every connect (covers host respawn) and on settings PATCH.
+// Fire-and-forget: a missed push self-heals on the next connect transition.
+function pushAgentDispatchConfig(maxConcurrent: number): void {
+  hostConnection
+    .sendCommand({ type: 'set-config', maxConcurrent })
+    .then((res) => {
+      if (!res.ok) {
+        console.warn(`[fd-15] host rejected set-config: ${res.error}`);
+      }
+    })
+    .catch((err) => {
+      console.warn(
+        `[fd-15] set-config push failed (will retry on next connect): ${(err as Error).message}`,
+      );
+    });
+}
+hostConnection.onHealthChange((h) => {
+  if (h.state === 'connected') {
+    pushAgentDispatchConfig(readSettings().agentDispatch.maxConcurrent);
+  }
+});
+
 // Remove/quarantine legacy PC Claude runtime files from project roots before
 // any Claude process starts. PC now passes session-local `--settings`,
 // `--mcp-config`, and `--plugin-dir`; leaving old root files in place would
@@ -785,7 +809,10 @@ function maybePersistPostTurnSummary(projectId: ULID, event: unknown): void {
 
 // ── Global settings (Q10 envelope) ────────────────────────────────────────
 
-registerSettingsOnboardingRoutes(app);
+registerSettingsOnboardingRoutes(app, {
+  // FD-15 — saving Settings pushes the (already-clamped) cap to the live host.
+  onSettingsApplied: (s) => pushAgentDispatchConfig(s.agentDispatch.maxConcurrent),
+});
 
 registerFileRoutes(app, {
   projectFolderPath: (projectId) => getProjectById(projectId)?.folderPath ?? null,

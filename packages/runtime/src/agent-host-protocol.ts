@@ -87,6 +87,10 @@ export type AgentHostCommand =
   // (running→completed) on the ONE host-backed path — no in-process fallback.
   | { type: 'complete-run'; runId: ULID; result?: string }
   | { type: 'notify-mcp-handshake'; ccSessionId: string }
+  // FD-15 — live config push (settings → host). Today only the global
+  // concurrency cap; the host applies it to its AgentRunRegistry without a
+  // restart (a restart would kill live runs).
+  | { type: 'set-config'; maxConcurrent: number }
   | { type: 'shutdown'; mode: 'host-exit' | 'cancel-runs' };
 
 export type AgentHostCommandErrorCode =
@@ -129,6 +133,13 @@ export type AgentHostCommandResponse =
   | {
       ok: true;
       command: 'notify-mcp-handshake' | 'shutdown';
+      lastSeq: number;
+    }
+  | {
+      ok: true;
+      command: 'set-config';
+      /** Effective (clamped) cap after applying the push. */
+      maxConcurrent: number;
       lastSeq: number;
     }
   | {

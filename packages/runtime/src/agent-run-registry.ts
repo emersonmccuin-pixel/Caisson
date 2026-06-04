@@ -13,6 +13,8 @@
 // One Registry instance per Node process is the production shape; tests
 // construct fresh instances with whatever cap they need.
 
+import { clampMaxConcurrent } from '@pc/domain';
+
 export type TicketState = 'queued' | 'admitted' | 'released' | 'aborted';
 
 export interface AdmissionTicket {
@@ -37,11 +39,19 @@ export interface AgentRunRegistryOptions {
 export class AgentRunRegistry {
   private active = 0;
   private waiters: TicketImpl[] = [];
-  private readonly cap: number;
+  private cap: number;
 
   constructor(opts: AgentRunRegistryOptions = {}) {
-    const raw = opts.maxConcurrent ?? 5;
-    this.cap = Math.max(1, Math.min(50, Math.trunc(raw)));
+    this.cap = clampMaxConcurrent(opts.maxConcurrent ?? 5);
+  }
+
+  /** FD-15 — live-update the cap (settings push; no host restart). Raising it
+   *  admits queued waiters immediately. Lowering it never touches admitted
+   *  runs — the over-cap drains as they release (same semantics as reattach). */
+  setMaxConcurrent(maxConcurrent: number): number {
+    this.cap = clampMaxConcurrent(maxConcurrent);
+    this.dequeueNext();
+    return this.cap;
   }
 
   admit(): AdmissionTicket {
