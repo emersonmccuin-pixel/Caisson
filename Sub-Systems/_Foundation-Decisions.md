@@ -413,10 +413,18 @@ truth (migrate history vs accept gap vs quiet-moment cutover).
 
 ## FD-15 — Agent concurrency cap is a visible app setting
 
-**Status:** 🟢 Locked — 2026-06-03
+**Status:** ✅ Shipped — 2026-06-03 (commit 87b33b27)
 
 **The decision:** the "how many agents may run at once" limit (hard-coded 5 today; the rest queue)
 becomes a **global app setting** the user can see and change.
+
+**As built:** the setting existed in the store but was a DEAD KNOB — nothing read it; the host's
+registry hard-coded 5. Now: `AgentRunRegistry.setMaxConcurrent` (live; raise admits queued runs
+immediately, lower never interrupts running ones) · new `set-config` host command · the server
+pushes the stored cap on every host connect AND on settings save (host restart never required) ·
+"Max agents at once" field in Settings → General (1–50) · host `/health` reports the effective cap
+(positive receipt that a push landed). Verified live both ways: fresh host booted at 5 → server
+connect-push set it to the stored value; PATCH → host effective cap followed.
 
 ---
 

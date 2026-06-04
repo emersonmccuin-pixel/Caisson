@@ -92,6 +92,17 @@ need no supervisor change — they become host sessions, not new service process
 
 ---
 
+## Known bug to fix here — host `shutdown host-exit` never exits (found live 2026-06-03, FD-15 work)
+
+The HTTP host's shutdown path calls `server.close()`, which waits for open connections —
+but the API holds a PERSISTENT `/events` stream, so close never completes: the process
+stays alive, the lock file stays, and the "graceful stop" is a silent no-op (had to
+`Stop-Process` to bounce it). Fix when supervision lands: shutdown must destroy live
+event-stream sockets (`server.closeAllConnections()` or tracked-socket destroy) then
+exit — a graceful stop that can't complete within a deadline escalates, it doesn't hang.
+
+---
+
 ## Risk — HIGH (changes how the whole app boots, both modes)
 
 Mitigation — land in order, verify each before the next:
