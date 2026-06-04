@@ -255,7 +255,23 @@ a patch.
 
 ## FD-6 — One ask door: agents only ask the orchestrator
 
-**Status:** 🟢 Locked — 2026-06-03
+**Status:** ✅ Executed — M7, 2026-06-04 (scope: `refactor plan/m7-ask-door-scope-2026-06-04.md`)
+
+**Delivered:** `pc_ask_user` ☠ deleted whole (registry · tier map · MCP handler case · route
+rejects `kind:'user'` · `PendingAskKind`/`AgentInboxEventKind`/`PENDING_INTERACTION_KINDS`
+narrowed · `agent-asks-user` event + payload + wire types dead · web rendering gone · 4 names in
+banned-resurrection). `pc_ask_orchestrator` is THE door and **inherited the multi-choice
+`options` array**. Required set 7→6 (baseline audit done — see Audit backlog). 7 stock-pod
+grants + prompts re-aimed ("if only the human can decide, say so — the orchestrator takes it to
+them"); orchestrator triage protocol rewritten; boot sweep `agent-tools-scrub.ts` scrubs stored
+rows the stock reseed can't reach (project copies + custom pods). Live-verified: agent asked
+through the one door w/ options → `kind:'orchestrator'` row → pause → answer accepted
+(`answeredBy:'user'`) → respawn. **Live-fire CAUGHT a pre-existing Engine bug (2/2 repro, not
+M7's): the resume's answer send is eaten by the `--resume` replay repaint (echo-ack passes, no
+JSONL user row, empty composer, run wedged 'running') + the pre-pause claude.exe never exits
+(code assumed "CC exits cleanly when paused" — it doesn't), leaving two processes on one
+session. The known quiet-window class ([[resume-needs-quiet-window]]) landing on the ONE door —
+fixed in the same session (see M7 scope doc addendum).**
 
 **The decision:**
 - **Agents never ask the human directly. Every agent question goes to the orchestrator** through the
@@ -268,8 +284,8 @@ a patch.
 **Why:** one door instead of two; the orchestrator is better positioned to triage than a raw agent
 question landing in the human's lap; deletes a whole path.
 
-**Ripple:** the **required-tools set changes** — `pc_ask_user` leaves the always-granted four. Fold
-into the baseline-tools audit (see Audit backlog).
+**Ripple:** ✅ done in M7 — the required set is now 6 (`pc_ask_user` left; M5 had added the
+contract/attachment readers). Baseline-tools audit recorded in the Audit backlog.
 
 **Addendum (2026-06-03, from `3-product` notes):** the **orchestrator itself has no ask tool, and
 keeps none** — verified: its toolset contains no `pc_ask_*`; it only *answers* agent questions via
@@ -659,9 +675,13 @@ lives in per-session scratch dirs outside the repo).
 - **Agent-management toolkit audit** — FD requirement: one built-in, orchestrator-callable agent with
   the *complete* agent-management toolkit (apply knowledge, secrets, tools, MCP servers…). Verify
   what's tool-doable today vs UI-only; close the gaps.
-- **Baseline-tools audit** — re-derive the always-granted tool set EVERY agent gets (changes under
-  FD-6: `pc_ask_user` leaves). Then the full agent roster audit (tools, descriptions, dispatch
-  guidance) — deliberately *after* the rebuild's bigger pieces settle.
+- **Baseline-tools audit — ✅ first half DONE in M7 (2026-06-04).** The always-granted set is 6:
+  `pc_get_work_item` · `pc_submit_deliverable` · `pc_ask_orchestrator` (the ONE escalation door) ·
+  `pc_get_contract` · `pc_list_attachments` · `pc_get_attachment` (`REQUIRED_AGENT_TOOLS`,
+  tool-catalog.ts). Still open: the full agent roster audit (tools, descriptions, dispatch
+  guidance) — deliberately *after* the rebuild's bigger pieces settle. M7 finding for it:
+  `agent-ask-*` work-item history kinds have NO live writer (only `agent-invoke` does;
+  agent-audit.ts) — dead union members kept for read-tolerance, candidates for that audit.
 - **Dispatch-payload audit — ✅ DONE 2026-06-03.** Verdict: the context-pod goal is **partially met,
   broken for attachments.**
   - **Body / fields / parent / live-read:** OK — body referenced in the prompt, everything readable

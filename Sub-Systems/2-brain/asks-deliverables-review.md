@@ -28,8 +28,9 @@ Nothing else can end a run as "complete."
 
 ### 1. Asking a question and waiting (pending asks)
 
-When an agent calls `pc_ask_user`, `pc_ask_orchestrator`, or `pc_request_approval`, the system:
-*(🟢 FD-6: in the rebuild `pc_ask_user` dies — agents only ask the orchestrator, one ask door.)*
+When an agent calls `pc_ask_orchestrator` or `pc_request_approval`, the system:
+*(✅ FD-6 executed M7 2026-06-04: ☠ `pc_ask_user` — ONE ask door; the orchestrator answers from
+context or takes the question to the human in chat. `pc_ask_orchestrator` inherited `options`.)*
 
 - Looks up the run in the **ActiveRunRegistry** (the in-memory list of live runs). (`pause-resume.ts:133`)
 - Reads the run's real status from the **database row**, not from memory — this prevents a race where the row still shows `queued` on an agent that asks a question the instant it spawns. If the row is behind, the system does a live read from the host to catch up before deciding. (`pause-resume.ts:147–160`, `152–158`)
@@ -37,7 +38,7 @@ When an agent calls `pc_ask_user`, `pc_ask_orchestrator`, or `pc_request_approva
 - Waits for the host to acknowledge the pause before the MCP tool call returns. This prevents the host from reading a "run ended" signal before the pause has landed. (`pause-resume.ts:198`)
 - Delivers the question to the orchestrator's mailbox (the durable inbox) — one door, no fallback. (`pause-resume.ts:218–235`, `agent-delivery.ts:86–117`)
 
-**The stored question** (`pending_asks_v2` table, `pending-asks.ts:35–55`) has a kind (`orchestrator`, `user`, or `approval`), the run it belongs to, the CC session ID, the question text, and an optional list of choices.
+**The stored question** (`pending_asks_v2` table, `pending-asks.ts:35–55`) has a kind (`orchestrator` or `approval` — ☠ M7 `user`; historical rows read-tolerated), the run it belongs to, the CC session ID, the question text, and an optional list of choices.
 
 **Answering** (`pause-resume.ts:280`):
 - Rejects if the question is already answered or cancelled. (`pause-resume.ts:295–308`)
@@ -156,7 +157,7 @@ and dispatcher-aware addressing (workflow-worker asks fall back to the active or
 - `@pc/db` — `pending_asks_v2`, `pending_interactions`, `agent_inbox` (legacy), `agent_runs_v2`, `agent_contracts`, `work_items`, `live_outbox`.
 
 **Used by:**
-- MCP tool implementations (`pc_ask_user`, `pc_ask_orchestrator`, `pc_request_approval`, `pc_submit_deliverable`, `pc_answer_pending`, `pc_resolve_work_item`).
+- MCP tool implementations (`pc_ask_orchestrator`, `pc_request_approval`, `pc_submit_deliverable`, `pc_answer_pending`, `pc_resolve_work_item` — ☠ FD-6/M7 `pc_ask_user`).
 - HTTP routes (approve / reject / answer endpoints).
 - `agent-run-terminal-effects.ts` — calls `applyDeliverableStore` and `runVerificationOnTerminal` from inside the terminal handler.
 
@@ -228,8 +229,9 @@ used the store). Round-trip guard written FIRST, amended deliberately
 3. ~~Verification tiers merge?~~ 🟢 **FD-7:** also absorbed by the Human Inbox workstream (one
    consistent review process everywhere is its mandate).
 
-**Also locked (FD-6):** agents only ask the **orchestrator** — `pc_ask_user` dies; the orchestrator
-triages and surfaces to the human when needed. Exchanges visible in chat by default, filterable.
+**✅ Executed (FD-6, M7 2026-06-04):** agents only ask the **orchestrator** — ☠ `pc_ask_user`; the
+orchestrator triages and surfaces to the human when needed. Exchanges visible in chat by default,
+filterable. `pc_ask_orchestrator` inherited the multi-choice `options`.
 
 **Technical:**
 - Once the Step 2 reconciler lands, confirm whether the early-ask on-demand round-trip (`pause-resume.ts:152–158`) can be removed outright, or whether a first-ask latency window still needs it.

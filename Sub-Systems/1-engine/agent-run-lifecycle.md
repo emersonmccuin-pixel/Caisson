@@ -39,7 +39,7 @@ The run moves through these states in order:
 | `queued` | Waiting for a concurrency slot to open up |
 | `spawning` | Slot granted; process is starting |
 | `running` | Process is live and doing work |
-| `paused` | Waiting on a human to answer a question (`pc_ask_user`) |
+| `paused` | Waiting on an answer to a question (`pc_ask_orchestrator` / `pc_request_approval` — ☠ FD-6/M7 `pc_ask_user`) |
 | `completed` | Agent submitted its deliverable — clean landing |
 | `failed` | Something went wrong (timeout, crash, no deliverable) |
 | `cancelled` | Operator or system deliberately stopped it |
@@ -198,7 +198,7 @@ All state transitions go through `announceAgentRunChange` (`agent-run-writer.ts:
 ## How it connects
 
 - **Depends on:** `@pc/runtime` (the run object, registry, PTY spawning, JSONL tailer) · `@pc/db` (`agent_runs`, `live_outbox`, `agent_contracts`, `pending_asks`) · `@pc/app-services` (contract service, mutation gateway) · `host-connection.ts` / `agent-host-client.ts` (the host wire) · `process-control.ts` (OS-level pid / kill) · `pod-spawn.ts` (renders the agent's files before launch).
-- **Used by:** HTTP routes (`/invoke`, `/continue`) · workflow engine (`dag-run-service.ts`, awaits `done`) · MCP tools (`pc_submit_deliverable` → `run.complete()`, `pc_ask_user` → `markPaused()`, `pc_answer_pending_ask` → `resumeWithAnswer()`) · `agent-run-control.ts` (operator kill/inspect) · `index.ts` (boot + sweep wiring).
+- **Used by:** HTTP routes (`/invoke`, `/continue`) · workflow engine (`dag-run-service.ts`, awaits `done`) · MCP tools (`pc_submit_deliverable` → `run.complete()`, `pc_ask_orchestrator` → `markPaused()`, `pc_answer_pending_ask` → `resumeWithAnswer()`) · `agent-run-control.ts` (operator kill/inspect) · `index.ts` (boot + sweep wiring).
 - **Contracts / events crossed:** `agent_runs` (DB source of truth for status) · `live_outbox` (live-relay truth) · `agent_contracts` (deliverable home) · `pending_asks` (human-gate questions) · `AgentHostCommand / Response / Event` (host wire protocol) · `AgentRun` internal events: `'terminal'`, `'state'`, `'jsonl-event'`, `'paused'`.
 
 ---

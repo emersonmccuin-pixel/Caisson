@@ -21,9 +21,10 @@ A quick vocabulary note for the table below:
 - **Output goes to:** *chat* = it posts its result into the conversation; *passthrough* = it hands
   its raw result straight back to whatever called it (e.g. a workflow step).
 - **Max turns:** how many back-and-forth steps it gets before it must wrap up (`—` = no fixed cap).
-- Every dispatched worker *always* has four tools merged in: read its assignment
-  (`pc_get_work_item`), submit its result (`pc_submit_deliverable`), and reach out
-  (`pc_ask_user`, `pc_ask_orchestrator`).
+- Every dispatched worker *always* has six tools merged in: read its assignment
+  (`pc_get_work_item` + `pc_get_contract` + `pc_list_attachments`/`pc_get_attachment`), submit its
+  result (`pc_submit_deliverable`), and reach out (`pc_ask_orchestrator` — THE one ask door; ☠
+  FD-6/M7 `pc_ask_user`: the orchestrator answers or takes it to the human).
 
 ## Quick reference
 
@@ -113,8 +114,8 @@ not an architecture one.
   to the server, so a researcher's hard-failure signal currently leans on log inference, not a
   positive receipt. (See [mcp.md](mcp.md).)
 - **Conversational pods carry unusable worker tools.** agent-designer (and the other passthrough
-  conversational pods) get `pc_ask_user` / `pc_ask_orchestrator` force-merged in by the repo layer
-  even though those hard-error in a conversational (non-dispatched) context. The prompt forbids them;
+  conversational pods) get `pc_ask_orchestrator` (☠ FD-6/M7 `pc_ask_user`) force-merged in by the
+  repo layer even though it hard-errors in a conversational (non-dispatched) context. The prompt forbids it;
   the real fix is to exempt conversational pods from the required-tool merge (a noted future item,
   `stock-pod-seed.ts:1166`).
 

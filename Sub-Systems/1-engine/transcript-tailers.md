@@ -105,7 +105,7 @@ Several parts of the server create a tailer, call `drainAvailable()` to read all
 | Caller | What it reads the transcript for |
 |---|---|
 | `agent-runs/routes.ts:183` | Load the inline JSONL transcript for display on the agent card |
-| `agent-run-terminal-effects.ts:290` | Verify that `pc_ask_user` was actually called before accepting a paused state |
+| `agent-run-terminal-effects.ts:290` | Verify that an ask tool (`pc_ask_orchestrator` — ☠ FD-6/M7 `pc_ask_user`) was actually called before accepting a paused state |
 | `agent-run-control.ts:214` | Same verification path, different call site |
 | `agent-host-reattach.ts:475` | Backfill WS stream when the host reports a run that wasn't tracked in memory |
 

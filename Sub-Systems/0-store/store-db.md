@@ -91,7 +91,7 @@ Four rules applied consistently across all tables:
 |---|---|
 | `agent_runs` | One row per dispatched run. Full state machine: `queued → spawning → running → paused → completed/failed/cancelled`. Carries CC session id, pod name, pod rev hash, PID (see Known issues), deliverable timestamp, continuation link. |
 | `agent_contracts` | The machine assignment for a run: expected output, acceptance criteria, verification status, typed deliverable. Optional link to a card. |
-| `pending_asks` | One row per agent pause (`pc_ask_user` / `pc_ask_orchestrator`). Status: `open → answered/cancelled`. Answer-once enforced in the DB. |
+| `pending_asks` | One row per agent pause (`pc_ask_orchestrator` / `pc_request_approval` — ☠ FD-6/M7 `pc_ask_user`; old `kind='user'` rows read-tolerated). Status: `open → answered/cancelled`. Answer-once enforced in the DB. |
 | `agent_inbox` | **✅ DELETED (M4a 2026-06-04).** Archived to `agent_inbox_v2_archive` by migration 0041 with `agent_delivery_audit`. The tables were writer-less since slice 017; the inbox-drain hook (also deleted) drained an empty set every prompt. NO-INBOX-WRITE gate. |
 | `agent_delivery_audit` | ✅ DELETED with `agent_inbox` (M4a — archived by 0041). |
 

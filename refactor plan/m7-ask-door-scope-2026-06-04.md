@@ -61,6 +61,34 @@ audit rides (FD-6 ripple: the required set changes).
   live: dispatch agent with a human-only question → asks orchestrator → orchestrator surfaces in
   chat → answer relayed → run resumes → completes.
 
+## ADDENDUM — live gauntlet caught a pre-existing resume bug (2/2 repro)
+
+The one-door half is GREEN: agent (only door available) called `pc_ask_orchestrator`, flagged the
+question human-only, options array rode the door, `pending_asks` row `kind:'orchestrator'`, run
+paused, answer accepted (`answeredBy:'user'`), respawn issued. The `kind:'user'` POST returns the
+typed 400.
+
+Then 2/2 runs WEDGED at resume — NOT an M7 break (M7 deleted a label off this shared machinery;
+the identical flow predates it):
+
+1. **The answer send is eaten by the `--resume` replay repaint.** Evidence: `spawn.send` returned
+   ok (echo-ack matched the PTY echo during typing), but the JSONL census shows NO user row after
+   the resume preamble, and the ANSI-stripped `transcript.log` ends at an EMPTY composer after the
+   replay rendering. CC discards input typed before its post-resume quiet window
+   ([[resume-needs-quiet-window]], lab-isolated 2026-05-22: needs ≥1500ms stdout quiet). Fresh
+   spawns win this race (short banner); resume replays a transcript after the MCP handshake →
+   ready fires early → send lands mid-repaint → eaten. Run sits 'running' forever (P9 ladder
+   correctly badges + would notify at 5min — escalation worked as designed, nothing killed it).
+2. **The pre-pause claude.exe NEVER exits.** `agent-run.ts` assumes "CC exits cleanly when paused"
+   — interactive CC sits at the composer instead. `runSpawnPhase('resume')` replaces `this.spawn`
+   without killing the old child → two claude.exe on ONE session id; `pc_kill_agent_run` kills
+   only the current handle (`processKilled:false` left the original alive).
+
+**Fix (same session):** (a) identity-guard the spawn event handlers + kill the old spawn at
+resume; (b) resume send waits for a PTY quiet window (1500ms, the lab-proven precondition);
+(c) positive receipt: the answer must appear as a JSONL user row within a deadline, else bounded
+re-send → typed `resume-input-lost` failure. Silence never wedges.
+
 ## Fire recipes (from P9/M5, verified)
 
 - invoke: `POST /api/projects/01KS1358GYAQFG8BW9ERSB2J7C/agents/code-writer/invoke

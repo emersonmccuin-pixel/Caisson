@@ -138,11 +138,13 @@ fields (prompt, tools, model, effort, max turns, output destination, description
   agent could be given — both Caisson's own app tools (the `pc_…` ones) and Claude Code's built-ins
   (Read, Edit, Bash, etc.). There's now **one source of truth** for this list (it used to be
   duplicated in a few places — that was a recurring bug).
-- **The required four** (`REQUIRED_AGENT_TOOLS`): every dispatched agent *always* gets four tools, no
-  matter what — read its assignment (`pc_get_work_item`), submit its result
-  (`pc_submit_deliverable`), and reach out (`pc_ask_user`, `pc_ask_orchestrator`). This is enforced in
-  three places so it can't be lost. 🟢 *FD-6: `pc_ask_user` dies in the rebuild (agents only ask the
-  orchestrator) — the required set gets re-derived in the baseline-tools audit.*
+- **The required six** (`REQUIRED_AGENT_TOOLS`): every dispatched agent *always* gets six tools, no
+  matter what — read its assignment (`pc_get_work_item`, `pc_get_contract`, `pc_list_attachments`,
+  `pc_get_attachment`), submit its result (`pc_submit_deliverable`), and reach out
+  (`pc_ask_orchestrator` — THE one ask door). Enforced in three places so it can't be lost.
+  ✅ *FD-6 executed (M7, 2026-06-04): ☠ `pc_ask_user` — agents only ask the orchestrator, which
+  answers from context or takes the question to the human in chat; `pc_ask_orchestrator` inherited
+  the multi-choice `options` array. Boot sweep (`agent-tools-scrub.ts`) scrubbed stored grants.*
 - **Wildcards:** a pod can list `mcp__pc-rig__*` to mean "all tools from this server." At launch that
   expands to the explicit list. If it names a server that doesn't exist, it **fails loudly** rather
   than silently giving the agent no tools.
