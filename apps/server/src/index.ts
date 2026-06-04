@@ -4,7 +4,8 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+
+import { SERVER_ROOT } from './server-root.ts';
 
 import type {
   Project,
@@ -101,15 +102,10 @@ import { createAgentRunReconciler } from './services/agent-run-reconciler.ts';
 import { getActiveRunRegistry } from './services/agent-active-runs.ts';
 import { writeRunStatus } from './services/workflow-run-writer.ts';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
-// apps/server/src/index.ts → trunk root is three levels up. In a packaged
-// Electron build the server runs as a bundled `server.mjs` whose location
-// bears no relation to the resource layout, so PC_ROOT (set by the desktop
-// main process to the unpacked resources dir) overrides. PUBLIC / TEMPLATES /
-// the scaffold trunk path all derive from ROOT, so they relocate with it.
-const ROOT = process.env.PC_ROOT
-  ? resolve(process.env.PC_ROOT)
-  : resolve(__dirname, '..', '..', '..');
+// PUBLIC / TEMPLATES / the scaffold trunk path all derive from ROOT, so they
+// relocate with it (PC_ROOT in packaged builds). server-root.ts is the ONE
+// derivation — do not re-derive from import.meta.url anywhere else.
+const ROOT = SERVER_ROOT;
 const PUBLIC = resolve(ROOT, 'apps', 'web', 'dist');
 // Section 22.3 — single runtime contract: every server-internal data path
 // resolves through `getDataDir()` (`PC_DATA_DIR` env or workspace-root/data).

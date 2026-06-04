@@ -8,18 +8,17 @@
 
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { getProjectById } from '@pc/db';
 import type { PodMcpServerConfig, ULID } from '@pc/domain';
 import { resolveNodeLauncher } from '@pc/runtime';
 import { getDataDir } from '@pc/utils';
 
+import { SERVER_ROOT } from '../server-root.ts';
 import { applyNodeLauncher } from './mcp-config-rewrite.ts';
 import { renderTemplate } from './project-scaffold.ts';
 
 const DEFAULT_SERVER_PORT = 4040;
-const DEFAULT_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..');
 
 export interface ClaudeRuntimeFilesInput {
   /** Per-session or per-run scratch dir. Runtime files land under here. */
@@ -174,7 +173,9 @@ function runtimeEnv(ctx: RuntimeContext): Record<string, string> {
 
 function rootPath(override: string | undefined): string {
   if (override && override.trim()) return resolve(override);
-  return process.env.PC_ROOT ? resolve(process.env.PC_ROOT) : DEFAULT_ROOT;
+  // Step 3 — was a second import.meta.url hop-count here; wrong from the
+  // bundle, so every dev agent dispatch failed pod materialisation.
+  return SERVER_ROOT;
 }
 
 function posixPath(p: string): string {
