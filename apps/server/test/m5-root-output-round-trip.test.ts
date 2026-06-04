@@ -7,10 +7,9 @@
 //  1. `$root.output` resolves the run-root card's BODY (the human brief) and
 //     `$root.output.<field>` its typed fields. Survives slice B verbatim —
 //     after the split the body is GUARANTEED to be the brief.
-//  2. CURRENT (pre-B) behavior: a prose deliverable with
-//     `store: 'work_item_body'` lands on the contract row AND overwrites the
-//     linked WI body. Slice B amends this test — the body half flips to
-//     "body unchanged". The amendment diff IS the proof the move was deliberate.
+//  2. SLICE B LANDED (the deliberate amendment): ☠ store 'work_item_body' —
+//     a prose deliverable lands on the contract row and the linked WI body
+//     SURVIVES untouched (body = the human brief only, FD-5 law).
 //  3. `$nodeId.output` reads the CONTRACT deliverable, never the WI body —
 //     mutating the body after submission does not change the ref. Survives
 //     slice B verbatim: downstream wiring never depended on the body write.
@@ -91,7 +90,7 @@ function mkResolver(project: Project, rootWorkItemId: ULID | null, state: Workfl
 
 /** Seed a dispatched prose contract + run on a child WI — what a workflow
  *  agent node mints in production. */
-function seedProseChild(slug: string, store: 'work_item_body' | 'contract') {
+function seedProseChild(slug: string, store: 'contract' | undefined) {
   const p = mkProject(slug);
   const wi = createWorkItem({
     projectId: p.id as ULID,
@@ -101,7 +100,7 @@ function seedProseChild(slug: string, store: 'work_item_body' | 'contract') {
   });
   const expected: ContractV2.ExpectedOutput = {
     kind: 'prose',
-    store,
+    ...(store !== undefined ? { store } : {}),
     min_chars: 10,
   };
   const contract = new ContractService().create({
@@ -161,25 +160,30 @@ test('$root.output with no root work item resolves empty', () => {
   assert.equal(resolve('root', undefined), '');
 });
 
-// ── 2. CURRENT pre-B behavior: work_item_body store writes contract AND body ─
-// Slice B flips the body assertion to "body unchanged" — that diff is the move.
+// ── 2. SLICE B law: the deliverable lands on the contract; the body SURVIVES ─
+// (Amended from the pre-B pin of store=work_item_body's dual-write — the diff
+// at commit time is the deliberate move.)
 
-test('prose/work_item_body: deliverable lands on the contract row AND (pre-B) overwrites the body', async () => {
-  const { p, wi, contract, runId } = seedProseChild('m5-wib', 'work_item_body');
+test('prose default store: deliverable lands on the contract row; the WI body stays the brief', async () => {
+  const { p, wi, contract, runId } = seedProseChild('m5-wib', undefined);
   const app = mkApp();
 
   const text = 'THE DELIVERABLE — finished prose the agent produced';
   const res = await submit(app, p.id, runId, text);
   assert.equal(res.status, 200);
 
-  // The contract row is the durable home (FD-5 law — survives slice B).
+  // The contract row is the durable home (FD-5 law).
   const stored = new ContractService().listByWorkItem(wi.id as ULID).slice(-1)[0];
   assert.ok(stored?.deliverable, 'deliverable persisted on the contract row');
   assert.equal(contractDeliverableText(stored.deliverable, stored.report), text);
   assert.equal(stored.id, contract.id);
 
-  // CURRENT behavior (amended in slice B → body stays the task brief).
-  assert.equal(getWorkItem(wi.id)!.body, text, 'pre-B: store=work_item_body overwrites the WI body');
+  // M5 law: body = the human brief only.
+  assert.equal(
+    getWorkItem(wi.id)!.body,
+    'TASK BRIEF — what the agent was told to do',
+    'the deliverable must never overwrite the WI body',
+  );
 });
 
 // ── 3. $nodeId.output reads the CONTRACT, never the WI body ─────────────────

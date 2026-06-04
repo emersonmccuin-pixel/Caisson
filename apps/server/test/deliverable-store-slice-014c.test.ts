@@ -2,9 +2,12 @@
 //
 // The writer-vs-reader-mismatch class of bug (a recurring pattern in this
 // codebase): the deliverable was written to the contract row, but verification
-// read the work-item body — two different places, nothing bridging them. These
+// read a different corpus — two different places, nothing bridging them. These
 // round-trips assert, for EVERY prose store + for explicit-submit answer, that
 // submission ALONE writes the declared home AND passes verification.
+//
+// M5 (FD-5) — ☠ `store: 'work_item_body'`: the WI body is the human brief only;
+// the default store is `contract`. The first test pins the body's survival.
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -69,7 +72,7 @@ function seed(
         projectId: p.id as ULID,
         stageId: 'backlog',
         title: 'task',
-        body: 'ORIGINAL task brief — must be overwritten by the deliverable',
+        body: 'ORIGINAL task brief — must SURVIVE delivery untouched (M5: body = brief only)',
       })
     : null;
   const contract = new ContractService().create({
@@ -127,10 +130,10 @@ const SPEC_TEXT =
   '# Spec\n\n## Current state\nThings are as they are, described at length here.\n\n' +
   '## Concrete proposal\nDo the thing, described at length here so we clear min_chars.';
 
-test('prose/work_item_body: submit writes the WI body AND passes verification', async () => {
+test('prose/default store (M5): WI body stays the BRIEF; deliverable passes on the contract', async () => {
+  // store unset → defaults to 'contract' (FD-5/M5) even with a WI linked.
   const expected: ContractV2.ExpectedOutput = {
     kind: 'prose',
-    store: 'work_item_body',
     sections: SECTIONS,
     min_chars: 50,
   };
@@ -140,8 +143,11 @@ test('prose/work_item_body: submit writes the WI body AND passes verification', 
   const res = await submit(app, p.id, runId, { kind: 'prose', text: SPEC_TEXT });
   assert.equal(res.status, 200);
 
-  // The body is now the deliverable, not the original brief.
-  assert.equal(getWorkItem(wi!.id)!.body, SPEC_TEXT);
+  // M5 law: the body is the human brief only — the deliverable never lands there.
+  assert.equal(
+    getWorkItem(wi!.id)!.body,
+    'ORIGINAL task brief — must SURVIVE delivery untouched (M5: body = brief only)',
+  );
 
   const outcome = await verify({
     contractId: contract.id,
@@ -246,10 +252,10 @@ test('answer (explicit submit, no report): passes via the deliverable-text fallb
   assert.equal(outcome!.verificationStatus, 'passed');
 });
 
-test('placement failure: prose/work_item_body with no linked WI returns 422 (retryable)', async () => {
+test('placement failure: prose/attachment with no linked WI returns 422 (retryable)', async () => {
   const expected: ContractV2.ExpectedOutput = {
     kind: 'prose',
-    store: 'work_item_body',
+    store: 'attachment',
     sections: SECTIONS,
   };
   const { p, runId } = seed('nowi', expected, { withWorkItem: false });

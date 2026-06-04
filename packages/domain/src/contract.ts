@@ -50,7 +50,7 @@ export type ExpectedOutput =
       doc_type?: ProseDocType;
       sections?: string[];
       min_chars?: number;
-      store?: ProseStore; // default: 'work_item_body' when a WI is linked, else 'attachment'
+      store?: ProseStore; // default: 'contract' — the Work Contract is the result's home (FD-5/M5)
       path?: string; // required when store === 'repo_file'
     }
   | { kind: 'payload'; schema: JsonSchema; semantic?: PayloadSemantic }
@@ -94,7 +94,9 @@ export type ProseDocType =
   | 'summary'
   | 'postmortem'
   | 'note';
-export type ProseStore = 'contract' | 'attachment' | 'work_item_body' | 'repo_file';
+// M5 (FD-5) — ☠ 'work_item_body': the body is the human brief ONLY; results
+// live on the contract. The variant is deleted, not deprecated.
+export type ProseStore = 'contract' | 'attachment' | 'repo_file';
 export type PayloadSemantic =
   | 'extraction'
   | 'classification'

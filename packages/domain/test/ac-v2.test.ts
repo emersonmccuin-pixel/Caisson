@@ -151,12 +151,7 @@ test('payload derives schema_valid; answer derives report_contains', () => {
   );
 });
 
-test('prose AC source tracks the store (014c)', () => {
-  // work_item_body → the body corpus.
-  assert.deepEqual(
-    deriveAcceptanceCriteriaV2({ kind: 'prose', sections: ['Goal'], store: 'work_item_body' }),
-    [{ kind: 'body_contains', pattern: 'Goal' }],
-  );
+test('prose AC source tracks the store (014c; M5 — ☠ work_item_body)', () => {
   // attachment → asserts the doc landed (by name) AND searches the body+
   // attachment corpus (body_contains spans both). Default name: deliverable.md.
   assert.deepEqual(

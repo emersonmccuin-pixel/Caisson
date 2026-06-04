@@ -82,7 +82,7 @@ pc_invoke_agent({ name, input: "<the task>", expected_output? })
 - \`input\` is the agent's first user message — say what you want done.
 - \`expected_output\` (or the pod's default) is the STRUCTURED spec that drives the acceptance criteria the system checks. It tells the system what shape to verify, not what the task is — put the task narrative in \`input\`. Valid kinds + their fields:
   - \`{ kind: "answer", must_address?: string[], min_chars?: number }\` — a direct answer / report to you.
-  - \`{ kind: "prose", doc_type?, sections?: string[], min_chars?: number, store? }\` — a written document. \`store: "contract"\` keeps it on the contract (no work item); \`"work_item_body"\` / \`"attachment"\` / \`"repo_file"\` land it on a work item or disk (needs a work item — see Decision-4 below).
+  - \`{ kind: "prose", doc_type?, sections?: string[], min_chars?: number, store? }\` — a written document. \`store: "contract"\` (the default) keeps it on the contract (no work item); \`"attachment"\` / \`"repo_file"\` land it on a work item or disk (needs a work item — see Decision-4 below). A work item's body is its human brief — deliverables never overwrite it.
   - \`{ kind: "payload", schema, semantic? }\` — structured JSON matching a schema (verdict, extraction, decision).
   - \`{ kind: "repo", isolation: "worktree"|"in_place", paths_touched?, checks?, require_diff? }\` — a code change (needs a work item).
   - \`{ kind: "external", system, action, confirm, idempotency_key }\` — an external side-effect (email, ticket).
@@ -98,8 +98,8 @@ Whether the output needs a work-item HOME is fixed by its kind, not your interpr
 | Output | Needs a work item? |
 |---|---|
 | \`answer\` / \`payload\` for you | no — contract only |
-| \`prose\` with \`store: "contract"\` | no — contract only |
-| \`prose\` stored on a work item / attachment / repo file | **yes** |
+| \`prose\` with \`store: "contract"\` (or store omitted) | no — contract only |
+| \`prose\` stored as an attachment / repo file | **yes** |
 | \`repo\` (code change) | **yes** |
 | \`action\` / \`external\` / \`binary\` | no (lives on the contract / external system) |
 

@@ -6,8 +6,9 @@
 // Locked cells + leaned-open forks (flip a lean = a one-line edit here):
 //   answer   → no     (lives on the contract)
 //   payload  → no     (lives on the contract)
-//   prose    → depends on `store`: 'contract' → no; else (work_item_body /
-//              attachment / repo_file / unset) → yes
+//   prose    → depends on `store`: 'contract' / unset (defaults to contract,
+//              FD-5/M5) → no; attachment / repo_file → yes
+//              (☠ work_item_body — body = brief only)
 //   action   → no     (the act is the deliverable; no home to persist)
 //   repo     → yes    (OPEN FORK, lean: persists outside the contract, like a
 //              doc on disk)
@@ -31,8 +32,8 @@ export function expectedOutputRequiresWorkItem(spec: ExpectedOutput): boolean {
     case 'repo': // OPEN FORK — lean: yes
       return true;
     case 'prose':
-      // Only contract-stored prose needs no work item; every other store
-      // (incl. the default) lands on a work item or on disk under one.
-      return spec.store !== 'contract';
+      // The default home is the contract (FD-5/M5) — no work item needed.
+      // Only explicitly WI-/disk-targeted stores require one.
+      return spec.store === 'attachment' || spec.store === 'repo_file';
   }
 }

@@ -23,11 +23,10 @@ test('repo requires a work item (lean)', () => {
   assert.equal(expectedOutputRequiresWorkItem({ kind: 'repo', isolation: 'worktree' }), true);
 });
 
-test('prose requires a WI unless explicitly contract-stored', () => {
+test('prose requires a WI only for explicitly WI-/disk-targeted stores (M5)', () => {
   assert.equal(expectedOutputRequiresWorkItem({ kind: 'prose', store: 'contract' }), false);
-  assert.equal(expectedOutputRequiresWorkItem({ kind: 'prose', store: 'work_item_body' }), true);
   assert.equal(expectedOutputRequiresWorkItem({ kind: 'prose', store: 'attachment' }), true);
   assert.equal(expectedOutputRequiresWorkItem({ kind: 'prose', store: 'repo_file', path: 'x.md' }), true);
-  // unset store defaults to requiring a WI (default store is work_item_body/attachment)
-  assert.equal(expectedOutputRequiresWorkItem({ kind: 'prose' }), true);
+  // unset store defaults to 'contract' (FD-5/M5) — no work item needed.
+  assert.equal(expectedOutputRequiresWorkItem({ kind: 'prose' }), false);
 });

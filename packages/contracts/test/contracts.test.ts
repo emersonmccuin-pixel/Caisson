@@ -69,7 +69,7 @@ test('Contract guard accepts a full row and rejects drift', () => {
 // ── Every ExpectedOutput kind round-trips through the Contract DTO ──
 const expectedOutputs: ExpectedOutput[] = [
   { kind: 'answer', must_address: ['why', 'how'], min_chars: 50 },
-  { kind: 'prose', doc_type: 'prd', sections: ['Goals'], store: 'work_item_body' },
+  { kind: 'prose', doc_type: 'prd', sections: ['Goals'], store: 'attachment' },
   { kind: 'payload', schema: { type: 'object', required: ['x'] }, semantic: 'decision' },
   { kind: 'repo', isolation: 'worktree', paths_touched: ['a.ts'], checks: [{ preset: 'build' }], require_diff: true },
   {

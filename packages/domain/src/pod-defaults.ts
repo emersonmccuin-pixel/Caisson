@@ -36,9 +36,9 @@ const POD_DEFAULTS: Record<string, PodDefault> = {
   // summary of what it found. Lives on the contract — no work-item home.
   researcher: podDefault({ kind: 'answer', must_address: ['summary'] }),
 
-  // Drafted prose. Defaults to contract-stored so a writer dispatch is
-  // contract-only by default; the orchestrator sets `store: 'work_item_body'`
-  // (and links a work item) when the draft needs a durable home.
+  // Drafted prose. Contract-stored (the M5/FD-5 default); the orchestrator
+  // sets `store: 'attachment'` (and links a work item) when the draft should
+  // live as a document on a card.
   writer: podDefault({ kind: 'prose', store: 'contract' }),
 
   // Code changes land in the repo. Decision-4 leans repo ⇒ requires a

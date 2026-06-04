@@ -1,9 +1,10 @@
-// Slice 014c — the `store` EXECUTOR. Submission-gated completion (014/014b)
-// validated the deliverable SHAPE but never acted on `expectedOutput.store`, so
-// a `prose` contract declaring `store: work_item_body` had its text written only
-// onto the contract row while verification read the (never-written) work-item
-// body — structurally un-passable. This applies the deliverable to its declared
-// home AT SUBMIT, atomically, before verification runs at terminal.
+// Slice 014c — the `store` EXECUTOR. Applies a prose deliverable to its
+// declared home AT SUBMIT, atomically, before verification runs at terminal.
+//
+// M5 (FD-5) — ☠ `store: 'work_item_body'`. The work item's body is the HUMAN
+// BRIEF only; the deliverable's durable home is the contract row. The default
+// store is now `contract` (was: body-when-WI-linked). `attachment` / `repo_file`
+// survive as explicit placements.
 //
 // `store` is a prose-only directive. Every other deliverable kind lands its
 // evidence in its real home natively (repo → git, external → the outside system,
@@ -17,21 +18,14 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
-import { createAttachment, getWorkItem, updateWorkItemFields } from '@pc/db';
+import { createAttachment, getWorkItem } from '@pc/db';
 import type { Contract, Deliverable } from '@pc/contracts';
 import type { ULID } from '@pc/domain';
 import { ContractV2, proseAttachmentName } from '@pc/domain';
-import { WorkItemMutationGateway } from '@pc/app-services';
-
-/** FD-12 — the one write door (repo write + outbox receipt in one txn). The
- *  body write was previously SILENT (no work-item.changed receipt) — the UI
- *  only saw the deliverable land on a lucky refetch. */
-const workItemGateway = new WorkItemMutationGateway();
 
 export type StoreApplyOutcome =
   | 'none' // not a prose/store deliverable — nothing to place
   | 'contract' // text stays on the contract row (verification reads it via report fallback)
-  | 'work_item_body'
   | 'attachment'
   | 'repo_file';
 
@@ -84,23 +78,6 @@ export function applyDeliverableStore(input: ApplyDeliverableStoreInput): StoreA
       // the text via the report fallback in agent-verification.ts.
       return { ok: true, applied: 'contract' };
 
-    case 'work_item_body': {
-      const wi = requireLiveWorkItem(contract.workItemId, 'work_item_body');
-      if (!wi.ok) return wi;
-      try {
-        workItemGateway.tryCommitWorkItemChange({
-          projectId: wi.projectId,
-          mutate: () => {
-            const row = updateWorkItemFields(wi.id, { body: text });
-            return row ? { row, reason: 'patched' } : null;
-          },
-        });
-      } catch (err) {
-        return writeFailed('work item body', err);
-      }
-      return { ok: true, applied: 'work_item_body' };
-    }
-
     case 'attachment': {
       const wi = requireLiveWorkItem(contract.workItemId, 'attachment');
       if (!wi.ok) return wi;
@@ -150,13 +127,13 @@ export function applyDeliverableStore(input: ApplyDeliverableStoreInput): StoreA
   }
 }
 
-/** Default store: `work_item_body` when a WI is linked, else `attachment` —
- *  mirrors the contract doc's documented default. */
+/** Default store: `contract` (FD-5/M5) — the Work Contract is the result's
+ *  home unless the author explicitly routes it elsewhere. */
 function resolveStore(
   expected: Extract<ContractV2.ExpectedOutput, { kind: 'prose' }>,
-  workItemId: string | null,
+  _workItemId: string | null,
 ): ContractV2.ProseStore {
-  return expected.store ?? (workItemId ? 'work_item_body' : 'attachment');
+  return expected.store ?? 'contract';
 }
 
 function requireLiveWorkItem(

@@ -62,7 +62,8 @@ export type ProseDocType =
   | 'summary'
   | 'postmortem'
   | 'note';
-export type ProseStore = 'contract' | 'attachment' | 'work_item_body' | 'repo_file';
+// M5 (FD-5) — ☠ 'work_item_body' (body = brief only; mirror of domain's ProseStore).
+export type ProseStore = 'contract' | 'attachment' | 'repo_file';
 export type PayloadSemantic =
   | 'extraction'
   | 'classification'

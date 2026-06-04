@@ -113,6 +113,10 @@ const BANNED_RESURRECTION = [
   // mailbox is the ONE delivery system.
   'enqueueInboxRow',
   'markInboxDelivered',
+  // M5 (FD-5): ☠ the work_item_body prose store — a work item's body is the
+  // human brief ONLY; deliverables live on the contract (or an explicit
+  // attachment/repo_file placement). The string is banned as a store value.
+  'work_item_body',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 
@@ -202,8 +206,6 @@ const MUTATOR_IMPORT_ALLOWLIST: Record<string, string> = {
     'moveCard transition effect — moveWorkItemStage inside gateway.tryCommitWorkItemChange.',
   'apps/server/src/services/project-runtime.ts':
     'legacy no-expectedVersion move (pc_move_work_item) — moveWorkItemStage inside gateway.commitWorkItemChange.',
-  'apps/server/src/services/apply-deliverable-store.ts':
-    'prose→work_item_body store — updateWorkItemFields inside gateway.tryCommitWorkItemChange.',
   'apps/server/src/services/auto-advance-done.ts':
     'helper ONLY: returns the moved row to callers that wrap it in their own gateway commit (verification paths).',
   'apps/server/src/services/agent-audit.ts':

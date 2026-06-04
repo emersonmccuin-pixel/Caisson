@@ -86,11 +86,12 @@ function deriveProseV2(
 
   const preds: AcceptancePredicateV2[] = [];
   // The store decides which corpus the section/min-chars checks read:
-  //   - work_item_body / attachment → the work-item body + attachment contents
-  //     (`body_contains` searches both); the executor writes the text there.
-  //   - contract → the contract report (`report_contains`); the text stays on
-  //     the contract and verification reads it via the report fallback.
-  const useBody = spec.store === 'work_item_body' || spec.store === 'attachment';
+  //   - attachment → the work-item body + attachment contents (`body_contains`
+  //     searches both); the executor writes the document there.
+  //   - contract (default — FD-5/M5) → the contract report (`report_contains`);
+  //     the text stays on the contract and verification reads it via the report
+  //     fallback. ☠ work_item_body: the body is the human brief only.
+  const useBody = spec.store === 'attachment';
   // attachment also asserts the document actually landed, by name.
   if (spec.store === 'attachment') {
     preds.push({ kind: 'attachments_present', names: [proseAttachmentName(spec)] });
