@@ -48,7 +48,6 @@ test('create emits exactly one contract.changed (created) fact', () => {
   const c = service.create({
     projectId: p.id,
     podName: 'researcher',
-    issuedBy: 'orch-1',
     expectedOutput: { kind: 'answer', min_chars: 10 },
     acceptanceCriteria: [{ kind: 'report_contains', pattern: 'done' }],
     verificationTier: 'auto',

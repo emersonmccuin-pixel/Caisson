@@ -22,8 +22,6 @@ const baseContract: Contract = {
   projectId: 'p1',
   workItemId: 'w1',
   agentRunId: null,
-  attempt: 0,
-  issuedBy: 'orch-session-1',
   podName: 'researcher',
   expectedOutput: { kind: 'answer', min_chars: 10 },
   acceptanceCriteria: [{ kind: 'report_contains', pattern: 'done' }],
@@ -59,7 +57,6 @@ function contractChangedEvent(
 
 test('Contract guard accepts a full row and rejects drift', () => {
   assert.equal(isContract(baseContract), true);
-  assert.equal(isContract({ ...baseContract, attempt: '0' }), false);
   assert.equal(isContract({ ...baseContract, status: 'nope' }), false);
   assert.equal(isContract({ ...baseContract, version: null }), false);
   // nullable FKs are allowed

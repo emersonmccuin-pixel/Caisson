@@ -188,10 +188,6 @@ export interface Contract {
   workItemId: ULID | null;
   /** The producing run. Null until dispatched. */
   agentRunId: ULID | null;
-  /** Retry counter — retries live on the contract, not new work items. */
-  attempt: number;
-  /** Provenance string (orchestrator session / workflow stage / parent run). */
-  issuedBy: string | null;
   podName: string | null;
   /** The typed spec the orchestrator authored. */
   expectedOutput: ExpectedOutput | null;
@@ -299,8 +295,6 @@ export function isContract(value: unknown): value is Contract {
     typeof value.projectId === 'string' &&
     (value.workItemId === null || typeof value.workItemId === 'string') &&
     (value.agentRunId === null || typeof value.agentRunId === 'string') &&
-    typeof value.attempt === 'number' &&
-    (value.issuedBy === null || typeof value.issuedBy === 'string') &&
     (value.podName === null || typeof value.podName === 'string') &&
     (value.expectedOutput === null || isRecord(value.expectedOutput)) &&
     (value.acceptanceCriteria === null || Array.isArray(value.acceptanceCriteria)) &&

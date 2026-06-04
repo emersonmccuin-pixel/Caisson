@@ -35,6 +35,8 @@ export {
   computeRunStatus,
   resumeCompatErrors,
   resetFailedNodesForResume,
+  deriveDagStateFromDiary,
+  type ReplayDiaryEvent,
   type ReadySelection,
   type SkipReason,
   type ReviewDecision,

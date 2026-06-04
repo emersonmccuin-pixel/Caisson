@@ -4,6 +4,7 @@
 export { buildTopologicalLayers, computeUpstreams, forwardEdges, findForwardCycle } from './topo.ts';
 export { evaluateCondition, checkTriggerRule } from './when.ts';
 export { validateWorkflowV2, type ValidationResult } from './validate.ts';
+export { deriveDagStateFromDiary, type ReplayDiaryEvent } from './replay.ts';
 export {
   substituteRefs,
   substituteInputs,

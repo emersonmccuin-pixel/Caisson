@@ -133,19 +133,23 @@ failed, ZERO in-flight.
 - Boot fail-close: interrupted runs land `failed` → now resumable via the same door ("resume
   interrupted job" = FD-14's button, workflow flavor).
 
-### Slice D — riding cleanups
-- ☠ v1 `workflow.ts` module + v1 `WorkflowRunStatus` (zero importers, refute 5).
-- ☠ contract dead fields `attempt`/`issuedBy` (M5 finding).
-- Ad-hoc `pc_invoke_agent` w/o expected_output: contract mint consults pod default → stock
-  default (same precedence as templated dispatch; M5 Decision-4 blast-radius fix; kills the
-  NULL-spec contract class).
-- `$root.output` → `$root.brief` rename (M5 breadcrumb; alias-free, defs migrated in the B
-  script; 7 active defs).
-- **FD-13 projection guard:** diary must be write-complete enough to rebuild run state — a
-  replay test derives node states from `workflow_run_events` and asserts ≡ dagState after a
-  reject-loop run. dagState stays the operational cache; the diary is provably the truth. (Full
-  projection-only storage deliberately NOT done — FD-13 honored at the guard level, revisit if
-  drift ever observed.)
+### Slice D — riding cleanups ✅ DELIVERED (as amended)
+- ✅ ☠ v1 domain modules WHOLE: `workflow.ts` + `workflow-run.ts` + `workflow-edges.ts` (zero
+  importers, refute 5 + slice-D trace).
+- ✅ ☠ contract dead fields `attempt`/`issuedBy` (M5 finding): migration 0044, DTO + repo + the
+  never-true UI badge.
+- ✅ Ad-hoc `pc_invoke_agent` w/o expected_output: contract mint consults pod row → stock default
+  (same precedence as templated dispatch; deps-seamed; defaulted repo specs inherit worktree
+  isolation — the 2026-06-03 wrong-directory class).
+- ⚪ `$root.output` → `$root.brief` rename **DEFERRED (slice-D amendment, decided in-pass):** two
+  ref grammars (refs.ts + when.ts atoms) + 3 prompt surfaces + registry descriptions + ANOTHER
+  live-defs migration, for a purely cosmetic gain — the SEMANTIC fix (body=brief, guaranteed)
+  shipped in M5. Standalone pass if wanted; not rot-bearing.
+- ✅ **FD-13 projection guard:** `deriveDagStateFromDiary` (dag/replay.ts) replays
+  `workflow_run_events` through the SAME pure transitions; guard tests assert derived states ≡
+  executor dagState across a reject-loop story AND a ceiling-escalation story. dagState stays the
+  operational cache; the diary is provably the truth.
+- ✅ Banned names += RejectEdge · RetryPolicy · holdForHuman.
 
 ## Open questions (bring to Emerson mid-pass, plain-English)
 - **Child-cards-per-step visibility** — agent steps mint child work items; should they show on

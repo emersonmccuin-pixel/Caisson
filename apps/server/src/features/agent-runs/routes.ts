@@ -638,7 +638,6 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         expectedOutput: contract.expectedOutput,
         acceptanceCriteria: contract.acceptanceCriteria,
         verificationTier: contract.verificationTier,
-        attempt: contract.attempt,
         deliverable: contract.deliverable,
         report: contract.report,
       },

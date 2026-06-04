@@ -81,40 +81,10 @@ export {
   resolveCancelledHidden,
   withProjectSettingsDefaults,
 } from './project.ts';
-export type {
-  ApprovalNode,
-  AttachedToWorkItem,
-  AttachToWorkItemNode,
-  BashNode,
-  BaseNode,
-  CancelNode,
-  CreateWorkItemNode,
-  DagNode,
-  DoneWhen,
-  HttpNode,
-  LoopNode,
-  NestedWorkflowNode,
-  OrchestratorReviewNode,
-  RetryCause,
-  RetryPolicy,
-  ScriptNode,
-  SubagentNode,
-  TriggerRule,
-  UpdateWorkItemNode,
-  WriteToWorktreeNode,
-  Workflow,
-  WorkflowTriggers,
-} from './workflow.ts';
-export type {
-  NodeOutput,
-  NodeOutputStatus,
-  WorkflowRun,
-  WorkflowRunStatus,
-  WorkflowRunTrigger,
-} from './workflow-run.ts';
-// Section 19 v2 workflow types — namespaced to coexist with the legacy
-// workflow.ts surface above until 19.12 culls it. Access as WorkflowV2.Workflow,
-// WorkflowV2.AgentNode, WorkflowV2.WORKFLOW_NODE_KINDS, etc.
+// ☠ M6 slice D (2026-06-04): the v1 workflow domain modules (workflow.ts /
+// workflow-run.ts / workflow-edges.ts — BashNode, DagNode, the dead
+// 'in-progress'/'complete' run statuses, EdgeRef, …) are DELETED WHOLE. They
+// were unreferenced scaffolding since 19.12; WorkflowV2 is the one surface.
 export * as WorkflowV2 from './workflow-v2.ts';
 export type {
   WorkflowAuditField,
@@ -206,7 +176,6 @@ export type {
 } from './pod.ts';
 export { POD_AUDIT_ACTORS, POD_AUDIT_FIELDS, POD_KNOWLEDGE_KINDS, POD_SCOPES } from './pod.ts';
 export type { SubagentFailureCause, SubagentFailureSignal } from './subagent-failure.ts';
-export type { CatalogType, EdgeRef, NodeEdges } from './workflow-edges.ts';
 export type { ToolCatalogEntry, ToolCatalogSource } from './tool-catalog.ts';
 export {
   REQUIRED_AGENT_TOOLS,

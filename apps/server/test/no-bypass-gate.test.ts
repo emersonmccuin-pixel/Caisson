@@ -138,6 +138,13 @@ const BANNED_RESURRECTION = [
   'EventTrigger',
   'allow_stage_workflow_skip',
   'also_fire_on_regression',
+  // M6 slices B+C+D (FD-9/FD-11): ☠ the reject-edge object (loop steps own
+  // back_to/ceiling/carry) · the dead per-node retry schema (validated,
+  // executed by nothing) · the ceiling no-op seam (the ceiling now PAUSES as
+  // an escalated human gate).
+  'RejectEdge',
+  'RetryPolicy',
+  'holdForHuman',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 

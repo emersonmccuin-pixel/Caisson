@@ -45,12 +45,16 @@ test('0038 creates agent_contracts table with every schema.ts column', () => {
     (c) => c.name,
   );
   for (const col of [
-    'id', 'project_id', 'work_item_id', 'agent_run_id', 'attempt', 'issued_by',
+    'id', 'project_id', 'work_item_id', 'agent_run_id',
     'pod_name', 'expected_output', 'acceptance_criteria', 'verification_tier',
     'verification_status', 'verification_notes', 'report', 'deliverable',
     'worktree_path', 'status', 'version', 'created_at', 'updated_at',
   ]) {
     assert.ok(cols.includes(col), `agent_contracts.${col} should exist`);
+  }
+  // ☠ M6 slice D (migration 0044): the dead attempt/issued_by columns are gone.
+  for (const dead of ['attempt', 'issued_by']) {
+    assert.ok(!cols.includes(dead), `agent_contracts.${dead} should be dropped`);
   }
   const runCols = (raw.pragma('table_info("agent_runs")') as { name: string }[]).map(
     (c) => c.name,
@@ -73,7 +77,6 @@ test('contracts repo: create / setRun / setDeliverable / setVerification + versi
     projectId: p.id,
     workItemId: null,
     podName: 'writer',
-    issuedBy: 'orch-1',
     expectedOutput: { kind: 'prose', doc_type: 'prd' },
     acceptanceCriteria: [{ kind: 'body_contains', pattern: 'Goals' }],
     verificationTier: 'auto',

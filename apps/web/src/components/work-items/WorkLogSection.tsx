@@ -67,11 +67,6 @@ function ContractRow({ contract }: { contract: Contract }) {
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={who}>
           {who}
         </span>
-        {contract.attempt > 1 && (
-          <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
-            attempt {contract.attempt}
-          </span>
-        )}
         <VerificationBadge status={contract.verificationStatus} contractStatus={contract.status} />
       </div>
       <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 px-3 py-2 text-xs">

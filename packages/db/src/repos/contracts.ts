@@ -25,8 +25,6 @@ export interface ContractRow {
   projectId: ULID;
   workItemId: ULID | null;
   agentRunId: ULID | null;
-  attempt: number;
-  issuedBy: string | null;
   podName: string | null;
   expectedOutput: ContractV2.ExpectedOutput | null;
   acceptanceCriteria: AcceptanceCriteria | null;
@@ -47,8 +45,6 @@ export interface CreateContractInput {
   projectId: ULID;
   workItemId?: ULID | null;
   agentRunId?: ULID | null;
-  attempt?: number;
-  issuedBy?: string | null;
   podName?: string | null;
   expectedOutput?: ContractV2.ExpectedOutput | null;
   acceptanceCriteria?: AcceptanceCriteria | null;
@@ -130,8 +126,6 @@ export function createContractInDb(db: DbExecutor, input: CreateContractInput): 
     projectId: input.projectId,
     workItemId: input.workItemId ?? null,
     agentRunId: input.agentRunId ?? null,
-    attempt: input.attempt ?? 0,
-    issuedBy: input.issuedBy ?? null,
     podName: input.podName ?? null,
     expectedOutput: input.expectedOutput ?? null,
     acceptanceCriteria: input.acceptanceCriteria ?? null,

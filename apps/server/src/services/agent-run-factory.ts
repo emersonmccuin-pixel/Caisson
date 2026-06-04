@@ -45,7 +45,7 @@ import {
   updateAgentRunStatus,
 } from '@pc/db';
 import { ContractService } from '@pc/app-services';
-import { ContractV2, deriveAcceptanceCriteriaV2, expectedOutputRequiresWorkItem } from '@pc/domain';
+import { ContractV2, deriveAcceptanceCriteriaV2, expectedOutputRequiresWorkItem, getPodDefaultExpectedOutput } from '@pc/domain';
 import type {
   AgentRunFailureCause,
   ExpectedOutput,
@@ -614,8 +614,7 @@ export async function dispatchContinueAgent(
   }
 
   // Re-link the contract to the continuation run (same resolution as the fresh
-  // path). The contract carries retries on its `attempt` field; this keeps the
-  // run↔contract link pointed at the latest producer.
+  // path); this keeps the run↔contract link pointed at the latest producer.
   const contractId = resolveContractForDispatch({
     projectId: input.projectId,
     workItemId: continueWorkItemId,
@@ -1022,6 +1021,9 @@ export interface ResolveContractForDispatchDeps {
   getWorkItem?: typeof getWorkItem;
   listContractsForWorkItem?: typeof listContractsForWorkItem;
   setAgentRunContractId?: typeof setAgentRunContractId;
+  /** M6 slice D — pod-row default lookup for spec-less dispatches. Defaults to
+   *  the real resolver; tests without a DB inherit the safe-null fallback. */
+  getPodRowExpectedOutput?: (podName: string, projectId: ULID) => ContractV2.ExpectedOutput | null;
 }
 
 /** Slice 019 (contract-first) — resolve the dispatch's contract. ALWAYS returns
@@ -1061,15 +1063,41 @@ export function resolveContractForDispatch(
     }
     if (!contractId) {
       // Contract-first: create a contract whether or not a WI is attached.
-      // The explicit spec is the only source (the legacy WI contract columns
-      // were dropped in slice 023).
       // M5 (FD-5 addendum, live-fire finding) — derive the AC onto the
       // CONTRACT ROW when a spec exists and no explicit AC was passed. The
       // verifier already derives-on-null at terminal, so behavior is
       // identical — but `pc_get_contract` returned acceptanceCriteria: null
       // on every direct dispatch, defeating "the agent can read what it's
       // verified against". The row now carries what the verifier will use.
-      const expectedOutput = args.expectedOutput ?? null;
+      // M6 slice D (the M5 Decision-4 blast-radius fix) — a spec-less ad-hoc
+      // dispatch consults the SAME default chain as templated dispatch
+      // (dispatch-supplied → pod row → stock default) instead of minting a
+      // NULL-spec contract. A defaulted repo spec inherits the dispatch's
+      // worktree isolation (the 2026-06-03 wrong-directory class).
+      let expectedOutput = args.expectedOutput ?? null;
+      if (!expectedOutput) {
+        const lookupPodRow =
+          deps.getPodRowExpectedOutput ??
+          ((podName: string, projectId: ULID): ContractV2.ExpectedOutput | null => {
+            try {
+              return (resolveAgentForDispatch(podName, projectId)?.expectedOutput ??
+                null) as ContractV2.ExpectedOutput | null;
+            } catch {
+              return null; // no DB (tests) / lookup failure — fall to stock default
+            }
+          });
+        expectedOutput =
+          lookupPodRow(args.podName, args.projectId) ??
+          getPodDefaultExpectedOutput(args.podName) ??
+          null;
+        if (
+          expectedOutput?.kind === 'repo' &&
+          args.worktreePath &&
+          expectedOutput.isolation === 'in_place'
+        ) {
+          expectedOutput = { ...expectedOutput, isolation: 'worktree' };
+        }
+      }
       const acceptanceCriteria =
         args.acceptanceCriteria ??
         (expectedOutput ? deriveAcceptanceCriteriaV2(expectedOutput) : null);

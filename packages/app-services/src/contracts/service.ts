@@ -40,8 +40,6 @@ export function toContractDto(row: ContractRow): Contract {
     projectId: row.projectId,
     workItemId: row.workItemId,
     agentRunId: row.agentRunId,
-    attempt: row.attempt,
-    issuedBy: row.issuedBy,
     podName: row.podName,
     // The repo persists the v2 union; the DTO mirror is structurally identical.
     expectedOutput: (row.expectedOutput as ContractExpectedOutput | null) ?? null,
@@ -85,8 +83,6 @@ export interface CreateContractServiceInput {
   projectId: ULID;
   workItemId?: ULID | null;
   agentRunId?: ULID | null;
-  attempt?: number;
-  issuedBy?: string | null;
   podName?: string | null;
   expectedOutput?: ContractV2.ExpectedOutput | null;
   acceptanceCriteria?: AcceptanceCriteria | null;
@@ -132,8 +128,6 @@ export class ContractService {
         projectId: input.projectId as DomainULID,
         workItemId: (input.workItemId ?? null) as DomainULID | null,
         agentRunId: (input.agentRunId ?? null) as DomainULID | null,
-        ...(input.attempt !== undefined ? { attempt: input.attempt } : {}),
-        ...(input.issuedBy !== undefined ? { issuedBy: input.issuedBy } : {}),
         ...(input.podName !== undefined ? { podName: input.podName } : {}),
         ...(input.expectedOutput !== undefined ? { expectedOutput: input.expectedOutput } : {}),
         ...(input.acceptanceCriteria !== undefined

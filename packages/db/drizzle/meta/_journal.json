@@ -309,6 +309,13 @@
       "when": 1782172800000,
       "tag": "0043_drop_workflow_run_triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1782172900000,
+      "tag": "0044_drop_contract_attempt_issued_by",
+      "breakpoints": true
     }
   ]
 }

@@ -33,8 +33,6 @@ function contract(over: Partial<Contract> = {}): Contract {
     projectId: 'p1',
     workItemId: 'w1',
     agentRunId: 'r1',
-    attempt: 1,
-    issuedBy: null,
     podName: 'builder',
     expectedOutput: { kind: 'answer' },
     acceptanceCriteria: null,

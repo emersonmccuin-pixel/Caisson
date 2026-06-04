@@ -134,7 +134,9 @@ The first-principles spec reduces the engine to three concepts: **step → trans
 
 **✅ FD-11 reqs 2+3 EXECUTED (M6 slice C, 2026-06-04):** ceiling→human-pause · cancel wired end-to-end · resume-from-failed-step with definition re-freeze — see §6.
 
-**Remaining:** M6 slice D riding cleanups · re-attach instead of fail-closed on boot (the one-reconciler work; interrupted runs are at least RESUMABLE now).
+**✅ M6 slice D (2026-06-04):** ☠ the v1 domain modules whole (workflow.ts / workflow-run.ts / workflow-edges.ts) · ☠ contract `attempt`/`issued_by` (migration 0044) · spec-less ad-hoc dispatches consult the pod-row → stock default chain (no more NULL-spec contracts) · **FD-13 guard**: `deriveDagStateFromDiary` replays the diary through the engine's own pure transitions; guard tests prove replay ≡ dagState (the diary is provably the truth; dagState stays the resume cache). `$root.output`→`$root.brief` rename deferred (cosmetic; semantic fix shipped in M5 — see the M6 scope doc).
+
+**M6 IS CLOSED — FD-9, FD-10, FD-11 all executed.** Remaining beyond M6: re-attach instead of fail-closed on boot (the one-reconciler work; interrupted runs are at least RESUMABLE now) · M7 ask door · M8 Human Inbox (re-homes the ceiling-pause + review surfaces).
 
 ---
 

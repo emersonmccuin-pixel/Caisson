@@ -113,7 +113,9 @@ export const agentRuns = sqliteTable(
  *   (app-enforced, mirrors `work_items.area_id`).
  * - `deliverable` lives HERE (typed v2 union), not borrowed from `wi.body`.
  * - `report` is the free-text envelope to the orchestrator.
- * - `attempt` carries retries (retries don't mint new work items).
+ * - ☠ M6 slice D: `attempt` + `issued_by` dropped (migration 0044) — written
+ *   as 0/NULL by every caller since the table was born; retries are the
+ *   workflow LOOP's business, provenance is the diary's.
  *
  * Verification behavior is unchanged this slice — predicates/tiers move as-is.
  */
@@ -129,10 +131,6 @@ export const agentContracts = sqliteTable(
     workItemId: text('work_item_id').$type<ULID | null>(),
     /** The producing run. NULL until dispatched. */
     agentRunId: text('agent_run_id').$type<ULID | null>(),
-    /** Retry counter — retries live here, not on new work items. */
-    attempt: integer('attempt').notNull().default(0),
-    /** Provenance (orchestrator session / workflow stage / parent run). */
-    issuedBy: text('issued_by'),
     podName: text('pod_name'),
     /** Orchestrator's typed spec (v2 union). */
     expectedOutput: text('expected_output', { mode: 'json' }).$type<ContractV2.ExpectedOutput>(),
