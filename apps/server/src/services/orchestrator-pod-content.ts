@@ -25,7 +25,7 @@
 //     Agents tab. Was `'inherit'` pre-2026-05-23; that alias was retired
 //     because it never resolved to anything but opus in practice.
 //   - maxTurns null — orchestrator session is long-running by design.
-//   - outputDestination `passthrough` — orchestrator's output IS the chat
+//   - output IS the chat (no routing field — ☠ outputDestination, M5)
 //     panel via stdout; doesn't attach to a work item.
 //   - description — short, since it's surfaced in the future Pod UI's pod list.
 //
@@ -391,7 +391,6 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
   model: 'opus',
   effort: null,
   maxTurns: null,
-  outputDestination: 'passthrough',
   description:
     "The project's PM. Single point of contact for the user. Dispatches substantive work to agents; can use Bash/Edit/Write directly for small fixes and runtime recovery.",
 };

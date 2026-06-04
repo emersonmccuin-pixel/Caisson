@@ -1047,7 +1047,6 @@ const RESEARCHER_POD_CONTENT: CreateAgentInput = {
   model: 'opus',
   effort: null,
   maxTurns: null,
-  outputDestination: 'passthrough',
   description:
     "Investigates context on demand — reads anywhere on the filesystem, fetches from the web, and writes findings inside the bound worktree. Returns text on success (runtime closes node); calls pc_node_failed on hard failure. Can ask the orchestrator or request user approval when needed.",
   dispatchGuidance:
@@ -1076,7 +1075,6 @@ const WRITER_POD_CONTENT: CreateAgentInput = {
   model: 'sonnet',
   effort: 'medium',
   maxTurns: 20,
-  outputDestination: 'chat',
   description:
     "Drafts text — emails, docs, summaries, release notes, prose. Matches the audience's voice. Returns the draft inline; attaches long drafts to the pinned work item.",
   dispatchGuidance:
@@ -1104,7 +1102,6 @@ const REVIEWER_POD_CONTENT: CreateAgentInput = {
   model: 'sonnet',
   effort: 'high',
   maxTurns: 20,
-  outputDestination: 'chat',
   description:
     'Critiques a draft / code change / plan / design against explicit criteria. Returns pass | fail | revise plus concrete comments with file:line citations. Flags vague criteria rather than guessing.',
   dispatchGuidance:
@@ -1131,7 +1128,6 @@ const PLANNER_POD_CONTENT: CreateAgentInput = {
   model: 'opus',
   effort: 'high',
   maxTurns: 15,
-  outputDestination: 'chat',
   description:
     "Breaks a goal into ordered, concrete, verifiable steps. Surfaces dependencies, risks, and unknowns. Doesn't pad with obvious steps.",
   dispatchGuidance:
@@ -1158,7 +1154,6 @@ const AGENT_DESIGNER_POD_CONTENT: CreateAgentInput = {
   model: 'sonnet',
   effort: 'medium',
   maxTurns: 30,
-  outputDestination: 'chat',
   description:
     'Designs + creates a new agent pod from a complete spec (dispatched worker — the orchestrator interviews the user and dispatches this pod). Derives name, prompt, tool allowlist, model+effort sizing, and knowledge docs from the job description; creates via pc_create_agent + pc_create_knowledge; reports every defaulted decision in its deliverable.',
   dispatchGuidance:
@@ -1204,7 +1199,6 @@ const CAISSON_POD_CONTENT: CreateAgentInput = {
   model: 'sonnet',
   effort: 'high',
   maxTurns: 25,
-  outputDestination: 'chat',
   description:
     "In-app specialist for Caisson. Explains how Caisson works (stages, work items, agents, workflows, etc.) and mutates project + global config (stages, fields, CLAUDE.md, settings). Routes workflow authoring to the workflow-builder. Always asks for approval before destructive changes.",
   dispatchGuidance:
@@ -1235,7 +1229,6 @@ const CODE_WRITER_POD_CONTENT: CreateAgentInput = {
   model: 'sonnet',
   effort: 'high',
   maxTurns: 30,
-  outputDestination: 'chat',
   description:
     "Writes or edits code to meet a spec. Matches surrounding conventions, runs typecheck / tests / lint via Bash, only returns on green.",
   dispatchGuidance:
@@ -1262,7 +1255,6 @@ const EXTRACTOR_POD_CONTENT: CreateAgentInput = {
   model: 'sonnet',
   effort: 'medium',
   maxTurns: 15,
-  outputDestination: 'chat',
   description:
     'Pulls structured data from unstructured input. Returns JSON matching the supplied schema. Flags ambiguous fields with null rather than guessing.',
   dispatchGuidance:

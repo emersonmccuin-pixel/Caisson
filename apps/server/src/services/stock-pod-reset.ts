@@ -60,7 +60,6 @@ export function resetStockPodToDefault(name: string, reason: string): ResetStock
     'model',
     'effort',
     'maxTurns',
-    'outputDestination',
     'description',
   ];
   for (const f of SCALARS) {

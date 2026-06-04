@@ -52,7 +52,6 @@ import {
 import type {
   AgentEffort,
   AgentModel,
-  AgentOutputDestination,
   PodAgentRow,
   PodAuditActor,
   PodAuditField,
@@ -174,15 +173,6 @@ function asToolsArray(v: unknown): string[] | undefined {
     return v as string[];
   }
   throw new Error(`invalid tools: expected string[]`);
-}
-
-function asOutputDestinationOrNull(v: unknown): AgentOutputDestination | null | undefined {
-  if (v === undefined) return undefined;
-  if (v === null) return null;
-  if (typeof v === 'string' && v.length > 0) {
-    return v as AgentOutputDestination;
-  }
-  throw new Error(`invalid outputDestination: ${JSON.stringify(v)}`);
 }
 
 function asActor(v: unknown): PodAuditActor | undefined {
@@ -355,9 +345,6 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
             ? { maxTurns: asMaxTurnsOrNull(body.maxTurns) ?? null }
             : {}),
           ...(body.tools !== undefined ? { tools: asToolsArray(body.tools) ?? [] } : {}),
-          ...(body.outputDestination !== undefined
-            ? { outputDestination: asOutputDestinationOrNull(body.outputDestination) ?? null }
-            : {}),
         },
         auditFromBody(body, 'user', 'ui-create'),
       );
@@ -582,9 +569,6 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
       if (body.model !== undefined) patch.model = asModelOrNull(body.model) ?? null;
       if (body.effort !== undefined) patch.effort = asEffortOrNull(body.effort) ?? null;
       if (body.maxTurns !== undefined) patch.maxTurns = asMaxTurnsOrNull(body.maxTurns) ?? null;
-      if (body.outputDestination !== undefined) {
-        patch.outputDestination = asOutputDestinationOrNull(body.outputDestination) ?? null;
-      }
       if (patch.name === '') {
         return c.json({ ok: false, error: 'name cannot be empty' }, 400);
       }

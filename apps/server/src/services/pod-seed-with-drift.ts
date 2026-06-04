@@ -90,7 +90,6 @@ const SEED_OWNED_FIELDS = [
   'model',
   'effort',
   'maxTurns',
-  'outputDestination',
   'description',
   // Section 36 — drift-reseed picks up source changes to dispatch_guidance.
   // origin is set at insert + not patchable through updateAgent, so it stays

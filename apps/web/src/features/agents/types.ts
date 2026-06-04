@@ -11,6 +11,8 @@ export type PodAuditField =
   | 'effort'
   | 'max_turns'
   | 'tools'
+  // 'output_destination' — ☠ M5 (FD-5): column deleted; survives only in
+  // historical audit rows.
   | 'output_destination'
   | 'name'
   | 'dispatch_guidance'
@@ -38,7 +40,6 @@ export interface Pod {
   model: string | null;
   effort: string | null;
   maxTurns: number | null;
-  outputDestination: string | null;
   description: string;
   origin: PodOrigin;
   dispatchGuidance: string | null;
@@ -109,7 +110,6 @@ export interface CreatePodInput {
   effort?: string | null;
   maxTurns?: number | null;
   tools?: string[];
-  outputDestination?: string | null;
 }
 
 export interface PatchPodInput {
@@ -120,7 +120,6 @@ export interface PatchPodInput {
   effort?: string | null;
   maxTurns?: number | null;
   tools?: string[];
-  outputDestination?: string | null;
 }
 
 export interface ListAuditOptions {

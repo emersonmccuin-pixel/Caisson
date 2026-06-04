@@ -89,37 +89,12 @@ export interface InlineMcpServer {
 
 export type AgentMcpServerRef = string | InlineMcpServer;
 
-/** Output destination for an agent — one of the seven destinations.
- *  Captured in the agent's frontmatter under `pc.outputDestination` so the
- *  UI and workflow runtime can reason about an agent's shape without
- *  parsing the body. Defaults to `attachment` when authoring a reusable
- *  agent standalone; `passthrough` when the agent is intended for use
- *  inside a workflow chain; `chat` for general-purpose dispatched agents
- *  whose output lands in the orchestrator chat panel. */
-export type AgentOutputDestination =
-  | 'passthrough'
-  | 'chat'
-  | 'attachment'
-  | 'work-item-child'
-  | 'work-item-update'
-  | 'external'
-  | 'worktree-file';
-
-export const AGENT_OUTPUT_DESTINATIONS: readonly AgentOutputDestination[] = [
-  'passthrough',
-  'chat',
-  'attachment',
-  'work-item-child',
-  'work-item-update',
-  'external',
-  'worktree-file',
-];
-
-/** PC-specific frontmatter, namespaced under `pc:` to stay out of CC's own
- *  field surface. Unknown keys inside the `pc` block round-trip verbatim. */
-export interface AgentPcMetadata {
-  outputDestination?: AgentOutputDestination;
-}
+// M5 (FD-5, 2026-06-04) — ☠ AgentOutputDestination / AGENT_OUTPUT_DESTINATIONS /
+// AgentPcMetadata (`pc:` frontmatter block). output_destination was a dead knob:
+// stored + editable + seeded, consumed by ZERO runtime code. Results route via
+// the terminal envelope → orchestrator relay; prose placement is
+// `expectedOutput.store`. Old agent files' `pc:` blocks round-trip verbatim as
+// unknown frontmatter.
 
 /** Typed view of an agent file's YAML frontmatter. Every field is optional
  *  except `name` + `description` — those are required by CC. Fields not
@@ -147,9 +122,6 @@ export interface AgentDef {
   memory?: AgentMemoryScope;
   hooks?: AgentHooks;
   skills?: string[];
-
-  // PC-specific (under `pc:` block in frontmatter — D13).
-  pc?: AgentPcMetadata;
 
   // Dead config — kept so PC round-trips raw YAML cleanly even though PC
   // never honors these.
@@ -338,21 +310,6 @@ export function validateAgentDef(def: AgentDef): AgentValidationResult {
           errors.push({ field: `skills[${i}]`, message: 'skill entry must be a non-empty string' });
         }
       }
-    }
-  }
-
-  // pc (PC-specific frontmatter — D13 output destination)
-  if (def.pc !== undefined) {
-    if (def.pc === null || typeof def.pc !== 'object' || Array.isArray(def.pc)) {
-      errors.push({ field: 'pc', message: 'pc must be an object' });
-    } else if (
-      def.pc.outputDestination !== undefined &&
-      !AGENT_OUTPUT_DESTINATIONS.includes(def.pc.outputDestination)
-    ) {
-      errors.push({
-        field: 'pc.outputDestination',
-        message: `pc.outputDestination must be one of: ${AGENT_OUTPUT_DESTINATIONS.join(', ')}`,
-      });
     }
   }
 

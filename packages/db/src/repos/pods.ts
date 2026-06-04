@@ -26,7 +26,6 @@ import { and, asc, eq, isNull, or } from 'drizzle-orm';
 import type {
   AgentEffort,
   AgentModel,
-  AgentOutputDestination,
   PodAgentRow,
   PodAuditField,
   PodKnowledgeKind,
@@ -60,7 +59,6 @@ export interface CreateAgentInput {
   model?: AgentModel | null;
   effort?: AgentEffort | null;
   maxTurns?: number | null;
-  outputDestination?: AgentOutputDestination | null;
   description?: string;
   /** Section 36 — defaults to `'user-created'`. Only the boot-time stock-pod
    *  seed passes `'stock'`. */
@@ -81,7 +79,6 @@ function rowToAgent(row: typeof agents.$inferSelect): PodAgentRow {
     model: row.model ?? null,
     effort: row.effort ?? null,
     maxTurns: row.maxTurns ?? null,
-    outputDestination: row.outputDestination ?? null,
     description: row.description,
     origin: row.origin,
     dispatchGuidance: row.dispatchGuidance ?? null,
@@ -106,7 +103,6 @@ function agentSnapshot(row: PodAgentRow): string {
     model: row.model,
     effort: row.effort,
     maxTurns: row.maxTurns,
-    outputDestination: row.outputDestination,
     description: row.description,
     origin: row.origin,
     dispatchGuidance: row.dispatchGuidance,
@@ -132,7 +128,6 @@ export function createAgent(input: CreateAgentInput, audit: AuditInput): PodAgen
     model: input.model ?? null,
     effort: input.effort ?? null,
     maxTurns: input.maxTurns ?? null,
-    outputDestination: input.outputDestination ?? null,
     description: input.description ?? '',
     origin: input.origin ?? 'user-created',
     dispatchGuidance: input.dispatchGuidance ?? null,
@@ -242,7 +237,6 @@ export interface UpdateAgentInput {
   model?: AgentModel | null;
   effort?: AgentEffort | null;
   maxTurns?: number | null;
-  outputDestination?: AgentOutputDestination | null;
   description?: string;
   /** Section 36 — patchable so future UI can edit it; `origin` is NOT
    *  patchable (set once at creation). */
@@ -260,7 +254,6 @@ const UPDATE_AGENT_FIELD_MAP: ReadonlyArray<
   ['model', 'model', 'model'],
   ['effort', 'effort', 'effort'],
   ['maxTurns', 'max_turns', 'maxTurns'],
-  ['outputDestination', 'output_destination', 'outputDestination'],
   ['description', 'description', 'description'],
   ['dispatchGuidance', 'dispatch_guidance', 'dispatchGuidance'],
 ];
@@ -466,7 +459,6 @@ export function cloneAgentToProject(
     model: source.model,
     effort: source.effort,
     maxTurns: source.maxTurns,
-    outputDestination: source.outputDestination,
     description: source.description,
     // Cloned pods are user-created regardless of the source's origin —
     // the new row is the user's own copy in this project.

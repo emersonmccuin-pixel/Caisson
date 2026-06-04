@@ -1,8 +1,8 @@
 // Section 17d.7 — Settings tab.
 //
-// Top half: model / effort / maxTurns / tools / outputDestination edit
-// controls. These bind into the modal-root draft state (saved on the modal
-// footer's Save button alongside Prompt edits).
+// Top half: model / effort / maxTurns / tools edit controls. These bind into
+// the modal-root draft state (saved on the modal footer's Save button
+// alongside Prompt edits). ☠ outputDestination (M5/FD-5 — dead knob deleted).
 //
 // Bottom half: MCP servers subsection. Per-row Delete + raw-JSON "Add"
 // form. No inline edit — replace via delete + add (matches the secrets
@@ -18,7 +18,6 @@ interface SettingsDraftSlice {
   effort: string;
   maxTurns: string;
   tools: string;
-  outputDestination: string;
 }
 
 interface SettingsTabProps {
@@ -100,15 +99,6 @@ function ScalarSettings({
             value={draft.maxTurns}
             onChange={(e) => onChange({ maxTurns: e.target.value })}
             placeholder="(no cap)"
-            className="w-full border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
-          />
-        </Field>
-        <Field label="Output destination">
-          <input
-            type="text"
-            value={draft.outputDestination}
-            onChange={(e) => onChange({ outputDestination: e.target.value })}
-            placeholder="(optional)"
             className="w-full border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
           />
         </Field>

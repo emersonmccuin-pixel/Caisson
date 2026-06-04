@@ -117,6 +117,11 @@ const BANNED_RESURRECTION = [
   // human brief ONLY; deliverables live on the contract (or an explicit
   // attachment/repo_file placement). The string is banned as a store value.
   'work_item_body',
+  // M5 (FD-5 amendment): ☠ agents.output_destination — the dead routing knob
+  // (stored + edited + seeded, read by nothing). Dropped in migration 0042;
+  // do not re-grow it on pods OR the contract without a real consumer.
+  'outputDestination',
+  'output_destination',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 

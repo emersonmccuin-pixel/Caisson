@@ -49,7 +49,6 @@ interface ScalarDraft {
   effort: string;
   maxTurns: string;
   tools: string;
-  outputDestination: string;
 }
 
 function draftFromPod(pod: Pod): ScalarDraft {
@@ -61,7 +60,6 @@ function draftFromPod(pod: Pod): ScalarDraft {
     effort: pod.effort ?? '',
     maxTurns: pod.maxTurns !== null ? String(pod.maxTurns) : '',
     tools: pod.tools.join(', '),
-    outputDestination: pod.outputDestination ?? '',
   };
 }
 
@@ -74,8 +72,7 @@ function isDirty(draft: ScalarDraft, baseline: Pod): boolean {
     draft.model !== b.model ||
     draft.effort !== b.effort ||
     draft.maxTurns !== b.maxTurns ||
-    draft.tools !== b.tools ||
-    draft.outputDestination !== b.outputDestination
+    draft.tools !== b.tools
   );
 }
 
@@ -182,9 +179,6 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
           .split(',')
           .map((s) => s.trim())
           .filter((s) => s.length > 0);
-      }
-      if (draft.outputDestination !== b.outputDestination) {
-        patch.outputDestination = draft.outputDestination.trim() || null;
       }
       const next = await agentsApi.patchPod(baseline.id, patch);
       setBaseline(next);

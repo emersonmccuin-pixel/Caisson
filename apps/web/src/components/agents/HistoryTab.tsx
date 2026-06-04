@@ -8,10 +8,11 @@
 //   - Per-row revert (PATCH-back the prior_value)
 //
 // Revert is implemented for scalar agent fields (prompt / description /
-// model / effort / max_turns / tools / output_destination / name). Reverts
-// of knowledge / secret / mcp_server / created / deleted rows are not
-// supported — the buildout's revert scope is the scalar fields; restoring a
-// deleted knowledge row is a recreate-by-hand path.
+// model / effort / max_turns / tools / name). Reverts of knowledge / secret /
+// mcp_server / created / deleted rows are not supported — the buildout's
+// revert scope is the scalar fields; restoring a deleted knowledge row is a
+// recreate-by-hand path. ☠ output_destination (M5/FD-5): historical audit
+// rows still render, but the field is gone — no filter chip, no revert.
 
 import { useCallback, useEffect, useState } from 'react';
 
@@ -32,7 +33,6 @@ const FIELD_FILTERS: { value: '' | PodAuditField; label: string }[] = [
   { value: 'effort', label: 'Effort' },
   { value: 'max_turns', label: 'Max turns' },
   { value: 'tools', label: 'Tools' },
-  { value: 'output_destination', label: 'Output dest' },
   { value: 'name', label: 'Name' },
   { value: 'knowledge', label: 'Knowledge' },
   { value: 'secret', label: 'Secret' },
@@ -47,13 +47,11 @@ const REVERTABLE_FIELDS: ReadonlySet<PodAuditField> = new Set([
   'effort',
   'max_turns',
   'tools',
-  'output_destination',
   'name',
 ]);
 
 const AUDIT_FIELD_TO_PATCH_KEY: Record<string, string> = {
   max_turns: 'maxTurns',
-  output_destination: 'outputDestination',
 };
 
 interface Group {

@@ -150,9 +150,6 @@ export async function handleAgentTool(
         if (typeof args.effort === 'string') payload.effort = args.effort;
         if (typeof args.maxTurns === 'number') payload.maxTurns = args.maxTurns;
         if (Array.isArray(args.tools)) payload.tools = args.tools;
-        if (typeof args.outputDestination === 'string') {
-          payload.outputDestination = args.outputDestination;
-        }
         const res = await ctx.postServer('/api/agents/pods', payload);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
@@ -214,9 +211,6 @@ export async function handleAgentTool(
         if (typeof args.effort === 'string') payload.effort = args.effort;
         if (typeof args.maxTurns === 'number') payload.maxTurns = args.maxTurns;
         if (Array.isArray(args.tools)) payload.tools = args.tools;
-        if (typeof args.outputDestination === 'string') {
-          payload.outputDestination = args.outputDestination;
-        }
         // Body must contain at least one mutating field — the `actor` + `reason`
         // alone produces a no-op update.
         const fieldKeys = Object.keys(payload).filter(
@@ -227,7 +221,7 @@ export async function handleAgentTool(
             content: [
               {
                 type: 'text',
-                text: 'pc_update_agent: at least one field required (prompt / newName / description / model / effort / maxTurns / tools / outputDestination)',
+                text: 'pc_update_agent: at least one field required (prompt / newName / description / model / effort / maxTurns / tools)',
               },
             ],
             isError: true,

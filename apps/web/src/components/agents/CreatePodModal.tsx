@@ -313,7 +313,6 @@ interface FormState {
   effort: string;
   maxTurns: string;
   tools: string;
-  outputDestination: string;
 }
 
 const INITIAL: FormState = {
@@ -324,7 +323,6 @@ const INITIAL: FormState = {
   effort: '',
   maxTurns: '',
   tools: '',
-  outputDestination: '',
 };
 
 const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -376,9 +374,6 @@ function ManualForm({
         .split(',')
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
-    }
-    if (form.outputDestination.trim()) {
-      input.outputDestination = form.outputDestination.trim();
     }
     setBusy(true);
     setError(null);
@@ -455,15 +450,6 @@ function ManualForm({
                 value={form.maxTurns}
                 onChange={(e) => setForm((p) => ({ ...p, maxTurns: e.target.value }))}
                 placeholder="(no cap)"
-                className="w-full border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
-              />
-            </Field>
-            <Field label="Output destination">
-              <input
-                type="text"
-                value={form.outputDestination}
-                onChange={(e) => setForm((p) => ({ ...p, outputDestination: e.target.value }))}
-                placeholder="(optional)"
                 className="w-full border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
               />
             </Field>

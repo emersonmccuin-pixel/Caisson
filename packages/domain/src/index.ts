@@ -167,8 +167,6 @@ export type {
   AgentMemoryScope,
   AgentModel,
   AgentModelShort,
-  AgentOutputDestination,
-  AgentPcMetadata,
   AgentPermissionMode,
   AgentValidationErr,
   AgentValidationIssue,
@@ -181,7 +179,6 @@ export {
   AGENT_EFFORTS,
   AGENT_MEMORY_SCOPES,
   AGENT_MODEL_SHORTCUTS,
-  AGENT_OUTPUT_DESTINATIONS,
   AGENT_PERMISSION_MODES,
   validateAgentDef,
 } from './agent.ts';

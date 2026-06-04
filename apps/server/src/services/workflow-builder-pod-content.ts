@@ -464,7 +464,6 @@ export const WORKFLOW_BUILDER_POD_CONTENT: CreateAgentInput = {
   model: 'sonnet',
   effort: 'high',
   maxTurns: null,
-  outputDestination: 'chat',
   description:
     'Builds + publishes v2 workflows from a complete spec (dispatched worker — the orchestrator interviews the user and dispatches this pod). v2-aware: 2 node kinds (agent + review), card-move as a node `move` field (agent on completion / review on approve), declared input ports (`input:` map + `{{name}}`) wiring an upstream step\'s deliverable into the next, $root/$nodeId refs, unified review gate (reviewer: orchestrator|human), reject-only kick-back (max_iterations 3 default). Publishes to the DB (overwrite-by-slug); slug immutable post-create. Also handles edits: give it the slug + the change; it reads-before-edit and republishes.',
   dispatchGuidance:

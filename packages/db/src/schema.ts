@@ -3,7 +3,6 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-or
 import type {
   AgentEffort,
   AgentModel,
-  AgentOutputDestination,
   ExpectedOutput,
   FieldSchemaType,
   GlobalSettings,
@@ -599,7 +598,7 @@ export const agents = sqliteTable(
     model: text('model').$type<AgentModel | null>(),
     effort: text('effort').$type<AgentEffort | null>(),
     maxTurns: integer('max_turns'),
-    outputDestination: text('output_destination').$type<AgentOutputDestination | null>(),
+    // output_destination — ☠ M5 (FD-5): dead knob, dropped in migration 0042.
     description: text('description').notNull().default(''),
     /** Section 36 — `'stock'` (seeded by PC) vs `'user-created'` (any other
      *  row). Replaces the multi-list "is this pod stock?" pattern (deleted
@@ -617,7 +616,10 @@ export const agents = sqliteTable(
     dispatchGuidance: text('dispatch_guidance'),
     /** Section 26 Issue #3 — default expected_output for this pod. When set,
      *  createAgentWorkItem uses this before the stock map (pod-defaults.ts).
-     *  Null for stock pods and user-created pods that haven't declared one. */
+     *  Null for stock pods and user-created pods that haven't declared one.
+     *  M5 (FD-5 amendment): this stays — an explicit DEFAULT in the precedence
+     *  chain (dispatch-supplied → this → stock map → hard fail). The CONTRACT
+     *  row is the per-run authority; dispatch always wins. */
     expectedOutput: text('expected_output', { mode: 'json' }).$type<ExpectedOutput | null>(),
     /** UI Spine step 3 — monotonic write counter. Incremented inside every
      *  mutating write so the pod write-door can stamp WS deltas. Frontend

@@ -12,7 +12,7 @@
 // when materialising the pod to disk for `claude.exe`. Pod tables are the
 // source of truth; the .md file is rendered fresh per spawn.
 
-import type { AgentEffort, AgentModel, AgentOutputDestination } from './agent.ts';
+import type { AgentEffort, AgentModel } from './agent.ts';
 import type { ExpectedOutput } from './contract.ts';
 import type { ULID } from './ulid.ts';
 
@@ -39,6 +39,8 @@ export type PodAuditField =
   | 'effort'
   | 'max_turns'
   | 'tools'
+  // 'output_destination' — ☠ M5 (FD-5): the column is deleted; the literal
+  // survives ONLY in historical audit rows, which keep rendering as-is.
   | 'output_destination'
   | 'name'
   | 'dispatch_guidance'
@@ -103,7 +105,6 @@ export interface PodAgentRow {
   model: AgentModel | null;
   effort: AgentEffort | null;
   maxTurns: number | null;
-  outputDestination: AgentOutputDestination | null;
   description: string;
   /** Section 36 — `'stock'` vs `'user-created'`. Stock pods can't be deleted
    *  or edited via user-facing routes (route-layer guard reads this column). */

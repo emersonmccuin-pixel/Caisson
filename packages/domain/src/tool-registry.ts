@@ -326,10 +326,6 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
             "type": "string"
           },
           "description": "allowlist of tool slugs (e.g. ['Read','Grep','mcp__pc-rig__pc_get_work_item']). Empty = inherit all."
-        },
-        "outputDestination": {
-          "type": "string",
-          "description": "where the agent's output goes (per AgentOutputDestination enum)"
         }
       },
       "required": [
@@ -361,8 +357,8 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_update_agent",
     "family": "agent",
     "label": "Update an agent",
-    "description": "Update an agent pod's prompt and/or scalar settings in one call. Pass only the fields you want to change — any of: `prompt` (system prompt body), `newName` (rename, kebab-case), `description`, `model`, `effort`, `maxTurns`, `tools` (full allowlist), `outputDestination`. At least one mutating field is required. Audits as actor='orchestrator'; multi-field updates audit under a shared change-set. Stock-pod prompts (orchestrator/researcher/...) are editable — be deliberate; danger-zone editing in the UI is gated for a reason. Triggers restart-on-edit for any live session. Accepts either { id } or { name }.",
-    "catalogDescription": "Edit a pod's prompt, model, tools, effort, name, or output destination.",
+    "description": "Update an agent pod's prompt and/or scalar settings in one call. Pass only the fields you want to change — any of: `prompt` (system prompt body), `newName` (rename, kebab-case), `description`, `model`, `effort`, `maxTurns`, `tools` (full allowlist). At least one mutating field is required. Audits as actor='orchestrator'; multi-field updates audit under a shared change-set. Stock-pod prompts (orchestrator/researcher/...) are editable — be deliberate; danger-zone editing in the UI is gated for a reason. Triggers restart-on-edit for any live session. Accepts either { id } or { name }.",
+    "catalogDescription": "Edit a pod's prompt, model, tools, effort, or name.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -401,9 +397,6 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
           "items": {
             "type": "string"
           }
-        },
-        "outputDestination": {
-          "type": "string"
         },
         "reason": {
           "type": "string",
@@ -726,7 +719,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_list_agent_audit",
     "family": "agent",
     "label": "Read an agent's change history",
-    "description": "Read an agent's change history. Returns audit rows newest-first. Filter by actor ('orchestrator' / 'user'), field ('prompt' / 'model' / 'effort' / 'tools' / 'description' / 'name' / 'maxTurns' / 'outputDestination' / 'knowledge' / 'secret' / 'mcp-server'), limit (default 50), beforeCreatedAt (epoch ms — for paging). Use when reasoning about 'why does this agent behave this way?' or auditing recent changes. Accepts either { agentId } or { agentName }.",
+    "description": "Read an agent's change history. Returns audit rows newest-first. Filter by actor ('orchestrator' / 'user'), field ('prompt' / 'model' / 'effort' / 'tools' / 'description' / 'name' / 'maxTurns' / 'knowledge' / 'secret' / 'mcp-server'), limit (default 50), beforeCreatedAt (epoch ms — for paging). Use when reasoning about 'why does this agent behave this way?' or auditing recent changes. Accepts either { agentId } or { agentName }.",
     "catalogDescription": "Inspect a pod's audit log (who changed what, when).",
     "inputSchema": {
       "type": "object",
