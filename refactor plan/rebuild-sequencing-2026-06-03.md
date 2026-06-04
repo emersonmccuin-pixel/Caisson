@@ -41,7 +41,7 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 | P5 ✅ | **FD-2 spike — shared HTTP tools server. PASSED 6/6, 2026-06-03.** Shared-HTTP WINS: identity via per-session mcp.json headers (`extra.requestInfo`) · turn-1 race gone (`deferred_tools_delta`) · concurrency clean · restart recovery ~5s via 404/-32001. Harness `labs/fd2-shared-http-mcp/` (re-run on every FD-22 version bump). Adoption rides P6. Bonus: caught + fixed the `encodeCwdForClaude` dot-divergence stall bug. | MUST land before P6: if shared-HTTP wins, Engine sessions spawn without per-session messengers — deciding after the orchestrator migration means migrating twice. | FD-2 |
 | P6 ✅ | **Step 4 — orchestrator → Engine. DONE 2026-06-04.** Slices 0–3 live-verified incl. packaged: FD-2 shared-HTTP adopted (Slice 0) · persistent-interactive policy (Slice 1) · THE SWAP, ☠ interactive-session.ts (Slice 2) · interrupt/alongside/sessions/packaged gauntlet + interrupt-wedge fix (Slice 3). Scope: `step4-orchestrator-engine-scope-2026-06-04.md`. | Needs P4. | FD-2, FD-18 |
 | P7 ✅ | **Modals DELETE. DONE 2026-06-04** (with S2 same day — handoffs live-verified FIRST: workflow/agent/setup all green through chat). Deleted: 3 modal paths web+server, transient routes, ProjectRuntime transient block, draft store + `pc_save/read_workflow_draft` (53→51 tools), setup-wizard scaffold+template. Banned-resurrection set grew the names. Scope: `s2-authoring-handoffs-scope-2026-06-04.md`. | Deletion, not migration. | FD-21 |
-| P8 | **Step 6 — converge the primitive.** Delete `PtySession`, banner-regex, file-watching, reattach field. One state machine, one ready-detector, one transcript reader. **Zero PtySession constructors remain in apps/server after P7 — pure @pc/runtime deletion.** | Needs P6 + P7 ✅ (no callers left). | FD-12 |
+| P8 ✅ | **Step 6 — converge the primitive. DONE 2026-06-04.** ☠ pty-session.ts whole (PtySession · `terminalBufferLooksReady` banner-regex · stop-marker/events `watchFile` pair · stripAnsi · SessionState) + `TimedBracketedPasteQueue` + dead `AgentRun.reattach` field/lifecycle + `registry.reattach()`. `JsonlReplayMeta`/`Source` rehomed to jsonl-tailer. ONE primitive: LowLevelSpawn+AgentRun · ReadyGate · JsonlTailer · echo-ack. Banned-resurrection grew the names. Live: chat e2e + worker dispatch completed on the converged code. (Bisect note: a smoke "stall" turned out to be the model skipping `pc_submit_deliverable` on a degenerate one-word task — pre-existing compliance edge, logged in FD backlog, NOT a regression.) | Needs P6 + P7 ✅. | FD-12 |
 | P9 | **Step 8 — retire inference; FD-17 timeout ladder.** Idle-kill dies; silence escalates (badge → verify-alive → notify orchestrator → kill only on wall-clock/confirmed-dead). | Needs the one lifecycle (P8) so the ladder is built once. | FD-17 |
 
 ---
@@ -80,10 +80,12 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 
 ## The near-term picture (what actually happens next)
 
-**P6 ✅ + S2 ✅ + P7 ✅ all closed 2026-06-04.** Authoring flows through the orchestrator chat;
-the modal subsystem is gone. Next candidates, parallel-safe: **P8 Step 6 converge primitive**
-(now a pure deletion) · M3 diary-as-truth · M4 mailbox/agent_inbox drop · sync-invoke DELETE ·
-FD-20 Patterns design pass. Also logged: ask-trips-watchdog engine finding (FD backlog → P9/FD-17).
+**P6 ✅ + S2 ✅ + P7 ✅ + P8 ✅ all closed 2026-06-04.** Authoring flows through the orchestrator
+chat; the modal subsystem is gone; the session primitive is ONE (LowLevelSpawn+AgentRun /
+ReadyGate / JsonlTailer / echo-ack). **Track P remainder: P9 only** (Step 8 — FD-17 timeout
+ladder; the ask-trips-watchdog + deliverable-skip findings both land there). Next candidates,
+parallel-safe: M3 diary-as-truth · M4 mailbox/agent_inbox drop · sync-invoke DELETE · FD-20
+Patterns design pass · P9.
 
 Next up, parallel-safe, in value order:
 

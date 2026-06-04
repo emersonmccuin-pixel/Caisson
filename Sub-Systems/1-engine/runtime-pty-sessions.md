@@ -1,7 +1,19 @@
 # Runtime — PTY & Session Primitives
 
+> ## ✅ STEP 6 CONVERGED — P8, 2026-06-04
+> **The primitive is ONE now.** `PtySession` ☠ deleted (with `terminalBufferLooksReady`
+> banner-regex, the stop-marker/events `watchFile` pair, `stripAnsi`, `SessionState`,
+> `TimedBracketedPasteQueue`, and the dead `AgentRun.reattach` field +
+> `reattachLifecycle()` + `registry.reattach()`). `InteractiveSession` died in Step-4
+> Slice 2; the modals in P7. What remains: **`LowLevelSpawn` + `AgentRun`** (one state
+> machine), **`ReadyGate`** (one ready-detector), **`JsonlTailer`** (one transcript
+> reader), **echo-ack** (one send protocol). `JsonlReplayMeta`/`JsonlReplaySource`
+> moved to `jsonl-tailer.ts`. Banned-resurrection gate covers the names. Live-verified:
+> chat e2e + worker dispatch completed on the converged primitive. Sections below
+> describing the three-wrapper world are the historical snapshot (2026-06-03).
+
 > **Role:** Engine (target) — cross-cutting today (Brain + Engine both own sessions)
-> **Status:** as-built snapshot — 2026-06-03
+> **Status:** historical snapshot — 2026-06-03 (see Step-6 banner above)
 > **Code anchors:**
 > `packages/runtime/src/low-level-spawn.ts` · `packages/runtime/src/pty-session.ts` · `packages/runtime/src/interactive-session.ts` · `packages/runtime/src/ready-gate.ts` · `packages/runtime/src/send-protocol.ts` · `packages/runtime/src/jsonl-tailer.ts` · `packages/runtime/src/ansi.ts` · `packages/runtime/src/env-scrub.ts` · `packages/runtime/src/claude-resolver.ts` · `packages/runtime/src/path-resolver.ts` · `packages/runtime/src/node-launcher.ts` · `packages/runtime/src/chat-policy.ts` · `packages/runtime/src/worktree.ts`
 

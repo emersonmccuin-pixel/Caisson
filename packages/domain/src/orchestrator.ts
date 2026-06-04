@@ -1,7 +1,6 @@
 // OrchestratorSession domain type. One per project; tracks the per-project
-// PtySession lifecycle. Currently scaffolded for Slice 7 (multi-tenant) —
-// today's rig spawns a singleton PtySession on first WS connect, but the
-// table captures the per-project shape needed for the multi-project pivot.
+// chat-session lifecycle (an Engine-owned host run behind the server's
+// OrchestratorHostSession adapter since Step 4).
 
 import type { ULID } from './ulid.ts';
 
@@ -30,7 +29,7 @@ export interface OrchestratorSession {
   endedAt: number | null;
   deletedAt: number | null;
   /** Absolute path of CC's per-session JSONL file (`~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`).
-   *  Discovered after the PtySession spawns; persisted so resume can re-attach
+   *  Discovered after the session spawns; persisted so resume can re-attach
    *  to the same file with the cursor below. */
   jsonlPath: string | null;
   /** Line count of CC's JSONL we've consumed. Persisted so a server restart

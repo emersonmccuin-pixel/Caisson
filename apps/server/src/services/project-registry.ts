@@ -76,7 +76,7 @@ export class ProjectRegistry {
     if (runtime) runtime.refresh(project);
   }
 
-  /** Drop a runtime (e.g. on soft-delete). Kills its PtySession + clears caches. */
+  /** Drop a runtime (e.g. on soft-delete). Kills its chat session + clears caches. */
   remove(projectId: ULID): void {
     const runtime = this.runtimes.get(projectId);
     if (!runtime) return;

@@ -94,6 +94,14 @@ const BANNED_RESURRECTION = [
   'getWorkflowBuilderDraft',
   'pc_save_workflow_draft',
   'pc_read_workflow_draft',
+  // P8 (Step 6): the primitive converged — PtySession + its banner-regex
+  // ready detector + the timing-guess sender + the dead AgentRun reattach
+  // lane are deleted. LowLevelSpawn/AgentRun + ReadyGate + echo-ack are the
+  // ONE spawn/ready/send path.
+  'PtySession',
+  'terminalBufferLooksReady',
+  'TimedBracketedPasteQueue',
+  'reattachLifecycle',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 

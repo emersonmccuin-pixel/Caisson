@@ -10,10 +10,10 @@ export interface ChatSurfaceProps {
   events: WsEnvelope[];
   /** Project id - needed for AskCard reply POST + ApprovalBubble POST. */
   projectId: string;
-  /** Current session id (orchestrator PtySession ULID, or null when unknown).
-   *  Used to filter `ask` envelopes so transient-session asks don't bleed in. */
+  /** Current session id (orchestrator session ULID, or null when unknown).
+   *  Used to scope `ask` envelopes to this session. */
   currentSessionId: string | null;
-  /** Composer send. Wrappers wire to WS (orchestrator) or HTTP (agent-designer). */
+  /** Composer send. The orchestrator wrapper wires this to the WS `send`. */
   onSend: (text: string, clientMessageId: string) => boolean;
   /** Composer interrupt. */
   onInterrupt: () => boolean;

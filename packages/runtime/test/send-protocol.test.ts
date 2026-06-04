@@ -6,11 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  sendBracketedPaste,
-  TimedBracketedPasteQueue,
-  type SendDeps,
-} from '../src/send-protocol.ts';
+import { sendBracketedPaste, type SendDeps } from '../src/send-protocol.ts';
 
 interface FakeDeps extends SendDeps {
   writes: string[];
@@ -37,35 +33,6 @@ function makeDeps(opts: { exited?: boolean } = {}): FakeDeps {
       exited = v;
     },
   } as unknown as FakeDeps;
-}
-
-function makeManualTimers() {
-  type Handle = ReturnType<typeof setTimeout>;
-  const timers: Array<{ id: Handle; cb: () => void; ms: number; cleared: boolean }> = [];
-  let nextId = 1;
-  return {
-    setTimeout(cb: () => void, ms: number): Handle {
-      const id = nextId++ as unknown as Handle;
-      timers.push({ id, cb, ms, cleared: false });
-      return id;
-    },
-    clearTimeout(handle: Handle): void {
-      const timer = timers.find((t) => t.id === handle);
-      if (timer) timer.cleared = true;
-    },
-    runNext(): number {
-      const timer = timers.find((t) => !t.cleared);
-      if (!timer) throw new Error('no active timer');
-      timer.cleared = true;
-      timer.cb();
-      return timer.ms;
-    },
-    runAll(): void {
-      while (timers.some((t) => !t.cleared)) {
-        this.runNext();
-      }
-    },
-  };
 }
 
 test('echo-ack: paste + echo lands → Enter sent → ok', async () => {
@@ -210,108 +177,4 @@ test('echo-ack: probe is anchored to the post-write tail', async () => {
   assert.equal(result, 'echo-timeout');
   assert.equal(deps.writes[deps.writes.length - 1], '\x1b');
   assert.ok(!deps.writes.includes('\r'));
-});
-
-test('timed queue serializes rapid paste/Enter pairs', () => {
-  const timers = makeManualTimers();
-  const writes: string[] = [];
-  let submitted = 0;
-  const queue = new TimedBracketedPasteQueue(
-    {
-      write: (bytes) => writes.push(bytes),
-      isExited: () => false,
-      onSubmitted: () => submitted++,
-      setTimeout: timers.setTimeout,
-      clearTimeout: timers.clearTimeout,
-    },
-    { submitDelayMs: 500, drainGapMs: 50 },
-  );
-
-  assert.equal(queue.enqueue('sup'), 'queued');
-  assert.equal(queue.enqueue('Hello?'), 'queued');
-  assert.deepEqual(writes, ['\x1b[200~sup\x1b[201~']);
-
-  assert.equal(timers.runNext(), 500);
-  assert.deepEqual(writes, ['\x1b[200~sup\x1b[201~', '\r']);
-  assert.equal(submitted, 1);
-
-  assert.equal(timers.runNext(), 50);
-  assert.deepEqual(writes, [
-    '\x1b[200~sup\x1b[201~',
-    '\r',
-    '\x1b[200~Hello?\x1b[201~',
-  ]);
-
-  assert.equal(timers.runNext(), 500);
-  assert.deepEqual(writes, [
-    '\x1b[200~sup\x1b[201~',
-    '\r',
-    '\x1b[200~Hello?\x1b[201~',
-    '\r',
-  ]);
-  assert.equal(submitted, 2);
-});
-
-test('timed queue preserves drain gap for sends added during gap', () => {
-  const timers = makeManualTimers();
-  const writes: string[] = [];
-  const queue = new TimedBracketedPasteQueue(
-    {
-      write: (bytes) => writes.push(bytes),
-      isExited: () => false,
-      setTimeout: timers.setTimeout,
-      clearTimeout: timers.clearTimeout,
-    },
-    { submitDelayMs: 500, drainGapMs: 50 },
-  );
-
-  queue.enqueue('first');
-  queue.enqueue('second');
-  assert.equal(timers.runNext(), 500);
-  assert.deepEqual(writes, ['\x1b[200~first\x1b[201~', '\r']);
-
-  queue.enqueue('third');
-  assert.deepEqual(writes, ['\x1b[200~first\x1b[201~', '\r']);
-
-  assert.equal(timers.runNext(), 50);
-  assert.deepEqual(writes, [
-    '\x1b[200~first\x1b[201~',
-    '\r',
-    '\x1b[200~second\x1b[201~',
-  ]);
-});
-
-test('timed queue clear cancels pending Enter and queued sends', () => {
-  const timers = makeManualTimers();
-  const writes: string[] = [];
-  let submitted = 0;
-  const queue = new TimedBracketedPasteQueue(
-    {
-      write: (bytes) => writes.push(bytes),
-      isExited: () => false,
-      onSubmitted: () => submitted++,
-      setTimeout: timers.setTimeout,
-      clearTimeout: timers.clearTimeout,
-    },
-    { submitDelayMs: 500, drainGapMs: 50 },
-  );
-
-  queue.enqueue('first');
-  queue.enqueue('second');
-  queue.clear();
-  timers.runAll();
-
-  assert.deepEqual(writes, ['\x1b[200~first\x1b[201~']);
-  assert.equal(submitted, 0);
-});
-
-test('timed queue rejects enqueue after exit', () => {
-  const writes: string[] = [];
-  const queue = new TimedBracketedPasteQueue({
-    write: (bytes) => writes.push(bytes),
-    isExited: () => true,
-  });
-
-  assert.equal(queue.enqueue('lost'), 'exited');
-  assert.deepEqual(writes, []);
 });

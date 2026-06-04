@@ -658,6 +658,12 @@ These came up and need their own entries once we talk them through:
   not be killed for silence. Same exposure for `idleMs` mid-run. **This is the FD-17 class** —
   the escalate-don't-kill ladder (P9) is the fix; an interim rule worth considering there: a
   registered pending ask suspends the run's watchdogs until answered.
+  **Sibling finding (P8 smoke, same day):** a worker that ends its turn WITHOUT calling
+  `pc_submit_deliverable` idles to death the same way — observed when a degenerate verbatim
+  task ("reply with exactly one word: marco") led the writer to just type the word and stop
+  (a realistic brief completed fine in ~18s). The deliverable-is-the-done-signal model depends
+  on prompt compliance; the FD-17 ladder's verify-alive step (or a turn-ended-without-deliverable
+  nudge) should catch this class instead of a silent 300s kill.
 - ⚪ **Work Item vs Work Contract model** — what each is, how they relate (goal vs. assignment), and
   the rule for a contract with no work item. *(See `0-store/contracts-system.md` and `3-product/work-items.md`.)*
   Also owns: **passing work down the line** in workflows (hand-off control lives in the contract) —

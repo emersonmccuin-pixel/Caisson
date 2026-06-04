@@ -49,7 +49,7 @@ export interface JsonlSweepOptions {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Default root: `~/.claude/projects/`. Matches `PtySession.claudeProjectsDir`. */
+/** Default root: `~/.claude/projects/`. Matches `claudeProjectsRoot()` (path-resolver). */
 export function defaultClaudeProjectsDir(): string {
   return join(homedir(), '.claude', 'projects');
 }

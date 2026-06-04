@@ -1,9 +1,8 @@
-// ProjectRuntime — per-project bundle of PtySession + DagExecutor +
-// WorktreeService. Replaces the singleton wiring that lived in apps/server's
-// bootstrap during the rig phase. One instance per active project; held by
-// ProjectRegistry.
+// ProjectRuntime — per-project bundle of the orchestrator chat session
+// (OrchestratorHostSession, an Engine-owned host run) + DagExecutor +
+// WorktreeService. One instance per active project; held by ProjectRegistry.
 //
-// Lazy spawn: the PtySession + DagExecutor are only constructed on first
+// Lazy spawn: the chat session + DagExecutor are only constructed on first
 // access. Lets the server boot with N projects in the DB without spawning N
 // claude.exe processes — each waits for a UI subscriber.
 

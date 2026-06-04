@@ -1,10 +1,9 @@
 // Bracketed-paste + echo-ack send.
 //
-// Production today uses a 500ms setTimeout between paste and `\r`
-// (pty-session.ts:517, labeled "conservative"). The rebuild replaces this
-// with the positive ack — the labs anti-criteria (D7) prohibits timing-
-// heuristic gates and the labs scenarios proved echo-ack reliable across
-// 45+ runs.
+// The positive ack replaced the old 500ms paste-then-Enter timing guess —
+// the labs anti-criteria (D7) prohibits timing-heuristic gates and the labs
+// scenarios proved echo-ack reliable across 45+ runs. (The timing-guess
+// sender died with PtySession in Step 6.)
 //
 // Send sequence:
 //   1. Write `\x1b[200~<body>\x1b[201~` to the PTY.
@@ -55,95 +54,9 @@ const ECHO_CLEAR_SETTLE_MS = 40;
 const defaultSleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export type TimedPasteQueueResult = 'queued' | 'exited';
-
-export interface TimedPasteQueueDeps {
-  write: (bytes: string) => void;
-  isExited: () => boolean;
-  onSubmitted?: () => void;
-  setTimeout?: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
-  clearTimeout?: (handle: ReturnType<typeof setTimeout>) => void;
-}
-
-export interface TimedPasteQueueOptions {
-  submitDelayMs?: number;
-  drainGapMs?: number;
-}
-
-const DEFAULT_TIMED_SUBMIT_DELAY_MS = 500;
-const DEFAULT_TIMED_DRAIN_GAP_MS = 50;
-
-/**
- * Legacy interactive PTY sender.
- *
- * PtySession cannot yet await echo-ack the way LowLevelSpawn does, but it must
- * still serialize paste/Enter pairs. Without serialization, two sends inside
- * the 500 ms paste window merge in Claude's composer while the UI records two
- * separate pending prompts.
- */
-export class TimedBracketedPasteQueue {
-  private queue: string[] = [];
-  private inFlight = false;
-  private submitTimer: ReturnType<typeof setTimeout> | null = null;
-  private drainTimer: ReturnType<typeof setTimeout> | null = null;
-  private submitDelayMs: number;
-  private drainGapMs: number;
-  private setTimeoutImpl: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
-  private clearTimeoutImpl: (handle: ReturnType<typeof setTimeout>) => void;
-
-  constructor(
-    private deps: TimedPasteQueueDeps,
-    opts: TimedPasteQueueOptions = {},
-  ) {
-    this.submitDelayMs = opts.submitDelayMs ?? DEFAULT_TIMED_SUBMIT_DELAY_MS;
-    this.drainGapMs = opts.drainGapMs ?? DEFAULT_TIMED_DRAIN_GAP_MS;
-    this.setTimeoutImpl = deps.setTimeout ?? ((cb, ms) => setTimeout(cb, ms));
-    this.clearTimeoutImpl = deps.clearTimeout ?? ((handle) => clearTimeout(handle));
-  }
-
-  enqueue(body: string): TimedPasteQueueResult {
-    if (this.deps.isExited()) return 'exited';
-    this.queue.push(body);
-    this.drain();
-    return 'queued';
-  }
-
-  clear(): void {
-    this.queue = [];
-    this.inFlight = false;
-    if (this.submitTimer) {
-      this.clearTimeoutImpl(this.submitTimer);
-      this.submitTimer = null;
-    }
-    if (this.drainTimer) {
-      this.clearTimeoutImpl(this.drainTimer);
-      this.drainTimer = null;
-    }
-  }
-
-  private drain(): void {
-    if (this.inFlight || this.drainTimer || this.deps.isExited()) return;
-    const body = this.queue.shift();
-    if (body === undefined) return;
-
-    this.inFlight = true;
-    this.deps.write(`\x1b[200~${body}\x1b[201~`);
-    this.submitTimer = this.setTimeoutImpl(() => {
-      this.submitTimer = null;
-      if (!this.deps.isExited()) {
-        this.deps.write('\r');
-        this.deps.onSubmitted?.();
-      }
-      this.inFlight = false;
-      if (this.queue.length > 0 && !this.deps.isExited()) {
-        this.drainTimer = this.setTimeoutImpl(() => {
-          this.drainTimer = null;
-          this.drain();
-        }, this.drainGapMs);
-      }
-    }, this.submitDelayMs);
-  }
-}
+// ☠ Step 6 (P8, 2026-06-04) — `TimedBracketedPasteQueue` (the 500ms
+// timing-guess sender PtySession used) DELETED with PtySession. Echo-ack
+// (`sendBracketedPaste` below) is the one send protocol.
 
 function echoMatched(body: string, tail: string): boolean {
   const normalizedBody = collapseAnsiToWhitespace(body);

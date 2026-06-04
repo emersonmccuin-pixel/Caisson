@@ -204,6 +204,24 @@ export interface JsonlEventMeta {
   sourceCursor: number;
 }
 
+// Replay envelope metadata for re-persisted JSONL events (the orchestrator
+// adapter's server-side replay + the runtime-host WS payloads). Moved here
+// from pty-session.ts when Step 6 deleted it — the shape describes tailed
+// JSONL rows, so the tailer module owns it.
+
+export interface JsonlReplaySource {
+  kind: 'claude-jsonl';
+  cursor: number | null;
+}
+
+export interface JsonlReplayMeta {
+  id: string;
+  sessionId: string;
+  seq: number;
+  kind: JsonlEvent['kind'];
+  source: JsonlReplaySource;
+}
+
 /**
  * One tailer = one JSONL file. Emits:
  *   'event' (JsonlEvent) — one per canonical event derived from a line

@@ -12,8 +12,8 @@
 //      dependency for interactive readiness.
 //
 // Subagents deliberately do not use `--remote-control`, so their gate requires
-// only the first two signals. The orchestrator can require the remote-control
-// banner when launched through PtySession instead of this primitive.
+// only the first two signals. Step 6 (P8): this is THE one ready-detector —
+// PtySession and its banner-regex (`terminalBufferLooksReady`) are deleted.
 //
 // The fresh and resume orderings differ — fresh often emits composer-ready
 // first, resume often emits handshake first. The gate doesn't enforce ordering;

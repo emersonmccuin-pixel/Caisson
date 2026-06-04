@@ -80,17 +80,17 @@ live/foundational. The genuinely-dead in-process branch is gated behind a test r
 | `AgentRunState` (agent-run.ts) | **KEEP** (the one primitive) | HIGH | Add policy flags (persistent/one-shot/ephemeral, awaited, interactive, pausable). |
 | `SpawnState` (low-level-spawn.ts) | **KEEP-internal** | HIGH | Stays internal to LowLevelSpawn; not a public FSM. |
 | `InteractiveSessionState` (interactive-session.ts) | **MERGE→AgentRun** | HIGH (V1) | LIVE — the orchestrator (`project-runtime.ts:104,501`). Becomes a `persistent,interactive` policy on the one primitive. |
-| `SessionState`/`PtySession` (pty-session.ts) | **DELETE** (after Step 5) | HIGH (V1) | LIVE today — the 3 modals (`project-runtime.ts:109,114,117`). Migrate to the Engine first, THEN delete. Not a free delete. |
-| reattach path: `AgentRun.reattach` field + `reattachLifecycle()` (agent-run.ts:120,499) | **DELETE in Step 6 pass** | HIGH (re-confirmed 06-03) | Field+method DEAD — no caller sets `reattach`. ⚠️ NOT the same as the LIVE `reattachAgentRunsOnBoot` module (skeptic confused them). Delete field+method only. |
+| `SessionState`/`PtySession` (pty-session.ts) | ☠ **DELETED 2026-06-04 (P8)** | HIGH (V1) | Modals died in P7 → file deleted whole. |
+| reattach path: `AgentRun.reattach` field + `reattachLifecycle()` | ☠ **DELETED 2026-06-04 (P8)** | HIGH | Field+method+`registry.reattach()` all cut. The LIVE `reattachAgentRunsOnBoot` module untouched. |
 
 ### Ready detection (target: ONE)
 | `ReadyGate` (ready-gate.ts) | **KEEP** | HIGH | Signal-based; the keeper. |
-| `terminalBufferLooksReady` banner regex (pty-session.ts) | **DELETE** (after Step 5) | HIGH (V1) | Duplicate of ReadyGate's init-complete check; dies with PtySession. |
+| `terminalBufferLooksReady` banner regex (pty-session.ts) | ☠ **DELETED 2026-06-04 (P8)** | HIGH (V1) | ReadyGate is the one detector. |
 
 ### Transcript reading (target: ONE)
 | `agent-run-jsonl-tailer.ts` (v2) | **KEEP** | HIGH | The agent-run *layer* (typed events). |
-| `jsonl-tailer.ts` (v1) | **KEEP** | HIGH (V6) | NOT legacy — it's the BASE layer: exports `JsonlEvent` + `JsonlTailer` used by low-level-spawn, pty-session, interactive-session, agent-run. v2 sits on top; not a replacement. |
-| PtySession file-watching (stop-marker + events file) | **DELETE** (after Step 5) | HIGH (V1) | Dies when modals migrate to the Engine. PtySession IS live today (3 modals) — migrate, then delete. |
+| `jsonl-tailer.ts` (v1) | **KEEP** | HIGH (V6) | NOT legacy — it's the BASE layer: exports `JsonlEvent` + `JsonlTailer` (+ `JsonlReplayMeta`/`Source` since P8) used by low-level-spawn + agent-run. v2 sits on top; not a replacement. |
+| PtySession file-watching (stop-marker + events file) | ☠ **DELETED 2026-06-04 (P8)** | HIGH (V1) | Died with pty-session.ts. |
 
 ### Completion detection (target: positive receipt + typed-failure backstops)
 | Deliverable receipt: `pc_submit_deliverable` → `run.complete()` / `complete-run` + `gateTerminalForDeliverable` (agent-run-settle.ts) | **KEEP** (sole "good done") | HIGH | The positive signal. |
@@ -193,11 +193,11 @@ Each row independently shippable. Risky moves after prereqs. `✅` = code alread
 | 5 | Step 3 Engine re-resolution | **✅ DONE 2026-06-04** — trace+refute found most of it already shipped (Step 2 HOLD + lock-rediscovery/hostId/lastSeq w/ tests); built the 2 real gaps: graceful `/events` end left the server silently deaf (now restarts via the S4 debounce; regression test) + a SECOND trunk-root hop-count in `claude-runtime-bundle.ts` broke EVERY dev agent dispatch since Step 7 (→ `server-root.ts`, the one derivation). Live: 2× mid-run host kills → respawn, auto-reconnect <10s, run `host-lost` ~30s + visible workflow fail + mailbox notify, next dispatch green; paused-gate survived respawn (FD-14); claude.exe dies with the host (ConPTY, no zombies). Deferred: host-lost resume → S5/FD-14 · JSONL backfill boot-only → M3 · pid-recycle accepted | 4 (need a respawn to test) | RECONNECT (host-connection suite) + ONE-ROOT ✅ | med |
 | 6 | Step 4 orchestrator→Engine | **✅ DONE 2026-06-04** — Slices 0–3 all live-verified incl. packaged (scope: `step4-orchestrator-engine-scope-2026-06-04.md`); ☠ interactive-session.ts; FD-2 shared-HTTP adopted (Slice 0) | 5 | ONE-TOOL-TRANSPORT + banned `InteractiveSession` ✅ | high |
 | 7 | ~~Step 5 modals→Engine~~ ☠ FD-21 | **✅ DELETED 2026-06-04** — S2 handoffs live-verified first (workflow/agent/setup all green through chat; scope: `s2-authoring-handoffs-scope-2026-06-04.md`), then the 3 modal paths + transient routes + draft store/tools + setup-wizard scaffold deleted outright; banned-resurrection set grew the transient names | 6 ✅ | banned-resurrection ✅ | med↓ |
-| 8 | Step 6 converge primitive | DELETE PtySession + banner-regex + file-watching + reattach field — **zero PtySession constructors remain in apps/server after row 7; now a pure @pc/runtime deletion** | 6,7 ✅ | ONE-TRANSCRIPT-READER / ONE-READY-DETECTOR / ONE-SPAWN-OWNER (full) | med↓ |
+| 8 | Step 6 converge primitive | **✅ DONE 2026-06-04** — ☠ pty-session.ts (PtySession, terminalBufferLooksReady banner-regex, watchFile pair, stripAnsi, SessionState) + TimedBracketedPasteQueue + dead AgentRun reattach field/lifecycle + registry.reattach(); JsonlReplayMeta/Source rehomed to jsonl-tailer; banned-resurrection grew the names. ONE primitive: LowLevelSpawn+AgentRun / ReadyGate / JsonlTailer / echo-ack. Live: chat e2e + worker dispatch green on the converged code | 6,7 ✅ | banned-resurrection (PtySession et al) ✅ | med↓ |
 | 9 | agent-inbox tables DELETE | refactor `inbox-drain.cjs` → mailbox, archive, drop tables | mailbox-stable + hook refactor | NO-INBOX-WRITE | med |
 | 10 | sync-invoke types DELETE | remove `PcInvokeAgentResultSync` + `wait` | — | self-guarding (compile) | low |
 | 11 | wi.body re-scope | KEEP; document dual purpose | — | $root.output round-trip | low |
 | 12 | workflow events = truth | route `appendEvent` through gateway/live_outbox | slice 3 | EVENTS-ARE-TRUTH | high |
 
-**Ready now (no prereq):** row 8 Step 6 converge primitive (rows 6+7 ✅ — pure deletion now) ·
-sync-invoke DELETE · wi.body re-scope.
+**Ready now (no prereq):** sync-invoke DELETE · wi.body re-scope. (Rows 1–8 ✅ — the whole
+process track Steps 1–7 is closed; Step 8/P9 timeout-ladder is the remaining north-star step.)

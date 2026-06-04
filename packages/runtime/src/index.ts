@@ -1,23 +1,18 @@
 // Section 25 — runtime barrel (post-Phase-E bare names).
 //
-// PtySession + legacy JsonlTailer survive cutover (orchestrator + interview
-// surfaces use them). The agent-system primitives (LowLevelSpawn, AgentRun,
-// AgentRunJsonlTailer) sit alongside as named exports.
+// ☠ Step 6 (P8, 2026-06-04) — PtySession DELETED (with terminalBufferLooksReady,
+// stripAnsi, SessionState, the stop-marker/events file-watching, and the dead
+// AgentRun reattach lane). ONE primitive remains: LowLevelSpawn + AgentRun
+// (ReadyGate is the one ready-detector; JsonlTailer the one transcript reader).
 
-export {
-  encodeCwdForClaude,
-  PtySession,
-  stripAnsi,
-  terminalBufferLooksReady,
-} from './pty-session.ts';
+export { JsonlTailer } from './jsonl-tailer.ts';
 export type {
+  JsonlEvent,
+  JsonlEventMeta,
   JsonlReplayMeta,
   JsonlReplaySource,
-  PtySessionOptions,
-  SessionState,
-} from './pty-session.ts';
-export { JsonlTailer } from './jsonl-tailer.ts';
-export type { JsonlEvent, JsonlEventMeta, JsonlTailerOptions } from './jsonl-tailer.ts';
+  JsonlTailerOptions,
+} from './jsonl-tailer.ts';
 
 export {
   attachWorktree,
@@ -107,8 +102,8 @@ export type {
 
 // ☠ Step-4 Slice 2 (2026-06-04) — InteractiveSession DELETED. The orchestrator
 // chat is an Engine-owned `persistent-interactive` AgentRun behind the
-// server's OrchestratorHostSession adapter; transient modals stay on
-// PtySession until P7 deletes them (FD-21).
+// server's OrchestratorHostSession adapter. (The transient modals followed in
+// P7, and PtySession itself in Step 6 — see header.)
 
 export { AgentRunJsonlTailer } from './agent-run-jsonl-tailer.ts';
 export type {
