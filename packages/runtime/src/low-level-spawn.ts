@@ -181,6 +181,8 @@ export class LowLevelSpawn extends EventEmitter {
   private readyReject: ((err: Error) => void) | null = null;
   private readyTimer: NodeJS.Timeout | null = null;
   private started = false;
+  /** Epoch-ms of the last PTY output chunk. Powers `awaitOutputQuiet`. */
+  private lastChunkAt = 0;
 
   constructor(input: LowLevelSpawnInput) {
     super();
@@ -290,6 +292,26 @@ export class LowLevelSpawn extends EventEmitter {
     return result;
   }
 
+  /** M7 live-fire fix ([[resume-needs-quiet-window]]) — resolve once the PTY
+   *  output stream has been quiet for `quietMs`. CC discards composer input
+   *  typed while it is still repainting (lab-isolated 2026-05-22: interactive
+   *  `--resume` needs ≥1500ms stdout quiet before input registers); callers
+   *  gate a resume send on this. Resolves `true` on quiet, `false` when
+   *  `maxWaitMs` elapses first (caller decides whether to send anyway) or the
+   *  PTY exits. */
+  async awaitOutputQuiet(quietMs: number, maxWaitMs: number): Promise<boolean> {
+    const startedAt = Date.now();
+    // Treat "no output yet" as quiet-from-spawn.
+    if (this.lastChunkAt === 0) this.lastChunkAt = startedAt;
+    for (;;) {
+      if (this.state === 'exited') return false;
+      const sinceChunk = Date.now() - this.lastChunkAt;
+      if (sinceChunk >= quietMs) return true;
+      if (Date.now() - startedAt >= maxWaitMs) return false;
+      await new Promise<void>((r) => setTimeout(r, Math.min(100, quietMs - sinceChunk)));
+    }
+  }
+
   /** Raw terminal input for xterm-style interactive use. This deliberately
    *  avoids the chat send protocol: no bracketed paste wrapper, no echo ack,
    *  no ready/busy state transition, and no prompt history accounting. */
@@ -381,6 +403,7 @@ export class LowLevelSpawn extends EventEmitter {
   // -- internals ------------------------------------------------------
 
   private onChunk(data: string): void {
+    this.lastChunkAt = Date.now();
     this.rawBuffer += data;
     if (this.transcriptStream) {
       try {

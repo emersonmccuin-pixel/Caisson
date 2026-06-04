@@ -105,6 +105,9 @@ export interface SpawnLike extends EventEmitter {
   start(): void;
   awaitReady(): Promise<ReadyTimestamps>;
   send(body: string, echoTimeoutMs?: number): Promise<SendResult>;
+  /** M7 fix — resolve when PTY output has been quiet `quietMs` (true) or
+   *  `maxWaitMs` elapsed (false). Optional so test fakes need not implement. */
+  awaitOutputQuiet?(quietMs: number, maxWaitMs: number): Promise<boolean>;
   writeRaw?(bytes: string): boolean;
   notifyMcpHandshake(): void;
   interrupt(): void;
@@ -180,6 +183,15 @@ export interface AgentRunInput {
    *  success (Section 18 V-4 lesson on Windows kill-isn't-synchronous).
    *  Default 5_000. */
   cancelGraceMs?: number;
+  /** M7 fix — PTY must be quiet this long before a resume send (CC discards
+   *  composer input typed mid-replay-repaint). Default 1_500. */
+  resumeQuietMs?: number;
+  /** M7 fix — cap on waiting for the quiet window (send anyway after this;
+   *  the receipt check still guards the outcome). Default 10_000. */
+  resumeQuietMaxWaitMs?: number;
+  /** M7 fix — deadline per attempt for the answer's user row to appear in
+   *  the JSONL (the positive receipt). Default 15_000. */
+  resumeReceiptTimeoutMs?: number;
 }
 
 export interface AgentRunDeps {
@@ -196,7 +208,13 @@ const DEFAULTS = {
   handshakeTimeoutMs: 60_000,
   readyTimeoutMs: 60_000,
   cancelGraceMs: 5_000,
+  resumeQuietMs: 1_500,
+  resumeQuietMaxWaitMs: 10_000,
+  resumeReceiptTimeoutMs: 15_000,
 };
+
+/** M7 fix — total sends attempted before a resume input is declared lost. */
+const RESUME_SEND_MAX_ATTEMPTS = 3;
 
 const defaultSpawnFactory: SpawnFactory = (input) => new LowLevelSpawn(input);
 
@@ -219,6 +237,12 @@ export class AgentRun extends EventEmitter {
   private started = false;
   private cancelling = false;
   private lastAssistantText: string | null = null;
+  /** Highest JSONL source cursor seen. Floors the resume receipt so a
+   *  replayed historical user row can't satisfy it. */
+  private lastJsonlCursorSeen = 0;
+  /** One-shot waiter for the resume positive receipt (a fresh jsonl-user
+   *  row). Resolved in onJsonlEvent. */
+  private resumeReceiptWaiter: { floor: number; resolve: () => void } | null = null;
   private turnState: AgentRunTurnState = 'busy';
   private readonly policy: AgentRunPolicy;
   private readonly deps: Required<AgentRunDeps>;
@@ -247,6 +271,11 @@ export class AgentRun extends EventEmitter {
         input.handshakeTimeoutMs ?? DEFAULTS.handshakeTimeoutMs,
       readyTimeoutMs: input.readyTimeoutMs ?? DEFAULTS.readyTimeoutMs,
       cancelGraceMs: input.cancelGraceMs ?? DEFAULTS.cancelGraceMs,
+      resumeQuietMs: input.resumeQuietMs ?? DEFAULTS.resumeQuietMs,
+      resumeQuietMaxWaitMs:
+        input.resumeQuietMaxWaitMs ?? DEFAULTS.resumeQuietMaxWaitMs,
+      resumeReceiptTimeoutMs:
+        input.resumeReceiptTimeoutMs ?? DEFAULTS.resumeReceiptTimeoutMs,
     };
     this.policy = input.policy ?? 'default';
     this.record = {
@@ -350,6 +379,22 @@ export class AgentRun extends EventEmitter {
   _resumeWithAnswer(answer: string): void {
     if (this.state !== 'paused') return;
     if (this.cancelling) return;
+    // M7 live-fire fix — the old "CC exits cleanly when paused" assumption is
+    // FALSE: interactive claude.exe sits at the composer after the ask turn.
+    // Kill the pre-pause child before the `--resume` spawn, or two processes
+    // hold one session (observed live 2026-06-04: orphan survived even
+    // pc_kill_agent_run, which only kills the current handle). The identity
+    // guards in runSpawnPhase keep this kill's exit event from misfiring
+    // onSpawnExit.
+    const prePause = this.spawn;
+    this.spawn = null;
+    if (prePause) {
+      try {
+        prePause.kill();
+      } catch {
+        /* already dead */
+      }
+    }
     this.record.pendingAskId = undefined;
     this.setState('spawning');
     this.record.spawningAt = this.deps.now();
@@ -484,13 +529,26 @@ export class AgentRun extends EventEmitter {
     const spawn = this.deps.spawnFactory(this.buildSpawnInput(mode));
     this.spawn = spawn;
 
-    spawn.on('jsonl-event', (ev: JsonlEvent, meta?: JsonlEventMeta) =>
-      this.onJsonlEvent(ev, meta),
-    );
-    spawn.on('exit', (code, signal) => this.onSpawnExit(code, signal));
-    spawn.on('state', (s: SpawnState) => this.emit('spawn-state', s));
-    spawn.on('chunk', (text: string) => this.emit('chunk', text));
-    spawn.on('ready', (ts: ReadyTimestamps) => this.emit('ready', ts));
+    // Identity-guarded handlers (M7 fix): a replaced spawn (the pre-pause
+    // child killed by _resumeWithAnswer) must not feed events into the run —
+    // its kill-driven exit would otherwise misfire onSpawnExit as
+    // 'unexpected-exit' while the resume spawn is mid-flight.
+    const current = () => this.spawn === spawn;
+    spawn.on('jsonl-event', (ev: JsonlEvent, meta?: JsonlEventMeta) => {
+      if (current()) this.onJsonlEvent(ev, meta);
+    });
+    spawn.on('exit', (code, signal) => {
+      if (current()) this.onSpawnExit(code, signal);
+    });
+    spawn.on('state', (s: SpawnState) => {
+      if (current()) this.emit('spawn-state', s);
+    });
+    spawn.on('chunk', (text: string) => {
+      if (current()) this.emit('chunk', text);
+    });
+    spawn.on('ready', (ts: ReadyTimestamps) => {
+      if (current()) this.emit('ready', ts);
+    });
 
     spawn.start();
 
@@ -521,10 +579,30 @@ export class AgentRun extends EventEmitter {
 
     if (inputBody !== undefined && inputBody.length > 0) {
       try {
-        const sendResult = await spawn.send(inputBody);
-        if (sendResult !== 'ok') {
-          this.toTerminal('failed', 'send-failed', `send: ${sendResult}`);
-          return;
+        if (mode === 'resume') {
+          // M7 live-fire fix — a resume send raced CC's replay repaint: the
+          // echo-ack passed (keystrokes echo immediately) but CC discarded the
+          // composer on a later repaint, leaving the answer un-submitted and
+          // the run wedged 'running' forever (2/2 repro 2026-06-04;
+          // [[resume-needs-quiet-window]], lab-isolated 2026-05-22). Quiet-gate
+          // the send, then require the POSITIVE receipt — the answer's user
+          // row in the JSONL — with bounded re-sends. Silence is a typed
+          // failure, never a wedge.
+          const landed = await this.sendResumeInputWithReceipt(spawn, inputBody);
+          if (!landed) {
+            this.toTerminal(
+              'failed',
+              'send-failed',
+              `resume-input-lost: answer never appeared as a JSONL user row after ${RESUME_SEND_MAX_ATTEMPTS} sends`,
+            );
+            return;
+          }
+        } else {
+          const sendResult = await spawn.send(inputBody);
+          if (sendResult !== 'ok') {
+            this.toTerminal('failed', 'send-failed', `send: ${sendResult}`);
+            return;
+          }
         }
       } catch (err) {
         this.toTerminal('failed', 'send-failed', stringify(err));
@@ -539,6 +617,59 @@ export class AgentRun extends EventEmitter {
     // orchestrator, never a 90s execution.
     // From here, lifecycle is event-driven via onJsonlEvent / onSpawnExit /
     // cancel / _markPaused.
+  }
+
+  /** M7 live-fire fix — deliver a resume answer with a POSITIVE receipt.
+   *  Per attempt: wait for the PTY quiet window (CC discards composer input
+   *  typed mid-replay-repaint), send via echo-ack, then require the answer's
+   *  user row to appear in the JSONL past the pre-send cursor floor. Echo-ack
+   *  alone is insufficient on resume — the echo arrives while CC is still
+   *  repainting and the Enter is dropped (observed 2/2 live 2026-06-04).
+   *  Returns true once the receipt lands; false after all attempts. A failed
+   *  echo already double-Escape-clears the composer (send-protocol), and an
+   *  eaten send leaves it empty, so re-pasting is safe. */
+  private async sendResumeInputWithReceipt(
+    spawn: SpawnLike,
+    body: string,
+  ): Promise<boolean> {
+    for (let attempt = 1; attempt <= RESUME_SEND_MAX_ATTEMPTS; attempt++) {
+      if (this.cancelling || this.isTerminal()) return false;
+      await spawn.awaitOutputQuiet?.(
+        this.timeouts.resumeQuietMs,
+        this.timeouts.resumeQuietMaxWaitMs,
+      );
+
+      const floor = this.lastJsonlCursorSeen;
+      const receipt = new Promise<boolean>((resolve) => {
+        this.resumeReceiptWaiter = { floor, resolve: () => resolve(true) };
+      });
+
+      const sendResult = await spawn.send(body);
+      if (sendResult === 'exited') {
+        this.resumeReceiptWaiter = null;
+        return false;
+      }
+      if (sendResult !== 'ok') {
+        // echo-timeout — composer cleared by the protocol; retry.
+        this.resumeReceiptWaiter = null;
+        continue;
+      }
+
+      let receiptTimer: NodeJS.Timeout | undefined;
+      const landed = await Promise.race([
+        receipt,
+        new Promise<boolean>((resolve) => {
+          receiptTimer = setTimeout(
+            () => resolve(false),
+            this.timeouts.resumeReceiptTimeoutMs,
+          );
+        }),
+      ]);
+      if (receiptTimer) clearTimeout(receiptTimer);
+      if (landed) return true;
+      this.resumeReceiptWaiter = null;
+    }
+    return false;
   }
 
   /** Build the LowLevelSpawn input. Caller (Session 9 wiring) is expected to
@@ -575,11 +706,23 @@ export class AgentRun extends EventEmitter {
 
   private onJsonlEvent(ev: JsonlEvent, meta?: JsonlEventMeta): void {
     this.emit('jsonl-event', ev, meta);
+    if (meta && meta.sourceCursor > this.lastJsonlCursorSeen) {
+      this.lastJsonlCursorSeen = meta.sourceCursor;
+    }
     // G1 — turn boundaries: a user row (typed send / queued command popping)
     // opens a turn; a turn-end closes it.
     const kind = (ev as { kind?: unknown }).kind;
-    if (kind === 'jsonl-user') this.setTurnState('busy');
-    else if (kind === 'jsonl-turn-end') this.setTurnState('ready');
+    if (kind === 'jsonl-user') {
+      this.setTurnState('busy');
+      // M7 fix — the resume positive receipt: a user row BEYOND the pre-send
+      // cursor floor proves the answer landed as a real turn. (No meta = test
+      // fake; accept arrival-order.)
+      const waiter = this.resumeReceiptWaiter;
+      if (waiter && (!meta || meta.sourceCursor > waiter.floor)) {
+        this.resumeReceiptWaiter = null;
+        waiter.resolve();
+      }
+    } else if (kind === 'jsonl-turn-end') this.setTurnState('ready');
     // Capture last assistant text for the completed-state result field.
     const text = extractAssistantText(ev);
     if (text !== null) this.lastAssistantText = text;
