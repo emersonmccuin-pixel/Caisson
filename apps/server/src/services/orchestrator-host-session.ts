@@ -144,6 +144,14 @@ export class OrchestratorHostSession extends EventEmitter {
 
   private nextReplaySeq = 1;
   private maxPersistedCursor = 0;
+  /** Frozen at construct = the replay file's high-water cursor. Wire events at
+   *  or below it are pre-restart frames replayed from the host's event buffer
+   *  — already persisted, already in the UI. CRITICAL: this must NOT advance
+   *  with live events — one provider row expands into MULTIPLE events sharing
+   *  one cursor (usage + turn-end), and a live-advancing threshold eats every
+   *  sibling after the first (live-fire bug 2026-06-04: the chat's reply text,
+   *  which rides on turn-end, never reached the UI). */
+  private readonly dedupCursorFloor: number;
 
   private transcriptOffset = 0;
   private transcriptPoller: NodeJS.Timeout | null = null;
@@ -180,6 +188,7 @@ export class OrchestratorHostSession extends EventEmitter {
     const replayState = scanReplayFile(this.input.replayEventsPath);
     this.nextReplaySeq = replayState.nextSeq;
     this.maxPersistedCursor = replayState.maxCursor;
+    this.dedupCursorFloor = replayState.maxCursor;
   }
 
   /** Begin the lifecycle. Idempotent — throws on second call. */
@@ -434,6 +443,9 @@ export class OrchestratorHostSession extends EventEmitter {
       }
       case 'run-state':
         if (event.run.runId !== this.runId) return;
+        // After close() the subscription only exists to observe the terminal
+        // (settled) — state flaps from the dying run must not resurrect us.
+        if (this.closing) return;
         this.applySnapshot(event.run);
         return;
       case 'run-terminal':
@@ -442,6 +454,9 @@ export class OrchestratorHostSession extends EventEmitter {
         return;
       case 'run-jsonl': {
         if (event.runId !== this.runId) return;
+        // A closed adapter must not keep writing the replay file — the
+        // successor session owns it now (and scanned its floor at construct).
+        if (this.closing || this.terminalReached) return;
         this.onRunJsonl(event);
         return;
       }
@@ -456,12 +471,15 @@ export class OrchestratorHostSession extends EventEmitter {
 
   private onRunJsonl(event: Extract<AgentHostEvent, { type: 'run-jsonl' }>): void {
     const cursor = typeof event.cursor === 'number' ? event.cursor : null;
-    // Dedup: after an API restart the host's event buffer replays recent
-    // frames; anything at or below the replay log's high-water cursor is
-    // already persisted AND already in the UI's replay — drop it.
-    if (cursor !== null && cursor <= this.maxPersistedCursor) return;
+    // Dedup ONLY against the construct-time floor (pre-restart frames replayed
+    // from the host's event buffer). Live events legitimately share cursors —
+    // one provider row → tool-call + usage + turn-end — so the threshold must
+    // never advance mid-stream.
+    if (cursor !== null && cursor <= this.dedupCursorFloor) return;
     const replay = this.persistJsonlEvent(event.event, cursor, event.kind);
-    if (cursor !== null) this.maxPersistedCursor = cursor;
+    if (cursor !== null && cursor > this.maxPersistedCursor) {
+      this.maxPersistedCursor = cursor;
+    }
     this.emit('jsonl-event', event.event, replay);
   }
 
@@ -525,6 +543,7 @@ export class OrchestratorHostSession extends EventEmitter {
   private applySnapshot(snapshot: AgentHostRunSnapshot): void {
     if (snapshot.state === 'failed') {
       this.markTerminalReached();
+      if (this.closing) return; // close() already presented 'exited'
       const reason =
         snapshot.terminalResult?.failureReason ??
         snapshot.terminalResult?.failureCause ??

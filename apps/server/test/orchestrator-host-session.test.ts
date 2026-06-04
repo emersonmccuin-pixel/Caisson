@@ -235,6 +235,17 @@ test('send routes to the host; jsonl events persist replay meta + dedup by curso
     kind: 'jsonl-user',
     source: 'claude-jsonl',
   });
+  // ONE provider row expands into usage + turn-end SHARING a cursor — both
+  // must flow (live-fire bug 2026-06-04: a live-advancing dedup threshold ate
+  // the turn-end, so the chat's reply text never reached the UI).
+  port.emitEvent({
+    type: 'run-jsonl',
+    runId,
+    event: { kind: 'jsonl-usage', inputTokens: 1, row: {} },
+    cursor: 6,
+    kind: 'jsonl-usage',
+    source: 'claude-jsonl',
+  });
   port.emitEvent({
     type: 'run-jsonl',
     runId,
@@ -243,30 +254,82 @@ test('send routes to the host; jsonl events persist replay meta + dedup by curso
     kind: 'jsonl-turn-end',
     source: 'claude-jsonl',
   });
-  // Replayed frame (host event-buffer replay after a reconnect) — must drop.
-  port.emitEvent({
-    type: 'run-jsonl',
-    runId,
-    event: { kind: 'jsonl-user', text: 'hello', row: {} },
-    cursor: 5,
-    kind: 'jsonl-user',
-    source: 'claude-jsonl',
-  });
 
-  assert.equal(seen.length, 2);
+  assert.equal(seen.length, 3, 'equal-cursor live siblings must all flow');
   assert.equal(seen[0]!.replay.seq, 1);
-  assert.equal(seen[1]!.replay.seq, 2);
+  assert.equal(seen[2]!.replay.seq, 3);
 
   const replayPath = join(dir, 'jsonl-events.jsonl');
   assert.ok(existsSync(replayPath));
   const lines = readFileSync(replayPath, 'utf8').split('\n').filter(Boolean);
-  assert.equal(lines.length, 2);
+  assert.equal(lines.length, 3);
   const first = JSON.parse(lines[0]!);
   assert.equal(first.type, 'jsonl');
   assert.equal(first.sessionId, 'pc-session-1');
   assert.equal(first.kind, 'jsonl-user');
   assert.equal(first.source.cursor, 5);
+  const last = JSON.parse(lines[2]!);
+  assert.equal(last.kind, 'jsonl-turn-end');
   session.kill();
+});
+
+test('pre-restart frames replayed from the host buffer are deduped by the construct-time floor', async () => {
+  const port = new FakeHostPort();
+  const { session, dir } = makeSession(port);
+  session.start();
+  await settleTicks();
+  const runId = port.commandsOf('start-run')[0]!.request.runId;
+  // First lifetime persists cursors 1..7.
+  for (let c = 1; c <= 7; c++) {
+    port.emitEvent({
+      type: 'run-jsonl',
+      runId,
+      event: { kind: 'jsonl-user', text: `t${c}`, row: {} },
+      cursor: c,
+      kind: 'jsonl-user',
+      source: 'claude-jsonl',
+    });
+  }
+  session.kill();
+
+  // "API restart": a NEW adapter over the same replay file adopts the run and
+  // the host buffer replays cursors 5..9 — only 8 and 9 are new.
+  port.commands = [];
+  port.roster = [snapshotFor(runId, { ccSessionId: 'cc-uuid-1' })];
+  const second = new OrchestratorHostSession(
+    {
+      pcSessionId: 'pc-session-1',
+      providerSessionId: 'cc-uuid-1',
+      projectId: '01PRJ' as never,
+      podDefinition: { name: 'pc:orchestrator' },
+      worktreePath: 'C:\\proj',
+      env: {},
+      mode: 'resume',
+      jsonlPath: join(dir, 'cc.jsonl'),
+      transcriptPath: join(dir, 'transcript.log'),
+      replayEventsPath: join(dir, 'jsonl-events.jsonl'),
+    },
+    { hostClient: port, mintRunId: () => 'run-second', transcriptPollMs: 50, awaitBeforeTimeoutMs: 100 },
+  );
+  const seen: unknown[] = [];
+  second.on('jsonl-event', (ev: unknown) => seen.push(ev));
+  second.start();
+  await settleTicks();
+
+  for (let c = 5; c <= 9; c++) {
+    port.emitEvent({
+      type: 'run-jsonl',
+      runId,
+      event: { kind: 'jsonl-user', text: `t${c}`, row: {} },
+      cursor: c,
+      kind: 'jsonl-user',
+      source: 'claude-jsonl',
+    });
+  }
+  assert.equal(seen.length, 2, 'only post-floor cursors flow');
+  const lines = readFileSync(join(dir, 'jsonl-events.jsonl'), 'utf8').split('\n').filter(Boolean);
+  assert.equal(lines.length, 9, '7 originals + 2 new, no duplicates');
+  second.kill();
 });
 
 test('adopts a still-live host run after an API restart (no double spawn)', async () => {
