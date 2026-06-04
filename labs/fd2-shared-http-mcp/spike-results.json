@@ -14,7 +14,7 @@
     },
     "concurrency": {
       "pass": true,
-      "note": "slow-call windows OVERLAP (parallel)"
+      "note": "overlapping slow-call windows: A∩C B∩C (shared endpoint not serialized)"
     },
     "turn1-tools": {
       "pass": true,
@@ -22,17 +22,17 @@
     },
     "restart-recovery": {
       "pass": true,
-      "note": "client A got a receipt from boot ac4f955f (was f676a411) — reconnect + re-init works"
+      "note": "client A got a receipt from boot a913e962 (was 578f9deb) — reconnect + re-init works"
     }
   },
   "notes": [
-    "[A] prompt→whoami-served: 8654ms",
-    "[B] prompt→whoami-served: 8743ms",
-    "[C] prompt→whoami-served: 8054ms"
+    "[A] prompt→whoami-served: 10520ms",
+    "[B] prompt→whoami-served: 13746ms",
+    "[C] prompt→whoami-served: 12386ms"
   ],
   "bootIds": [
-    "f676a411",
-    "ac4f955f"
+    "578f9deb",
+    "a913e962"
   ],
-  "finishedAt": "2026-06-04T00:24:11.001Z"
+  "finishedAt": "2026-06-04T13:23:17.928Z"
 }

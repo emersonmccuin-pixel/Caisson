@@ -151,10 +151,17 @@ busy→ready snapshot edge already emits 'turn-end'. Live: interrupt→turn-end 
 follow-up delivered immediately, replied in 8s. Quirk noted: CC *may* late-finalize an
 interrupted turn (~270ms, empty usage+turn-end) — harmless ready-flap, handled by the same
 idempotent edge. +1 runtime guard test (45).
-⬜ remaining: reload-replay visual check (Emerson, in-app) · agents dispatch normally
-alongside the chat · packaged-mode pass · spike harness green (5/6 on a loaded box 2026-06-04
-— concurrency window check is timing-sensitive under load; re-run solo) · Sessions-tab
-resume/new-session flows.
+✅ **agents-alongside live-fired 2026-06-04 — PASS, full gauntlet in caisson:** chat reply →
+fire file-then-review → chat replied DURING the worker run → gate paused → approve →
+completed → chat replied after. Bonus proof: the mailbox injected the gate notification into
+the orchestrator mid-test; the queued user send held behind the injected turn and drained
+cleanly — chat + worker + system injections coexist on the one Engine.
+✅ **spike harness 6/6 2026-06-04** — after fixing the harness's concurrency check: it
+required all THREE 2s slow-windows to share one instant (client thinking-time luck); a 5/6
+"fail" had a real 219ms A∩C overlap on the books. Now ANY pairwise overlap = the
+non-serialization proof. Green run observed A∩C + B∩C genuinely simultaneous.
+⬜ remaining: reload-replay visual check (Emerson, in-app) · packaged-mode pass ·
+Sessions-tab resume/new-session flows.
 
 ## Open questions (carried, not blocking Slice 0)
 

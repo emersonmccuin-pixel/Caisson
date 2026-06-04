@@ -356,19 +356,30 @@ verdict(
   `mcp sessions per client: ${sessions.map((s) => s.size).join('/')}, no cross-sharing`,
 );
 
-// 4. concurrency — the three spike_slow windows overlap (server slept 2s each;
-//    serialized they'd be ≥6s end-to-end, parallel ≈2s)
+// 4. concurrency — overlapping spike_slow windows prove the shared endpoint
+//    does NOT serialize calls (server slept 2s each). ANY pairwise overlap is
+//    the proof; requiring all THREE to share one instant conflated server
+//    capability with client timing (model thinking time varies by seconds per
+//    turn — 2026-06-04 re-runs "failed" with a real 219ms A∩C overlap on the
+//    books).
 const slows = all
-  .flatMap((x) => x.receipts.filter((r) => r.tool === 'spike_slow'))
-  .map((r) => ({ s: Date.parse(r.startedAt), e: Date.parse(r.finishedAt) }));
-const overlap =
-  slows.length === 3 &&
-  Math.max(...slows.map((w) => w.s)) < Math.min(...slows.map((w) => w.e));
+  .flatMap((x) =>
+    x.receipts
+      .filter((r) => r.tool === 'spike_slow')
+      .map((r) => ({ p: x.c.probe, s: Date.parse(r.startedAt), e: Date.parse(r.finishedAt) })),
+  );
+const pairs = [];
+for (let i = 0; i < slows.length; i++)
+  for (let j = i + 1; j < slows.length; j++)
+    if (Math.max(slows[i].s, slows[j].s) < Math.min(slows[i].e, slows[j].e))
+      pairs.push(`${slows[i].p}∩${slows[j].p}`);
 verdict(
   'concurrency',
-  overlap,
+  slows.length === 3 && pairs.length > 0,
   slows.length === 3
-    ? `slow-call windows ${overlap ? 'OVERLAP (parallel)' : 'do not overlap (serialized?)'}`
+    ? pairs.length > 0
+      ? `overlapping slow-call windows: ${pairs.join(' ')} (shared endpoint not serialized)`
+      : 'no slow-call windows overlapped this run (serialized, or clients never coincided)'
     : `only ${slows.length}/3 slow receipts`,
 );
 
