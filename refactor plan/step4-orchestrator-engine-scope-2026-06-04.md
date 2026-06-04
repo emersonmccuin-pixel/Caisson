@@ -95,11 +95,25 @@ StdioServerTransport check) · auth round-trip/tamper tests · real HTTP boot sm
 (initialize→initialized→tools/list registry order · 401 forged token · -32001 unknown session).
 Suites: server 240 · mcp 75 · workspace green.
 
-**Slice 1 — Engine persistent-interactive policy.**
-Policy flags on AgentRunInput + start-run · timer exemptions · cap-exempt lane ·
-`interrupt`/`resize` commands · turn-state in snapshots/events · `run-jsonl` carries replay meta ·
-`transcriptPath` in snapshots. All host-fake tested; no Brain behavior change yet.
-*Guard:* policy regression tests (persistent run never idle-killed; cap math ignores it).
+**Slice 1 — Engine persistent-interactive policy. ✅ SHIPPED 2026-06-04 (bb2975fc).**
+`policy: 'persistent-interactive'` on AgentRunInput + start-run request · G3 timer
+exemptions (idle/wall-clock/first-turn never armed; spawn-stuck + handshake/ready stay —
+a chat that can't spawn still fails fast) · G4 `AgentRunRegistry.exempt()` (born admitted,
+holds no slot, release/abort never touch slot math) · G2/G6 `interrupt` (Escape,
+non-destructive) + `resize` host commands, validator cases added in agent-host-client
+(set-config burn class) · G1 turn-state `ready⇌busy` on record + snapshots, `turn-state`
+event refreshes the run-state stream; **reattach reports `ready`** (busy-with-no-coming-
+turn-end would deadlock the send-queue; a mid-turn send queues in CC — a feature) ·
+G7 `run-jsonl` grows `cursor`/`kind`/`source` (AgentRun re-emits the tailer's
+JsonlEventMeta instead of dropping it) · `transcriptPath` was already on the snapshot —
+Slice 2 just threads it at start-run. Dispatched-worker defaults pinned by tests.
+*Guards:* agent-run-policy.test.ts (9: never idle/wall-clock-killed, cap-exempt math,
+interrupt/resize forward, turn-state transitions, meta re-emit) + registry exempt (2) +
+persistent-interactive.test.ts (6: policy threading, command routing, wire meta,
+turn-state snapshots). Suites: runtime 44 · agent-host 11 · server 240 · typecheck green.
+No live-fire — nothing starts a persistent run until Slice 2 (its swap gauntlet is the
+live gate). ⚠️ Flake seen twice then gone: `tsx --test` subprocess teardown crash
+0xC0000409 on Windows; tests pass direct-run and on re-run — infra, not product.
 
 **Slice 2 — the swap + delete.**
 ProjectRuntime orchestrator spawn → host `start-run {policy}` · pty-handlers wiring rebound to
