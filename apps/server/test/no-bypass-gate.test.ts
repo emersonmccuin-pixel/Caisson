@@ -109,6 +109,10 @@ const BANNED_RESURRECTION = [
   'resetIdleTimer',
   'armFirstTurnWatchdog',
   'sweepAgentRunLiveness',
+  // M4a (FD-12 bypass #3): the agent_inbox path is deleted whole — the
+  // mailbox is the ONE delivery system.
+  'enqueueInboxRow',
+  'markInboxDelivered',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 

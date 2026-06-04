@@ -74,9 +74,8 @@ export interface ProjectRuntimeOptions {
   broadcast: BroadcastFn;
   /** Templates dir for hook re-render (per-session paths via env var). */
   templatesDir: string;
-  /** Trunk repo root. 18.4 — substituted as `{{PC_TRUNK_PATH}}` into the
-   *  inbox-drain hook so it can `createRequire` better-sqlite3 from the
-   *  trunk's pnpm-managed `node_modules`. */
+  /** Trunk repo root. Substituted as `{{PC_TRUNK_PATH}}` in template renders
+   *  (README; historically the ☠ inbox-drain hook's createRequire — M4a). */
   trunkPath: string;
   getHostClient?: () => AgentHostReattachClient | null;
   /** Slice 008 — injected workflow-review delivery seam (friction #1). When

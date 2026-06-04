@@ -12,9 +12,8 @@ import type { WorkflowReviewDelivery, WorkflowRunFailedDelivery } from './dag-ru
 export interface ProjectRegistryDeps {
   dataDir: string;
   templatesDir: string;
-  /** Trunk repo root. 18.4 — threaded into ProjectRuntime so the
-   *  refresh-hooks template substitution can resolve `{{PC_TRUNK_PATH}}` for
-   *  the inbox-drain hook's `createRequire` of `better-sqlite3`. */
+  /** Trunk repo root. Threaded into ProjectRuntime for `{{PC_TRUNK_PATH}}`
+   *  template substitution (README; historically the ☠ inbox-drain hook — M4a). */
   trunkPath: string;
   serverPort: number;
   getHostClient?: () => AgentHostReattachClient | null;

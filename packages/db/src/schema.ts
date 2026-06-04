@@ -770,8 +770,7 @@ export {
   agentRuns,
   agentContracts,
   pendingAsks,
-  agentInbox,
-  agentDeliveryAudit,
+  // ☠ M4a: agentInbox + agentDeliveryAudit deleted (migration 0041 archive).
 } from './schema-agent-system.ts';
 
 // Section 31.12 — post-turn summary log. CC's `system:post_turn_summary` row

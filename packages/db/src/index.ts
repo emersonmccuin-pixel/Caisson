@@ -247,18 +247,9 @@ export type {
   StatuslineSnapshotRow,
 } from './repos/statusline-snapshots.ts';
 
-// Section 25 — agent inbox / delivery repo.
-export {
-  enqueueInboxRow,
-  getAuditForInbox,
-  getInboxRow,
-  listPendingForSession,
-  markInboxDelivered,
-} from './repos/agent-inbox.ts';
-export type {
-  EnqueueInboxRowInput,
-  MarkInboxDeliveredInput,
-} from './repos/agent-inbox.ts';
+// ☠ M4a (2026-06-04) — the agent-inbox repo is DELETED with its tables
+// (migration 0041 archive-rename; FD-12 bypass #3 executed). The mailbox is
+// the one delivery system.
 
 // Section 25 — pending asks repo.
 export {

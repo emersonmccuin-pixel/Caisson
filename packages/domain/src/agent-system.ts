@@ -192,41 +192,7 @@ export const AGENT_INBOX_EVENT_KINDS: readonly AgentInboxEventKind[] = [
   'agent-jsonl-event',
 ];
 
-export type AgentInboxStatus = 'pending' | 'delivered';
-
-export const AGENT_INBOX_STATUSES: readonly AgentInboxStatus[] = [
-  'pending',
-  'delivered',
-];
-
-/** Delivery driver. No `'unknown'` — audit row is written at flip time with
- *  a definite driver, never stubbed at enqueue. */
-export type AgentInboxDriver = 'channel' | 'user-prompt';
-
-export const AGENT_INBOX_DRIVERS: readonly AgentInboxDriver[] = [
-  'channel',
-  'user-prompt',
-];
-
-export interface AgentInboxRow {
-  id: ULID;
-  projectId: ULID;
-  /** Recipient PC session-id (orchestrator's session or another AgentRun's
-   *  dispatcher_session_id). */
-  pcSessionId: string;
-  kind: AgentInboxEventKind;
-  body: string;
-  status: AgentInboxStatus;
-  driver: AgentInboxDriver | null;
-  createdAt: number;
-  deliveredAt: number | null;
-}
-
-export interface AgentDeliveryAuditRow {
-  id: ULID;
-  inboxId: ULID;
-  driver: AgentInboxDriver;
-  deliveredAt: number;
-  /** Wall-clock ms between inbox-row creation and delivery. */
-  latencyMs: number;
-}
+// ☠ M4a (2026-06-04) — AgentInboxStatus/Driver/Row + AgentDeliveryAuditRow
+// deleted with the `agent_inbox` tables (migration 0041 archive). The
+// AgentInboxEventKind union above SURVIVES — it names the envelope kinds the
+// mailbox delivery path still routes (deliverAgentEnvelope).

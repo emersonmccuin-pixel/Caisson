@@ -257,11 +257,10 @@ export type {
 } from './agent-comms.ts';
 export { AGENT_CHANNEL_EVENT_KINDS } from './agent-comms.ts';
 export type {
-  AgentDeliveryAuditRow,
-  AgentInboxDriver,
+  // ☠ M4a: AgentDeliveryAuditRow / AgentInboxDriver / AgentInboxRow /
+  // AgentInboxStatus deleted with the agent_inbox tables. AgentInboxEventKind
+  // survives — it names the mailbox delivery envelope kinds.
   AgentInboxEventKind,
-  AgentInboxRow,
-  AgentInboxStatus,
   AgentRunFailureCause,
   AgentRunRow,
   AgentRunStatus,
@@ -270,9 +269,7 @@ export type {
   PendingAskStatus,
 } from './agent-system.ts';
 export {
-  AGENT_INBOX_DRIVERS,
   AGENT_INBOX_EVENT_KINDS,
-  AGENT_INBOX_STATUSES,
   AGENT_RUN_FAILURE_CAUSES,
   AGENT_RUN_STATUSES,
   PENDING_ASK_KINDS,

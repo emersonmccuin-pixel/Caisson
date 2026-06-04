@@ -11,9 +11,6 @@
 import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import type {
   AcceptanceCriteria,
-  AgentInboxDriver,
-  AgentInboxEventKind,
-  AgentInboxStatus,
   AgentRunFailureCause,
   AgentRunStatus,
   ContractStatus,
@@ -27,7 +24,7 @@ import type {
   VerificationTier,
 } from '@pc/domain';
 
-import { projects, workItems } from './schema.ts';
+import { projects } from './schema.ts';
 
 /**
  * Persisted dispatch record. Mirrors the in-memory AgentRunRecord 1:1 —
@@ -205,55 +202,10 @@ export const pendingAsks = sqliteTable(
   ],
 );
 
-/**
- * Durability layer of the hybrid delivery transport. Every outbound agent →
- * recipient event lands here as a row before any best-effort channel push.
- */
-export const agentInbox = sqliteTable(
-  'agent_inbox',
-  {
-    id: text('id').primaryKey().$type<ULID>(),
-    projectId: text('project_id')
-      .notNull()
-      .$type<ULID>()
-      .references(() => projects.id),
-    /** PC session-id of the recipient surface. */
-    pcSessionId: text('pc_session_id').notNull(),
-    kind: text('kind').notNull().$type<AgentInboxEventKind>(),
-    body: text('body').notNull(),
-    status: text('status').notNull().default('pending').$type<AgentInboxStatus>(),
-    driver: text('driver').$type<AgentInboxDriver | null>(),
-    createdAt: integer('created_at').notNull(),
-    deliveredAt: integer('delivered_at'),
-  },
-  (t) => [
-    index('agent_inbox_project_session_status_idx').on(
-      t.projectId,
-      t.pcSessionId,
-      t.status,
-    ),
-    index('agent_inbox_session_created_idx').on(t.pcSessionId, t.createdAt),
-  ],
-);
-
-/**
- * Observational audit. One row per successful delivery — never written for
- * still-pending rows.
- */
-export const agentDeliveryAudit = sqliteTable(
-  'agent_delivery_audit',
-  {
-    id: text('id').primaryKey().$type<ULID>(),
-    inboxId: text('inbox_id')
-      .notNull()
-      .$type<ULID>()
-      .references(() => agentInbox.id),
-    driver: text('driver').notNull().$type<AgentInboxDriver>(),
-    deliveredAt: integer('delivered_at').notNull(),
-    /** Wall-clock ms between inbox creation and delivery flip. */
-    latencyMs: integer('latency_ms').notNull(),
-  },
-  (t) => [
-    index('agent_delivery_audit_inbox_idx').on(t.inboxId),
-  ],
-);
+// ☠ M4a (2026-06-04, FD-12 bypass #3 EXECUTED): `agent_inbox` +
+// `agent_delivery_audit` are GONE (migration 0041 archive-renames them to
+// *_v2_archive). They were the pre-mailbox delivery durability layer; the
+// last writer (`enqueueInboxRow` via the old enqueueAndPush) died in slice
+// 017 Phase C, and the `inbox-drain.cjs` hook then drained an eternally-empty
+// table on every prompt for weeks. The mailbox (mailbox_messages/recipients/
+// deliveries + the worker) is the ONE delivery system.

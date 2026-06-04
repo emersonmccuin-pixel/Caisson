@@ -99,7 +99,8 @@ export class ProjectScaffold {
     return {
       PC_TRUNK_PATH: posixPath(this.deps.trunkPath),
       PC_SERVER_PORT: String(this.deps.serverPort),
-      // 18.4 — Inbox-drain hook reads agent_inbox rows from the global PC db.
+      // Global PC db path. (Historically the ☠ inbox-drain hook's read target —
+      // M4a deleted it; the token stays for any future hook needing the db.)
       PC_DB_PATH: posixPath(resolve(this.deps.dataDir, 'pc.sqlite')),
       PROJECT_ID: target.projectId,
       PROJECT_SLUG: target.projectSlug,

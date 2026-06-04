@@ -19,10 +19,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/inbox-drain.cjs\""
-          },
-          {
-            "type": "command",
             "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" UserPromptSubmit"
           }
         ]
