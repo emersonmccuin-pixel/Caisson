@@ -33,7 +33,12 @@ import {
   type ReconcileSweepResult,
 } from './agent-host-reattach.ts';
 import { sweepStallWarn, type StallWarnResult } from './agent-run-stall-warn.ts';
+import {
+  onWorkerTurnEndWithoutDeliverable,
+  type DeliverableNudgeOutcome,
+} from './agent-run-deliverable-nudge.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
+import { getAgentRunRow as defaultGetAgentRunRow } from '@pc/db';
 
 /** What the reconciler needs from the host connection (host mode). The real
  *  `HostConnection` satisfies this; tests fake it. */
@@ -70,6 +75,8 @@ export interface AgentRunReconcilerDeps {
   reconcileHost?: typeof reconcileAgentRunsAgainstHost;
   stallWarn?: typeof sweepStallWarn;
   applyHostEvent?: typeof applyAgentHostEvent;
+  nudge?: typeof onWorkerTurnEndWithoutDeliverable;
+  getAgentRun?: typeof defaultGetAgentRunRow;
   /** Threaded into the sweeps (S3 envelope replay). Test seam. */
   replayEnvelopes?: AgentHostReattachDepsReplay;
 }
@@ -120,6 +127,8 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
   const stalledRuns = new Set<string>();
   // P9 ladder rung 2 — runs already orchestrator-notified this stall episode.
   const notifiedRuns = new Set<string>();
+  // P9 deliverable-skip nudge — strikes per run (1 = nudged, 2 = escalated).
+  const nudgeStrikes = new Map<string, number>();
 
   let interval: NodeJS.Timeout | null = null;
   let subscribed = false;
@@ -142,6 +151,34 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
         if (event.type === 'run-state' || event.type === 'run-terminal') {
           const handle = registry.get(event.run.runId)?.run;
           if (handle instanceof HostBackedActiveRunHandle) handle.applySnapshot(event.run);
+        }
+        // P9 deliverable-skip nudge — event-driven (the marco case corrects in
+        // seconds, not at a poll boundary). A live turn-end on a contract-first
+        // run with nothing delivered → reminder into the run; twice → ONE
+        // orchestrator escalation. Never a kill.
+        if (event.type === 'run-terminal') {
+          nudgeStrikes.delete(event.run.runId);
+        } else if (event.type === 'run-jsonl' && event.kind === 'jsonl-turn-end') {
+          const row = (deps.getAgentRun ?? defaultGetAgentRunRow)(event.runId);
+          if (row) {
+            const outcome: DeliverableNudgeOutcome = (
+              deps.nudge ?? onWorkerTurnEndWithoutDeliverable
+            )(row, {
+              strikes: nudgeStrikes,
+              sendToRun: (runId, text) => {
+                Promise.resolve(
+                  deps.host.sendCommand({ type: 'send', runId, text }),
+                ).catch((err) =>
+                  warn(`[agent-runs] deliverable-nudge send failed: ${(err as Error).message}`),
+                );
+              },
+              mailboxEnqueue: deps.mailboxEnqueue,
+              now: deps.now,
+            });
+            if (outcome === 'nudged' || outcome === 'notified') {
+              log(`[agent-runs] deliverable-nudge: ${outcome} run=${event.runId}`);
+            }
+          }
         }
       } catch (err) {
         warn(`[agent-runs] host event apply failed: ${(err as Error).message}`);
