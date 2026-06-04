@@ -426,6 +426,12 @@ export class HttpAgentHostClient
       }
       buffer += decoder.decode();
       this.drainEventBuffer(buffer);
+      // A graceful end (done, nothing thrown) is just as dead as a torn socket.
+      // Without this report nothing restarts the stream — the client goes deaf
+      // while sendCommand keeps succeeding and health stays 'connected'.
+      if (!this.closed && !signal.aborted) {
+        this.reportProtocolError(new Error('agent host event stream ended'));
+      }
     } catch (err) {
       if (!this.closed && !signal.aborted) this.reportProtocolError(toError(err));
     } finally {

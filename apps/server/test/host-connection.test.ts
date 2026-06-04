@@ -43,6 +43,7 @@ function jsonResponse(body: unknown): Response {
 function makeEventStream(): {
   response: Response;
   push: (e: AgentHostEvent) => void;
+  close: () => void;
 } {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   const stream = new ReadableStream<Uint8Array>({
@@ -56,6 +57,7 @@ function makeEventStream(): {
       const line = `${JSON.stringify({ type: 'event', event: e })}\n`;
       controller.enqueue(new TextEncoder().encode(line));
     },
+    close: () => controller.close(),
   };
 }
 
@@ -64,6 +66,7 @@ interface Recorder {
   urls: string[];
   setHostId(id: string): void;
   pushEvent(e: AgentHostEvent): void;
+  closeStream(): void;
 }
 
 /** Fake fetch: any POST /command → hello/list-runs/echo; GET /events → open stream.
@@ -74,6 +77,7 @@ function recorder(opts: {
 }): Recorder {
   const urls: string[] = [];
   let streamPush: ((e: AgentHostEvent) => void) | null = null;
+  let streamClose: (() => void) | null = null;
   const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     urls.push(url);
@@ -85,6 +89,7 @@ function recorder(opts: {
     if (url.includes('/events')) {
       const s = makeEventStream();
       streamPush = s.push;
+      streamClose = s.close;
       return s.response;
     }
     // /command — inspect the body to answer hello vs list-runs vs echo.
@@ -99,6 +104,7 @@ function recorder(opts: {
     urls,
     setHostId() {},
     pushEvent: (e) => streamPush?.(e),
+    closeStream: () => streamClose?.(),
   };
 }
 
@@ -210,6 +216,41 @@ test('persistent onEvent survives a host-id-change reconnect', async () => {
   rec.pushEvent({ seq: 99, type: 'run-state', run: {} as never } as AgentHostEvent);
   await new Promise((r) => setTimeout(r, 10));
   assert.ok(seen.includes(99), `listener should fire on the new inner client; saw ${seen}`);
+  conn.close();
+});
+
+test('graceful /events end (no socket error) re-opens the stream from lastSeq (Step 3)', async () => {
+  const rec = recorder({ liveBase: () => 'http://127.0.0.1:9001', hostId: () => 'h1' });
+  const conn = createHostConnection({
+    discoverEndpoint: () => endpoint(9001, 'h1'),
+    fetch: rec.fetch,
+    isPidAlive: () => true,
+    readLockRaw: () => null,
+    heartbeatMs: 1_000_000,
+  });
+  const seen: number[] = [];
+  conn.onEvent((e) => seen.push(e.seq));
+
+  await conn.sendCommand({ type: 'list-runs' }); // connect; opens /events?after=0
+  rec.pushEvent({ seq: 3, type: 'run-state', run: {} as never } as AgentHostEvent);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(seen, [3]);
+
+  // The host ends the stream CLEANLY (done=true, nothing thrown). Before the
+  // fix this path reported nothing → no restart → the connection went deaf
+  // forever while sendCommand kept succeeding and health stayed 'connected'.
+  const eventsFetches = () => rec.urls.filter((u) => u.includes('/events')).length;
+  const before = eventsFetches();
+  rec.closeStream();
+  await new Promise((r) => setTimeout(r, 700)); // > the 500ms stream-restart debounce
+  assert.equal(eventsFetches(), before + 1, 'stream must re-open after a graceful end');
+  assert.ok(
+    rec.urls.some((u) => u.includes('/events?after=3')),
+    `resubscribe must carry lastSeq; saw ${JSON.stringify(rec.urls)}`,
+  );
+  rec.pushEvent({ seq: 4, type: 'run-state', run: {} as never } as AgentHostEvent);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(seen.includes(4), `events must flow on the re-opened stream; saw ${seen}`);
   conn.close();
 });
 
