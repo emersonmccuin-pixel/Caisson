@@ -239,6 +239,31 @@ test('loop ceiling PAUSES the run as an escalated HUMAN gate (FD-11 — never fa
   assert.equal(s3, 'completed');
 });
 
+test('a cancel landing mid-layer finalizes CANCELLED — never failed (live-caught race)', async () => {
+  // Simulates the real race: the cancel route cancels the run + its child
+  // agent runs WHILE the executor awaits the layer; the child resolves failed.
+  let cancelled = false;
+  const persisted: string[] = [];
+  const events: string[] = [];
+  const deps = baseDeps({
+    dispatchAgent: async (): Promise<NodeOutcome> => {
+      cancelled = true; // the cancel lands while the dispatch is in flight
+      return { state: 'failed', error: 'agent run cancelled' };
+    },
+    isCancelled: () => cancelled,
+    persist: (_s, status) => persisted.push(status),
+    event: (ev) => events.push(ev.type),
+    notifyRunFailed: () => {
+      throw new Error('a cancelled run must not fire the failure notice');
+    },
+  });
+  const exec = DagExecutor.start(oneAgentWorkflow(), deps, ctxBase);
+  const status = await exec.advance();
+  assert.equal(status, 'cancelled');
+  assert.equal(persisted[persisted.length - 1], 'cancelled');
+  assert.ok(!events.includes('workflow_failed'), 'no bogus workflow_failed diary line');
+});
+
 test('a completed run does NOT fire notifyRunFailed', async () => {
   const calls: string[] = [];
   const deps = baseDeps({

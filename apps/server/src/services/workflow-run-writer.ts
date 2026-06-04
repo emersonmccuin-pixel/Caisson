@@ -93,6 +93,15 @@ export function writeDagState(
   fanout(pub, broadcast);
 }
 
+/** M6 slice C — CANCELLED IS FINAL for the advance path. A cancel can land
+ *  while the executor has a layer in flight; when its persist arrives the
+ *  status write must not resurrect the run. Race-free: the check runs inside
+ *  the gateway txn. (The explicit resume door uses its OWN gateway call with
+ *  repo setters directly — failed→running stays legal there.) */
+function keepCancelled(id: ULID): boolean {
+  return workflowRunsV2Repo.getRun(id)?.status === 'cancelled';
+}
+
 /** setStatus + announce (atomic durable fact via the gateway). */
 export function writeRunStatus(
   id: ULID,
@@ -105,7 +114,7 @@ export function writeRunStatus(
     projectId,
     reason: reasonForStatus(status),
     mutate: () => {
-      workflowRunsV2Repo.setStatus(id, status, opts);
+      if (!keepCancelled(id)) workflowRunsV2Repo.setStatus(id, status, opts);
       return workflowRunsV2Repo.getRun(id);
     },
   });
@@ -125,8 +134,10 @@ export function writeDagAndStatus(
     projectId,
     reason: reasonForStatus(status),
     mutate: () => {
+      // dagState still lands (forensics: which nodes settled before the stop);
+      // the cancelled STATUS is never overwritten.
       workflowRunsV2Repo.setDagState(id, dagState);
-      workflowRunsV2Repo.setStatus(id, status, opts);
+      if (!keepCancelled(id)) workflowRunsV2Repo.setStatus(id, status, opts);
       return workflowRunsV2Repo.getRun(id);
     },
   });

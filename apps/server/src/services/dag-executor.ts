@@ -168,6 +168,13 @@ export class DagExecutor {
       // Non-review nodes first: dispatch concurrently (capped), await, settle.
       if (runReady.length > 0) {
         await this.runLayer(runReady, resolve);
+        // M6 slice C — a cancel can land WHILE the layer was in flight (the
+        // route cancels the child agent runs, which resolve as failed here).
+        // Never let the advance loop overwrite the cancelled status.
+        if (this.deps.isCancelled()) {
+          this.deps.persist(this.state, 'cancelled' as RunStatus, { lastReason: 'cancelled' });
+          return 'cancelled' as RunStatus;
+        }
         this.persistRun(computeRunStatus(this.workflow, this.state));
         continue; // re-evaluate (a review may now be ready)
       }
@@ -326,6 +333,13 @@ export class DagExecutor {
   }
 
   private finalize(): RunStatus {
+    // M6 slice C — a cancelled run finalizes CANCELLED: no workflow_failed
+    // diary line, no failure notice (the cancel already wrote its own
+    // workflow_cancelled line via the gateway).
+    if (this.deps.isCancelled()) {
+      this.deps.persist(this.state, 'cancelled' as RunStatus, { lastReason: 'cancelled' });
+      return 'cancelled' as RunStatus;
+    }
     const status = computeRunStatus(this.workflow, this.state);
     if (status === 'completed') this.deps.event({ type: 'workflow_completed' });
     else if (status === 'failed') this.deps.event({ type: 'workflow_failed' });
