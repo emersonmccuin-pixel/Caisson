@@ -978,6 +978,38 @@
       }
     },
     {
+      "name": "pc_cancel_workflow_run",
+      "description": "Cancel an in-flight workflow run (pending / running / paused). Writes the `workflow_cancelled` diary line and cascade-cancels the run's in-flight child agent runs — the workers stop, the run lands `cancelled`. 404 on unknown run; 409 when already terminal. Use when a run is doing the wrong thing, is stuck at an exhausted loop ceiling, or the user asks to stop it. Returns { ok, status: 'cancelled', cancelledChildren: [agentRunIds] }.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "description": "workflow run ULID"
+          }
+        },
+        "required": [
+          "runId"
+        ]
+      }
+    },
+    {
+      "name": "pc_resume_workflow_run",
+      "description": "FD-11 repair loop — resume a FAILED workflow run from its failed step(s) instead of re-running from scratch. Completed steps are KEPT; failed/skipped/interrupted steps reset to pending and re-run. The run re-freezes the CURRENT definition — so the repair flow is: read the diary (pc_get_workflow_run) → fix the definition (pc_update_workflow) → resume. Compat-checked: if the edit removed a step the run already completed, this returns 409 naming it. 400 when the run isn't failed or the definition is missing/invalid/disabled. Returns { ok, status: 'running', defChanged, resetNodes }.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "description": "workflow run ULID (must be status failed)"
+          }
+        },
+        "required": [
+          "runId"
+        ]
+      }
+    },
+    {
       "name": "pc_replace_stages",
       "description": "Bulk-replace a project's stages. The server validates uniqueness, flag constraints, and in-use stage safety. When a removed stage still has work items, the server returns 409 STAGE_HAS_ITEMS with an `orphans` array — surface this to the caller instead of swallowing. Pass `force: true` + `fallbackStageId` (a retained stage id) to force-remove and reassign orphaned items. Always call `pc_request_approval` before removing, reordering, or re-flagging stages.",
       "inputSchema": {
@@ -1504,6 +1536,8 @@
     "mcp__pc-rig__pc_delete_workflow",
     "mcp__pc-rig__pc_get_workflow",
     "mcp__pc-rig__pc_get_workflow_run",
+    "mcp__pc-rig__pc_cancel_workflow_run",
+    "mcp__pc-rig__pc_resume_workflow_run",
     "mcp__pc-rig__pc_replace_stages",
     "mcp__pc-rig__pc_replace_field_schemas",
     "mcp__pc-rig__pc_attach_to_work_item",
@@ -1804,6 +1838,18 @@
       "slug": "mcp__pc-rig__pc_get_workflow_run",
       "label": "Read a workflow run + its diary",
       "description": "One run's status + readable step-by-step diary (the run's story; debugging read).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_cancel_workflow_run",
+      "label": "Cancel a workflow run",
+      "description": "Cancel an in-flight workflow run + its child agent runs.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_resume_workflow_run",
+      "label": "Resume a failed run from its failed step",
+      "description": "Resume a failed workflow run from its failed step (keeps completed work; picks up def edits).",
       "source": "pc-rig"
     },
     {

@@ -1139,6 +1139,44 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
+    "name": "pc_cancel_workflow_run",
+    "family": "workflow",
+    "label": "Cancel a workflow run",
+    "description": "Cancel an in-flight workflow run (pending / running / paused). Writes the `workflow_cancelled` diary line and cascade-cancels the run's in-flight child agent runs — the workers stop, the run lands `cancelled`. 404 on unknown run; 409 when already terminal. Use when a run is doing the wrong thing, is stuck at an exhausted loop ceiling, or the user asks to stop it. Returns { ok, status: 'cancelled', cancelledChildren: [agentRunIds] }.",
+    "catalogDescription": "Cancel an in-flight workflow run + its child agent runs.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "description": "workflow run ULID"
+        }
+      },
+      "required": [
+        "runId"
+      ]
+    }
+  },
+  {
+    "name": "pc_resume_workflow_run",
+    "family": "workflow",
+    "label": "Resume a failed run from its failed step",
+    "description": "FD-11 repair loop — resume a FAILED workflow run from its failed step(s) instead of re-running from scratch. Completed steps are KEPT; failed/skipped/interrupted steps reset to pending and re-run. The run re-freezes the CURRENT definition — so the repair flow is: read the diary (pc_get_workflow_run) → fix the definition (pc_update_workflow) → resume. Compat-checked: if the edit removed a step the run already completed, this returns 409 naming it. 400 when the run isn't failed or the definition is missing/invalid/disabled. Returns { ok, status: 'running', defChanged, resetNodes }.",
+    "catalogDescription": "Resume a failed workflow run from its failed step (keeps completed work; picks up def edits).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "description": "workflow run ULID (must be status failed)"
+        }
+      },
+      "required": [
+        "runId"
+      ]
+    }
+  },
+  {
     "name": "pc_replace_stages",
     "family": "project",
     "label": "Replace project stages",
@@ -1736,6 +1774,9 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_get_workflow: 'on-demand',
   // M3a — the run-diary read (FD-11 debugging; reach it via pc_call_tool).
   pc_get_workflow_run: 'on-demand',
+  // M6 slice C — FD-11 lifecycle: cancel-for-real + the repair-loop resume.
+  pc_cancel_workflow_run: 'on-demand',
+  pc_resume_workflow_run: 'on-demand',
   pc_update_workflow: 'on-demand',
   pc_delete_workflow: 'on-demand',
   pc_publish_workflow: 'on-demand',

@@ -105,9 +105,9 @@ import { resetStockPodToDefault } from './services/stock-pod-reset.ts';
 import { detectStockPodDrift, listCanonicalStockPodNames } from './services/pod-drift.ts';
 import { seedStockPods } from './services/stock-pod-seed.ts';
 import { migrateStoredWorkflowDefsToV3 } from './services/workflow-def-migrate-v3.ts';
+import { cancelWorkflowRunCascade } from './services/workflow-run-cancel.ts';
 import { createAgentRunReconciler } from './services/agent-run-reconciler.ts';
 import { getActiveRunRegistry } from './services/agent-active-runs.ts';
-import { writeRunStatus } from './services/workflow-run-writer.ts';
 
 // PUBLIC / TEMPLATES / the scaffold trunk path all derive from ROOT, so they
 // relocate with it (PC_ROOT in packaged builds). server-root.ts is the ONE
@@ -628,8 +628,10 @@ function deliverWorkflowRunFailed(input: {
     `Run: ${input.runId}` +
     (input.workItemId ? `\nCard: ${input.workItemId}` : '') +
     // M3a — the diary IS the debugging read (FD-11): point the orchestrator at
-    // it before it guesses from the one-line reason.
-    `\n\nFor the step-by-step story (which agent ran, what the review said, where it died): pc_get_workflow_run({ runId: "${input.runId}" }) via pc_call_tool.`;
+    // it before it guesses from the one-line reason. M6 slice C — and at the
+    // repair loop: fix the definition, then resume from the failed step.
+    `\n\nFor the step-by-step story (which agent ran, what the review said, where it died): pc_get_workflow_run({ runId: "${input.runId}" }) via pc_call_tool.` +
+    `\nFixable? Repair the definition (pc_update_workflow), then resume from the failed step — completed work is kept: pc_resume_workflow_run({ runId: "${input.runId}" }) via pc_call_tool.`;
   enqueueMailboxAndFanout({
     message: {
       id: newId(),
@@ -921,22 +923,21 @@ registerWorkflowRoutes(app, {
         (r.status === 'pending' || r.status === 'running' || r.status === 'paused'),
     ).length;
   },
-  cancelInFlightRuns: (projectId, slug) => {
+  cancelInFlightRuns: async (projectId, slug) => {
+    // M6 slice C — through the ONE cancel door (gateway cancel + diary line +
+    // child agent-run cascade). The old direct writeRunStatus skipped the
+    // `workflow_cancelled` diary line and left child workers running.
     const runs = workflowRunsV2Repo.listRunsByProject(projectId);
     for (const r of runs) {
       if (
         r.workflowId === slug &&
         (r.status === 'pending' || r.status === 'running' || r.status === 'paused')
       ) {
-        // Write-door: writeRunStatus increments rev + reads back full row
-        // + broadcasts a versioned full-snapshot delta.
-        writeRunStatus(
-          r.id,
-          'cancelled',
-          { lastReason: 'workflow soft-deleted' },
+        await cancelWorkflowRunCascade({
           projectId,
-          (ev) => broadcastTo(projectId, ev),
-        );
+          runId: r.id,
+          getHostConnection: () => hostConnection,
+        });
       }
     }
   },
@@ -1002,7 +1003,10 @@ registerAreaRoutes(app, { resolveProject });
 
 registerContractRoutes(app, {});
 
-registerWorkflowCompatRoutes(app, { resolveProject });
+registerWorkflowCompatRoutes(app, {
+  resolveProject,
+  getHostConnection: () => hostConnection,
+});
 
 registerWorktreeRoutes(app, { resolveProject });
 

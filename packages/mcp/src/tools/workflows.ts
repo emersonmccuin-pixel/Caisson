@@ -446,6 +446,45 @@ export async function handleWorkflowTool(
       }
     }
 
+    // M6 slice C — FD-11 lifecycle: cancel-for-real + the repair-loop resume.
+    case 'pc_cancel_workflow_run':
+    case 'pc_resume_workflow_run': {
+      const action = name === 'pc_cancel_workflow_run' ? 'cancel' : 'resume';
+      const runId = typeof args.runId === 'string' ? args.runId.trim() : '';
+      if (!runId) {
+        return {
+          content: [{ type: 'text', text: `${name}: runId required` }],
+          isError: true,
+        };
+      }
+      if (!ctx.projectId) {
+        return {
+          content: [
+            { type: 'text', text: `${name}: PC_PROJECT_ID env not set — requires a project scope.` },
+          ],
+          isError: true,
+        };
+      }
+      try {
+        const res = await ctx.postServer(
+          `/api/projects/${encodeURIComponent(ctx.projectId)}/workflow-v2/runs/${encodeURIComponent(runId)}/${action}`,
+          {},
+        );
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `${name} failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `${name} failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
     case 'pc_get_workflow': {
       const workflowId = typeof args.id === 'string' ? args.id.trim() : '';
       if (!workflowId) {

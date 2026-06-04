@@ -21,6 +21,8 @@ export {
   loopSubtree,
   applyReviewDecision,
   computeRunStatus,
+  resumeCompatErrors,
+  resetFailedNodesForResume,
   type ReadySelection,
   type SkipReason,
   type ReviewDecision,

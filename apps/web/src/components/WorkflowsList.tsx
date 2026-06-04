@@ -868,6 +868,34 @@ function RunInlineDetail({
 
   const def = row.parsedDefinition as unknown as WorkflowV2.Workflow | null;
 
+  // M6 slice C — FD-11 lifecycle controls. Cancel: any non-terminal run.
+  // Resume: failed runs only ("fix it and resume" — keeps completed steps,
+  // picks up definition edits). Transient confirmation per action.
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const isNonTerminal =
+    liveStatus === 'pending' || liveStatus === 'running' || liveStatus === 'paused';
+  const isFailed = liveStatus === 'failed';
+  async function runAction(kind: 'cancel' | 'resume') {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setActionMsg(null);
+    try {
+      if (kind === 'cancel') {
+        await workflowsApi.cancelV2Run(project.id, runId);
+        setActionMsg('Run cancelled.');
+      } else {
+        const res = await workflowsApi.resumeV2Run(project.id, runId);
+        setActionMsg(`Resumed${res.defChanged ? ' with your definition edits' : ''}.`);
+      }
+    } catch (e) {
+      setActionMsg((e as Error).message);
+    } finally {
+      setActionBusy(false);
+      setTimeout(() => setActionMsg(null), 5000);
+    }
+  }
+
   return (
     <div className="flex min-h-[280px] flex-1 flex-col border-t border-border bg-card">
       <header className="flex items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-2">
@@ -879,15 +907,41 @@ function RunInlineDetail({
             {runId}
           </span>
           {liveStatus && <StatusPill status={liveStatus} />}
+          {actionMsg && (
+            <span className="bg-muted px-1.5 py-0.5 text-[10px] text-foreground">{actionMsg}</span>
+          )}
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="border border-border bg-card px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted hover:text-foreground"
-          aria-label="Close run detail"
-        >
-          Close
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {isNonTerminal && (
+            <button
+              type="button"
+              disabled={actionBusy}
+              onClick={() => void runAction('cancel')}
+              className="border border-destructive/50 bg-destructive/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-destructive hover:bg-destructive/20 disabled:opacity-50"
+            >
+              Cancel run
+            </button>
+          )}
+          {isFailed && (
+            <button
+              type="button"
+              disabled={actionBusy}
+              onClick={() => void runAction('resume')}
+              className="border border-primary/50 bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary hover:bg-primary/20 disabled:opacity-50"
+              title="Re-runs the failed steps; completed work is kept. Picks up definition edits."
+            >
+              Resume from failed step
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="border border-border bg-card px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Close run detail"
+          >
+            Close
+          </button>
+        </div>
       </header>
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {loadErr ? (
@@ -965,7 +1019,9 @@ function diaryLine(ev: V2RunEvent): string {
     case 'review_requested': return `Review requested at ${node}.`;
     case 'review_approved': return `Review ${node} approved.`;
     case 'review_rejected': return `Review ${node} rejected — sent back.`;
-    case 'iteration_ceiling_hit': return `Reject ceiling hit at ${node} — held for a human.`;
+    case 'iteration_ceiling_hit': return `Loop ceiling hit at ${node} — escalated to a human.`;
+    case 'run_resumed':
+      return `Run resumed from its failed step${d.defChanged ? ' (picked up definition edits)' : ''}.`;
     case 'card_moved':
       return d.error
         ? `Card move to "${String(d.stage ?? '?')}" failed.`

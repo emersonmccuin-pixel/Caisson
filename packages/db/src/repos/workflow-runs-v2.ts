@@ -146,7 +146,20 @@ export function markStarted(id: ULID): void {
     .run();
 }
 
-/** Transition status. Sets `endedAt` on terminal transitions when unset. */
+/** M6 slice C (FD-11 restart-at-step) — re-freeze the run's definition
+ *  snapshot on an explicit resume-from-failed (the ONE door through which an
+ *  edited definition reaches an existing run). Called only inside the resume
+ *  gateway txn. */
+export function setWorkflowYamlSnapshot(id: ULID, workflowYamlSnapshot: string): void {
+  getDb()
+    .update(workflowRunsV2)
+    .set({ workflowYamlSnapshot, lastActivityAt: Date.now(), rev: REV_INC })
+    .where(eq(workflowRunsV2.id, id))
+    .run();
+}
+
+/** Transition status. Sets `endedAt` on terminal transitions; clears it on a
+ *  non-terminal transition (a resumed run is no longer "ended" — M6 slice C). */
 export function setStatus(
   id: ULID,
   status: WorkflowV2.WorkflowRunStatus,
@@ -155,7 +168,7 @@ export function setStatus(
   const now = Date.now();
   const patch: Partial<WorkflowRunV2Record> = { status, lastActivityAt: now, rev: REV_INC };
   if (opts.lastReason !== undefined) patch.lastReason = opts.lastReason;
-  if (TERMINAL.has(status)) patch.endedAt = now;
+  patch.endedAt = TERMINAL.has(status) ? now : null;
   getDb().update(workflowRunsV2).set(patch).where(eq(workflowRunsV2.id, id)).run();
 }
 

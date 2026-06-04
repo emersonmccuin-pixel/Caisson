@@ -387,9 +387,15 @@ Banned names: the matcher fns + trigger types + `allow_stage_workflow_skip` + `a
    `agent_dispatched` cross-link (the diary hands you the agentRunId); `pc_get_workflow_run`
    renders the plain-English story; the Workflows run panel shows the live timeline. Live-proof:
    a 12-line reject-loop story end-to-end. (State PROJECTION from the diary rides M6.)
-2. **Restart at a specific step** after repair — not from scratch. *(M6-era; needs the diary spine — now in place.)*
+2. **Restart at a specific step** after repair — not from scratch.
+   **✅ M6 slice C (2026-06-04):** `pc_resume_workflow_run` / resume route / run-panel button —
+   failed runs reset their failed/skipped steps to pending (completed work KEPT) and re-advance.
 3. **Repair loop until reliable:** broken workflow → orchestrator helps work through it → resume from
    the failed step → once it succeeds, it's locked in as the repeatable, reliable workflow.
+   **✅ M6 slice C:** the resume RE-FREEZES the current definition (compat-checked) — the repair
+   edit actually reaches the resumed run. Plus: loop ceiling now PAUSES as an escalated human gate
+   (never fails), and cancel is wired end-to-end (route + button + tool + soft-delete path, with
+   child-agent cascade + the `workflow_cancelled` diary line).
 4. **The workflow-builder agent must be expert-level** — complete knowledge of how the engine works,
    translating user intent into a fully valid, runnable workflow ("saved ⇒ runnable" validation
    backstops it).

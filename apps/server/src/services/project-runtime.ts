@@ -33,6 +33,8 @@ import { importV2WorkflowsFromDisk } from './workflow-import.ts';
 import {
   fireDagWorkflow,
   applyV2ReviewDecision,
+  resumeFailedDagRun,
+  type ResumeFailedRunResult,
   type DagRunServiceOptions,
   type WorkflowReviewDelivery,
   type WorkflowRunFailedDelivery,
@@ -340,6 +342,15 @@ export class ProjectRuntime {
     decision: ReviewDecision,
   ): Promise<string | null> {
     return applyV2ReviewDecision(runId, reviewNodeId, decision, this.dagRunOptions());
+  }
+
+  /** M6 slice C (FD-11 restart-at-step) — resume a FAILED run against the
+   *  CURRENT definition (the route resolves + validates the def row). */
+  async resumeV2Run(
+    runId: ULID,
+    currentDefinition: WorkflowV2.Workflow | null,
+  ): Promise<ResumeFailedRunResult> {
+    return resumeFailedDagRun(runId, currentDefinition, this.dagRunOptions());
   }
 
   /** Lazy: WorkItemService — owns create/patch/move/softDelete/restore/list/get

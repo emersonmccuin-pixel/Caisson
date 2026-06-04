@@ -307,7 +307,11 @@ export const WORKFLOW_EVENT_TYPES = [
   'review_approved',
   'review_rejected',
   'iteration_ceiling_hit',
-  /** Card-move transition effect fired (locked decision 1). */
+  /** M6 slice C (FD-11 req 2/3) — a failed run was resumed from its failed
+   *  step(s); `data.resetNodes` + `data.defChanged` (the repair loop re-froze
+   *  the CURRENT definition as the run's new snapshot). */
+  'run_resumed',
+  /** A move STEP fired (FD-9 — card-move is a drawn step since M6 slice B). */
   'card_moved',
 ] as const;
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];

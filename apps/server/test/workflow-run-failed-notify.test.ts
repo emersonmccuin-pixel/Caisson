@@ -20,7 +20,6 @@ function baseDeps(over: Partial<DagExecutorDeps> = {}): DagExecutorDeps {
     persist: () => {},
     event: () => {},
     isCancelled: () => false,
-    holdForHuman: () => {},
     ...over,
   };
 }
@@ -195,6 +194,49 @@ test('an explicit loop carry.feedback overrides the auto-seeded notes', async ()
   await exec.advance();
   await exec.onReviewDecision('gate', { kind: 'reject', notes: 'ignored by override' });
   assert.equal(carries[1]?.feedback, 'CUSTOM', 'explicit loop carry wins over the default');
+});
+
+test('loop ceiling PAUSES the run as an escalated HUMAN gate (FD-11 — never fails it)', async () => {
+  const reviews: { reviewer: string; prompt: string }[] = [];
+  const events: string[] = [];
+  let dispatched = 0;
+  const deps = baseDeps({
+    dispatchAgent: async (): Promise<NodeOutcome> => {
+      dispatched += 1;
+      return { state: 'completed', workItemId: `wi-${dispatched}` as ULID };
+    },
+    requestReview: async (node) => {
+      reviews.push({ reviewer: node.reviewer, prompt: node.prompt ?? '' });
+    },
+    event: (ev) => events.push(ev.type),
+    notifyRunFailed: () => {
+      throw new Error('ceiling must PAUSE, not fail');
+    },
+  });
+  const wf: WorkflowV2.Workflow = {
+    id: 'wf',
+    name: 'WF',
+    nodes: [
+      { id: 'build', kind: 'agent', agent: 'x', task: 'build it' },
+      { id: 'gate', kind: 'review', reviewer: 'orchestrator', reject: 'gate-loop' },
+      { id: 'gate-loop', kind: 'loop', back_to: 'build', max_iterations: 2 },
+    ],
+  };
+  const exec = DagExecutor.start(wf, deps, ctxBase);
+  await exec.advance();
+  const s1 = await exec.onReviewDecision('gate', { kind: 'reject', notes: 'no' }); // iter 1 → re-runs
+  assert.equal(s1, 'awaiting-review');
+  assert.equal(dispatched, 2);
+  const s2 = await exec.onReviewDecision('gate', { kind: 'reject', notes: 'still no' }); // iter 2 = ceiling
+  assert.equal(s2, 'awaiting-review', 'ceiling PAUSES the run — it does not fail');
+  assert.equal(dispatched, 2, 'no re-run at the ceiling — the gate waits for a human');
+  assert.ok(events.includes('iteration_ceiling_hit'));
+  const last = reviews[reviews.length - 1]!;
+  assert.equal(last.reviewer, 'human', 'the ceiling gate is escalated to a HUMAN');
+  assert.match(last.prompt, /LOOP CEILING REACHED/);
+  // The human can still approve the held gate and the run completes.
+  const s3 = await exec.onReviewDecision('gate', { kind: 'approve' });
+  assert.equal(s3, 'completed');
 });
 
 test('a completed run does NOT fire notifyRunFailed', async () => {

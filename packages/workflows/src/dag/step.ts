@@ -248,11 +248,14 @@ export function applyReviewDecision(
 
   const max = loop.max_iterations === undefined ? DEFAULT_MAX_ITERATIONS : loop.max_iterations;
   if (max !== null && count >= max) {
+    // FD-11 (M6 slice C) — the ceiling PAUSES, it never executes: the review
+    // goes back to awaiting-review (escalated to a HUMAN gate by the executor)
+    // instead of failing the run. No work is lost; the human approves to
+    // continue, rejects to keep it held, or cancels the run.
     next.nodes[reviewNodeId] = {
       ...next.nodes[reviewNodeId],
-      state: 'failed',
-      error: `loop iteration ceiling reached (${count}/${String(max)}) — held for human review`,
-      endedAt: at,
+      state: 'awaiting-review',
+      error: `loop iteration ceiling reached (${count}/${String(max)}) — escalated to human`,
     };
     return { state: next, kickedBack: null, heldForHuman: true };
   }
@@ -262,6 +265,62 @@ export function applyReviewDecision(
     next.nodes[id] = { state: 'pending', iteration: next.nodes[id]?.iteration ?? 0 };
   }
   return { state: next, kickedBack: subtree, heldForHuman: false };
+}
+
+/**
+ * M6 slice C (FD-11 req 2/3 — restart-at-step / the repair loop). A failed run
+ * resumes against the CURRENT definition (re-frozen as the new snapshot), so
+ * the repair "edit the def → resume from the failed step" actually picks up
+ * the fix. Compatibility rule: every node the OLD run already settled
+ * (completed) or is mid-tracking must still exist in the new def with the SAME
+ * kind — otherwise the kept work would be meaningless. Returns one error per
+ * problem; empty = compatible.
+ */
+export function resumeCompatErrors(
+  workflow: WorkflowV2.Workflow,
+  state: State,
+): string[] {
+  const errors: string[] = [];
+  const byId = new Map(workflow.nodes.map((n) => [n.id, n]));
+  for (const [nodeId, rec] of Object.entries(state.nodes)) {
+    if (rec.state === 'pending') continue; // never ran — no kept work to honor
+    const node = byId.get(nodeId);
+    if (!node) {
+      errors.push(
+        `node "${nodeId}" (${rec.state}) no longer exists in the edited definition — its kept work has no home`,
+      );
+      continue;
+    }
+  }
+  return errors;
+}
+
+/**
+ * Reset a failed run's state for resume: failed / skipped / ghost-running
+ * nodes go back to pending (their work re-runs); completed nodes and loop
+ * bookkeeping (iterations, feedback) are KEPT. Returns the new state + the
+ * node ids that were reset.
+ */
+export function resetFailedNodesForResume(
+  workflow: WorkflowV2.Workflow,
+  state: State,
+): { state: State; resetNodes: string[] } {
+  const next = clone(state);
+  const resetNodes: string[] = [];
+  for (const node of workflow.nodes) {
+    if (isLoopNode(node)) continue; // routing bookkeeping — never reset
+    const rec = next.nodes[node.id];
+    if (!rec) {
+      // A node ADDED by the repair edit — starts pending like any fresh node.
+      next.nodes[node.id] = { state: 'pending' };
+      continue;
+    }
+    if (rec.state === 'failed' || rec.state === 'skipped' || rec.state === 'running' || rec.state === 'awaiting-review') {
+      next.nodes[node.id] = { state: 'pending', iteration: rec.iteration ?? 0 };
+      resetNodes.push(node.id);
+    }
+  }
+  return { state: next, resetNodes };
 }
 
 export type RunStatus = 'running' | 'completed' | 'failed' | 'awaiting-review';

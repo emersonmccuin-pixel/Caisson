@@ -133,4 +133,19 @@ export const workflowsApi = {
       `/api/workflows/${encodeURIComponent(id)}/fire`,
       input ?? {},
     ),
+
+  /** M6 slice C — cancel an in-flight run (cascades to its child agent runs). */
+  cancelV2Run: (projectId: ULID, runId: string) =>
+    postJson<{ ok: true; status: 'cancelled'; cancelledChildren: string[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/workflow-v2/runs/${encodeURIComponent(runId)}/cancel`,
+      {},
+    ),
+
+  /** M6 slice C — resume a FAILED run from its failed step(s). Keeps completed
+   *  work; re-freezes the CURRENT definition (the repair loop). */
+  resumeV2Run: (projectId: ULID, runId: string) =>
+    postJson<{ ok: true; status: string; defChanged: boolean; resetNodes: string[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/workflow-v2/runs/${encodeURIComponent(runId)}/resume`,
+      {},
+    ),
 };

@@ -74,14 +74,12 @@ Each step produces exactly **one output: its deliverable** (the work the agent h
 
 The agent calls `pc_submit_deliverable` — "here's my finished work." That positive receipt is the **only** good "done." No guessing from logs, ever. (This is the law that killed the stall bug; the engine waits on a run-keyed waiter resolved by the one terminal authority.)
 
-### 6. Pause / resume
+### 6. Pause / resume / cancel — ✅ FD-11 reqs 2+3 EXECUTED (M6 slice C, 2026-06-04)
 
 - **Pause at a review** — built and durable. The run survives restarts while parked; the inbox item persists; a decision resumes it exactly where it stopped.
-- **Pause on failure + a user-facing "fix it and resume" button** — **not built.** Today a failed step fails the run (downstream steps are skipped) and you get notified.
-
-> 🟢 **FD-11 (locked 2026-06-03):** "went wrong → fix it → resume" is a core capability — restart at
-> a specific step after repair, repair-loop until the workflow is reliable, run diary readable by the
-> orchestrator.
+- **Loop ceiling = PAUSE, never fail.** A loop's last reject re-posts the gate **escalated to a human** with the loop context ("LOOP CEILING REACHED — approve to continue, reject to hold, or cancel"). No work is lost. ☠ the `holdForHuman` no-op (the run used to just die).
+- **Resume a failed run from its failed step** (`POST …/workflow-v2/runs/:id/resume` · `pc_resume_workflow_run` · the run panel's "Resume from failed step" button). Completed steps are KEPT; failed/skipped/interrupted steps reset and re-run. The resume **re-freezes the CURRENT definition** (compat-checked: an edit that removed a settled step is refused by name) — this IS the repair loop: read the diary → fix the def → resume. Resolves the editing-def-vs-in-flight-runs question: edits never touch live runs EXCEPT through this one explicit door. Boot-interrupted runs land `failed` → resumable the same way.
+- **Cancel a run for real** (`POST …/workflow-v2/runs/:id/cancel` · `pc_cancel_workflow_run` · the run panel's "Cancel run" button): gateway cancel (status + fact + `workflow_cancelled` diary line, one txn) + cascade-cancel of the run's in-flight child agent runs. The workflow soft-delete `?cancel=1` path now rides the same door (it used to skip the diary line and leave workers running). The executor's `isCancelled` poll finally has a real setter.
 
 ### 7. When things go wrong (failure policy)
 
@@ -110,7 +108,7 @@ the new semantics on the spine once).
 ### 10. Watching and stopping a run
 
 - **Watching:** run status changes fan to the UI live (every state write also writes a live-event row in the same transaction — structurally impossible to "forget to announce"). ✅ M3a: step-by-step watching is real — every diary line fans as `workflow.run.event`.
-- **Stopping:** ⚠️ M3a finding — `gateway.cancelRun` exists (and writes the `workflow_cancelled` diary line) but has **no production caller**: no cancel-a-run button or tool exists anywhere; the executor polls `isCancelled` for a setter that never fires. The affordance lands M6/FD-7 era.
+- **Stopping:** ✅ M6 slice C — `gateway.cancelRun` is wired end-to-end (route + run-panel button + `pc_cancel_workflow_run` + the soft-delete path), cascading to child agent runs. See §6.
 
 ---
 
@@ -134,7 +132,9 @@ The first-principles spec reduces the engine to three concepts: **step → trans
 
 **✅ FD-9 EXECUTED (M6 slice B, 2026-06-04):** the four-kind step model is live — see §3. Move + loop are drawn steps; move-as-property and RejectEdge/RetryPolicy are dead; the boot def-migration rewrote stored definitions.
 
-**Remaining:** FD-11 ceiling→human + cancel wired + restart-at-step (M6 slice C) · user-facing resume (#6) · re-attach instead of fail-closed on boot (the one-reconciler work, Step 2).
+**✅ FD-11 reqs 2+3 EXECUTED (M6 slice C, 2026-06-04):** ceiling→human-pause · cancel wired end-to-end · resume-from-failed-step with definition re-freeze — see §6.
+
+**Remaining:** M6 slice D riding cleanups · re-attach instead of fail-closed on boot (the one-reconciler work; interrupted runs are at least RESUMABLE now).
 
 ---
 

@@ -4,7 +4,14 @@ import {
   dismissFailedRun as defaultDismissFailedRun,
   listFailedRunDismissalsForProject as defaultListFailedRunDismissalsForProject,
   workflowRunsV2Repo as defaultWorkflowRunsV2Repo,
+  workflowsRepo,
 } from '@pc/db';
+import {
+  cancelWorkflowRunCascade,
+  type CancelWorkflowRunResult,
+} from '../../services/workflow-run-cancel.ts';
+import type { ResumeFailedRunResult } from '../../services/dag-run-service.ts';
+import type { AgentHostReattachClient } from '../../services/agent-host-reattach.ts';
 
 type WorkflowReviewDecision =
   | { kind: 'approve' }
@@ -25,6 +32,10 @@ export interface WorkflowCompatRuntime {
     nodeId: string,
     decision: WorkflowReviewDecision,
   ): Promise<string | null>;
+  resumeV2Run(
+    runId: ULID,
+    currentDefinition: WorkflowV2.Workflow | null,
+  ): Promise<ResumeFailedRunResult>;
 }
 
 export interface WorkflowCompatRouteDeps {
@@ -36,6 +47,27 @@ export interface WorkflowCompatRouteDeps {
     typeof defaultWorkflowRunsV2Repo,
     'getRunForProject' | 'listEvents' | 'listRunsByProject'
   >;
+  /** Live host resolver (per request) — the cancel cascade sends host `cancel`
+   *  commands for the run's in-flight child agent runs. */
+  getHostConnection?: () => AgentHostReattachClient | null;
+  /** Test seam — defaults to the real cascade service. */
+  cancelWorkflowRun?: typeof cancelWorkflowRunCascade;
+}
+
+/** Resolve the CURRENT (live) definition for a run's workflow slug — project
+ *  scope first, then global. Returns null when missing, invalid, or disabled
+ *  (resume must not run a definition that can't fire). */
+function resolveCurrentDefinition(
+  slug: string,
+  projectId: ULID,
+): WorkflowV2.Workflow | null {
+  const row =
+    workflowsRepo.getWorkflowBySlug({ slug, scope: 'project', projectId }) ??
+    workflowsRepo.getWorkflowBySlug({ slug, scope: 'global' });
+  if (!row || row.status !== 'active' || row.disabled || row.parsedDefinition === null) {
+    return null;
+  }
+  return row.parsedDefinition as WorkflowV2.Workflow;
 }
 
 export function registerWorkflowCompatRoutes(app: Hono, deps: WorkflowCompatRouteDeps): void {
@@ -135,5 +167,52 @@ export function registerWorkflowCompatRoutes(app: Hono, deps: WorkflowCompatRout
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 400);
     }
+  });
+
+  /** M6 slice C (FD-11) — cancel a workflow run for real: gateway cancel
+   *  (status + fact + `workflow_cancelled` diary line) + cascade-cancel the
+   *  run's in-flight child agent runs. */
+  app.post('/api/projects/:projectId/workflow-v2/runs/:runId/cancel', async (c) => {
+    const id = c.req.param('projectId');
+    const runtime = deps.resolveProject(id);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    const cancel = deps.cancelWorkflowRun ?? cancelWorkflowRunCascade;
+    const result: CancelWorkflowRunResult = await cancel({
+      projectId: runtime.project.id,
+      runId: c.req.param('runId') as ULID,
+      ...(deps.getHostConnection ? { getHostConnection: deps.getHostConnection } : {}),
+    });
+    if (!result.ok) {
+      return c.json(
+        { ok: false, error: result.error },
+        result.code === 'not-found' ? 404 : 409,
+      );
+    }
+    return c.json({ ok: true, status: 'cancelled', cancelledChildren: result.cancelledChildren });
+  });
+
+  /** M6 slice C (FD-11 req 2+3) — resume a FAILED run from its failed step(s).
+   *  Re-freezes the CURRENT definition (the repair loop: edit the def → resume
+   *  → the fix is live), compat-checked against the run's kept work. */
+  app.post('/api/projects/:projectId/workflow-v2/runs/:runId/resume', async (c) => {
+    const id = c.req.param('projectId');
+    const runtime = deps.resolveProject(id);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    const runId = c.req.param('runId') as ULID;
+    const run = services.workflowRunsV2Repo.getRunForProject(runId, runtime.project.id);
+    if (!run) return c.json({ ok: false, error: `unknown run: ${runId}` }, 404);
+    const def = resolveCurrentDefinition(run.workflowId, runtime.project.id);
+    const result = await runtime.resumeV2Run(runId, def);
+    if (!result.ok) {
+      const code =
+        result.code === 'not-found' ? 404 : result.code === 'incompatible' ? 409 : 400;
+      return c.json({ ok: false, error: result.error, code: result.code }, code);
+    }
+    return c.json({
+      ok: true,
+      status: result.status,
+      defChanged: result.defChanged,
+      resetNodes: result.resetNodes,
+    });
   });
 }

@@ -70,8 +70,6 @@ export interface DagExecutorDeps {
   event(ev: { type: WorkflowV2.WorkflowEventType; nodeId?: string; data?: Record<string, unknown> }): void;
   /** External cancellation check (between layers). */
   isCancelled(): boolean;
-  /** Route a ceiling-exceeded review to Human Review (Section 7). */
-  holdForHuman(nodeId: string, reason: string): void;
   /** Workflow-engine redesign — fired once when the run finalizes as `failed`,
    *  carrying the derived failure reason. Delivers a notice to the human inbox +
    *  the project orchestrator (offline → persists, drains next pass). Optional so
@@ -293,12 +291,34 @@ export class DagExecutor {
     });
 
     if (outcome.heldForHuman) {
-      // Ceiling reached: the review node is now `failed`. Surface it to Human
-      // Review (Section 7) for visibility, then advance — downstream nodes whose
-      // only path ran through the failed review get skipped, and the run
-      // finalizes to `failed`.
+      // FD-11 (M6 slice C) — the ceiling PAUSES, it never executes. The review
+      // is back at awaiting-review; re-post it ESCALATED TO A HUMAN gate with
+      // the loop context so the run waits (durably) instead of dying. The human
+      // approves to continue past the gate, rejects to keep it held, or cancels
+      // the run. ☠ the old holdForHuman no-op (the run used to just fail).
       this.deps.event({ type: 'iteration_ceiling_hit', nodeId: reviewNodeId });
-      this.deps.holdForHuman(reviewNodeId, 'loop iteration ceiling reached');
+      const reviewNode = this.byId.get(reviewNodeId);
+      if (reviewNode && isReview(reviewNode)) {
+        const loopId = reviewNode.reject;
+        const count = loopId ? (this.state.rejectIterations?.[loopId] ?? 0) : 0;
+        const resolve = this.deps.resolveRef(this.state);
+        const bundle = this.resolveBundle(reviewNode, resolve);
+        const escalated: WorkflowV2.ReviewNode = {
+          ...reviewNode,
+          reviewer: 'human',
+          prompt:
+            `⚠ LOOP CEILING REACHED — this gate rejected ${String(count)} time(s); the loop is exhausted. ` +
+            `A human decision is required: APPROVE to accept the latest work and continue, ` +
+            `REJECT to keep it held here, or cancel the run.\n\n` +
+            (reviewNode.prompt ?? ''),
+        };
+        await this.deps.requestReview(escalated, this.ctx(resolve), bundle);
+        this.deps.event({
+          type: 'review_requested',
+          nodeId: reviewNodeId,
+          data: { bundle, escalated: true, iterations: count },
+        });
+      }
     }
     // ☠ FD-9 (M6 slice B): the approve-move / reject-move card effects are
     // gone — the card moves ONLY via explicit `move` steps on the forward path.

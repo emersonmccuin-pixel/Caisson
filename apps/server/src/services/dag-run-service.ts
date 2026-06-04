@@ -10,6 +10,8 @@ import type { ExpectedOutput, Project, ULID, WorkflowV2 } from '@pc/domain';
 import {
   substituteRefs,
   substituteInputs,
+  resumeCompatErrors,
+  resetFailedNodesForResume,
   type RefResolver,
   type ReviewDecision,
   type RunStatus,
@@ -456,13 +458,9 @@ export function makeExecutorDeps(
         workItemId: run.workItemId ?? null,
         reason,
       }),
-    holdForHuman: (_nodeId, _reason) => {
-      // Slice 015c — the legacy `workflow-v2-human-hold` envelope is deleted: it
-      // had no web consumer, and the durable fact (the run advancing to `failed`
-      // on the iteration-ceiling path) already rides the relay's
-      // `workflow.run.changed` frame, with the `iteration_ceiling_hit` event
-      // appended to the run log for audit. Nothing else to deliver.
-    },
+    // ☠ holdForHuman (M6 slice C / FD-11): the ceiling now PAUSES the run as an
+    // escalated HUMAN review gate (executor re-posts via requestReview) instead
+    // of failing it — the no-op seam is gone.
   };
 }
 
@@ -596,4 +594,92 @@ export async function applyV2ReviewDecision(
       : {}),
   });
   return result;
+}
+
+export type ResumeFailedRunResult =
+  | { ok: true; runId: ULID; status: RunStatus; defChanged: boolean; resetNodes: string[] }
+  | { ok: false; code: 'not-found' | 'not-failed' | 'no-definition' | 'incompatible'; error: string };
+
+/**
+ * M6 slice C — FD-11 req 2+3: restart-at-step / the repair loop. Resume a
+ * FAILED run: re-freeze the CURRENT definition as the run's new snapshot
+ * (compat-checked — every node the run already settled must still exist), reset
+ * failed/skipped/ghost nodes to pending (completed work is KEPT), flip the run
+ * back to running with a `run_resumed` diary line, and re-advance. This is the
+ * ONE door through which an edited definition reaches an existing run.
+ */
+export async function resumeFailedDagRun(
+  runId: ULID,
+  currentDefinition: WorkflowV2.Workflow | null,
+  opts: DagRunServiceOptions,
+): Promise<ResumeFailedRunResult> {
+  const run = workflowRunsV2Repo.getRun(runId);
+  if (!run) return { ok: false, code: 'not-found', error: `unknown run: ${runId}` };
+  if (run.status !== 'failed') {
+    return {
+      ok: false,
+      code: 'not-failed',
+      error: `run is ${run.status} — only failed runs can be resumed from their failed step`,
+    };
+  }
+  if (!currentDefinition) {
+    return {
+      ok: false,
+      code: 'no-definition',
+      error: `the workflow definition "${run.workflowId}" is missing or invalid — repair it before resuming`,
+    };
+  }
+
+  const compat = resumeCompatErrors(currentDefinition, run.dagState);
+  if (compat.length > 0) {
+    return {
+      ok: false,
+      code: 'incompatible',
+      error: `the edited definition is incompatible with this run's kept work: ${compat.join('; ')}`,
+    };
+  }
+
+  const frozen = JSON.stringify(currentDefinition);
+  const defChanged = frozen !== run.workflowYamlSnapshot;
+  const { state: resetState, resetNodes } = resetFailedNodesForResume(
+    currentDefinition,
+    run.dagState,
+  );
+
+  // One gateway txn: new snapshot + reset state + status running + the
+  // workflow.run.changed fact. The diary line rides its own gateway write.
+  runGateway.commitRunChange({
+    projectId: opts.projectId,
+    reason: 'advanced',
+    mutate: () => {
+      workflowRunsV2Repo.setWorkflowYamlSnapshot(runId, frozen);
+      workflowRunsV2Repo.setDagState(runId, resetState);
+      workflowRunsV2Repo.setStatus(runId, 'running', { lastReason: null });
+      return workflowRunsV2Repo.getRun(runId);
+    },
+  });
+  runGateway.appendRunEvent({
+    projectId: opts.projectId,
+    runId,
+    type: 'run_resumed',
+    data: { resetNodes, defChanged },
+  });
+
+  const deps = makeExecutorDeps(
+    { id: run.id, workItemId: run.workItemId, worktreePath: run.worktreePath },
+    currentDefinition,
+    opts,
+  );
+  const exec = DagExecutor.resume(currentDefinition, resetState, deps, {
+    runId: run.id,
+    rootWorkItemId: run.workItemId,
+    worktreePath: run.worktreePath,
+  });
+  // Advance in the background (mirrors fireDagWorkflow) — the route returns a
+  // receipt now; the run proceeds + broadcasts on its own.
+  exec.advance().catch((err: Error) => {
+    console.error(`[dag-run] resumed run ${runId} failed:`, err.message);
+  });
+
+  return { ok: true, runId, status: 'running', defChanged, resetNodes };
 }
