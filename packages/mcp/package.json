@@ -10,6 +10,10 @@
       "types": "./src/server.ts",
       "import": "./src/server.ts",
       "default": "./dist/server.mjs"
+    },
+    "./http-endpoint": {
+      "types": "./src/http-endpoint.ts",
+      "import": "./src/http-endpoint.ts"
     }
   },
   "scripts": {

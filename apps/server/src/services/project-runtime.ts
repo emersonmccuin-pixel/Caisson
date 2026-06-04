@@ -481,6 +481,12 @@ export class ProjectRuntime {
         projectId: this.project.id,
         worktreeDir: this.project.folderPath,
         scratchDir: sessionDir,
+        // FD-2 — identity for the pc-rig HTTP headers (mirrors the
+        // PC_SESSION_ID / PC_AGENT_SESSION_ID env below).
+        identity: {
+          sessionId: session.row.id,
+          agentSessionId: session.providerSessionId,
+        },
         dataDir: this.opts.dataDir,
         templatesDir: this.opts.templatesDir,
         trunkPath: this.opts.trunkPath,
@@ -778,6 +784,9 @@ export class ProjectRuntime {
       projectId: this.project.id,
       worktreeDir: this.project.folderPath,
       scratchDir: sessionDir,
+      // FD-2 — transient identity; agentSessionId stays empty (modals never
+      // armed the MCP-handshake gate — parity with the stdio child).
+      identity: { sessionId: transientId },
       dataDir: this.opts.dataDir,
       templatesDir: this.opts.templatesDir,
       trunkPath: this.opts.trunkPath,
@@ -918,6 +927,8 @@ export class ProjectRuntime {
       projectId: this.project.id,
       worktreeDir: this.project.folderPath,
       scratchDir: sessionDir,
+      // FD-2 — transient identity (see agent-designer note).
+      identity: { sessionId: transientId },
       dataDir: this.opts.dataDir,
       templatesDir: this.opts.templatesDir,
       trunkPath: this.opts.trunkPath,
@@ -1007,6 +1018,8 @@ export class ProjectRuntime {
       projectId: this.project.id,
       projectSlug: this.project.slug,
       projectName: this.project.name,
+      // FD-2 — transient identity (see agent-designer note).
+      identity: { sessionId: transientId },
       dataDir: this.opts.dataDir,
       templatesDir: this.opts.templatesDir,
       trunkPath: this.opts.trunkPath,

@@ -313,7 +313,7 @@ export function StatusBar({
               {mcp === null
                 ? 'Loading…'
                 : !mcp.alive
-                  ? 'No MCP servers reporting. The pc-rig server publishes a heartbeat to mcp-status.json; offline means no heartbeat in the last 8 seconds.'
+                  ? 'No MCP servers reporting. The pc-rig tools endpoint lives inside the API server; offline means the API itself is unreachable.'
                   : 'Server is alive but reports no tools.'}
             </p>
           ) : (

@@ -1,12 +1,12 @@
-// Slice 011 (11F) — external/per-pod MCP server config SHAPE validation +
-// boot-time .mcp.json rewriter suffix-match behavior. Config shape only;
-// capability discovery is out of scope (plan section 14/16).
+// Slice 011 (11F) — external/per-pod MCP server config SHAPE validation.
+// Config shape only; capability discovery is out of scope (plan section 14/16).
+// ☠ FD-2: the applyNodeLauncher rewriter died with the stdio pc-rig child —
+// the baseline is an HTTP entry now; no node launcher to swap.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { parsePodMcpServerConfig } from '../src/services/pod-mcp-config.ts';
-import { applyNodeLauncher } from '../src/services/mcp-config-rewrite.ts';
 
 // ── parsePodMcpServerConfig: valid shapes accepted ──────────────────────────
 
@@ -79,15 +79,3 @@ test('rejects wrong types for command / args / env / url', () => {
   assert.throws(() => parsePodMcpServerConfig({ url: 5 }), /url must be a string/);
 });
 
-test('applyNodeLauncher only touches PC-node servers (suffix match), leaves foreign ones', () => {
-  const config = {
-    mcpServers: {
-      'pc-rig': { command: 'oldnode', args: ['/x/packages/mcp/dist/server.mjs'] },
-      gmail: { command: 'python', args: ['gmail_server.py'] },
-    },
-  };
-  const changed = applyNodeLauncher(config, { command: 'node', env: {} });
-  assert.equal(changed, true);
-  assert.equal(config.mcpServers['pc-rig'].command, 'node');
-  assert.equal(config.mcpServers.gmail.command, 'python'); // foreign untouched
-});

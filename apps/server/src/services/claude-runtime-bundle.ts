@@ -11,14 +11,33 @@ import { resolve } from 'node:path';
 
 import { getProjectById } from '@pc/db';
 import type { PodMcpServerConfig, ULID } from '@pc/domain';
-import { resolveNodeLauncher } from '@pc/runtime';
+import {
+  PC_MCP_CLAIM_HEADERS,
+  PC_MCP_TOKEN_HEADER,
+  type PcMcpClaims,
+} from '@pc/mcp/http-endpoint';
 import { getDataDir } from '@pc/utils';
 
 import { SERVER_ROOT } from '../server-root.ts';
-import { applyNodeLauncher } from './mcp-config-rewrite.ts';
+import { mcpAuthSecret, signMcpClaims } from './mcp-http-auth.ts';
 import { renderTemplate } from './project-scaffold.ts';
 
 const DEFAULT_SERVER_PORT = 4040;
+
+/** FD-2 — per-spawn identity baked into the pc-rig HTTP entry's headers.
+ *  Mirrors the env-var set the stdio child used to read (PC_SESSION_ID,
+ *  PC_AGENT_SESSION_ID, PC_AGENT_RUN_ID, …). Omit a field where the old env
+ *  was absent for that spawn kind — behavior parity, not new policy. */
+export interface ClaudeRuntimeIdentity {
+  /** Orchestrator session ULID / transient `ad-*`/`wb-*`/`sw-*` id. */
+  sessionId?: string;
+  /** CC session uuid — drives the MCP-handshake ReadyGate signal. */
+  agentSessionId?: string;
+  agentRunId?: string;
+  dispatcherSessionId?: string;
+  parentWorkItemId?: string;
+  invokeDepth?: number;
+}
 
 export interface ClaudeRuntimeFilesInput {
   /** Per-session or per-run scratch dir. Runtime files land under here. */
@@ -28,6 +47,7 @@ export interface ClaudeRuntimeFilesInput {
   projectId?: ULID | null;
   projectSlug?: string | null;
   projectName?: string | null;
+  identity?: ClaudeRuntimeIdentity;
   dataDir?: string;
   templatesDir?: string;
   trunkPath?: string;
@@ -91,6 +111,7 @@ interface RuntimeContext {
   projectSlug: string;
   projectName: string;
   worktreeDir: string;
+  identity: ClaudeRuntimeIdentity;
   dataDir: string;
   templatesDir: string;
   trunkPath: string;
@@ -125,6 +146,7 @@ function resolveRuntimeContext(input: ClaudeRuntimeFilesInput): RuntimeContext {
     projectSlug,
     projectName,
     worktreeDir,
+    identity: input.identity ?? {},
     dataDir,
     templatesDir,
     trunkPath,
@@ -144,23 +166,38 @@ function resolveRuntimeContext(input: ClaudeRuntimeFilesInput): RuntimeContext {
 }
 
 function renderPcMcpBaseline(ctx: RuntimeContext): Record<string, PodMcpServerConfig> {
-  const config: { mcpServers: Record<string, PodMcpServerConfig> } = {
-    mcpServers: {
-      'pc-rig': {
-        command: 'node',
-        args: [posixPath(resolve(ctx.trunkPath, 'packages', 'mcp', 'dist', 'server.mjs'))],
-        env: {
-          PC_PROJECT_ID: ctx.projectId,
-          PC_PROJECT_SLUG: ctx.projectSlug,
-          PC_SERVER_PORT: String(ctx.serverPort),
-        },
+  // ☠ FD-2 (Step-4 Slice 0): the per-session stdio pc-rig child is DEAD — every
+  // PC-spawned session calls the ONE shared HTTP tools endpoint in the API
+  // server. Identity = claim headers + an HMAC token the server signed at spawn
+  // time (mcp-http-auth); the endpoint re-verifies on every request.
+  // ☠ FD-3: the `webhook` channel-server entry is gone — the mailbox is the one
+  // notify door; no per-session channel child is spawned.
+  const claims: PcMcpClaims = {
+    projectId: ctx.projectId,
+    sessionId: ctx.identity.sessionId ?? '',
+    agentSessionId: ctx.identity.agentSessionId ?? '',
+    agentRunId: ctx.identity.agentRunId ?? '',
+    dispatcherSessionId: ctx.identity.dispatcherSessionId ?? '',
+    parentWorkItemId: ctx.identity.parentWorkItemId ?? '',
+    invokeDepth: ctx.identity.invokeDepth ?? 0,
+  };
+  const token = signMcpClaims(mcpAuthSecret(ctx.dataDir), claims);
+  return {
+    'pc-rig': {
+      type: 'http',
+      url: `http://127.0.0.1:${ctx.serverPort}/api/mcp`,
+      headers: {
+        [PC_MCP_CLAIM_HEADERS.projectId]: claims.projectId,
+        [PC_MCP_CLAIM_HEADERS.sessionId]: claims.sessionId,
+        [PC_MCP_CLAIM_HEADERS.agentSessionId]: claims.agentSessionId,
+        [PC_MCP_CLAIM_HEADERS.agentRunId]: claims.agentRunId,
+        [PC_MCP_CLAIM_HEADERS.dispatcherSessionId]: claims.dispatcherSessionId,
+        [PC_MCP_CLAIM_HEADERS.parentWorkItemId]: claims.parentWorkItemId,
+        [PC_MCP_CLAIM_HEADERS.invokeDepth]: String(claims.invokeDepth),
+        [PC_MCP_TOKEN_HEADER]: token,
       },
-      // ☠ FD-3: the `webhook` channel-server entry is gone — the mailbox is
-      // the one notify door; no per-session channel child is spawned.
     },
   };
-  applyNodeLauncher(config, resolveNodeLauncher());
-  return config.mcpServers;
 }
 
 function runtimeEnv(ctx: RuntimeContext): Record<string, string> {

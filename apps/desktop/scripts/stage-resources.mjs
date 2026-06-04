@@ -10,8 +10,10 @@
 //     agent-host.mjs                 bundled out-of-process agent host
 //     apps/web/dist/                 web UI (PUBLIC)
 //     templates/                     project scaffold templates
-//     packages/mcp/dist/server.mjs   pc-rig MCP server (self-contained; spawned)
 //     node_modules/                  server externals (better-sqlite3, node-pty)
+//
+// ☠ FD-2: packages/mcp/dist/server.mjs is no longer staged — the stdio pc-rig
+// child died with the shared HTTP tools endpoint (served by server.mjs itself).
 //
 // Native deps are the only non-bundled pieces: node-pty ships N-API prebuilds
 // (ABI-stable, copied as-is); better-sqlite3 is V8-ABI and gets rebuilt for
@@ -59,10 +61,7 @@ copy(resolve(TRUNK, 'templates'), 'templates');
 // 3b. Drizzle migrations (read at runtime by runMigrations via ROOT-relative path)
 copy(resolve(TRUNK, 'packages/db/drizzle'), 'packages/db/drizzle');
 
-// 4. pc-rig MCP server (self-contained bundle)
-copy(resolve(TRUNK, 'packages/mcp/dist/server.mjs'), 'packages/mcp/dist/server.mjs');
-copy(resolve(TRUNK, 'packages/mcp/dist/server.mjs.map'), 'packages/mcp/dist/server.mjs.map');
-
+// ☠ FD-2: the pc-rig stdio bundle staging step is gone (shared HTTP endpoint).
 // ☠ FD-3: the channel-server bundle step is gone with the channel system.
 
 // 6. native externals for the server bundle

@@ -1,8 +1,10 @@
 import './diagnostics.ts'; // FIRST — arm crash capture before anything else loads
 
 import { serve } from '@hono/node-server';
+import { RESPONSE_ALREADY_SENT } from '@hono/node-server/utils/response';
 import { Hono } from 'hono';
 import { readFile, stat } from 'node:fs/promises';
+import type { IncomingMessage, ServerResponse as NodeServerResponse } from 'node:http';
 import { isAbsolute, relative, resolve } from 'node:path';
 
 import { SERVER_ROOT } from './server-root.ts';
@@ -82,7 +84,12 @@ import { registerLiveEventRoutes } from './features/live-events/routes.ts';
 import { registerDevControlRoutes } from './features/dev-controls/routes.ts';
 import { registerProjectContextRoutes } from './features/project-context/routes.ts';
 import { registerWorkflowCompatRoutes } from './features/workflow-compat/routes.ts';
-import { registerMcpBridgeRoutes } from './features/mcp-bridge/routes.ts';
+import {
+  createMcpHandshakeRouter,
+  registerMcpBridgeRoutes,
+} from './features/mcp-bridge/routes.ts';
+import { createPcRigHttpEndpoint } from '@pc/mcp/http-endpoint';
+import { mcpAuthSecret, verifyMcpToken } from './services/mcp-http-auth.ts';
 import {
   createPendingAskStore,
   registerChatBridgeRoutes,
@@ -490,6 +497,37 @@ registerMcpBridgeRoutes(app, {
   dataDir: DATA,
   resolveProject,
   getHostClient: () => hostConnection,
+});
+
+// ── FD-2 (Step-4 Slice 0) — THE shared HTTP MCP tools endpoint ─────────────
+// Every PC-spawned claude.exe calls here ({type:'http'} in its session-local
+// mcp.json) instead of spawning a per-session stdio pc-rig child. Identity =
+// signed claim headers (mcp-http-auth); the JSON-RPC `initialized` signal
+// routes through the same handshake door the stdio child POSTed to.
+const mcpHandshakeRouter = createMcpHandshakeRouter({
+  dataDir: DATA,
+  resolveProject,
+  getHostClient: () => hostConnection,
+});
+const pcRigHttpEndpoint = createPcRigHttpEndpoint({
+  serverPort: PORT,
+  verify: (claims, token) => verifyMcpToken(mcpAuthSecret(DATA), claims, token),
+  onInitialized: (claims) => {
+    void mcpHandshakeRouter(claims.projectId, claims.agentSessionId).catch(() => {
+      /* best-effort — ReadyGate timeout backstops a lost signal */
+    });
+  },
+  log: (line) => console.log(`[pc] ${line}`),
+});
+app.all('/api/mcp', async (c) => {
+  // The MCP transport writes the node response directly — hand it the raw
+  // sockets and tell Hono the response is already gone.
+  const { incoming, outgoing } = c.env as {
+    incoming: IncomingMessage;
+    outgoing: NodeServerResponse;
+  };
+  await pcRigHttpEndpoint.handleRequest(incoming, outgoing);
+  return RESPONSE_ALREADY_SENT;
 });
 
 // ── Slice 007 — mailbox platform (additive; alongside Channel, no cutover) ──

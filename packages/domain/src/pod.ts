@@ -69,12 +69,15 @@ export const POD_AUDIT_FIELDS: readonly PodAuditField[] = [
 
 /** Inline MCP server config stored on `agent_mcp_servers.config_json`.
  *  Mirrors the on-disk `.mcp.json` `mcpServers` value shape — `command + args
- *  + env` for stdio, `url` for HTTP/SSE. Validated at materialisation time. */
+ *  + env` for stdio, `type:'http' + url + headers` for HTTP (FD-2: the pc-rig
+ *  baseline is an HTTP entry). Validated at materialisation time. */
 export interface PodMcpServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  type?: string;
   url?: string;
+  headers?: Record<string, string>;
 }
 
 /** Provenance of an agent row. `'stock'` rows are seeded by PC at boot;

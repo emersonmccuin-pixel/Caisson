@@ -347,6 +347,14 @@ export async function dispatchFreshAgent(
       worktreeDir: input.worktreeDir,
       scratchDir,
       workItem: workItem ?? undefined,
+      // FD-2 — identity for the pc-rig HTTP headers (mirrors buildAgentEnv).
+      identity: {
+        agentSessionId: ccSessionId,
+        agentRunId,
+        dispatcherSessionId: input.dispatcherSessionId,
+        parentWorkItemId: input.parentWorkItemId ?? '',
+        invokeDepth: input.invokeDepth,
+      },
     });
   } catch (err) {
     return {
@@ -562,6 +570,14 @@ export async function dispatchContinueAgent(
       worktreeDir: input.worktreeDir,
       scratchDir,
       workItem: continueWorkItem ?? undefined,
+      // FD-2 — identity for the pc-rig HTTP headers (mirrors buildAgentEnv).
+      identity: {
+        agentSessionId: plan.plan.ccSessionId,
+        agentRunId: plan.plan.agentRunId,
+        dispatcherSessionId: plan.plan.dispatcherSessionId,
+        parentWorkItemId: plan.plan.parentWorkItemId ?? '',
+        invokeDepth: plan.plan.parentInvokeDepth,
+      },
     });
   } catch (err) {
     markAgentRunTerminal({

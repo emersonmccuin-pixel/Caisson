@@ -18,7 +18,10 @@
 import { getPodForSpawn } from '@pc/db';
 import type { ULID } from '@pc/domain';
 import { materializePodPlugin, type MaterializedPluginPod, type PodWorkItemContext } from '@pc/runtime';
-import { prepareClaudeRuntimeFiles } from './claude-runtime-bundle.ts';
+import {
+  prepareClaudeRuntimeFiles,
+  type ClaudeRuntimeIdentity,
+} from './claude-runtime-bundle.ts';
 import { PC_RIG_TOOL_NAMES } from './pod-tool-catalog.ts';
 import { renderAvailableAgents } from './pod-variable-renderers.ts';
 
@@ -41,6 +44,9 @@ export interface PreparePodSpawnInput {
    *  expected_output JSON. Null / undefined → no section emitted, matching
    *  today's behaviour. */
   workItem?: PodWorkItemContext;
+  /** FD-2 — per-spawn identity baked into the pc-rig HTTP entry headers
+   *  (replaces the env-var identity the stdio child read). */
+  identity?: ClaudeRuntimeIdentity;
   /** Optional runtime wiring overrides. Production project runtimes pass these
    *  explicitly; server-side agent routes can fall back to process defaults. */
   dataDir?: string;
@@ -90,6 +96,7 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
     projectId: input.projectId,
     projectSlug: input.projectSlug,
     projectName: input.projectName,
+    identity: input.identity,
     dataDir: input.dataDir,
     templatesDir: input.templatesDir,
     trunkPath: input.trunkPath,
