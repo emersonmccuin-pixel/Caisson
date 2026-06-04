@@ -68,12 +68,12 @@ When an agent calls `pc_submit_deliverable`, the work goes through the **termina
 
 | Store directive | Where it goes | Notes |
 |---|---|---|
-| `contract` | Stays on the contract row | The result is accessible to anything that reads the contract |
-| `work_item_body` | Written to `work_items.body` | ⚠️ This column is also read by the workflow engine as `$root.output` — don't break this write without a guard test |
-| `attachment` | Creates a new attachment row | Default when a work item is linked |
+| `contract` | Stays on the contract row | **The DEFAULT since M5 (FD-5)** — the Work Contract is the result's home |
+| ~~`work_item_body`~~ | ☠ **DELETED in M5 (2026-06-04)** | Body = the human brief only; `$root.output` reads it as the brief. Guard: `m5-root-output-round-trip.test.ts` + banned name |
+| `attachment` | Creates a new attachment row | Explicit placement (requires a linked work item) |
 | `repo_file` | Written to a file in the agent's worktree | Path-containment guard: no `..` escapes allowed |
 
-> **Tie-in:** the `store` directive is part of the **Work Contract** — the record that defines an agent's assignment and expected output. Where deliverables live is tracked as an open decision in the Foundation Decisions backlog (see §"Decisions & open questions").
+> **Tie-in:** the `store` directive is part of the **Work Contract** — the record that defines an agent's assignment and expected output. FD-5 delivered (M5): the contract IS where deliverables live.
 
 Only prose-typed contracts with non-empty text trigger a write. Failures come back as typed errors (`store-target-missing`, `store-path-invalid`, `store-write-failed`) — the agent gets a real error, not a silent drop. (`apply-deliverable-store.ts:29–42`, `143–148`, `186–189`)
 
@@ -203,8 +203,10 @@ An agent that calls `pc_ask_*` immediately after spawn may find its DB row still
 the "breaks orchestrator delivery" fear was wrong — the hook only read rows nothing wrote.
 Hook + repo + tables deleted (0041 archive); NO-INBOX-WRITE gate.
 
-**5. `work_items.body` does double duty.**
-`applyDeliverableStore` writes prose deliverables to `work_items.body` when `store: work_item_body`. That same column is read by `dag-run-service.ts:173` to resolve `$root.output` workflow refs. Deleting or repurposing this write silently breaks workflow variable resolution. Ledger verdict: KEEP + add a round-trip guard test. (`consolidation-ledger-2026-06-02.md §2 Sources of truth`)
+**5.** ~~`work_items.body` does double duty.~~ ✅ M5 (2026-06-04): ☠ `store: work_item_body` —
+the body is the brief only; `$root.output` reads it as exactly that (refute: 0 live defs ever
+used the store). Round-trip guard written FIRST, amended deliberately
+(`m5-root-output-round-trip.test.ts`); `work_item_body` in the banned-resurrection set.
 
 **6. `SubagentFailureSignal` vocabulary is pre-redesign. (unverified)**
 `packages/domain/src/subagent-failure.ts` references `pc_node_failed`, `pc_complete_node`, and the `subagent:` node field — concepts deleted in the first-principles redesign. The v2 executor doesn't call this shape, but it's unclear whether any live path still emits or consumes it.
@@ -216,9 +218,11 @@ Hook + repo + tables deleted (0041 archive); NO-INBOX-WRITE gate.
 **For Emerson (product calls):**
 
 *(All three resolved 2026-06-03 → Foundation Decisions:)*
-1. ~~Where does a deliverable live?~~ 🟢 **FD-5:** the result lives on the **Work Contract**;
-   `expected_output` + `output_destination` move there too (job-level, not agent-level);
-   `work_items.body` goes back to human-description-only. Needs the round-trip guard test first.
+1. ~~Where does a deliverable live?~~ 🟢 **FD-5 ✅ DELIVERED in M5 (2026-06-04, as amended):** the
+   result lives on the **Work Contract**; `work_items.body` is human-description-only;
+   `output_destination` was a dead knob → deleted (not moved); pod `expected_output` survives as a
+   documented default (contract row = per-run authority). Agents read their job via
+   `pc_get_contract` + attachment read tools.
 2. ~~Two overlapping "open question" tables.~~ 🟢 **FD-7:** the **Human Inbox System workstream**
    picks ONE canonical durable inbox surface — this question is absorbed there.
 3. ~~Verification tiers merge?~~ 🟢 **FD-7:** also absorbed by the Human Inbox workstream (one

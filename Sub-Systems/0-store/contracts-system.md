@@ -193,9 +193,10 @@ Work Contract directly via REST.
 
 ## Target shape (per north star + Foundation Decisions)
 
-Consolidation ledger (`consolidation-ledger-2026-06-02.md §2`) verdict:
-**KEEP `agent_contracts.deliverable` as the owned deliverable store. KEEP `work_items.body` for
-backward-compat** (`dag-run-service.ts` reads it live for `$root.output` refs) — do not delete.
+Consolidation ledger (`consolidation-ledger-2026-06-02.md §2`) verdict, **executed in M5
+(2026-06-04)**: `agent_contracts.deliverable` IS the one deliverable store; `work_items.body` is
+the human brief ONLY (☠ `store: work_item_body`; `$root.output` reads the body as the brief —
+guard: `m5-root-output-round-trip.test.ts`).
 
 `@pc/contracts` as the boundary-type package is **foundational and unchanged by the migration**.
 The five-role design just requires every new boundary type to be added here. The package is already
@@ -220,10 +221,10 @@ truth (ledger row 12 / slice 3), `appendEvent` will route through the live-outbo
   `Deliverable` / `AcceptancePredicate` union. The comment in `contracts.ts:9` explains this is
   intentional (browser safety), but any change must be made in both files. No drift guard exists
   today (unverified).
-- **`work_items.body` does double duty.** `dag-run-service.ts:173` reads `wi.body` live to resolve
-  `$root.output` workflow refs, so the body field is both a display field and a workflow-ref source.
-  Ledger verdict is KEEP + document; a round-trip guard is recommended but not written
-  (`consolidation-ledger-2026-06-02.md §0`).
+- ~~**`work_items.body` does double duty.**~~ ✅ M5 (2026-06-04): ☠ `store: work_item_body` — the
+  body is the brief only; the round-trip guard exists (`m5-root-output-round-trip.test.ts`).
+  Agents read their job via `pc_get_contract` (spec + acceptance criteria; AC now derived onto the
+  contract row at dispatch mint) + `pc_list_attachments`/`pc_get_attachment`.
 - ~~**The workflow run-events diary is write-only.**~~ ✅ M3a (2026-06-04): every line through the
   run gateway's `appendRunEvent` + a `workflow.run.event` live fact (new contract in
   `workflow-runs.ts`: `WorkflowRunEventLivePayload`); read by `pc_get_workflow_run` + the run

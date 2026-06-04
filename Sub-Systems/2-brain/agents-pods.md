@@ -51,10 +51,10 @@ These are the dials that define the agent. (`schema.ts:580`)
 | **model** | Which Claude "brain" it uses | `opus` (most capable) / `sonnet` (faster) |
 | **effort** | How hard it thinks before answering | `low` / `medium` / `high` |
 | **max_turns** | How many back-and-forth steps it gets before it must wrap up | a number, or empty = no cap |
-| **output_destination** | Where its result goes when done. 🟢 *FD-5: moves to the Work Contract in the rebuild (job-level, not agent-level)* | `chat` (posts to the conversation) / `passthrough` (hands the raw result back to whatever called it) |
+| ~~**output_destination**~~ | ☠ **DELETED in M5 (2026-06-04, FD-5 amendment)** — refute showed it was a dead knob: stored + editable + seeded, read by NOTHING. Results reach you via the agent's terminal notice → orchestrator relay; prose placement is the contract's `store`. (Migration 0042; field gone from the settings UI.) | — |
 | **description** | A human-readable summary of what it does (shown in the UI) | "Drafts emails, docs, summaries…" |
 | **dispatch_guidance** | A note that tells the *orchestrator* **when** to pick this agent | "use for drafting prose" |
-| **expected_output** | What kind of result it's supposed to produce by default. 🟢 *FD-5: moves to the Work Contract in the rebuild* | (a description of the deliverable) |
+| **expected_output** | What kind of result it's supposed to produce by default. 🟢 *FD-5 as amended (M5, 2026-06-04): STAYS as an explicit DEFAULT — the contract row is the per-run authority and dispatch always wins* | (a description of the deliverable) |
 | **scope** | Where the agent is available. 🟢 *FD-4: rebuild collapses scope+origin into one field: `built-in` / `global` / `project`* | `global` (everywhere) / `project` (one project only) |
 | **project_id** | Which project it belongs to, if project-scoped | (a project id, or empty) |
 | **origin** | Whether it's built-in or user-made. 🟢 *FD-4: dies in the rebuild (folded into scope)* | `stock` (ships with the app) / `user-created` |

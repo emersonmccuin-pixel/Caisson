@@ -63,7 +63,7 @@ Not steps today (both decided for the rebuild — see FD-9):
 Each step produces exactly **one output: its deliverable** (the work the agent handed in). A later step declares what it needs:
 
 - `input: { draft: $step2.output }` — "my `draft` input is step 2's output" — then the task text says `{{draft}}`.
-- `$step2.output.field` reaches into a structured output's named field; `$root.output` reads the card the run started from.
+- `$step2.output.field` reaches into a structured output's named field; `$root.output` reads the card the run started from — **the human brief, guaranteed since M5** (☠ `store: work_item_body`; deliverables never overwrite a card body).
 - All wiring is **validated when you save**: every reference must point at a strictly *earlier* step, and every `{{name}}` must match a declared input. You can't save a broken line.
 - A step that delivered nothing yields an **empty** input downstream — never the task text by accident.
 
@@ -137,7 +137,7 @@ The first-principles spec reduces the engine to three concepts: **step → trans
 
 - **The stall (FIXED).** A finished agent didn't advance its workflow — two competing listeners raced for the terminal signal and the waiting promise never resolved. Fixed by collapsing to one terminal authority + a run-keyed waiter (commits `40c2a91f`, `0022872d`). The lesson is law: *any* "done" handling added outside the one authority will strand runs again.
 - **The diary is write-only.** See #8 — biggest gap, ties to the store decision.
-- **The root card's `body` does double duty** (human brief AND `$root.output` value). Load-bearing; don't touch without a guard test. Same issue as the Work-Item/Work-Contract split in the decision backlog.
+- ~~**The root card's `body` does double duty**~~ ✅ M5 (2026-06-04): the body is the brief ONLY (☠ `store: work_item_body`); `$root.output` = the brief, with the round-trip guard pinning it (`m5-root-output-round-trip.test.ts`).
 - **Empty deliverable = empty downstream input.** A step that delivers nothing hands `''` onward (the step itself is marked failed, blocking downstream — but the *reason* may not surface clearly in the UI).
 - **A workflow can name an agent that isn't usable** — the "pod must be project-scoped" check happens at run time, not save time. A workflow can save cleanly and then fail at dispatch. (Open: add the check to save-time validation.)
 

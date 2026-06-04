@@ -197,7 +197,8 @@ piece, not in this pass.
 
 ## FD-5 — Assignment-level settings move to the Work Contract
 
-**Status:** 🟢 Locked — 2026-06-03
+**Status:** 🟢 Locked — 2026-06-03 · **✅ DELIVERED in M5 (2026-06-04, as amended below;
+scope + evidence: `refactor plan/m5-work-contract-scope-2026-06-04.md`)**
 
 **The decision:**
 - **`expected_output` and `output_destination` come off the pod.** Both describe *an assignment*
@@ -234,6 +235,21 @@ requirement.
   templates in practice; killing the default would force every dispatch to restate the spec. The
   "silently overridden" risk this FD feared is structurally gone (explicit precedence chain).
 - Scope + evidence: `refactor plan/m5-work-contract-scope-2026-06-04.md`.
+
+**Delivered (M5, 2026-06-04):** body = brief-only LAW (☠ `store: work_item_body`; `$root.output`
+now guaranteed to read the brief — its documented meaning; round-trip guard test pins it) ·
+`output_destination` deleted whole (migration 0042) · addendum delivered: `pc_get_contract`
+(acceptance criteria readable mid-run; dispatch door now derives AC onto the contract row at mint)
++ `pc_list_attachments`/`pc_get_attachment` (the audit's 🔴 closed) — all three in the required
+worker set. Live-fire: an agent read its contract + AC, fetched a secret-word attachment, and
+delivered; verification passed.
+
+**M5 finding, still open (→ M6/contract work):** an ad-hoc `pc_invoke_agent` dispatch with NO
+`expected_output` mints a contract with a NULL spec — `resolveContractForDispatch` does not
+consult the pod default or the stock map (only `createAgentWorkItem` does). The contract isn't
+"the complete job spec" on that path. Wiring the fallback in changes Decision-4 behavior (e.g. a
+spec-less code-writer dispatch would start requiring a work item), so it's a deliberate pass, not
+a patch.
 
 ---
 

@@ -22,9 +22,12 @@ Give each agent exactly one typed interface to every app service — work items,
 
 ### 1. The messenger itself
 
-The messenger is a small Node.js process (`packages/mcp/src/server.ts`) that Claude Code spawns automatically because every project directory contains a `.mcp.json` pointing at the built bundle (`packages/mcp/dist/server.mjs`). Claude Code connects to it over stdio using the MCP protocol (a standard JSON-RPC wire format for "here are the tools I offer"). The messenger registers all 52 tools, waits for tool calls, and relays each one as HTTP to `127.0.0.1:PC_SERVER_PORT`.
-
-The module is guarded so that importing it in tests or in the server runtime does **not** accidentally start an MCP server or pin the event loop (`server.ts:181`).
+**Since FD-2 adoption (P6 Slice 0, 2026-06-04) the messenger is NOT a separate process** — it's ONE
+shared HTTP endpoint inside the API server (`/api/mcp`, impl `@pc/mcp/http-endpoint`). Each spawned
+session's `mcp.json` carries a `{type:'http'}` entry with signed identity headers (X-PC-* + HMAC);
+Claude Code speaks MCP JSON-RPC over that. `packages/mcp/src/server.ts` survives as the canonical
+TOOL DATA source only (the `TOOLS` array + `PC_RIG_TOOL_NAMES`, zipped from the registry) — ☠ the
+stdio child, config-rewrite, staging, and the heartbeat `mcp-status.json` file.
 
 ### 2. The handshake signal
 
@@ -34,22 +37,23 @@ The Brain routes that signal to the right owner: the active-run registry (for in
 
 Orchestrator and modal spawns don't send this signal — they don't use programmatic first-turn sends and aren't affected by the race.
 
-### 3. The heartbeat
+### 3. ~~The heartbeat~~ ☠ (P6 Slice 0)
 
-After the handshake, the messenger writes `data/projects/<projectId>/mcp-status.json` (pid, timestamp, tool list) and refreshes it every 2 seconds (`server.ts:73–114`). `GET /api/mcp-status?projectId=<id>` reads that file and reports `{ alive, toolCount, tools }` — `alive` is true only when the file's timestamp is within 8 seconds of now (i.e., four missed heartbeats counts as dead). This is a file-based signal, not a database row.
+The file-based `mcp-status.json` heartbeat died with the stdio child — the shared HTTP endpoint
+lives inside the API server; if the API answers, the tools are up.
 
-### 4. The tool families (53 tools total)
+### 4. The tool families (55 tools total)
 
-All 53 tool definitions live in one place: `packages/domain/src/tool-registry.ts:PC_RIG_TOOL_REGISTRY` (line 52). The messenger's tool list (`TOOLS`) and the server's wildcard-expansion catalog (`PC_RIG_TOOL_NAMES`) both derive from this single registry by `.map()`. A build test (Slice-016) asserts they stay in sync — a half-added tool fails the build.
+All 55 tool definitions live in one place: `packages/domain/src/tool-registry.ts:PC_RIG_TOOL_REGISTRY` (line 52). The messenger's tool list (`TOOLS`) and the server's wildcard-expansion catalog (`PC_RIG_TOOL_NAMES`) both derive from this single registry by `.map()`. A build test (Slice-016) asserts they stay in sync — a half-added tool fails the build.
 
 **FD-16 tiers (shipped 2026-06-03):** every tool also carries a tier in `PC_RIG_TOOL_TIERS` (same file; parity guard `packages/domain/test/tool-tiers.test.ts`): `first-order` (meant for everyday pod allowlists), `on-demand` (reachable only through the door below), `worker` (dispatched-agent-side; never callable through the door).
 
 | Family | What the tools do | Tool names |
 |---|---|---|
-| **work-item** | Create, read, update, move, resolve, and attach things to cards | `pc_create_work_item`, `pc_create_agent_work_item`, `pc_resolve_work_item`, `pc_log_bug`, `pc_move_work_item`, `pc_update_work_item`, `pc_get_work_item`, `pc_list_work_items`, `pc_list_areas`, `pc_update_area`, `pc_attach_to_work_item` |
+| **work-item** | Create, read, update, move, resolve, and attach things to cards — and (M5) READ attachments | `pc_create_work_item`, `pc_create_agent_work_item`, `pc_resolve_work_item`, `pc_log_bug`, `pc_move_work_item`, `pc_update_work_item`, `pc_get_work_item`, `pc_list_work_items`, `pc_list_areas`, `pc_update_area`, `pc_attach_to_work_item`, `pc_list_attachments`, `pc_get_attachment` |
 | **agent** | Create, edit, delete, and read agents/pods; manage their knowledge docs, secrets, and extra tool servers | `pc_create_agent`, `pc_get_agent`, `pc_update_agent`, `pc_delete_agent`, `pc_list_agents`, `pc_create_knowledge`, `pc_update_knowledge`, `pc_delete_knowledge`, `pc_knowledge_read`, `pc_create_agent_secret`, `pc_delete_agent_secret`, `pc_add_agent_mcp_server`, `pc_delete_agent_mcp_server`, `pc_list_agent_audit` |
-| **agent-run** | Dispatch agents, continue them, pause-and-ask, inspect/kill runs, submit finished work | `pc_invoke_agent`, `pc_continue_agent`, `pc_list_my_runs`, `pc_inspect_agent_run`, `pc_kill_agent_run`, `pc_ask_orchestrator`, `pc_ask_user`, `pc_request_approval`, `pc_answer_pending`, `pc_submit_deliverable` |
-| **workflow** | Author and control workflows | `pc_save_workflow_draft`, `pc_read_workflow_draft`, `pc_publish_workflow`, `pc_list_workflows`, `pc_fire_workflow`, `pc_complete_node`, `pc_node_failed`, `pc_create_workflow`, `pc_update_workflow`, `pc_delete_workflow`, `pc_get_workflow` |
+| **agent-run** | Dispatch agents, continue them, pause-and-ask, inspect/kill runs, read your contract (M5), submit finished work | `pc_invoke_agent`, `pc_continue_agent`, `pc_list_my_runs`, `pc_inspect_agent_run`, `pc_kill_agent_run`, `pc_ask_orchestrator`, `pc_ask_user`, `pc_request_approval`, `pc_answer_pending`, `pc_get_contract`, `pc_submit_deliverable` |
+| **workflow** | Author and control workflows (☠ draft tools, P7) | `pc_publish_workflow`, `pc_list_workflows`, `pc_fire_workflow`, `pc_complete_node`, `pc_node_failed`, `pc_create_workflow`, `pc_update_workflow`, `pc_delete_workflow`, `pc_get_workflow`, `pc_get_workflow_run` |
 | **project** | Read/write project config, stages, and field schemas | `pc_write_claude_md`, `pc_list_stages`, `pc_list_field_schemas`, `pc_replace_stages`, `pc_replace_field_schemas` |
 
 | **none (meta)** | The FD-16 on-demand door | `pc_find_tool` (keyword-search the catalog; returns matches with tier + input schema), `pc_call_tool` (execute an `on-demand` tier tool through the SAME handler chain — same routes, same audit rows; refuses `first-order`/`worker`/unknown with a typed message) |

@@ -90,7 +90,7 @@ Three MCP tools (functions the orchestrator and agents can call) act on work ite
 
 When an agent is dispatched via `pc_create_agent_work_item`, the system mints a new child card *and* a linked "contract" row at the same moment. The contract is the verification spine — it records what the agent was asked for, and the acceptance criteria the result must meet. (`apps/server/src/services/agent-work-item.ts`)
 
-The agent then writes its finished work back into the card's `body` column via `pc_update_work_item`. That same `body` column is where workflow steps read `$root.output` from — see Known issues.
+The agent submits its finished work via `pc_submit_deliverable` — it lands on the **contract row**, never the card body (M5/FD-5 law: `body` = the human brief only; ☠ `store: work_item_body`). Workflow steps read `$root.output` from the body as exactly that — the brief. Agents read their job with `pc_get_contract` (spec + acceptance criteria) and `pc_list_attachments`/`pc_get_attachment`.
 
 ### 5. The write gateway (the one door)
 
@@ -142,7 +142,7 @@ Current answers: `prose` output (unless stored as a contract) → requires a car
 Per the consolidation ledger (`refactor plan/consolidation-ledger-2026-06-02.md §2`):
 
 - **`work_items.history` → KEEP as truth** (HIGH confidence). `position` and `status` are projections; `history` is the append-only log.
-- **`work_items.body` → KEEP, do NOT delete** (HIGH confidence, re-scoped 2026-06-03). `dag-run-service.ts:173` reads it live for `$root.output` workflow refs. A round-trip guard test should be added (`ledger §6 row 11`). ☠ The dual-purpose tension (brief AND deliverable in one column) feeds `_Foundation-Decisions.md` — see Decisions below.
+- **`work_items.body` → KEEP — and since M5 (2026-06-04) it is the BRIEF ONLY** (`ledger §6 row 11` closed). ☠ `store: work_item_body`; deliverables live on the contract; `$root.output` reads the body as the brief. Guard: `m5-root-output-round-trip.test.ts` + banned `work_item_body`.
 - **`workflow_run_events` → ✅ truth-grade since M3a (2026-06-04)** — every diary line through the run gateway's `appendRunEvent` + a `workflow.run.event` live fact; read by `pc_get_workflow_run` + the run panel. `dag_state` stays the execution store until M6 projects from the diary (`ledger §6 row 12` closed).
 
 In the five-role target, the work-item store is owned by **Brain** (control plane). Every mutation goes through the gateway → `live_outbox` → live relay. The `history` array grows into a proper append-only event log in Slice-3. No behavioral change to the mutation interface is needed — the gateway pattern already matches the target shape.
@@ -151,7 +151,7 @@ In the five-role target, the work-item store is owned by **Brain** (control plan
 
 ## Known issues / scar tissue
 
-- **`wi.body` does double duty.** The `body` column holds the original task brief *and* the agent's prose deliverable. `dag-run-service.ts:173` reads it live as `$root.output`. Before a prior fix, agents wrote their output into `fields.body` instead, silently freezing the column and breaking both workflow refs and `body_contains` acceptance-criteria checks. Fixed: `updateWorkItemFields` now promotes `body`/`title` keys from the fields map onto their real columns (`packages/db/src/repos/work-items.ts:306-348`). The deeper structural question is resolved — **FD-5**: the deliverable moves to the Work Contract; `body` returns to human-description-only in the rebuild.
+- ~~**`wi.body` does double duty.**~~ ✅ M5 (2026-06-04) — **FD-5 delivered**: ☠ `store: work_item_body`; the deliverable lives on the Work Contract; `body` is human-description-only. (Historical scar kept for context: agents once wrote output into `fields.body`, freezing the column; `updateWorkItemFields` still promotes `body`/`title` keys — `packages/db/src/repos/work-items.ts:306-348`.)
 - **The agent-update route bypasses `WorkItemService`.** `POST /api/projects/:id/work-items/update` calls `dbUpdateWorkItemFields` directly then announces separately. It skips field-schema validation (intentional for agent writes — agents don't use custom field schemas), but it's a second write path. (`apps/server/src/features/work-items/routes.ts`)
 - ~~**`workflow_run_events` writes go nowhere.**~~ ✅ fixed in M3a (2026-06-04) — one gateway door, live facts, tool + UI readers. (`ledger §0 row 3` closed)
 - **Callsign suffix scan is linear.** The per-parent suffix scan to find the next child number reads all siblings. Correct and safe today; not indexed; will slow at scale. (`packages/db/src/repos/work-items.ts:196-213`)
@@ -162,9 +162,9 @@ In the five-role target, the work-item store is owned by **Brain** (control plan
 
 **Resolved 2026-06-03 → Foundation Decisions:**
 
-- ~~Where does the deliverable live?~~ — **FD-5**: the deliverable lives on the **Work Contract**; `body` returns to being the human description only. (Migration guard: the `wi.body` ↔ `$root.output` coupling needs the round-trip test before the write moves.)
+- ~~Where does the deliverable live?~~ — **FD-5 ✅ DELIVERED in M5 (2026-06-04)**: the deliverable lives on the **Work Contract**; `body` is the human description only. The round-trip guard was written FIRST then amended deliberately (`m5-root-output-round-trip.test.ts`).
 - **Patterns** — locked as **FD-20**: a "Patterns" place for repeatable work — a template (context + instructions + optional workflow) that mints a fresh, fully-loaded work item when invoked. Work items complete; Patterns persist; finished work items can be promoted to Patterns. No new runtime machinery.
-- **Work item as context pod** — intent confirmed: a work item is the unit of work and the human↔AI collaboration point; humans define + provide context, the agent works from it. **Dispatch-payload audit ✅ 2026-06-03:** body/fields/parent/live-read OK via `pc_get_work_item`; 🔴 **attachments unreachable** (prompt directs the agent to use them, no fetch tool exists — `pod-materializer.ts:320`); 🟠 acceptance criteria invisible to the agent (FD-5 addendum: agent must be able to read its full contract). Verdicts + requirements in the FD audit backlog.
+- **Work item as context pod** — intent confirmed: a work item is the unit of work and the human↔AI collaboration point; humans define + provide context, the agent works from it. **Dispatch-payload audit ✅ 2026-06-03 → gaps CLOSED in M5 (2026-06-04):** 🔴 attachments now reachable (`pc_list_attachments` + `pc_get_attachment`, required worker set); 🟠 acceptance criteria now readable (`pc_get_contract`; AC derived onto the contract row at dispatch mint). Live-fire: an agent fetched a secret-word attachment + quoted its own AC verbatim.
 - The three open output-type forks (`repo` / `external` / `binary` — card or no card) stay **parked** until those agent types are actually used.
 
 **Still open (product calls):**
@@ -174,4 +174,4 @@ In the five-role target, the work-item store is owned by **Brain** (control plan
 **Technical:**
 - Should the agent-update route be absorbed into `WorkItemService` so there is truly one write door? (Current bypass skips field validation — intentional, but structural inconsistency.)
 - When Slice-3 lands (workflow events = truth), does `history` on the WI row become redundant for workflow-related entries, or do both coexist?
-- `body_contains` acceptance-criteria predicate and `$root.output` both depend on `wi.body` being the deliverable — should this be made an explicit contract field to avoid silent regressions?
+- ~~`body_contains` + `$root.output` both depend on `wi.body` being the deliverable~~ — resolved by M5: the deliverable IS an explicit contract field; the body is the brief.

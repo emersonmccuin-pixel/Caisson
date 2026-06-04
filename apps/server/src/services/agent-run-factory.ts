@@ -45,7 +45,7 @@ import {
   updateAgentRunStatus,
 } from '@pc/db';
 import { ContractService } from '@pc/app-services';
-import { ContractV2, expectedOutputRequiresWorkItem } from '@pc/domain';
+import { ContractV2, deriveAcceptanceCriteriaV2, expectedOutputRequiresWorkItem } from '@pc/domain';
 import type {
   AgentRunFailureCause,
   ExpectedOutput,
@@ -1063,12 +1063,22 @@ export function resolveContractForDispatch(
       // Contract-first: create a contract whether or not a WI is attached.
       // The explicit spec is the only source (the legacy WI contract columns
       // were dropped in slice 023).
+      // M5 (FD-5 addendum, live-fire finding) — derive the AC onto the
+      // CONTRACT ROW when a spec exists and no explicit AC was passed. The
+      // verifier already derives-on-null at terminal, so behavior is
+      // identical — but `pc_get_contract` returned acceptanceCriteria: null
+      // on every direct dispatch, defeating "the agent can read what it's
+      // verified against". The row now carries what the verifier will use.
+      const expectedOutput = args.expectedOutput ?? null;
+      const acceptanceCriteria =
+        args.acceptanceCriteria ??
+        (expectedOutput ? deriveAcceptanceCriteriaV2(expectedOutput) : null);
       const created = service.create({
         projectId: args.projectId,
         workItemId: args.workItemId,
         podName: args.podName,
-        expectedOutput: args.expectedOutput ?? null,
-        acceptanceCriteria: args.acceptanceCriteria ?? null,
+        expectedOutput,
+        acceptanceCriteria,
         verificationTier: args.verificationTier ?? null,
         worktreePath: args.worktreePath ?? null,
       });

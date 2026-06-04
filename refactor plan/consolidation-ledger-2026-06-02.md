@@ -199,11 +199,12 @@ Each row independently shippable. Risky moves after prereqs. `✅` = code alread
 | 7 | ~~Step 5 modals→Engine~~ ☠ FD-21 | **✅ DELETED 2026-06-04** — S2 handoffs live-verified first (workflow/agent/setup all green through chat; scope: `s2-authoring-handoffs-scope-2026-06-04.md`), then the 3 modal paths + transient routes + draft store/tools + setup-wizard scaffold deleted outright; banned-resurrection set grew the transient names | 6 ✅ | banned-resurrection ✅ | med↓ |
 | 8 | Step 6 converge primitive | **✅ DONE 2026-06-04** — ☠ pty-session.ts (PtySession, terminalBufferLooksReady banner-regex, watchFile pair, stripAnsi, SessionState) + TimedBracketedPasteQueue + dead AgentRun reattach field/lifecycle + registry.reattach(); JsonlReplayMeta/Source rehomed to jsonl-tailer; banned-resurrection grew the names. ONE primitive: LowLevelSpawn+AgentRun / ReadyGate / JsonlTailer / echo-ack. Live: chat e2e + worker dispatch green on the converged code | 6,7 ✅ | banned-resurrection (PtySession et al) ✅ | med↓ |
 | 9 | agent-inbox tables DELETE | **✅ M4a 2026-06-04** — hook+repo+tables deleted (0041 archive); no refactor needed (writer-less since 017); + FD-8 defer-not-dead in the worker | mailbox-stable ✅ | NO-INBOX-WRITE ✅ | med |
-| 10 | sync-invoke types DELETE | remove `PcInvokeAgentResultSync` + `wait` | — | self-guarding (compile) | low |
-| 11 | wi.body re-scope | KEEP; document dual purpose | — | $root.output round-trip | low |
+| 10 | sync-invoke types DELETE | **✅ M5 2026-06-04** — `PcInvokeAgentResultSync` + `wait` + audit 'sync' branch deleted; banned-resurrection += the name | — | self-guarding (compile) ✅ | low |
+| 11 | wi.body re-scope | **✅ M5 2026-06-04 — RE-SCOPED AGAIN, then EXECUTED**: refute showed `$root.output` is load-bearing for the BRIEF, not the result (0 live defs used `store: work_item_body`; 2 contracts ever). ☠ the work_item_body store → body = brief-only LAW; `$root.output` keeps reading body (now guaranteed-brief). Round-trip guard test FIRST (slice A), amended deliberately in slice B | — | $root.output round-trip ✅ + banned `work_item_body` | low |
 | 12 | workflow events = truth | **✅ M3a 2026-06-04** — appendRunEvent door + DIARY-DOOR gate + tool + UI timeline; projection → M6 | slice 3 | DIARY-DOOR ✅ | high |
 
-**Ready now (no prereq):** sync-invoke DELETE · wi.body re-scope. (Rows 1–8 ✅ AND Step 8/P9
+**ALL 12 ROWS CLOSED 2026-06-04** (rows 10–11 landed in M5 — scope:
+`m5-work-contract-scope-2026-06-04.md`). (Rows 1–8 ✅ AND Step 8/P9
 timeout-ladder ✅ 2026-06-04 — **the whole north-star process track, Steps 1–8, is CLOSED**.
 P9: ☠ idle-kill + firstTurn watchdog + liveness-sweep; ladder in the reconciler; deliverable
 nudge; live gauntlet green incl. marco-nudge + ask-resume + instant unexpected-exit.)

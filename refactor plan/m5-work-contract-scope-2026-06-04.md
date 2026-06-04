@@ -86,28 +86,58 @@ hardcodes `mode:'async'` (agent-runs/routes.ts:489), agent-audit's `'sync'` bran
   `issuedBy` never populated · pod-create route `expectedOutput` stub unvalidated (slice C adds
   the missing shape assert) · review route drives reject-loop synchronously (known, M3a).
 
-## Slices
+## Slices — ALL SHIPPED 2026-06-04
 
-- **A — the round-trip guard (test only, FIRST per ledger).** Pins: prose deliverable →
-  contract row; `$root.output` resolves the root card's body; `$nodeId.output` resolves the
-  child contract deliverable verbatim. Written against CURRENT behavior incl. work_item_body
-  store, then amended in B — the diff IS the proof the move was deliberate.
-- **B — body = brief-only.** ☠ work_item_body store everywhere + prompts + AC derivation +
-  guard-test amendment.
-- **C — pod field cleanup.** ☠ `output_destination` whole · pod `expected_output` documented as
-  default (comment + FD sweep) · pod-route validation stub fixed.
-- **D — the agent can read its job.** `pc_get_contract` + `pc_list_attachments` +
-  `pc_get_attachment` (worker tier, registry + catalog + golden regen) + materializer pointer.
-- **E — sync-invoke DELETE.** Independent, anytime.
+- **A ✅ (40b2edca) — the round-trip guard (test only, FIRST per ledger).** Pins: prose
+  deliverable → contract row; `$root.output` resolves the root card's body; `$nodeId.output`
+  resolves the child contract deliverable verbatim (body-independent); no-deliverable → empty
+  ref. Written against CURRENT behavior incl. work_item_body store, then amended in B — the diff
+  IS the proof the move was deliberate.
+- **B ✅ (4e320847) — body = brief-only.** ☠ work_item_body store everywhere (both ProseStore
+  unions, AC derivation, store executor + its gateway use, Decision-4 policy cell flipped:
+  unset-store prose defaults to `contract` → no WI required) + prompts + guard-test amendment +
+  banned `work_item_body`.
+- **C ✅ (224c4031) — pod field cleanup.** ☠ `output_destination` whole (migration 0042 + domain
+  type + `pc:` frontmatter block + routes + seeds + drift/reset lists + MCP args + web inputs +
+  History filter/revert; historical audit rows keep rendering) · pod `expected_output` documented
+  as default (schema comment carries the precedence chain). CORRECTION: the trace's "pod-create
+  route has an unvalidated expectedOutput stub" was an explorer MISREAD — pod-routes has no
+  expectedOutput handling at all; nothing to fix.
+- **E ✅ (74365555) — sync-invoke DELETE.** `PcInvokeAgentResultSync` + `wait` + audit 'sync'
+  branch; stale wait-semantics comments fixed; banned name. (Ledger row 10.)
+- **D ✅ (a3d8fff8 + AC-mint fix) — the agent can read its job.** `pc_get_contract` +
+  `pc_list_attachments` + `pc_get_attachment` (worker tier, 52→55, golden regen, REQUIRED set
+  7-strong) + GET `/agent-runs/:runId/contract` (3 route tests) + materializer pointers.
+  **Live-fire finding → fixed same day:** the dispatch door minted contracts with
+  `acceptanceCriteria: null` (only `createAgentWorkItem` derived them; the verifier
+  derived-on-null at terminal, so the agent's contract read showed null AC — defeating the
+  addendum). `resolveContractForDispatch` now derives AC onto the row at mint when a spec
+  exists. Verifier behavior unchanged.
 
-## Verification plan
+## Verification — RESULTS (live, 2026-06-04, dev stack)
 
-- Suites: server · mcp · domain · runtime + workspace typecheck.
-- Live: fire `file-then-review` (caisson) → green end-to-end post-B/C.
-- Live: dispatched agent calls `pc_get_contract` mid-run over the signed MCP wire and receives
-  its acceptance criteria; fetches a work-item attachment via the new read tools.
-- DB: no contract minted with `store: work_item_body` post-B; body of a card with a delivered
-  prose contract unchanged (brief intact).
+- Suites: db 41 · domain 20 · contracts 76 · mcp 75 · runtime 41 · server 266 · web 126;
+  workspace typecheck green. Migration 0042 applied on live boot (column gone, API clean).
+- **Live run 1** (researcher, no spec): `pc_get_contract` over the signed wire → delivered →
+  completed ~15s. Exposed finding 1 (below).
+- **Live run 2** (researcher, spec + linked WI + attachment): read contract → `pc_list_attachments`
+  → `pc_get_attachment` → submitted the secret word (`tangerine-47`) + predicate kind →
+  verification PASSED on real derived AC. All three tools proven in one run.
+- **Live run 3** (post AC-mint fix): agent echoed its `acceptanceCriteria` VERBATIM
+  (`[{"kind":"report_contains","pattern":"criteria-check"}]`) — the addendum's exact ask.
+- **Live run 4**: `file-then-review` fire → write → review gate → approve → **completed**; diary:
+  workflow_started → node_started → agent_dispatched → node_completed → review_requested →
+  review_approved → workflow_completed.
+
+## Findings (logged, not built here)
+
+1. **Spec-less contracts from ad-hoc dispatch** (FD doc, M5 finding): `pc_invoke_agent` without
+   `expected_output` mints a NULL-spec contract — `resolveContractForDispatch` consults neither
+   the pod default nor the stock map (only `createAgentWorkItem` does). Wiring the fallback
+   changes Decision-4 behavior (spec-less code-writer dispatch would start requiring a WI) →
+   deliberate pass in M6/contract work, not a patch.
+2. Contract `attempt` never incremented · `issuedBy` never populated → M6 (FD-9 retry/provenance).
+3. mcp.md carried pre-FD-2 content (stdio child, heartbeat, P7-deleted draft tools) — swept here.
 
 ## Out of scope (breadcrumbs)
 
