@@ -55,6 +55,13 @@ so cards don't move). See `consolidation-ledger-2026-06-02.md` §4 and the desig
 
 - Working branch: **`refactor/auto-pathway`**.
 - Typecheck: per-package `npx tsc --noEmit`, or `pnpm -r typecheck`.
+- **ONE RUNTIME (Step 7):** the stack is the Electron app — its main process supervises the API +
+  agent-host as child processes running the **dist bundles** (`node server.mjs`/`host.mjs`), dev and
+  packaged alike. `pnpm dev:app` (= `pnpm dev`) adds the tooling around it: esbuild `--watch`
+  rebuilds the bundles on save; Vite serves the UI. Load rebuilt code: server →
+  `POST /api/dev/restart` (exit 75 → respawn); host → kill its pid from
+  `data/agent-host/host.lock.json` (supervisor respawns). ☠ `dev-supervisor.mjs`, tsx-run API, and
+  the packaged in-process server import are deleted (ONE-SUPERVISOR gate).
 - Restart the dev stack **only** via the `restart-stack` skill / `scripts/restart-stack.ps1` — never
   hand-kill pids. Restart only at testing time or when asked.
 - Commit completed work before stopping; keep `git status --short` clean at handoff.

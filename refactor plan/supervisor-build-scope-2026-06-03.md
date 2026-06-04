@@ -18,7 +18,11 @@ The API child command is therefore ALWAYS `node server.mjs` (the bundle) — no 
 branch; dev's speed comes from the outside watcher rebuilding that bundle, not from a
 second way of running the app.
 
-**Status:** scoped, not built. Gated — build on approval.
+**Status:** ✅ SHIPPED + live-verified dev AND packaged — 2026-06-04 (commits e39fbcbc + ec7159f4 +
+43f03b16). Acceptance ran exactly as §Acceptance: dev restart/host-kill respawns · packaged
+api-kill (window survives) / host-kill respawns / graceful quit zero-orphan. Known bug below fixed
+(host shutdown). Bonus find: FD-15 set-config receipt validator gap (fixed + round-trip tests).
+As-built doc: `Sub-Systems/5-supervisor-ops/supervisor.md`.
 
 ---
 

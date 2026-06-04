@@ -68,9 +68,9 @@ live/foundational. The genuinely-dead in-process branch is gated behind a test r
 |------|---------|------|-------|
 | `LowLevelSpawn.start` → `pty.spawn` (low-level-spawn.ts) | **KEEP** | HIGH | The one PTY spawn primitive. All claude.exe go through it. |
 | `dispatchFreshAgent` / `dispatchContinueAgent` (agent-run-factory.ts) | **KEEP** | HIGH | The dispatch door (workflow + orchestrator both use it). |
-| `startDispatchedRun` host-vs-in-process fork (agent-run-factory.ts:~703) | **DELETE in-process branch** | HIGH (V2) | Dead in any real server (host always wired, `index.ts:279,304`); only unit tests hit it. Move those tests to a host-fake, then cut. |
-| `spawnPackagedAgentHostProcess` (desktop/agent-host-process.ts) | **KEEP→fold into Supervisor** | HIGH | Becomes part of the one supervisor (Step 7). Packaged host respawn is the gap. |
-| `dev-supervisor.mjs` (spawns API+host, respawns) | **KEEP→fold into Supervisor** | HIGH | The dev half of the one supervisor. |
+| `startDispatchedRun` host-vs-in-process fork (agent-run-factory.ts:~703) | **DELETE in-process branch** ✅ executed 2026-06-03 (60ac149f) | HIGH (V2) | Deleted; banned-resurrection gate holds. |
+| `spawnPackagedAgentHostProcess` (desktop/agent-host-process.ts) | **KEEP→fold into Supervisor** ✅ executed 2026-06-04 (☠ deleted; host = supervised child) | HIGH | Step 7 shipped; ONE-SUPERVISOR gate bans resurrection. |
+| `dev-supervisor.mjs` (spawns API+host, respawns) | **KEEP→fold into Supervisor** ✅ executed 2026-06-04 (☠ deleted; logic ported to `@pc/supervisor`) | HIGH | Step 7 shipped. |
 | `ProjectRuntime` spawning orchestrator (`InteractiveSession`) + modals (`PtySession`) | **orchestrator MERGE→Engine · modals ☠ DELETE (FD-21)** | HIGH (V1) | Step 4 moves the orchestrator to the Engine; the modals are deleted outright per FD-21 (orchestrator-led authoring), not migrated. |
 | ChannelServer per-project stdio children (index.ts:~321) | **KEEP** (re-evaluate) | VERIFY | Orchestrator bridge; confirm it's still needed after Engine absorbs orchestrator. |
 
@@ -171,8 +171,8 @@ already used for the tool-catalog drift test):
 
 ## 5. Next action
 
-Step 1 is **done in code** (§0). Supervisor (Step 7) build in flight — scope:
-`supervisor-build-scope-2026-06-03.md`.
+Step 1 is **done in code** (§0). Supervisor (Step 7) **✅ shipped + live-verified 2026-06-04** —
+scope: `supervisor-build-scope-2026-06-03.md`; as-built: `Sub-Systems/5-supervisor-ops/supervisor.md`.
 
 > **Sequencing superseded (2026-06-03):** the full FD-1..22-reconciled build order now lives in
 > **`rebuild-sequencing-2026-06-03.md`** — it absorbs §6's rows into two parallel tracks
@@ -188,8 +188,8 @@ Each row independently shippable. Risky moves after prereqs. `✅` = code alread
 |---|---------|--------|--------|-------|------|
 | 1 | Step 1 close-out | ✅ code done; add guards + close rows | — | ONE-TERMINAL-AUTHORITY | low |
 | 2 | Step 2 one reconciler | **✅ DONE 2026-06-03** — `agent-run-reconciler.ts`; boot = first tick; old path deleted; live acceptance green (scope: `step2-reconciler-scope-2026-06-03.md`) | 1 | ONE-RECONCILER + HOLD + PAUSED-SURVIVES ✅ | med |
-| 3 | in-process fork DELETE | cut `constructAndStart` else-branch (dead in prod) | 2 + move null-host tests to host-fake | ONE-SPAWN-OWNER (partial) | low |
-| 4 | **Step 7 Supervisor** ◀ NEAR-TERM | one spawn→watch→respawn module, dev + packaged; fix packaged respawn | — (parallel w/ 2) | ONE-SUPERVISOR | med |
+| 3 | in-process fork DELETE | **✅ DONE 2026-06-03** (60ac149f, −288 lines; banned-resurrection gate; live green) | 2 + move null-host tests to host-fake | ONE-SPAWN-OWNER (partial) ✅ | low |
+| 4 | Step 7 Supervisor | **✅ DONE 2026-06-04** — ONE RUNTIME: Electron main supervises api+host bundle-children both modes (e39fbcbc); ☠ dev-supervisor + startInProcessServer + one-shot host spawn; host shutdown-hang fixed (ec7159f4); live acceptance green dev AND packaged | — (parallel w/ 2) | ONE-SUPERVISOR ✅ | med |
 | 5 | Step 3 Engine re-resolution | Brain re-finds Engine after respawn | 4 (need a respawn to test) | RECONNECT | med |
 | 6 | Step 4 orchestrator→Engine | policy {persistent,interactive}; fix `thinking` type-width | 5 | (migration) | high |
 | 7 | ~~Step 5 modals→Engine~~ **☠ FD-21: modals DELETED, not migrated** (orchestrator-led authoring replaces them) | delete the 3 modal paths outright; no Engine policy needed | 6 (orchestrator must own authoring first) | (deletion) | med↓ |
@@ -199,4 +199,5 @@ Each row independently shippable. Risky moves after prereqs. `✅` = code alread
 | 11 | wi.body re-scope | KEEP; document dual purpose | — | $root.output round-trip | low |
 | 12 | workflow events = truth | route `appendEvent` through gateway/live_outbox | slice 3 | EVENTS-ARE-TRUTH | high |
 
-**Ready now (no prereq):** Step 7 Supervisor · sync-invoke DELETE · wi.body re-scope.
+**Ready now (no prereq):** Step 3 Engine re-resolution (row 5 — unblocked by row 4 ✅) ·
+sync-invoke DELETE · wi.body re-scope.

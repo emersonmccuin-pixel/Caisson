@@ -25,7 +25,7 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 |---|---|
 | Step 1 — one terminal authority + run-keyed waiter (the stall fix) | commits `0022872d`, `40c2a91f`; live acceptance green |
 | Workflow v2 cuts: bash/script steps deleted, deliverable = done, unified review | `refactor/auto-pathway` branch |
-| Step 7 Supervisor — **in flight** (parallel pile, untracked) | `packages/supervisor/` + `supervisor-build-scope-2026-06-03.md` |
+| Step 7 Supervisor — ✅ SHIPPED + live-verified dev AND packaged 2026-06-04 | commits `e39fbcbc` `ec7159f4` `43f03b16`; scope doc + `Sub-Systems/5-supervisor-ops/supervisor.md` |
 | Dispatch-payload audit — **running** | background agent, 2026-06-03 |
 
 ---
@@ -36,7 +36,7 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 |---|---|---|---|
 | P1 ✅ | **Step 2 — one reconciler, all states. DONE 2026-06-03.** `agent-run-reconciler.ts`; boot = first tick; legacy bulk-fail + boot-reconcile path DELETED; HOLD structural; paused-survives = law (guard-tested); live acceptance green. Scope: `step2-reconciler-scope-2026-06-03.md`. | Everything later assumes one loop. FD-14's "paused always survives" lands here as law. | FD-14 |
 | P2 ✅ | **In-process fork DELETE. DONE 2026-06-03** (60ac149f, −288 lines). `constructAndStart` + `defaultAgentRunFactory` + `activeRunHandleForAgentRun` deleted; no hostClient = typed `host-unavailable`; banned-resurrection gate covers the three names. Test prereq was already satisfied (all factory tests host-fake). Live acceptance green. ⚠ Landing surfaced the Bash-git worktree-escape (🔴 in FD backlog). | Dead in prod; needs P1 + null-host tests moved to a host fake. | FD-12 (one spawn path) |
-| P3 | **Step 7 — Supervisor** *(in flight now; parallel with P1–P2)*. One spawn→watch→respawn module, dev + packaged. | Independent; fixes packaged-host-never-respawns. | — |
+| P3 ✅ | **Step 7 — Supervisor. DONE 2026-06-04** (e39fbcbc). ONE RUNTIME: Electron main supervises api+host children (bundles) in dev AND packaged; ☠ dev-supervisor.mjs + startInProcessServer + one-shot host spawn; ONE-SUPERVISOR gate; host shutdown-never-exits fixed (ec7159f4); FD-15 receipt validator gap found+fixed live (43f03b16). Acceptance green both modes. | Independent; fixes packaged-host-never-respawns. | — |
 | P4 | **Step 3 — Engine re-resolution + reattach.** Brain re-finds the Engine after a respawn. | Needs P3 (a respawn to test against). Hard prereq for P6. | — |
 | P5 ✅ | **FD-2 spike — shared HTTP tools server. PASSED 6/6, 2026-06-03.** Shared-HTTP WINS: identity via per-session mcp.json headers (`extra.requestInfo`) · turn-1 race gone (`deferred_tools_delta`) · concurrency clean · restart recovery ~5s via 404/-32001. Harness `labs/fd2-shared-http-mcp/` (re-run on every FD-22 version bump). Adoption rides P6. Bonus: caught + fixed the `encodeCwdForClaude` dot-divergence stall bug. | MUST land before P6: if shared-HTTP wins, Engine sessions spawn without per-session messengers — deciding after the orchestrator migration means migrating twice. | FD-2 |
 | P6 | **Step 4 — orchestrator → Engine** (policy `persistent, interactive, fire-and-watch`). | Needs P4. Validates the policy-flag model before anything is deleted. FD-18's ready-gate surfacing rides along (orchestrator chat gets "Claude is loading"). | FD-18 |
@@ -80,7 +80,8 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 
 ## The near-term picture (what actually happens next)
 
-Running now: **P3 Supervisor** (in flight) · **dispatch-payload audit** (background).
+Running now: nothing in flight. Next up: **P4 Step 3 Engine re-resolution** (P3 ✅ unblocked it) ·
+FD-20 Patterns design · FD-21/S2 handoffs.
 
 Next up, parallel-safe, in value order:
 

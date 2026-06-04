@@ -93,11 +93,11 @@ The Engine keeps the last 1,000 events in a ring buffer (an in-memory queue that
 - **Heartbeat with backoff.** Checks in every 10–30 seconds and publishes a health status (`connected` / `reconnecting` / `down`) for the health indicator in the UI.
 - **Protocol version mismatch = terminal.** If the lock file shows a different `protocolVersion` than expected, health goes to permanent `down` rather than keep retrying.
 
-### 8. Packaged (installed) app mode (`apps/desktop/src/agent-host-process.ts`)
+### 8. How the Engine process is run (Step 7 — ONE runtime, shipped 2026-06-04)
 
-In the installed desktop app (Electron), the main process starts the Engine by running `agent-host.mjs --http-lock-file <path>` as a child process, using the Electron binary with a flag that makes it run as plain Node.
+Electron main supervises the Engine as a child process (`@pc/supervisor`) in dev AND packaged alike — `node host.mjs --http-lock-file <path>` (dev: repo bundle + system node; packaged: staged bundle + the app binary running as plain Node). Crash → respawn with backoff; fresh lock file is the ready gate; quit asks politely over HTTP (`shutdown host-exit`) before any kill.
 
-> 📌 **Known gap — packaged host never respawns.** If the Engine dies in the packaged app, Electron does not restart it. In development, a separate dev-supervisor script (`dev-supervisor.mjs`) handles respawning, which is why this gap only surfaces in the installed app. This is the direct motivation for **Step 7 (Supervisor)** in the rebuild plan.
+> ✅ **Closed gap — packaged host never respawns** (was the Step-7 motivating bug). Live-verified 2026-06-04: kill the packaged host pid → supervisor respawns it, fresh lock, API reconnects. See `5-supervisor-ops/supervisor.md`.
 
 ---
 
@@ -132,7 +132,8 @@ The current gap: today the Engine owns dispatched agents only. The orchestrator 
 
 ## Known issues / scar tissue
 
-- **Packaged host never respawns.** See Part 8. Only visible in the installed app; development is covered by `dev-supervisor.mjs`. Supervisor (Step 7) is the fix.
+- ✅ ~~Packaged host never respawns~~ — closed by Step 7 (2026-06-04, live-verified). See Part 8.
+- ✅ ~~`shutdown host-exit` never exits~~ — `server.close()` waited on the persistent `/events` stream forever; close now destroys live sockets with a deadline and the CLI awaits a `closed` promise that cannot hang (fix + 3 regression tests, 2026-06-04).
 - **Lock-file drift twin.** See Part 2. No compile-time safety net — a format change must be mirrored by hand.
 - **Step 3 is incomplete.** The server can rediscover after an Engine respawn, but its reconciler does not yet hold on an unreachable Engine. It could act on stale state. This is Step 2/3 work.
 - **Stdio path is a latent dual transport.** `cli.ts` still supports the JSON-line stdio mode. In any real run, the HTTP path is always taken. The stdio branch is only exercised by tests; it is not a behavior risk in production, but it is an untested surface.

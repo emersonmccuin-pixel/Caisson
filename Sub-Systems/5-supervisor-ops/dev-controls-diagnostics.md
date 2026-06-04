@@ -3,7 +3,7 @@
 > **Role:** cross-cutting (dev-only escape hatch + always-on observability)
 > **Status:** as-built snapshot — 2026-06-03
 > **Code anchors:**
-> `apps/server/src/diagnostics.ts` · `apps/server/src/features/dev-controls/routes.ts` · `apps/server/src/features/dev-controls/constants.ts` · `apps/web/src/components/DevControls.tsx` · `apps/web/src/features/dev-controls/client.ts` · `apps/server/src/services/process-control.ts` · `apps/server/src/services/terminal-mode.ts` · `apps/server/src/services/legacy-runtime-cleanup.ts` · `apps/server/src/services/host-health-writer.ts` · `apps/web/src/features/system/HostHealthPill.tsx` · `apps/web/src/features/system/HostHealthBanner.tsx` · `apps/web/src/features/system/host-health-banner-view.ts` · `apps/server/scripts/dev-supervisor.mjs` · `scripts/restart-stack.ps1`
+> `apps/server/src/diagnostics.ts` · `apps/server/src/features/dev-controls/routes.ts` · `apps/server/src/features/dev-controls/constants.ts` · `apps/web/src/components/DevControls.tsx` · `apps/web/src/features/dev-controls/client.ts` · `apps/server/src/services/process-control.ts` · `apps/server/src/services/terminal-mode.ts` · `apps/server/src/services/legacy-runtime-cleanup.ts` · `apps/server/src/services/host-health-writer.ts` · `apps/web/src/features/system/HostHealthPill.tsx` · `apps/web/src/features/system/HostHealthBanner.tsx` · `apps/web/src/features/system/host-health-banner-view.ts` · `packages/supervisor/src/` · `scripts/restart-stack.ps1`
 
 ---
 
@@ -48,9 +48,9 @@ These are three different levels of "restart." They are not interchangeable.
 
 | Level | What it does | When to use it |
 |---|---|---|
-| `POST /api/dev/restart` | Tells the running server to shut down cleanly and exit with code 75 (the sentinel). The supervisor sees 75 and respawns only the API/tsx child. Vite and the agent host keep running. | Picking up server-side code changes during a dev session. |
-| `dev-supervisor.mjs` | Spawns the agent-host and API/tsx children; watches for exits. Exit 75 → respawn API with backoff. Any other exit → auto-recover up to 3 times if the server had been healthy for ≥30s; give up on rapid boot failures. Waits up to 12s for ports 4040/8788 to free before respawning. (`dev-supervisor.mjs:79`, `dev-supervisor.mjs:94`) | Runs automatically in the background; you don't call it directly. |
-| `scripts/restart-stack.ps1` | Full stack restart (Windows). Kills the entire `dev-app.mjs` coordinator tree via `taskkill /T`, frees ports 4040/5173/8788, kills repo Electron and agent host, waits for ports to free, relaunches `pnpm dev:app` detached, then polls until server + Vite + host are all up. This is what the `restart-stack` skill runs. | Full teardown and relaunch — the only sanctioned full restart per `AGENTS.md`. |
+| `POST /api/dev/restart` | Tells the running server to shut down cleanly and exit with code 75 (the sentinel). The Electron supervisor sees 75 and respawns only the API child (now running the freshly-watched bundle). Vite and the agent host keep running. | Picking up server-side code changes during a dev session (esbuild `--watch` already rebuilt the bundle on save). |
+| The supervisor (Electron main, `@pc/supervisor`) | THE process manager, dev and packaged (Step 7, shipped 2026-06-04). Spawns host + API children from the bundles; exit 75 → respawn API; crash → backoff respawn, 3-rapid-crash budget, healthy-uptime reset; port-free wait pre-spawn; fresh-lock ready gate. ☠ `dev-supervisor.mjs` deleted (ONE-SUPERVISOR gate). | Runs as the app; you don't call it directly. Load new HOST code: kill the host pid from the lock file. |
+| `scripts/restart-stack.ps1` | Full stack restart (Windows). Kills the entire `dev-app.mjs` coordinator tree via `taskkill /T`, frees ports 4040/5173, kills repo Electron and agent host, waits for ports to free, relaunches `pnpm dev:app` detached, then polls until server + Vite + host are all up. This is what the `restart-stack` skill runs. | Full teardown and relaunch — the only sanctioned full restart per `AGENTS.md`. |
 
 **Exit code 75** is the sentinel (`constants.ts:2`): the API exits with 75 to say "I want to be restarted, not counted as a crash." The supervisor sees this and respawns cleanly. Any other exit code is treated as a crash.
 
@@ -127,7 +127,7 @@ The "agent host" is the Engine process — the separate process that actually ru
 ## How it connects
 
 - **Depends on:** `ActiveRunRegistry` (active-run count for the restart guard) · `@pc/db` / `insertLiveEvent` (host-health writes) · `live-relay` drain sweep (fans `live_outbox` rows to WebSocket clients) · `hostConnection` (`host-connection.ts`, emits health-change events) · `gracefulShutdown()` in `index.ts` (called by the restart endpoint before exit(75)).
-- **Used by:** `Shell.tsx` (mounts dev panel, dev-only) · `App.tsx` (mounts pill and banner, always) · liveness sweep and force-kill paths (`isProcessAlive` / `killProcessTree`) · orchestrator terminal-surface routes (`forwardTerminalInput` / `readTerminalTranscriptTail`) · `dev-supervisor.mjs` (receives the exit(75) sentinel).
+- **Used by:** `Shell.tsx` (mounts dev panel, dev-only) · `App.tsx` (mounts pill and banner, always) · liveness sweep and force-kill paths (`isProcessAlive` / `killProcessTree`) · orchestrator terminal-surface routes (`forwardTerminalInput` / `readTerminalTranscriptTail`) · the Electron supervisor (receives the exit(75) sentinel).
 - **Contracts / events crossed:** `live_outbox` table → `host-health.changed` global events · `HostHealthSnapshot` type (`@pc/contracts`) · `DevStatus` type (`features/dev-controls/types.ts`, `{ activeAgents, canRestart }`) · exit code 75 (restart sentinel between API process and supervisor).
 
 ---
@@ -136,8 +136,8 @@ The "agent host" is the Engine process — the separate process that actually ru
 
 Per `unified-process-supervision-2026-06-02.md` §9 Step 7 and ledger §0:
 
-- **Dev supervisor** (`dev-supervisor.mjs`) and the packaged Electron host-spawner (`desktop/agent-host-process.ts`) are both `KEEP → fold into Supervisor` (HIGH confidence). Step 7 is the near-term anchor: unify them into one `@pc/supervisor` package used identically in dev and packaged builds. This closes the "packaged host never respawns" gap.
-- Once the Supervisor lands, the restart endpoint's role may shift: today it signals a dev-only sentinel exit to `dev-supervisor.mjs`. In the target the Supervisor is the one process manager in both modes; the restart mechanism may stay (as a "request graceful restart" signal to the Supervisor) or be internalized. The dev-only `!process.env.PC_ROOT` guard may become unnecessary.
+- ✅ **Step 7 SHIPPED 2026-06-04**: one `@pc/supervisor`, consumed by Electron main, identical dev/packaged (see [supervisor.md](supervisor.md)). ☠ `dev-supervisor.mjs` deleted; the packaged one-shot host spawn deleted; ONE-SUPERVISOR gate holds.
+- The restart endpoint kept its exact role: exit-75 sentinel → the supervisor respawns the API child. It stays dev-only via the "no `PC_ROOT`" heuristic — dev children run the repo bundle (no `PC_ROOT` set), packaged children get `PC_ROOT` pointed at the staged resources.
 - **Diagnostics, process-control, terminal-mode, and legacy-runtime-cleanup** have no consolidation verdict — they're cross-cutting utilities or one-time boot operations. They stay as-is.
 - **Host-health surface** is already on the target path: one authoritative health event from the Engine, one relay to the UI. No structural change needed.
 
@@ -145,10 +145,10 @@ Per `unified-process-supervision-2026-06-02.md` §9 Step 7 and ledger §0:
 
 ## Known issues / scar tissue
 
-- **Packaged host never respawns.** `dev-supervisor.mjs` respawns the host on crash in dev. The packaged Electron build spawns the host once and does not respawn it. Step 7 Supervisor explicitly closes this gap. (Ledger §0 and §6 row 4.)
-- **Restart endpoint only restarts the API.** `POST /api/dev/restart` exits the API/tsx child; the agent host keeps running (or may have already died). After a sentinel restart the server reconnects to the existing host; a stale or wrong-endpoint host needs Step 3 (Engine re-resolution) to recover. Today that reconnect is brittle.
-- **Exit-75 backoff.** Rapid sentinel restarts (server dies in <5s) accumulate a capped delay up to 8s. A tsx compile error that loops can add noticeable lag to each restart attempt. (`dev-supervisor.mjs:94`)
-- **Port-free wait.** The supervisor waits up to 12s for ports 4040/8788 to free before respawning. On Windows a process can hold a socket briefly after exit; restarting via the endpoint may appear "hung" for several seconds. (`dev-supervisor.mjs:79`)
+- ✅ ~~Packaged host never respawns~~ — closed by Step 7 (2026-06-04, live-verified both modes).
+- **Restart endpoint only restarts the API.** `POST /api/dev/restart` exits the API child; the agent host keeps running (or may have already died). After a sentinel restart the server reconnects to the existing host; a stale or wrong-endpoint host needs Step 3 (Engine re-resolution) to recover. Today that reconnect is brittle.
+- **Exit-75 backoff.** Rapid sentinel restarts (server dies in <5s) accumulate a capped delay up to 8s (`@pc/supervisor` sentinel policy). A compile error that loops can add noticeable lag to each restart attempt.
+- **Port-free wait.** The supervisor waits up to 12s for the API port to free before respawning. On Windows a process can hold a socket briefly after exit; restarting via the endpoint may appear "hung" for several seconds. (`@pc/supervisor` `waitForPortsFree`)
 - **Terminal-transcript path-escape** — `isContained` uses `path.relative` correctly (guards `..` and absolute paths). This was a prior scar (`reference_startswith_path_containment.md`); the fix is in place.
 - **Legacy cleanup runs every boot.** Scans all projects including deleted ones. Low risk today; could be gated behind a version stamp if it becomes a bottleneck on large installs.
 - **Dev-panel renderer toggles are `localStorage`-backed.** A browser cache clear silently resets them to default with no visible indicator unless the panel is opened and checked.

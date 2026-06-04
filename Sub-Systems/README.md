@@ -72,10 +72,10 @@ path"). The unified design says **one job, one owner, one path**. Most issues be
 
 | Subsystem | What it is | Verdict | Biggest issue |
 |---|---|---|---|
-| [Supervisor](5-supervisor-ops/supervisor.md) | The dumb durable root: spawn → watch → respawn-with-backoff | **build + wire in** | The `@pc/supervisor` package is built + unit-tested but **not wired in**. Packaged mode still doesn't respawn the host. This is Step 7 — ready to build now, no prereqs. |
-| [Desktop / Electron shell](5-supervisor-ops/desktop-electron.md) | Packaged Windows app: hosts the API in-process, spawns the host, serves the UI | **rebuild → thin shell** | The agent host is spawned once and **never respawned** (`main.ts:279` logs and stops). Dev and packaged are structurally different trees; Step 7 unifies them. |
+| [Supervisor](5-supervisor-ops/supervisor.md) | The dumb durable root: spawn → watch → respawn-with-backoff | ✅ **SHIPPED 2026-06-04** (Step 7) | Electron main runs `@pc/supervisor` over both children, dev AND packaged; live-verified. ONE-SUPERVISOR gate keeps rivals dead. |
+| [Desktop / Electron shell](5-supervisor-ops/desktop-electron.md) | The ONE runtime: Electron main supervises API + host children, serves the UI window | ✅ **rebuilt (Step 7)** | ☠ in-process API + one-shot host spawn deleted; dev and packaged are the same tree now. Remaining: Electron 35 pin, lock-file drift twin. |
 | [Onboarding & setup](5-supervisor-ops/onboarding-setup.md) | First-run gate + project factory (preflight, auth, install, scaffold) | **keep** (setup-wizard modal ☠ FD-21; version pin → FD-22) | Self-contained and clean. Carries the same `inbox-drain.cjs` scaffold blocker. |
-| [Dev controls & diagnostics](5-supervisor-ops/dev-controls-diagnostics.md) | Restart endpoint, process-control, crash capture, host-health pill | **keep dev-only; fold restart into Supervisor** | Restart-on-crash works in dev (`dev-supervisor.mjs`) but not packaged — the same gap Step 7 closes. |
+| [Dev controls & diagnostics](5-supervisor-ops/dev-controls-diagnostics.md) | Restart endpoint, process-control, crash capture, host-health pill | **keep dev-only; restart rides the one Supervisor** | ✅ Respawn gap closed by Step 7. Restart endpoint unchanged (exit 75 → supervisor respawns the API child). |
 | [Live events & relay](5-supervisor-ops/live-events-relay.md) | DB fact → all browser tabs: write `live_outbox` row in-txn, relay fans out over WS | **keep + finish migration** | Dual delivery still live for several domains (some code calls `broadcastTo()` directly alongside the relay). `workflow_run_events` bypasses the outbox entirely. |
 
 ---
@@ -96,8 +96,7 @@ These are the systemic threads — fixing them once helps everywhere:
 4. **`inbox-drain.cjs` legacy hook.** A raw-SQL hook inside the orchestrator process drains old
    `agent_inbox` tables — a hidden parallel notify path. Blocks dropping those tables. Touches
    mailbox, agents-pods, and onboarding.
-5. **Packaged mode never respawns the host.** Dev self-heals; the shipped app doesn't. Step 7
-   (Supervisor) fixes it — and it's unblocked today.
+5. ✅ ~~Packaged mode never respawns the host~~ — fixed by Step 7 (Supervisor, shipped 2026-06-04).
 6. **No drift guards on duplicated definitions.** Tool catalog (3 copies), the deliverable type union
    (2 copies), stock-pod name mirrors. Each silently breaks when one copy changes.
 
@@ -113,7 +112,7 @@ Build bottom-up: nothing depends on something not yet built. Each tier is indepe
 3. **App-services layer** — the one write surface (atomic row + live-event).
 
 **Tier 1 — Process spine** (the five-role skeleton; this is where the north star's Steps 1–7 live)
-4. **Supervisor** — dumb root first; everything else gets spawned under it. *(Step 7, no prereqs.)*
+4. **Supervisor** — dumb root first; everything else gets spawned under it. *(Step 7 ✅ shipped 2026-06-04.)*
 5. **Runtime — one session primitive** — the single policy-driven `claude.exe` wrapper.
 6. **Agent Host (Engine)** — the one owner of that primitive.
 7. **Agent run lifecycle & reconciler** — one reconciler + run-keyed waiter. *(Steps 1–3.)*
