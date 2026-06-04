@@ -276,15 +276,21 @@ plain text and the turn ends. The full ask layering, deliberate:
 
 ## FD-8 — No message silently dies (mailbox lifecycle + failsafes)
 
-**Status:** 🟢 Locked — 2026-06-03
+**Status:** 🟢 Locked — 2026-06-03 · **core delivered in M4a (2026-06-04)**
 
 **The decision:** the principle is law — **every undelivered or unanswered mailbox message must
 either retry or surface visibly. Silent loss is never acceptable.** Concretely:
-- **Dead-letter recovery:** a sweep re-delivers given-up orchestrator-turn messages when an
-  orchestrator comes back online (today: 5 attempts, then silently gone — that's the bug this kills).
+- **Dead-letter recovery** — ✅ **SOLVED STRONGER in M4a: messages no longer die in the first
+  place.** An orchestrator-less delivery DEFERS (parked, zero attempts consumed, 60s recheck)
+  until an orchestrator exists — no give-up, so no re-delivery sweep needed. (Live finding that
+  forced it: 93 dead letters incl. same-day; the old worker dead-lettered an away-orchestrator
+  message on its FIRST pass. Also fixed at the source: workflow workers' synthetic dispatcher
+  ids no longer get doomed terminal envelopes at all — asks fall back to the active
+  orchestrator; a pinned session that truly doesn't exist dead-letters honestly.)
 - **Lifecycle tracking:** sent → delivered → *expecting response* → response received → done. The
   plumbing half-exists (delivery rows track pending→accepted; interactions track open→answered); the
   rebuild unifies it and adds a **watchdog for "expecting a response that never came."**
+  *(Remaining M4b scope, with message-expiry cleanup — `expiresAt` exists, nothing sweeps it.)*
 
 **Why:** Emerson's failsafes note + the known issue that dead-lettered orchestrator copies vanish
 with no alert, no indicator, no requeue.
@@ -364,8 +370,11 @@ unbreakable step. Zero bypasses.**
    ✅ EXECUTED in M3a (2026-06-04): every diary line through
    `WorkflowRunMutationGateway.appendRunEvent` (event row + `workflow.run.event` fact, one txn);
    DIARY-DOOR structural gate keeps it dead.
-3. ☠ The legacy `inbox-drain.cjs` hook's raw-SQL writes — dies with the mailbox migration
-   (ledger row 9 / M4). The last one standing.
+3. ☠ The legacy `inbox-drain.cjs` hook's raw-SQL writes —
+   ✅ EXECUTED in M4a (2026-06-04): the hook + repo + `agent_inbox` tables deleted whole
+   (migration 0041 archive-rename; the tables had been writer-less since slice 017 — the hook
+   drained an eternally-empty set every prompt). NO-INBOX-WRITE gate keeps it dead.
+   **ALL THREE BYPASSES EXECUTED — FD-12 is fully delivered.**
 
 **Plus a guard:** a structural test that a new bypass can't quietly appear (e.g., no direct
 table-write imports outside the gateway layer). Vigilance is not a strategy; the build enforces it.

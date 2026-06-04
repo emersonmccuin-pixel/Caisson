@@ -21,8 +21,10 @@ single-path guard. When no `MERGE`/`DELETE` rows remain unresolved, the app is u
 `resolveDone`→run-keyed registry, turn-end-as-completion delete. So real open work starts at **Step 2**.
 
 **Three rows the trace got WRONG — skeptic won (verified):**
-1. `agent_inbox` tables — NOT a free delete: `templates/.claude/hooks/inbox-drain.cjs` still reads/writes
-   them via raw SQL (lines 66/74/77). Refactor that hook → mailbox BEFORE dropping tables.
+1. ~~`agent_inbox` tables — NOT a free delete~~ **✅ M4a 2026-06-04: it WAS a free delete** —
+   refute-of-the-refute: the hook only ever READ rows that slice 017 stopped writing (drained an
+   eternally-empty pending set every prompt for weeks). Hook + repo + tables deleted whole
+   (migration 0041 archive; NO-INBOX-WRITE gate).
 2. `work_items.body` mirror — DO NOT delete: `dag-run-service.ts:173` reads it live to resolve
    `$root.output` workflow refs. Re-scoped to KEEP + document dual purpose.
 3. ~~`workflow_run_events` — dead observability writes~~ **✅ M3a 2026-06-04: every diary line
@@ -136,7 +138,7 @@ live/foundational. The genuinely-dead in-process branch is gated behind a test r
 | `field_schemas`, `orchestrator_sessions` tables | **KEEP-as-truth** | HIGH (V7) | Real repo'd tables. |
 
 ### Dead / legacy (DELETE after their V-row clears)
-| `agent_inbox` / `agent_delivery_audit` tables + `repos/agent-inbox.ts` | **DELETE — gated behind hook refactor** | HIGH (re-scoped 06-03) | TS repo IS dead (0 callers). ⚠️ BUT `templates/.claude/hooks/inbox-drain.cjs` (lines 66/74/77) still reads/writes the TABLES via raw SQL on UserPromptSubmit. Refactor that hook → mailbox, archive rows, THEN drop tables. |
+| `agent_inbox` / `agent_delivery_audit` tables + `repos/agent-inbox.ts` | **✅ DELETED (M4a 2026-06-04)** | HIGH | No refactor was needed: the hook only READ rows nothing wrote since 017 Phase C. Hook + settings entry + repo + domain types deleted; migration 0041 archive-renames the tables; NO-INBOX-WRITE gate. legacy-runtime-cleanup keeps the hook NAME (scrubs old installs). |
 | `PcInvokeAgentResultSync` + `PcInvokeAgentInput.wait` (agent-comms.ts) | **DELETE** | HIGH | Sync invoke mode never implemented. |
 | forked workflow-subagent dispatch | **DELETED** ✓ | HIGH | Already removed (slice 8b). |
 
@@ -196,7 +198,7 @@ Each row independently shippable. Risky moves after prereqs. `✅` = code alread
 | 6 | Step 4 orchestrator→Engine | **✅ DONE 2026-06-04** — Slices 0–3 all live-verified incl. packaged (scope: `step4-orchestrator-engine-scope-2026-06-04.md`); ☠ interactive-session.ts; FD-2 shared-HTTP adopted (Slice 0) | 5 | ONE-TOOL-TRANSPORT + banned `InteractiveSession` ✅ | high |
 | 7 | ~~Step 5 modals→Engine~~ ☠ FD-21 | **✅ DELETED 2026-06-04** — S2 handoffs live-verified first (workflow/agent/setup all green through chat; scope: `s2-authoring-handoffs-scope-2026-06-04.md`), then the 3 modal paths + transient routes + draft store/tools + setup-wizard scaffold deleted outright; banned-resurrection set grew the transient names | 6 ✅ | banned-resurrection ✅ | med↓ |
 | 8 | Step 6 converge primitive | **✅ DONE 2026-06-04** — ☠ pty-session.ts (PtySession, terminalBufferLooksReady banner-regex, watchFile pair, stripAnsi, SessionState) + TimedBracketedPasteQueue + dead AgentRun reattach field/lifecycle + registry.reattach(); JsonlReplayMeta/Source rehomed to jsonl-tailer; banned-resurrection grew the names. ONE primitive: LowLevelSpawn+AgentRun / ReadyGate / JsonlTailer / echo-ack. Live: chat e2e + worker dispatch green on the converged code | 6,7 ✅ | banned-resurrection (PtySession et al) ✅ | med↓ |
-| 9 | agent-inbox tables DELETE | refactor `inbox-drain.cjs` → mailbox, archive, drop tables | mailbox-stable + hook refactor | NO-INBOX-WRITE | med |
+| 9 | agent-inbox tables DELETE | **✅ M4a 2026-06-04** — hook+repo+tables deleted (0041 archive); no refactor needed (writer-less since 017); + FD-8 defer-not-dead in the worker | mailbox-stable ✅ | NO-INBOX-WRITE ✅ | med |
 | 10 | sync-invoke types DELETE | remove `PcInvokeAgentResultSync` + `wait` | — | self-guarding (compile) | low |
 | 11 | wi.body re-scope | KEEP; document dual purpose | — | $root.output round-trip | low |
 | 12 | workflow events = truth | **✅ M3a 2026-06-04** — appendRunEvent door + DIARY-DOOR gate + tool + UI timeline; projection → M6 | slice 3 | DIARY-DOOR ✅ | high |

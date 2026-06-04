@@ -116,8 +116,8 @@ Yes: one known bypass exists today, and a second gap.
 > 🟢 **FD-12 (locked 2026-06-03):** the gateway law is now enforced, not aspirational — every
 > durable write goes through the one door, write + receipt in one transaction, zero bypasses. The
 > three known bypasses (the two-step work-item writer below, the diary writes below, and the
-> legacy `inbox-drain.cjs` raw SQL) are all sentenced, plus a structural guard test so a new bypass
-> can't quietly appear.
+> legacy `inbox-drain.cjs` raw SQL) are ALL EXECUTED as of M4a (2026-06-04) — M2 · M3a · M4a —
+> each with a structural guard so it can't quietly reappear. FD-12 is fully delivered.
 
 1. ~~**Work-item writes are a two-step, not one-step.**~~ ✅ EXECUTED in M2 (2026-06-03): `work-item-writer.ts` deleted; every write-site runs inside `WorkItemMutationGateway` (one txn) with the structural no-bypass gate.
 

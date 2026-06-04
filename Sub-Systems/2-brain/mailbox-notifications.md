@@ -92,7 +92,10 @@ Five callers can drop a message into the mailbox today:
 
 All internal callers go through `deliverAgentEnvelope` (`agent-delivery.ts:86`), which calls `MailboxService.enqueue`. The enqueue is idempotent on `idempotencyKey` — calling it again with the same key returns the existing rows and emits nothing new.
 
-> ☠ **`inbox-drain.cjs` hook — legacy, must be migrated (FD-3 / ledger row 9).** The hook (`templates/.claude/hooks/inbox-drain.cjs`) still reads and writes the old `agent_inbox` tables via raw SQL on every user message. It is a parallel delivery path that runs inside the orchestrator's Claude process, completely outside this worker. The `agent_inbox` tables cannot be dropped until this is refactored to enqueue a mailbox message instead. This is the one surviving piece of the pre-mailbox world; it must die.
+> ✅ **`inbox-drain.cjs` hook — DELETED in M4a (2026-06-04, ledger row 9).** The refute held an
+> illusion: the hook only READ rows nothing had written since slice 017 (it drained an
+> eternally-empty set on every prompt). Hook + repo + `agent_inbox` tables deleted whole
+> (migration 0041 archives them); NO-INBOX-WRITE gate. The pre-mailbox world is gone.
 
 ### 5. The 1-second postman (the worker loop)
 
@@ -101,9 +104,14 @@ All internal callers go through `deliverAgentEnvelope` (`agent-delivery.ts:86`),
 1. Fetches up to 50 deliveries that are due (`db/repos/mailbox.ts:293`).
 2. **Claims** each one with an atomic database update — only one worker pass can own a row at a time. Lease duration: 30 seconds.
 3. **`ui-inbox` deliveries:** immediately accepted — the recipient row already exists in the DB from enqueue, nothing else needed.
-4. **`orchestrator-turn` deliveries:** looks up the live orchestrator session, then calls the turn adapter (see part 6 below).
+4. **`orchestrator-turn` deliveries:** resolves the session three ways (M4a/FD-8): a pinned
+   session that EXISTS → deliver via the turn adapter (part 6) · a pinned session that does NOT
+   exist (synthetic dispatcher id) → honest non-retryable dead-letter · a project whose
+   orchestrator is merely AWAY → **DEFER** — parked back to `pending` with zero attempts
+   consumed, rechecked every 60s until an orchestrator exists. **A message never dies because
+   the orchestrator was away.**
 5. **On success:** marks the delivery `accepted` and records the created row reference.
-6. **On failure:** retries with exponential backoff — 1s, 2s, 4s … capped at 60s. After 5 failures, the delivery is dead-lettered and a `mailbox_dead_letters` row is written.
+6. **On a real send failure:** retries with exponential backoff — 1s, 2s, 4s … capped at 60s. After 5 failures, the delivery is dead-lettered and a `mailbox_dead_letters` row is written.
 
 The worker is "unref'd" — it does not prevent the server process from shutting down cleanly.
 
@@ -152,11 +160,11 @@ What the channel system was (all dead): the per-orchestrator channel-server chil
 
 **What still needs to happen before this is fully clean:**
 
-1. **Migrate `inbox-drain.cjs` → mailbox** (ledger row 9). The legacy hook must be rewritten to enqueue a mailbox message instead of writing raw SQL to `agent_inbox`. Until that lands, `agent_inbox` tables cannot be dropped.
+1. ~~**Migrate `inbox-drain.cjs` → mailbox**~~ ✅ M4a (2026-06-04): no migration was needed — the hook read rows nothing wrote; hook + tables deleted (0041 archive).
 
-2. **FD-3 injected-turn tagging** — system-label + machine-readable source/kind tag must flow all the way through to the chat renderer. The send-queue `source` field exists today; the rest of the chain is not yet complete.
+2. **FD-3 injected-turn tagging** — ✅ shipped 2026-06-03 (810cd75f): the one injection door marks every injected turn `[pc:…]`; web renders SystemTurnCard + filter toggle.
 
-3. **Dead-letter recovery for `orchestrator-turn` messages** — if the orchestrator is down for all 5 attempts, the delivery dies silently (see Known issues). The target architecture has the Brain's reconciler re-dispatch on reconnect; today there is no sweep. 🟢 **FD-8 (locked):** the sweep + lifecycle watchdog are now required — no message may silently die.
+3. ~~**Dead-letter recovery for `orchestrator-turn` messages**~~ ✅ M4a (2026-06-04), solved stronger: an orchestrator-less delivery **DEFERS** (parked, zero attempts, 60s recheck) — it never dead-letters, so no recovery sweep is needed. Synthetic dispatcher ids no longer get doomed envelopes at all (ask-fallback to active-orchestrator; terminal notices skipped). Honest dead-letters remain only for: a pinned session that doesn't exist, real send failures ×5, and unsupported channels.
 
 4. **`compat-channel` cleanup** — reserved and unused; dead-letters immediately. Safe to ignore until a real use appears, then wire the worker branch before any caller uses it.
 
@@ -164,11 +172,11 @@ What the channel system was (all dead): the per-orchestrator channel-server chil
 
 ## Known issues / scar tissue
 
-1. **Dead-lettered orchestrator-turn messages don't auto-recover.** If the orchestrator was down for all 5 attempts, the delivery is dead-lettered. The human-inbox copy (`ui-inbox` channel) survives — the orchestrator copy is silently gone. No alert, no UI indicator, no requeue path today. Fix is either a longer `maxAttempts` ceiling or a dead-letter requeue endpoint.
+1. ~~**Dead-lettered orchestrator-turn messages don't auto-recover.**~~ ✅ M4a: they no longer dead-letter — an orchestrator-less delivery defers (parked, zero attempts) until an orchestrator exists. The 93 historical dead letters stay as forensics; no requeue surface exists for them (M4b candidate, low value — most were doomed synthetic-dispatcher envelopes).
 
-2. **`inbox-drain.cjs` is a parallel path.** See Part 4 above. The hook's raw SQL writes create an invisible secondary delivery path inside the orchestrator's Claude process, outside the worker. Must go.
+2. ~~**`inbox-drain.cjs` is a parallel path.**~~ ✅ deleted in M4a (2026-06-04).
 
-3. **`active-orchestrator` resolved at delivery time, not enqueue time.** If no orchestrator session exists on ANY of the 5 worker attempts, the message is dead-lettered with no visible alert. Intentional behavior for the "orchestrator not running" case, but there is currently no surface that shows the owner their message was lost.
+3. ~~**`active-orchestrator` resolved at delivery time, not enqueue time.**~~ ✅ M4a: delivery-time resolution is now the FEATURE — no session yet ⇒ defer-and-wait, so late resolution delivers to whichever orchestrator next exists.
 
 4. **Delivery frame `entityId` is the delivery ID, not the message ID.** Changed in slice 015b to prevent collisions in the client live store (`mailbox-service.ts:302–308`). Consumers must read `payload.messageId` to correlate with a message — not the frame's `entityId`. Documented in a code comment but easy to miss.
 
@@ -188,10 +196,10 @@ What the channel system was (all dead): the per-orchestrator channel-server chil
 2. ~~Hide system-injected messages by default?~~ 🟢 **FD-6 (locked 2026-06-03):** **shown by
    default**, with a chat-settings filter to hide them. (FD-3's kind-tagging is the mechanism.)
 
-3. **`inbox-drain.cjs` migration timing.** This is the last piece of the pre-mailbox world still running. What slice/step owns it? It blocks dropping the `agent_inbox` tables (ledger row 9). — still open.
+3. ~~**`inbox-drain.cjs` migration timing.**~~ ✅ M4a owned it (2026-06-04) — deleted, not migrated.
 
 **Technical:**
 
-- **Dead-letter requeue:** build a periodic sweep that retries dead-lettered `orchestrator-turn` deliveries once an orchestrator comes back online — or raise the `maxAttempts` ceiling as a short-term fix?
+- ~~**Dead-letter requeue**~~ ✅ moot for the away-orchestrator case (M4a defer). M4b remainder: expecting-response lifecycle + watchdog · message-expiry sweep (`expiresAt` unswept) · optional requeue UI for honest dead letters.
 - **`PendingInteractionService` answer authority:** the in-memory resolver at `/api/ask` is still the actual unblock path; the durable `PendingInteractionService.answer` is a shadow. When does the durable path become sole authority, and does the turn adapter need to wire answer/resume as a result?
 - **Worker throughput:** 1-second sweep, 50-message cap, 30-second lease. Under high agent concurrency, does the 50-per-pass ceiling cause delivery lag? No queue-depth monitoring exists today.

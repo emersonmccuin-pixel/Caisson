@@ -167,7 +167,7 @@ Files written each time:
 
 | Script | Trigger | Job |
 |---|---|---|
-| `inbox-drain.cjs` | UserPromptSubmit | Drains `agent_inbox` table rows into the conversation. ⚠️ Reads legacy DB tables directly — see Known issues. |
+| ~~`inbox-drain.cjs`~~ | — | ✅ DELETED in M4a (2026-06-04) with the `agent_inbox` tables it drained (writer-less since slice 017). |
 | `event-capture.cjs` | UserPromptSubmit, PreToolUse, PostToolUse, Stop, SubagentStop, SessionEnd, StopFailure, Notification | Captures all CC lifecycle events. |
 | `ask-intercept.cjs` | PreToolUse on `AskUserQuestion`, `ExitPlanMode`, `EnterPlanMode` | Intercepts ask/plan tool calls. |
 | `path-guard.cjs` | PreToolUse/PostToolUse on Agent/Task + file tools | Enforces path boundaries (gate-workflow, bind/unbind, enforce). |
@@ -175,7 +175,7 @@ Files written each time:
 
 > ☠ **Hook template trap (burned once):** The hook `.cjs` files live in `templates/.claude/hooks/` — that is the only real location. `packages/runtime/src/hook-scripts/` does **not** exist. Always edit `templates/.claude/hooks/`.
 
-> ☠ **`inbox-drain.cjs` blocker:** This hook still reads/writes `agent_inbox` DB tables via raw SQL (`inbox-drain.cjs:66/74/77`). The `agent_inbox` tables are targeted for deletion. They **cannot be dropped** until this hook is refactored to use the mailbox. Blocked on: mailbox stable + hook refactor (ledger row 9).
+> ✅ **`inbox-drain.cjs` blocker — resolved (M4a 2026-06-04):** hook + tables deleted whole (migration 0041 archive; no refactor was needed — the tables were writer-less since slice 017). `legacy-runtime-cleanup.ts` keeps the hook NAME to scrub it from old installs.
 
 ---
 
@@ -209,7 +209,7 @@ Everything else — preflight, install, auth, project-create, scaffold, registry
 ## Known issues / scar tissue
 
 - **Hook template trap.** Hook `.cjs` files live in `templates/.claude/hooks/` only. `packages/runtime/src/hook-scripts/` does not exist. Burned once editing the wrong path.
-- **`inbox-drain.cjs` blocks legacy table deletion.** Reads/writes `agent_inbox` tables via raw SQL (`inbox-drain.cjs:66/74/77`). Tables can't be dropped until this hook is refactored (ledger row 9).
+- ~~**`inbox-drain.cjs` blocks legacy table deletion.**~~ ✅ resolved in M4a (2026-06-04) — hook + tables deleted.
 - **`README.template.md` is stale.** Lines 8–11 list `.claude/` and `.mcp.json` as project-root files. They're not — they live in the session scratch dir. Misleading for users who read the committed README.
 - **No rollback on partial scaffold.** If a `git commit` fails mid-project-create, the folder is left with partial files. `project-create.ts:30` notes atomic rollback as a followup.
 - **`attach-to-git` history note.** Deleting `.project-companion/` before re-adopting is a working-tree-only delete; git history retains the old scaffold. Cosmetic only.
@@ -226,5 +226,5 @@ Everything else — preflight, install, auth, project-create, scaffold, registry
 
 **Technical:**
 - ~~`SetupWizardModal` Engine migration~~ — moot; the wizard is deleted (FD-21).
-- `inbox-drain.cjs` refactor timeline — prerequisite for dropping `agent_inbox` tables (ledger row 9). Blocked on mailbox-stable.
+- ~~`inbox-drain.cjs` refactor timeline~~ ✅ moot — M4a deleted hook + tables (2026-06-04).
 - `GET /api/preflight` has no caching contract beyond the binary-probe cache that install clears. Should preflight results have a TTL so repeated calls don't re-exec `claude --version` on every wizard render?

@@ -135,13 +135,14 @@ This is **not** the agent-run failure taxonomy. That lives in `packages/domain/s
 
 ---
 
-### 8. Legacy ask path — gated for deletion ☠
+### 8. Legacy ask path — ✅ DELETED (M4a 2026-06-04)
 
-`packages/db/src/repos/agent-inbox.ts` and the `agent_inbox` / `agent_delivery_audit` tables are the pre-mailbox delivery system. The TypeScript code has zero live callers. The old Channel transport was deleted in slice 017 Phase C; the mailbox is now the one delivery door. (`agent-delivery.ts:1–11`)
-
-These tables cannot be dropped yet because `templates/.claude/hooks/inbox-drain.cjs` still reads and writes them via raw SQL on every `UserPromptSubmit` (`lines 66/74/77`). Deleting the tables without migrating that hook will break orchestrator delivery.
-
-Ledger verdict: migrate hook → mailbox first, then archive rows, then drop tables. (`consolidation-ledger-2026-06-02.md §2 Dead/legacy`)
+`repos/agent-inbox.ts` + the `agent_inbox` / `agent_delivery_audit` tables + the
+`inbox-drain.cjs` hook are GONE (migration 0041 archive-renames the tables; NO-INBOX-WRITE
+gate). The "will break orchestrator delivery" fear was an illusion — the hook only READ rows
+nothing had written since slice 017. The mailbox is the one delivery door, now with M4a's
+defer-not-dead worker (an orchestrator-less delivery parks and waits instead of dead-lettering)
+and dispatcher-aware addressing (workflow-worker asks fall back to the active orchestrator).
 
 ---
 
@@ -181,7 +182,7 @@ The positive-signal model here **is** the north star. The three state transition
 
 **Changes needed:**
 - Once the Step 2 one-reconciler keeps the DB row continuously current, the early-ask workaround (on-demand host round-trip at `pause-resume.ts:152–158`) can be retired.
-- `agent_inbox` tables + `inbox-drain.cjs` hook must be migrated to the mailbox and deleted (ledger item 9, `consolidation-ledger §6`). Only blocker: the hook script.
+- ~~`agent_inbox` tables + `inbox-drain.cjs` hook~~ ✅ deleted in M4a (2026-06-04, ledger item 9) — no migration was needed (writer-less since 017).
 - Workflow review steps (`pending_interactions` rows of kind `workflow-orchestrator-review`, `workflow-human-review`) are the durable inbox for the new engine's review nodes. Same contract, same completion=delivery rule.
 - `SubagentFailureCause` / `SubagentFailureSignal` in `packages/domain/src/subagent-failure.ts` reference old v1 vocabulary (`pc_node_failed`, `pc_complete_node`, `subagent:` node field) from before the first-principles redesign. Retire when the new executor lands.
 
@@ -198,8 +199,9 @@ Two listeners were racing to settle the same run: a per-run `onEvent` factory li
 **3. Early-ask race (active workaround).**
 An agent that calls `pc_ask_*` immediately after spawn may find its DB row still at `queued/spawning` — the first reconciler tick hasn't run yet. Current fix: on-demand host round-trip to get a fresh state. This is a workaround; the reconciler should keep the row current continuously (Step 2). (`pause-resume.ts:152–158`)
 
-**4. Agent-inbox tables still alive despite no TypeScript callers.**
-`packages/db/src/repos/agent-inbox.ts` has zero live TS callers, but raw SQL in `templates/.claude/hooks/inbox-drain.cjs:66,74,77` still reads/writes `agent_inbox` on every `UserPromptSubmit`. Dropping the tables without migrating that hook breaks orchestrator delivery. (`consolidation-ledger-2026-06-02.md §2 Dead/legacy`)
+**4.** ~~Agent-inbox tables still alive despite no TypeScript callers.~~ ✅ M4a (2026-06-04):
+the "breaks orchestrator delivery" fear was wrong — the hook only read rows nothing wrote.
+Hook + repo + tables deleted (0041 archive); NO-INBOX-WRITE gate.
 
 **5. `work_items.body` does double duty.**
 `applyDeliverableStore` writes prose deliverables to `work_items.body` when `store: work_item_body`. That same column is read by `dag-run-service.ts:173` to resolve `$root.output` workflow refs. Deleting or repurposing this write silently breaks workflow variable resolution. Ledger verdict: KEEP + add a round-trip guard test. (`consolidation-ledger-2026-06-02.md §2 Sources of truth`)

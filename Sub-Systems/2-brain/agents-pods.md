@@ -219,9 +219,8 @@ agents.
 
 - **Secrets are stored in plain text.** `agent_secrets` holds values unencrypted in the database. A UI
   warning is shown; encryption (DPAPI) is planned but not built. (`pod.ts:143`)
-- **A legacy hook still touches old `agent_inbox` tables.** `templates/.claude/hooks/inbox-drain.cjs`
-  reads/writes those tables with raw SQL. Nothing else uses them, but they can't be dropped until the
-  hook is migrated to the mailbox. (Ledger row #9.)
+- ~~**A legacy hook still touches old `agent_inbox` tables.**~~ ✅ M4a (2026-06-04): hook + tables
+  deleted (migration 0041 archive; ledger row #9 closed).
 - **Wildcard tools fail hard on an unknown server.** Intentional ("loud failure beats a silent empty
   toolset"), but a pod listing `mcp__something-unknown__*` errors at launch instead of degrading
   gracefully.
