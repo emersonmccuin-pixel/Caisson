@@ -601,14 +601,25 @@ lives in per-session scratch dirs outside the repo).
 
 These came up and need their own entries once we talk them through:
 
-- 🔴 **Worktree confinement must cover Bash git** — observed live 2026-06-03 (P2 landing): a
+- 🟡 **Worktree confinement must cover Bash git** — observed live 2026-06-03 (P2 landing): a
   workflow agent mistakenly wrote its file in the MAIN repo, committed there, then "cleaned up" with
   `git reset HEAD~1` + `git checkout -- .` + `git clean -f` in the main tree — destroying all
-  uncommitted human work (and one command away from eating a commit). `path-guard.cjs` confines
-  Edit/Write tool calls to the worktree, but Bash with absolute paths walks right past it. Rebuild
-  requirement: dispatched agents must not be able to run destructive git (reset/checkout/clean/
-  restore) outside their worktree — hook-block on Bash, or spawn-level cwd jail, or both. Until
-  then: never leave uncommitted work in the main tree while a workflow agent runs (commit first).
+  uncommitted human work (and one command away from eating a commit).
+  **Mitigated same day (commit 19a8818d):** root cause was that path-guard's worktree enforcement
+  had been SILENTLY DEAD — CC ≥2.1 sets `agent_type` on the main thread of `--agent` sessions, so
+  the hook mis-took every workflow agent for a Task() subagent, found no binding, and skipped. Fixed
+  (env checked first) + Git-Bash `/e/…` path form covered + NEW **git write fence** for every PC
+  session including the orchestrator (writing git outside the session's fence root → denied with a
+  "stop, report, don't clean up" message). 13 subprocess tests; the hook previously had zero.
+  **Still open for the rebuild:** string-scanning is a backstop, not a sandbox — the real fix is a
+  spawn-level jail. Add path-guard to the FD-22 quirk surface (a CC change killed it once already).
+- ⚪ **Dispatch payloads must be fence-relative (Emerson, 2026-06-03)** — agents already spawn WITH
+  cwd = their worktree; the incident agent wandered out because our prompts/payloads hand it
+  ABSOLUTE paths (work-item bodies, project records, task text all leak `E:\…` references — the
+  model sees a full path and sometimes goes there). Rule for the rebuild: nothing in a dispatch
+  payload may contain an absolute path outside the agent's fence; instructions reference files
+  relative to the agent's own root ("create `docs/x.md`"), and "the project" IS the cwd. Folds into
+  the FD-5 Work Contract shape + the dispatch-payload audit findings.
 
 - ⚪ **Work Item vs Work Contract model** — what each is, how they relate (goal vs. assignment), and
   the rule for a contract with no work item. *(See `0-store/contracts-system.md` and `3-product/work-items.md`.)*
