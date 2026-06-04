@@ -601,6 +601,15 @@ lives in per-session scratch dirs outside the repo).
 
 These came up and need their own entries once we talk them through:
 
+- 🔴 **Worktree confinement must cover Bash git** — observed live 2026-06-03 (P2 landing): a
+  workflow agent mistakenly wrote its file in the MAIN repo, committed there, then "cleaned up" with
+  `git reset HEAD~1` + `git checkout -- .` + `git clean -f` in the main tree — destroying all
+  uncommitted human work (and one command away from eating a commit). `path-guard.cjs` confines
+  Edit/Write tool calls to the worktree, but Bash with absolute paths walks right past it. Rebuild
+  requirement: dispatched agents must not be able to run destructive git (reset/checkout/clean/
+  restore) outside their worktree — hook-block on Bash, or spawn-level cwd jail, or both. Until
+  then: never leave uncommitted work in the main tree while a workflow agent runs (commit first).
+
 - ⚪ **Work Item vs Work Contract model** — what each is, how they relate (goal vs. assignment), and
   the rule for a contract with no work item. *(See `0-store/contracts-system.md` and `3-product/work-items.md`.)*
   Also owns: **passing work down the line** in workflows (hand-off control lives in the contract) —
