@@ -39,9 +39,9 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 | P3 ✅ | **Step 7 — Supervisor. DONE 2026-06-04** (e39fbcbc). ONE RUNTIME: Electron main supervises api+host children (bundles) in dev AND packaged; ☠ dev-supervisor.mjs + startInProcessServer + one-shot host spawn; ONE-SUPERVISOR gate; host shutdown-never-exits fixed (ec7159f4); FD-15 receipt validator gap found+fixed live (43f03b16). Acceptance green both modes. | Independent; fixes packaged-host-never-respawns. | — |
 | P4 ✅ | **Step 3 — Engine re-resolution + reattach. DONE 2026-06-04.** Mostly already shipped (Step 2 HOLD + `HostConnection` rediscovery); closed the 2 real gaps: graceful `/events` end = silent deafness (now restarts; test) + dup trunk-root hop-count broke every dev dispatch since Step 7 (→ `server-root.ts` + ONE-ROOT gate). Live: 2× mid-run host kills → auto-reconnect <10s, `host-lost` ~30s, visible fail + mailbox notify, next dispatch green; paused gate survived respawn; no claude.exe zombies (ConPTY). | Needs P3 (a respawn to test against). Hard prereq for P6. | — |
 | P5 ✅ | **FD-2 spike — shared HTTP tools server. PASSED 6/6, 2026-06-03.** Shared-HTTP WINS: identity via per-session mcp.json headers (`extra.requestInfo`) · turn-1 race gone (`deferred_tools_delta`) · concurrency clean · restart recovery ~5s via 404/-32001. Harness `labs/fd2-shared-http-mcp/` (re-run on every FD-22 version bump). Adoption rides P6. Bonus: caught + fixed the `encodeCwdForClaude` dot-divergence stall bug. | MUST land before P6: if shared-HTTP wins, Engine sessions spawn without per-session messengers — deciding after the orchestrator migration means migrating twice. | FD-2 |
-| P6 | **Step 4 — orchestrator → Engine** (policy `persistent, interactive, fire-and-watch`). | Needs P4. Validates the policy-flag model before anything is deleted. FD-18's ready-gate surfacing rides along (orchestrator chat gets "Claude is loading"). | FD-18 |
-| P7 | **Modals DELETE** (was Step 5 — ☠ FD-21). Delete the three modal paths outright. Needs S2 (authoring handoffs) live first so the product keeps its create flows. | Deletion, not migration. | FD-21 |
-| P8 | **Step 6 — converge the primitive.** Delete `PtySession`, `InteractiveSession`, banner-regex, file-watching, reattach field. One state machine, one ready-detector, one transcript reader. | Needs P6 + P7 (no callers left). | FD-12 |
+| P6 ✅ | **Step 4 — orchestrator → Engine. DONE 2026-06-04.** Slices 0–3 live-verified incl. packaged: FD-2 shared-HTTP adopted (Slice 0) · persistent-interactive policy (Slice 1) · THE SWAP, ☠ interactive-session.ts (Slice 2) · interrupt/alongside/sessions/packaged gauntlet + interrupt-wedge fix (Slice 3). Scope: `step4-orchestrator-engine-scope-2026-06-04.md`. | Needs P4. | FD-2, FD-18 |
+| P7 ✅ | **Modals DELETE. DONE 2026-06-04** (with S2 same day — handoffs live-verified FIRST: workflow/agent/setup all green through chat). Deleted: 3 modal paths web+server, transient routes, ProjectRuntime transient block, draft store + `pc_save/read_workflow_draft` (53→51 tools), setup-wizard scaffold+template. Banned-resurrection set grew the names. Scope: `s2-authoring-handoffs-scope-2026-06-04.md`. | Deletion, not migration. | FD-21 |
+| P8 | **Step 6 — converge the primitive.** Delete `PtySession`, banner-regex, file-watching, reattach field. One state machine, one ready-detector, one transcript reader. **Zero PtySession constructors remain in apps/server after P7 — pure @pc/runtime deletion.** | Needs P6 + P7 ✅ (no callers left). | FD-12 |
 | P9 | **Step 8 — retire inference; FD-17 timeout ladder.** Idle-kill dies; silence escalates (badge → verify-alive → notify orchestrator → kill only on wall-clock/confirmed-dead). | Needs the one lifecycle (P8) so the ladder is built once. | FD-17 |
 
 ---
@@ -66,7 +66,7 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 | Item | Needs | FDs |
 |---|---|---|
 | S1 **Areas first-class** — rename page, cards→modal, descriptions, orchestrator assigns + maintains | nothing — **ready now** | FD-19 |
-| S2 **Authoring handoffs** — Create agent / Create workflow buttons → orchestrator chat with pre-filled intent; specialist agents do the building | orchestrator prompt + dispatch work; prereq for P7 | FD-21, FD-11 (expert builder) |
+| S2 ✅ **Authoring handoffs — DONE 2026-06-04** (lean per Emerson: banner + Open-chat link, NO prefill; manual paths stay incl. new disabled-skeleton workflow create). Orchestrator interviews + dispatches the reshaped worker pods; all three flows live-verified. Scope: `s2-authoring-handoffs-scope-2026-06-04.md` | — | FD-21, FD-11 (expert builder) |
 | S3 **FD-22 version pin** — exact preflight check, pinned installer, auto-updater off for spawned sessions, warn-not-wall | nothing — **ready now**, small | FD-22 |
 | S4 ✅ **FD-15 concurrency setting** shipped 2026-06-03 (87b33b27: live `set-config` push, Settings field, `/health` receipt) + **FD-16 two-tier tools** shipped 2026-06-03 (tier map + `pc_find_tool`/`pc_call_tool` door, on-demand-only dispatch, audited; orchestrator+caisson granted live) | nothing — small | FD-15, FD-16 |
 | S5 **FD-14 "resume interrupted job"** affordance — incl. runs finalized `host-lost` (Step-3 refute: today they dead-end with no re-dispatch path) | P1 (one loop knows what's resumable) | FD-14 |
@@ -80,10 +80,10 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 
 ## The near-term picture (what actually happens next)
 
-Running now: **P6 Step 4 orchestrator→Engine — Slice 0 (FD-2 shared-HTTP tools) ✅ SHIPPED +
-live-verified 2026-06-04**; next = Slice 1 (Engine persistent-interactive policy). Scope:
-`step4-orchestrator-engine-scope-2026-06-04.md`. Also open: FD-20 Patterns design · FD-21/S2
-handoffs.
+**P6 ✅ + S2 ✅ + P7 ✅ all closed 2026-06-04.** Authoring flows through the orchestrator chat;
+the modal subsystem is gone. Next candidates, parallel-safe: **P8 Step 6 converge primitive**
+(now a pure deletion) · M3 diary-as-truth · M4 mailbox/agent_inbox drop · sync-invoke DELETE ·
+FD-20 Patterns design pass. Also logged: ask-trips-watchdog engine finding (FD backlog → P9/FD-17).
 
 Next up, parallel-safe, in value order:
 

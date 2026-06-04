@@ -2,9 +2,11 @@
 // with per-project tokens substituted. P8's create-project flow calls into
 // this after `git init` to produce the durable PC scaffold:
 //
-//   <folder>/.project-companion/setup-wizard-prompt.md (rendered)
-//   <folder>/.project-companion/workflows/*.yaml       (plain copy)
-//   <folder>/README.md                                (rendered)
+//   <folder>/.project-companion/workflows/*.yaml (plain copy)
+//   <folder>/README.md                           (rendered)
+//
+// `setup-wizard-prompt.md` left the scaffold with FD-21 (the wizard modal is
+// deleted; the orchestrator interviews + writes CLAUDE.md in the one chat).
 //
 // The orchestrator's identity used to land here as
 // `.project-companion/orchestrator-prompt.md` (rendered + appended at spawn
@@ -62,7 +64,6 @@ export class ProjectScaffold {
 
   /** Project-visible PC files that should be part of the scaffold commit. */
   writeProjectCompanionFiles(target: ProjectScaffoldTarget): void {
-    this.writeSetupWizardPrompt(target);
     this.writeWorkflowSeeds(target);
   }
 
@@ -76,17 +77,6 @@ export class ProjectScaffold {
       if (!f.endsWith('.yaml')) continue;
       copyFileSync(resolve(srcDir, f), resolve(destDir, f));
     }
-  }
-
-  /** Render the setup wizard identity into the project-visible scaffold. */
-  writeSetupWizardPrompt(target: ProjectScaffoldTarget): void {
-    const src = resolve(this.deps.templatesDir, '.project-companion', 'setup-wizard-prompt.md');
-    if (!existsSync(src)) return;
-    this.writeFromTemplate(
-      src,
-      resolve(target.folderPath, '.project-companion', 'setup-wizard-prompt.md'),
-      this.buildTokens(target),
-    );
   }
 
   /** Render `<folder>/README.md` from template. */

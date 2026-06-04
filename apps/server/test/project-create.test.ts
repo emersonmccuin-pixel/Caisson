@@ -36,9 +36,11 @@ test('attach-to-git writes a tracked Caisson scaffold file before committing', a
 
   const templatesDir = join(tmpDir, 'templates');
   mkdirSync(join(templatesDir, '.project-companion', 'workflows'), { recursive: true });
+  // FD-21: setup-wizard-prompt.md left the scaffold; workflow seeds are the
+  // remaining project-companion scaffold artifact.
   writeFileSync(
-    join(templatesDir, '.project-companion', 'setup-wizard-prompt.md'),
-    'Project {{PROJECT_NAME}} / {{PROJECT_SLUG}} / {{PROJECT_ID}}\n',
+    join(templatesDir, '.project-companion', 'workflows', 'seed.yaml'),
+    'id: seed\n',
     'utf-8',
   );
   writeFileSync(join(templatesDir, 'README.template.md'), '# {{PROJECT_NAME}}\n', 'utf-8');
@@ -64,8 +66,8 @@ test('attach-to-git writes a tracked Caisson scaffold file before committing', a
 
   assert.equal(registered[0]?.id, created.project.id);
   assert.equal(
-    readFileSync(join(repoDir, '.project-companion', 'setup-wizard-prompt.md'), 'utf-8'),
-    `Project Adopted Repo / adopted-repo / ${created.project.id}\n`,
+    readFileSync(join(repoDir, '.project-companion', 'workflows', 'seed.yaml'), 'utf-8'),
+    'id: seed\n',
   );
   assert.equal(created.legacyEvent.reason, 'created');
   assert.equal(created.liveEvent.type, 'project.changed');
@@ -80,7 +82,7 @@ test('attach-to-git writes a tracked Caisson scaffold file before committing', a
     gitOutput(['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'], repoDir)
       .trim()
       .split(/\r?\n/),
-    ['.project-companion/setup-wizard-prompt.md'],
+    ['.project-companion/workflows/seed.yaml'],
   );
 });
 

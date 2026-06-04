@@ -12,8 +12,6 @@ type WorkflowReviewDecision =
 
 export interface WorkflowCompatRuntime {
   project: { id: ULID };
-  setWorkflowBuilderDraft(sessionId: string, def: WorkflowV2.Workflow): void;
-  getWorkflowBuilderDraft(sessionId: string): WorkflowV2.Workflow | undefined;
   listV2Workflows(): {
     valid: Array<{ workflow: WorkflowV2.Workflow }>;
     invalid: Array<{ slug: string; errors: unknown }>;
@@ -31,7 +29,6 @@ export interface WorkflowCompatRuntime {
 
 export interface WorkflowCompatRouteDeps {
   resolveProject(projectId: string): WorkflowCompatRuntime | null;
-  broadcastTo(projectId: ULID, msg: unknown): void;
   now?: () => number;
   listFailedRunDismissalsForProject?: typeof defaultListFailedRunDismissalsForProject;
   dismissFailedRun?: typeof defaultDismissFailedRun;
@@ -49,36 +46,6 @@ export function registerWorkflowCompatRoutes(app: Hono, deps: WorkflowCompatRout
     dismissFailedRun: deps.dismissFailedRun ?? defaultDismissFailedRun,
     workflowRunsV2Repo: deps.workflowRunsV2Repo ?? defaultWorkflowRunsV2Repo,
   };
-
-  /** Section 19.9 -- stash an in-progress v2 workflow-builder draft. */
-  app.post('/api/projects/:projectId/workflow-builder/draft', async (c) => {
-    const id = c.req.param('projectId') as ULID;
-    const runtime = deps.resolveProject(id);
-    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
-    const payload = await c.req.json<{ sessionId?: string; def?: unknown }>();
-    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : '';
-    if (!sessionId) return c.json({ ok: false, error: 'sessionId required' }, 400);
-    if (!payload.def || typeof payload.def !== 'object') {
-      return c.json({ ok: false, error: 'def required' }, 400);
-    }
-    const rawDef = payload.def as Record<string, unknown>;
-    const wfId = typeof rawDef.id === 'string' && rawDef.id ? rawDef.id : '';
-    if (!wfId) return c.json({ ok: false, error: 'def.id required' }, 400);
-    const def = payload.def as unknown as WorkflowV2.Workflow;
-    runtime.setWorkflowBuilderDraft(sessionId, def);
-    deps.broadcastTo(id, { type: 'workflow-builder-draft', sessionId, def });
-    return c.json({ ok: true });
-  });
-
-  /** Section 19.9 -- read the current draft for a workflow-builder session. */
-  app.get('/api/projects/:projectId/workflow-builder/draft/:sessionId', (c) => {
-    const id = c.req.param('projectId') as ULID;
-    const runtime = deps.resolveProject(id);
-    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
-    const sessionId = c.req.param('sessionId');
-    const def = runtime.getWorkflowBuilderDraft(sessionId);
-    return c.json({ ok: true, def: def ?? null });
-  });
 
   app.get('/api/projects/:projectId/failed-run-dismissals', (c) => {
     const id = c.req.param('projectId');

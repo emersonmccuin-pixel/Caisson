@@ -84,17 +84,30 @@ for `idleMs` on later turns. An ask should suspend the watchdogs (the agent is w
 design, not stuck). FD-17's escalate-don't-kill ladder is the proper fix; until then the
 orchestrator's revise loop recovers, and the reshaped prompts minimize asks (decide-don't-ask).
 
-### D — P7: the deletion (FD-21, separate commits)
+### D — P7: the deletion (FD-21) — ✅ SHIPPED 2026-06-04
 
-Server: transient-sessions routes + project-runtime transient block (763–1072) +
-`pc_save_workflow_draft`/`pc_read_workflow_draft` (registry + handlers + draft store) +
-golden regen. Web: `WorkflowBuilderModal`, `WorkflowBuilderChat`, `AgentDesignerChat`,
-`TransientAgentConversation`, `SetupWizardModal`, `features/transient-sessions/*`.
-Banned-resurrection gate entries. Docs sweep: `transient-sessions-modals.md` ☠ tombstone ·
-ledger §4/§6 row 7 · sequencing P7 · this doc's as-built.
+As-built:
+- **Web:** ☠ `WorkflowBuilderModal` · `WorkflowBuilderChat` · `AgentDesignerChat` ·
+  `TransientAgentConversation` · `SetupWizardModal` · `features/transient-sessions/*`;
+  `api/client.ts` re-export pruned.
+- **Server:** ☠ `features/transient-sessions/` + index.ts registration · the entire
+  `ProjectRuntime` transient block (fields, `start/end/resize/Pty/Session` ×3,
+  `transientCcSession`, `hasLiveTransientSession`, draft store) · workflow-compat draft
+  routes + interface methods (+ unused `broadcastTo` dep) · runtime-host
+  `hasLiveTransientSession` seam · setup-wizard scaffold (template file, `writeSetupWizardPrompt`,
+  the always-re-render backfill); interview beats folded into the orchestrator's setup playbook.
+- **Tools:** ☠ `pc_save_workflow_draft` + `pc_read_workflow_draft` (registry, tiers, mcp
+  handlers); golden regenerated **53→51**.
+- **Gates:** banned-resurrection grew `registerTransientSessionRoutes` / `startAgentDesigner` /
+  `startWorkflowBuilder` / `startSetupWizard` / `hasLiveTransientSession` /
+  `set|getWorkflowBuilderDraft` / both draft tool names; transient-sessions + workflow-compat
+  allowlist entries removed.
+- **Tests:** project-create.test.ts re-anchored on workflow-seed scaffold.
+- **Verified:** workspace typecheck · server 251 · mcp 75 · web 126 · domain 20 all green;
+  dev API restarted on the cut — boots clean, transient routes 404.
 
-**P8 unblocked after D:** remaining `PtySession` callers should be zero → Step 6 (delete
-`PtySession`, banner-regex, file-watching) becomes a pure deletion pass.
+**P8 unblocked:** zero `PtySession` constructors remain in `apps/server` → Step 6 (delete
+`PtySession`, banner-regex, file-watching) is a pure @pc/runtime deletion pass.
 
 ## Open / deferred
 

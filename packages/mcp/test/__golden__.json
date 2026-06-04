@@ -733,31 +733,6 @@
       }
     },
     {
-      "name": "pc_save_workflow_draft",
-      "description": "Section 19.9 — push an in-progress draft of the v2 workflow currently being authored in the workflow-builder modal. Use this after each meaningful structural change (node added, edge wired, trigger set, position dragged) so the visualizer renders the workflow forming. The draft is NOT written to disk — only `pc_publish_workflow` does that. Server keys the draft by the transient PC_SESSION_ID env var (already set by the host); state clears automatically when the workflow-builder session ends. Drafts can be incomplete (missing nodes / wires) — they only need a top-level `id`. 400 on shape errors.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "def": {
-            "type": "object",
-            "description": "in-progress v2 workflow object: { id, name, triggers?, worktree?, nodes: [...] }. Nodes are 2 kinds. agent: { id, kind:'agent', agent:<podName>, task, input?, expected_output?, move?, next?, when? }. review: { id, kind:'review', reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire a step's output into a later step via DECLARED INPUT PORTS — `input: { name: \"$earlierId.output\" }` consumed as `{{name}}` in task/prompt (preferred) — or inline `$earlierId.output` refs. `$nodeId.output` is the upstream step's submitted deliverable; `.field` needs a `payload` output. `move:'<stageId>'` advances the card (agent on completion, review on approve).",
-            "additionalProperties": true
-          }
-        },
-        "required": [
-          "def"
-        ]
-      }
-    },
-    {
-      "name": "pc_read_workflow_draft",
-      "description": "Section 19.9 — read the current v2 workflow-builder draft for this session. Use this at the start of edit-mode, or any time you suspect the user has dragged nodes / wired edges in the visualizer since your last `pc_save_workflow_draft` write (sync-model-A — the user can edit the graph between your turns). Returns { ok: true, def: <current draft or null> } if a draft exists; { ok: true, def: null } if none. PC_SESSION_ID env is the implicit scope.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {}
-      }
-    },
-    {
       "name": "pc_publish_workflow",
       "description": "Section 19.17 — publish the v2 workflow to the DB-backed `/api/workflows` surface. Validates the graph (cycles, unknown node ids, `when:` grammar, trigger shape, ref integrity), upserts the row (GET → match by slug → PUT or POST), which records a `workflow.definition.changed` live-event so the Workflows tab refreshes. Returns 201 on first-write, 200 on overwrite. 400 on validation errors with per-path `errors:` array — translate to plain English and re-publish after fixing.",
       "inputSchema": {
@@ -1466,8 +1441,6 @@
     "mcp__pc-rig__pc_list_work_items",
     "mcp__pc-rig__pc_list_areas",
     "mcp__pc-rig__pc_update_area",
-    "mcp__pc-rig__pc_save_workflow_draft",
-    "mcp__pc-rig__pc_read_workflow_draft",
     "mcp__pc-rig__pc_publish_workflow",
     "mcp__pc-rig__pc_write_claude_md",
     "mcp__pc-rig__pc_list_stages",
@@ -1694,18 +1667,6 @@
       "slug": "mcp__pc-rig__pc_update_area",
       "label": "Update area",
       "description": "Rename an Area or write/improve its plain-language summary.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_save_workflow_draft",
-      "label": "Save workflow draft",
-      "description": "Push the in-progress draft so the visualizer renders the workflow forming.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_read_workflow_draft",
-      "label": "Read workflow draft",
-      "description": "Read the current draft back (the user can drag nodes between your turns).",
       "source": "pc-rig"
     },
     {

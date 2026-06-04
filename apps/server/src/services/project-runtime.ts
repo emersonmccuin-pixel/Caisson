@@ -26,13 +26,10 @@ import {
 import {
   claudeConfigDirFromJsonlPath,
   jsonlPathFor,
-  PtySession,
 } from '@pc/runtime';
 import { selectStageEntryWorkflows } from '@pc/workflows';
 
-import { renderTemplate } from './project-scaffold.ts';
 import { preparePodSpawn, type PodSpawnPrep } from './pod-spawn.ts';
-import { prepareClaudeRuntimeFiles } from './claude-runtime-bundle.ts';
 import { WorktreeService } from './worktree.ts';
 import { importV2WorkflowsFromDisk } from './workflow-import.ts';
 import {
@@ -69,16 +66,6 @@ const CLAUDE_TERMINAL_ENV: Readonly<Record<string, string>> = {
   CLAUDE_CODE_NO_FLICKER: '1',
 };
 
-function resizePty(
-  session: { resize(cols: number, rows: number): void } | null,
-  cols: number,
-  rows: number,
-): void {
-  const safeCols = Math.max(20, Math.min(400, Math.trunc(cols)));
-  const safeRows = Math.max(5, Math.min(200, Math.trunc(rows)));
-  session?.resize(safeCols, safeRows);
-}
-
 export interface ProjectRuntimeOptions {
   /** Trunk data dir. Per-project subpaths derived from this. */
   dataDir: string;
@@ -110,21 +97,6 @@ export class ProjectRuntime {
    *  the same CC session awaits it (the Engine holds the ccSessionId until
    *  the old run settles; see OrchestratorHostSession.settled). */
   private lastOrchestratorSettled: Promise<void> | null = null;
-  /** 17b.12 — transient agent-designer session that spawns CC with
-   *  `--agent agent-designer` + the materialised pod (prompt + tools +
-   *  knowledge from the agent-designer pod row). One per project at a time.
-   *  Pod-spawn cleanup is bound to the session end. */
-  private agentDesigner: PtySession | null = null;
-  private agentDesignerPrep: PodSpawnPrep | null = null;
-  private agentDesignerSessionId: string | null = null;
-  /** Section 19.9 — transient `workflow-builder` stock pod session that drives
-   *  the "+ New workflow" modal. v1 `workflowCreator` removed in 19.12. */
-  private workflowBuilder: PtySession | null = null;
-  private workflowBuilderPrep: PodSpawnPrep | null = null;
-  private workflowBuilderSessionId: string | null = null;
-  private setupWizard: PtySession | null = null;
-  private setupWizardCleanup: (() => void) | null = null;
-  private setupWizardSessionId: string | null = null;
   private worktreesSvc: WorktreeService | null = null;
   private orchestratorCols = 120;
   private orchestratorRows = 30;
@@ -137,11 +109,6 @@ export class ProjectRuntime {
   private attachmentSvc: AttachmentService | null = null;
   private fieldSchemaSvc: FieldSchemaService | null = null;
   private hooksRefreshed = false;
-  /** Section 19.9 — v2 workflow-builder drafts keyed by transient PC_SESSION_ID.
-   *  Populated by `pc_save_workflow_draft` mid-interview; consumed by the
-   *  visualizer via the `workflow-builder-draft` WS envelope. Cleared on
-   *  session exit. */
-  private readonly workflowBuilderDrafts: Map<string, WorkflowV2.Workflow> = new Map();
 
   constructor(public project: Project, private readonly opts: ProjectRuntimeOptions) {}
 
@@ -750,345 +717,14 @@ export class ProjectRuntime {
     return true;
   }
 
-  /** Kill the PtySession (if any) and clear caches so the runtime cold-starts. */
+  /** Kill the chat session (if any) and clear caches so the runtime cold-starts. */
   shutdown(): void {
     try { this.pty?.kill(); } catch { /* best-effort */ }
-    this.endAgentDesigner();
-    this.endWorkflowBuilder();
-    this.endSetupWizard();
     this.pty = null;
     this.worktreesSvc = null;
     this.workItemSvc = null;
     this.attachmentSvc = null;
     this.fieldSchemaSvc = null;
-    this.workflowBuilderDrafts.clear();
-  }
-
-  /** 17b.12 — transient agent-designer session backed by the agent-designer
-   *  pod (DB-resident; materialised at spawn time). Free-form chat
-   *  conversation, like the orchestrator chat but scoped to designing a new
-   *  pod. One per project at a time; calling `start` again kills any prior
-   *  session. Pod materialisation cleanup is bound to session-end.
-   *
-   *  Differences from `startAgentCreator`:
-   *   - uses `--agent agent-designer` (REPLACES CC's default system prompt
-   *     with the pod's content; the pod owns the rulebook)
-   *   - materialised pod mcp.json (carries the pod's tool allowlist + any
-   *     per-pod MCP servers; session-local baseline pc-rig still present)
-   *   - cleanup() on session-end removes the plugin, settings, and mcp.json
-   *  Otherwise the wiring (events.jsonl path, transient session id,
-   *  hook plumbing) mirrors startAgentCreator. */
-  startAgentDesigner(): PtySession {
-    this.endAgentDesigner();
-    this.refreshProjectCompanionFilesIfStale();
-    const transientId = `ad-${randomUUID()}`;
-    const sessionDir = this.sessionDataPath(transientId);
-    mkdirSync(sessionDir, { recursive: true });
-    const cc = this.transientCcSession();
-
-    const prep = preparePodSpawn({
-      agentName: 'agent-designer',
-      projectId: this.project.id,
-      worktreeDir: this.project.folderPath,
-      scratchDir: sessionDir,
-      // FD-2 — transient identity; agentSessionId stays empty (modals never
-      // armed the MCP-handshake gate — parity with the stdio child).
-      identity: { sessionId: transientId },
-      dataDir: this.opts.dataDir,
-      templatesDir: this.opts.templatesDir,
-      trunkPath: this.opts.trunkPath,
-      serverPort: this.opts.serverPort,
-      projectSlug: this.project.slug,
-      projectName: this.project.name,
-    });
-    if (!prep) {
-      throw new Error(
-        'agent-designer pod row not found — boot-time seedStockPods should have ensured it exists',
-      );
-    }
-    this.agentDesignerPrep = prep;
-
-    this.agentDesigner = new PtySession({
-      workspaceDir: this.project.folderPath,
-      stopMarkerPath: resolve(sessionDir, 'stop-markers.txt'),
-      eventsPath: resolve(sessionDir, 'events.jsonl'),
-      transcriptPath: resolve(sessionDir, 'transcript.log'),
-      pcSessionId: transientId,
-      claudeSessionId: cc.ccSessionId,
-      resume: false,
-      jsonlPath: cc.jsonlPath,
-      extraEnv: { ...prep.extraEnv, PC_SESSION_ID: transientId },
-      envOverrides: { ...CLAUDE_TERMINAL_ENV },
-      agentName: prep.agentCliName,
-      mcpConfigPath: prep.mcpConfigPath,
-      settingsPath: prep.settingsPath,
-      settingSources: prep.settingSources,
-      pluginDirs: [prep.pluginDir],
-    });
-    this.agentDesignerSessionId = transientId;
-    return this.agentDesigner;
-  }
-
-  /** Deterministic CC session identity for a transient (non-resumable) modal
-   *  session — agent-designer / workflow-builder / setup-wizard. Mirrors the
-   *  orchestrator's session ownership (resolveSessionForSpawn): mint a clean
-   *  UUID, pass it as `--session-id`, and tail the EXACT jsonl path CC writes.
-   *
-   *  Without this, PtySession falls back to a directory scan of
-   *  `~/.claude/projects/<cwd-hash>/` and attaches to the newest `.jsonl` by
-   *  mtime — which latches onto a SIBLING claude.exe writing into the same
-   *  cwd (e.g. a VS Code Claude Code session open in the same project folder),
-   *  bleeding that unrelated chat into the modal. The CC session id is
-   *  intentionally distinct from PC's internal `PC_SESSION_ID` (the `ad-`/`wc-`/
-   *  `sw-` prefixed id that names the on-disk session dir). */
-  private transientCcSession(): { ccSessionId: string; jsonlPath: string } {
-    const ccSessionId = randomUUID();
-    return {
-      ccSessionId,
-      jsonlPath: jsonlPathFor(this.project.folderPath, ccSessionId),
-    };
-  }
-
-  /** Returns the live agent-designer PtySession, or null. */
-  agentDesignerPty(): PtySession | null {
-    return this.agentDesigner && this.agentDesigner.getState() !== 'exited'
-      ? this.agentDesigner
-      : null;
-  }
-
-  /** The transient PC_SESSION_ID assigned to the current agent-designer
-   *  PtySession (or null when no designer modal session is live). */
-  agentDesignerSession(): string | null {
-    return this.agentDesignerSessionId;
-  }
-
-  /** True when a session id belongs to one of this project's live transient
-   *  modal PTYs. Used by terminal-transcript routes; durable orchestrator
-   *  sessions still validate through the DB row. */
-  hasLiveTransientSession(sessionId: string): boolean {
-    return (
-      sessionId === this.agentDesignerSessionId ||
-      sessionId === this.workflowBuilderSessionId ||
-      sessionId === this.setupWizardSessionId
-    );
-  }
-
-  resizeAgentDesigner(cols: number, rows: number): void {
-    resizePty(this.agentDesignerPty(), cols, rows);
-  }
-
-  /** Kill the agent-designer session + clean up the materialised session-local
-   *  runtime files. Idempotent. */
-  endAgentDesigner(): void {
-    if (this.agentDesigner) {
-      try { this.agentDesigner.kill(); } catch { /* best-effort */ }
-      this.agentDesigner = null;
-    }
-    if (this.agentDesignerPrep) {
-      try { this.agentDesignerPrep.cleanup(); } catch { /* best-effort */ }
-      this.agentDesignerPrep = null;
-    }
-    this.agentDesignerSessionId = null;
-  }
-
-  // ── Section 19.9 — workflow-builder transient session (v2-aware) ──────────
-  //
-  // Mirror of `startAgentDesigner` (uses `preparePodSpawn` to materialise the
-  // pod's prompt + tool allowlist — REPLACES CC's default identity). Replaces
-  // the v1 `workflow-creator` PtySession + draft store, both removed in 19.12.
-
-  /** Section 19.9 — stash the latest v2 workflow-builder draft for a session.
-   *  Called by the matching HTTP endpoint when `pc_save_workflow_draft` fires.
-   *  Index.ts handles the WS broadcast. */
-  setWorkflowBuilderDraft(sessionId: string, def: WorkflowV2.Workflow): void {
-    this.workflowBuilderDrafts.set(sessionId, def);
-  }
-
-  /** Section 19.9 — read the current draft for a session. Used by
-   *  `pc_read_workflow_draft` so the agent can pick up user drags between
-   *  turns (sync-model-A). Returns undefined if no draft exists. */
-  getWorkflowBuilderDraft(sessionId: string): WorkflowV2.Workflow | undefined {
-    return this.workflowBuilderDrafts.get(sessionId);
-  }
-
-  /** Section 19.9 — drop draft state for a specific workflow-builder session.
-   *  Called from `endWorkflowBuilder`. */
-  clearWorkflowBuilderDraft(sessionId: string): void {
-    this.workflowBuilderDrafts.delete(sessionId);
-  }
-
-  /** Section 19.9 — transient PtySession driving the conversational v2
-   *  workflow-builder modal. Spawned with `--agent workflow-builder` (replaces
-   *  CC's default identity with the pod's content). One workflow-builder at a
-   *  time per project; calling `start` again kills the prior one. */
-  startWorkflowBuilder(): PtySession {
-    this.endWorkflowBuilder();
-    this.refreshProjectCompanionFilesIfStale();
-    const transientId = `wb-${randomUUID()}`;
-    const sessionDir = this.sessionDataPath(transientId);
-    mkdirSync(sessionDir, { recursive: true });
-    const cc = this.transientCcSession();
-
-    const prep = preparePodSpawn({
-      agentName: 'workflow-builder',
-      projectId: this.project.id,
-      worktreeDir: this.project.folderPath,
-      scratchDir: sessionDir,
-      // FD-2 — transient identity (see agent-designer note).
-      identity: { sessionId: transientId },
-      dataDir: this.opts.dataDir,
-      templatesDir: this.opts.templatesDir,
-      trunkPath: this.opts.trunkPath,
-      serverPort: this.opts.serverPort,
-      projectSlug: this.project.slug,
-      projectName: this.project.name,
-    });
-    if (!prep) {
-      throw new Error(
-        'workflow-builder pod row not found — boot-time seedStockPods should have ensured it exists',
-      );
-    }
-    this.workflowBuilderPrep = prep;
-
-    this.workflowBuilder = new PtySession({
-      workspaceDir: this.project.folderPath,
-      stopMarkerPath: resolve(sessionDir, 'stop-markers.txt'),
-      eventsPath: resolve(sessionDir, 'events.jsonl'),
-      transcriptPath: resolve(sessionDir, 'transcript.log'),
-      pcSessionId: transientId,
-      claudeSessionId: cc.ccSessionId,
-      resume: false,
-      jsonlPath: cc.jsonlPath,
-      extraEnv: { ...prep.extraEnv, PC_SESSION_ID: transientId },
-      envOverrides: { ...CLAUDE_TERMINAL_ENV },
-      agentName: prep.agentCliName,
-      mcpConfigPath: prep.mcpConfigPath,
-      settingsPath: prep.settingsPath,
-      settingSources: prep.settingSources,
-      pluginDirs: [prep.pluginDir],
-    });
-    this.workflowBuilderSessionId = transientId;
-    return this.workflowBuilder;
-  }
-
-  /** Returns the live workflow-builder PtySession, or null if not started /
-   *  exited. */
-  workflowBuilderPty(): PtySession | null {
-    return this.workflowBuilder && this.workflowBuilder.getState() !== 'exited'
-      ? this.workflowBuilder
-      : null;
-  }
-
-  /** The transient PC_SESSION_ID assigned to the current workflow-builder
-   *  PtySession (or the most-recently exited one). Used by the draft-state
-   *  endpoint to scope cleanup. */
-  workflowBuilderSession(): string | null {
-    return this.workflowBuilderSessionId;
-  }
-
-  resizeWorkflowBuilder(cols: number, rows: number): void {
-    resizePty(this.workflowBuilderPty(), cols, rows);
-  }
-
-  /** Kill the workflow-builder session + clean up the materialised
-   *  session-local runtime files + drop its draft state. Idempotent. */
-  endWorkflowBuilder(): void {
-    if (this.workflowBuilder) {
-      try { this.workflowBuilder.kill(); } catch { /* best-effort */ }
-      this.workflowBuilder = null;
-    }
-    if (this.workflowBuilderPrep) {
-      try { this.workflowBuilderPrep.cleanup(); } catch { /* best-effort */ }
-      this.workflowBuilderPrep = null;
-    }
-    if (this.workflowBuilderSessionId) {
-      this.clearWorkflowBuilderDraft(this.workflowBuilderSessionId);
-      this.workflowBuilderSessionId = null;
-    }
-  }
-
-  /** 5.6 / D82: transient PtySession driving the conversational setup wizard
-   *  that writes CLAUDE.md. Mirrors startAgentCreator. One wizard at a time
-   *  per project — calling start again kills the prior one. */
-  startSetupWizard(): PtySession {
-    if (this.setupWizard) {
-      this.endSetupWizard();
-    }
-    this.refreshProjectCompanionFilesIfStale();
-    const transientId = `sw-${randomUUID()}`;
-    const sessionDir = this.sessionDataPath(transientId);
-    mkdirSync(sessionDir, { recursive: true });
-    const cc = this.transientCcSession();
-    const runtimeFiles = prepareClaudeRuntimeFiles({
-      scratchDir: sessionDir,
-      worktreeDir: this.project.folderPath,
-      projectId: this.project.id,
-      projectSlug: this.project.slug,
-      projectName: this.project.name,
-      // FD-2 — transient identity (see agent-designer note).
-      identity: { sessionId: transientId },
-      dataDir: this.opts.dataDir,
-      templatesDir: this.opts.templatesDir,
-      trunkPath: this.opts.trunkPath,
-      serverPort: this.opts.serverPort,
-    });
-    this.setupWizardCleanup = runtimeFiles.cleanup;
-    this.setupWizard = new PtySession({
-      workspaceDir: this.project.folderPath,
-      stopMarkerPath: resolve(sessionDir, 'stop-markers.txt'),
-      eventsPath: resolve(sessionDir, 'events.jsonl'),
-      transcriptPath: resolve(sessionDir, 'transcript.log'),
-      pcSessionId: transientId,
-      claudeSessionId: cc.ccSessionId,
-      resume: false,
-      jsonlPath: cc.jsonlPath,
-      extraEnv: { ...runtimeFiles.extraEnv, PC_SESSION_ID: transientId },
-      envOverrides: { ...CLAUDE_TERMINAL_ENV },
-      mcpConfigPath: runtimeFiles.mcpConfigPath,
-      settingsPath: runtimeFiles.settingsPath,
-      settingSources: runtimeFiles.settingSources,
-      appendSystemPromptPath: resolve(
-        this.project.folderPath,
-        '.project-companion',
-        'setup-wizard-prompt.md',
-      ),
-    });
-    this.setupWizardSessionId = transientId;
-    this.setupWizard.once('exit', () => {
-      if (this.setupWizardCleanup) {
-        try { this.setupWizardCleanup(); } catch { /* best-effort */ }
-        this.setupWizardCleanup = null;
-      }
-    });
-    return this.setupWizard;
-  }
-
-  /** Returns the live setup-wizard PtySession, or null if not started / exited. */
-  setupWizardPty(): PtySession | null {
-    return this.setupWizard && this.setupWizard.getState() !== 'exited'
-      ? this.setupWizard
-      : null;
-  }
-
-  setupWizardSession(): string | null {
-    return this.setupWizardSessionId;
-  }
-
-  resizeSetupWizard(cols: number, rows: number): void {
-    resizePty(this.setupWizardPty(), cols, rows);
-  }
-
-  /** Kill the setup-wizard session. Idempotent. */
-  endSetupWizard(): void {
-    if (this.setupWizard) {
-      try { this.setupWizard.kill(); } catch { /* best-effort */ }
-      this.setupWizard = null;
-    }
-    if (this.setupWizardCleanup) {
-      try { this.setupWizardCleanup(); } catch { /* best-effort */ }
-      this.setupWizardCleanup = null;
-    }
-    this.setupWizardSessionId = null;
   }
 
   private resolveSessionForSpawn(): {
@@ -1147,19 +783,9 @@ export class ProjectRuntime {
   private refreshProjectCompanionFilesIfStale(): void {
     if (this.hooksRefreshed) return;
     this.hooksRefreshed = true;
-    const tokens = {
-      PROJECT_DATA_DIR: this.dataPath.replace(/\\/g, '/'),
-      PROJECT_ID: this.project.id,
-      PROJECT_SLUG: this.project.slug,
-      PROJECT_NAME: this.project.name,
-      PROJECT_FOLDER: this.project.folderPath.replace(/\\/g, '/'),
-      // 18.4 — added so refresh-on-boot picks up the inbox-drain hook template
-      // for projects scaffolded pre-18.4. Trunk path resolves better-sqlite3
-      // via createRequire from the hook script; db path is the global
-      // PC sqlite file the drain query reads from.
-      PC_TRUNK_PATH: this.opts.trunkPath.replace(/\\/g, '/'),
-      PC_DB_PATH: resolve(this.opts.dataDir, 'pc.sqlite').replace(/\\/g, '/'),
-    };
+    // (Token-rendered backfills are all gone — orchestrator-prompt 16a.4,
+    // workflow-creator-prompt 19.12, setup-wizard-prompt FD-21. Only the
+    // verbatim workflow-seed copy remains.)
     try {
       // Section 16a.4 — orchestrator-prompt.md backfill removed. The
       // orchestrator's identity now lives in the `agents` DB table as a
@@ -1174,23 +800,10 @@ export class ProjectRuntime {
       // stock pod via `preparePodSpawn`. Existing per-project copies are
       // unused; safe to leave on disk or manually delete.
 
-      // 5.6 / D82: setup-wizard prompt. Always-re-render (nobody hand-edits
-      // this file, and the interview script may evolve between PC versions).
-      const swCreatorSrc = resolve(
-        this.opts.templatesDir,
-        '.project-companion',
-        'setup-wizard-prompt.md',
-      );
-      const swCreatorDest = resolve(
-        this.project.folderPath,
-        '.project-companion',
-        'setup-wizard-prompt.md',
-      );
-      if (existsSync(swCreatorSrc)) {
-        mkdirSync(resolve(this.project.folderPath, '.project-companion'), { recursive: true });
-        const raw = readFileSync(swCreatorSrc, 'utf-8');
-        writeFileSync(swCreatorDest, renderTemplate(raw, tokens), 'utf-8');
-      }
+      // FD-21 — setup-wizard-prompt.md backfill removed with the wizard modal.
+      // The orchestrator interviews + writes CLAUDE.md in the one chat.
+      // Existing per-project copies are unused; safe to leave or delete.
+
       // Section 3 phase 3i: backfill any workflow YAMLs from templates that
       // don't yet exist in the project. Write-if-missing — user-edited copies
       // of seed workflows (bash-loop.yaml, approval-demo.yaml, etc.) survive.

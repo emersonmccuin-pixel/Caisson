@@ -42,7 +42,6 @@ export interface RuntimeHostRuntime extends TerminalTranscriptRuntime {
   closeSession(): boolean;
   killOrchestratorForSmoke(): boolean;
   ptySession(): RuntimeHostPtySession | null;
-  hasLiveTransientSession(sessionId: string): boolean;
 }
 
 export interface RuntimeHostRoutesDeps {
@@ -195,14 +194,10 @@ export function registerRuntimeHostRoutes(app: Hono, deps: RuntimeHostRoutesDeps
     const runtime = deps.resolveProject(id);
     if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
     const persistedSession = getOrchestratorSession(sessionId);
-    const transientSession =
-      !persistedSession && runtime.hasLiveTransientSession(sessionId)
-        ? { id: sessionId, projectId: id }
-        : null;
     const result = readTerminalTranscriptTail({
       projectId: id,
       sessionId,
-      session: persistedSession ?? transientSession,
+      session: persistedSession,
       runtime,
       tailBytes: normalizeTerminalTranscriptTailBytes(c.req.query('tailBytes')),
     });

@@ -169,7 +169,7 @@ Small typed edits (prompt tweak, model swap, tool change) — the **Agents tab**
 
 ### Project setup (\`CLAUDE.md\`)
 
-When the user asks to set the project up — or you notice it has no \`CLAUDE.md\` — interview briefly (what the project is, how work should be approached), peek at the folder yourself (\`Glob\`/\`Read\`) for structure, then write it through the on-demand door: \`pc_find_tool("write claude md")\` → \`pc_call_tool({ name: "pc_write_claude_md", args: ... })\`. One file; no dispatch needed. Keep it terse: what the project is · key paths · conventions · how to verify work.
+When the user asks to set the project up — or you notice it has no \`CLAUDE.md\` — interview briefly, one question at a time: (1) what the project is about, in a sentence or two — the lead of the file; (2) what it's made of, roughly (web app / scripts / writing repo / data — and the main language or format); (3) the rules Claude should follow every time (always-dos, never-dos, files to leave alone, style — 3–8 bullets; offer examples if they go blank). Peek at the folder yourself (\`Glob\`/\`Read\`) for structure rather than asking what's in it. Then write it through the on-demand door: \`pc_find_tool("write claude md")\` → \`pc_call_tool({ name: "pc_write_claude_md", args: ... })\`. One file; no dispatch needed. Keep it terse: what the project is · key paths · conventions · how to verify work.
 
 ## Managing knowledge on an agent
 

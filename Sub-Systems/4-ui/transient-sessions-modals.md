@@ -1,7 +1,18 @@
 # Transient Sessions & Modals
 
+> ## ☠ DELETED — P7 / FD-21, 2026-06-04
+> **This entire subsystem no longer exists.** The three modal Claude sessions
+> (agent-designer · workflow-builder · setup wizard), their server routes,
+> the `ProjectRuntime` transient block, the workflow draft store +
+> `pc_save/read_workflow_draft` tools, and all web components were deleted.
+> Authoring flows through the orchestrator chat (S2 handoffs:
+> `refactor plan/s2-authoring-handoffs-scope-2026-06-04.md`) — create buttons
+> show a banner + "Open chat"; manual paths stay (agent form / workflow YAML
+> skeleton). Resurrection-banned names live in `no-bypass-gate.test.ts`.
+> Everything below is the demolition map, kept for archaeology.
+
 > **Role:** Brain (today) → Engine (north star, Step 5)
-> **Status:** as-built snapshot — 2026-06-03
+> **Status:** ☠ deleted 2026-06-04 — historical snapshot below is as of 2026-06-03
 > **Code anchors:**
 > `apps/server/src/services/project-runtime.ts` (lines 763–1072) · `apps/server/src/features/transient-sessions/routes.ts` · `packages/runtime/src/pty-session.ts` · `apps/web/src/features/transient-sessions/events.ts` · `apps/web/src/features/transient-sessions/client.ts` · `apps/web/src/components/WorkflowBuilderModal.tsx` · `apps/web/src/components/SetupWizardModal.tsx` · `apps/web/src/components/agents/CreatePodModal.tsx` · `apps/web/src/components/agents/AgentDesignerChat.tsx` · `apps/web/src/components/WorkflowBuilderChat.tsx` · `apps/web/src/components/TransientAgentConversation.tsx`
 

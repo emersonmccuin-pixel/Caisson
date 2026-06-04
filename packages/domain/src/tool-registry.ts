@@ -852,37 +852,6 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
-    "name": "pc_save_workflow_draft",
-    "family": "workflow",
-    "label": "Save workflow draft",
-    "description": "Section 19.9 — push an in-progress draft of the v2 workflow currently being authored in the workflow-builder modal. Use this after each meaningful structural change (node added, edge wired, trigger set, position dragged) so the visualizer renders the workflow forming. The draft is NOT written to disk — only `pc_publish_workflow` does that. Server keys the draft by the transient PC_SESSION_ID env var (already set by the host); state clears automatically when the workflow-builder session ends. Drafts can be incomplete (missing nodes / wires) — they only need a top-level `id`. 400 on shape errors.",
-    "catalogDescription": "Push the in-progress draft so the visualizer renders the workflow forming.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "def": {
-          "type": "object",
-          "description": "in-progress v2 workflow object: { id, name, triggers?, worktree?, nodes: [...] }. Nodes are 2 kinds. agent: { id, kind:'agent', agent:<podName>, task, input?, expected_output?, move?, next?, when? }. review: { id, kind:'review', reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire a step's output into a later step via DECLARED INPUT PORTS — `input: { name: \"$earlierId.output\" }` consumed as `{{name}}` in task/prompt (preferred) — or inline `$earlierId.output` refs. `$nodeId.output` is the upstream step's submitted deliverable; `.field` needs a `payload` output. `move:'<stageId>'` advances the card (agent on completion, review on approve).",
-          "additionalProperties": true
-        }
-      },
-      "required": [
-        "def"
-      ]
-    }
-  },
-  {
-    "name": "pc_read_workflow_draft",
-    "family": "workflow",
-    "label": "Read workflow draft",
-    "description": "Section 19.9 — read the current v2 workflow-builder draft for this session. Use this at the start of edit-mode, or any time you suspect the user has dragged nodes / wired edges in the visualizer since your last `pc_save_workflow_draft` write (sync-model-A — the user can edit the graph between your turns). Returns { ok: true, def: <current draft or null> } if a draft exists; { ok: true, def: null } if none. PC_SESSION_ID env is the implicit scope.",
-    "catalogDescription": "Read the current draft back (the user can drag nodes between your turns).",
-    "inputSchema": {
-      "type": "object",
-      "properties": {}
-    }
-  },
-  {
     "name": "pc_publish_workflow",
     "family": "workflow",
     "label": "Publish workflow",
@@ -1707,8 +1676,6 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_update_workflow: 'on-demand',
   pc_delete_workflow: 'on-demand',
   pc_publish_workflow: 'on-demand',
-  pc_save_workflow_draft: 'on-demand',
-  pc_read_workflow_draft: 'on-demand',
   // Project structure config.
   pc_replace_stages: 'on-demand',
   pc_replace_field_schemas: 'on-demand',

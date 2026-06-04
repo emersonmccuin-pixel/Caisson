@@ -80,9 +80,20 @@ const BANNED_RESURRECTION = [
   'activeRunHandleForAgentRun',
   // Step-4 Slice 2: the server-owned orchestrator spawn is dead — the Engine
   // owns EVERY Claude process; the chat rides OrchestratorHostSession on a
-  // `persistent-interactive` host run. (Transient modals stay on PtySession
-  // until P7 deletes them — FD-21.)
+  // `persistent-interactive` host run.
   'InteractiveSession',
+  // P7 (FD-21): the transient modal sessions are deleted — agent-designer /
+  // workflow-builder / setup-wizard popups + the workflow draft store.
+  // Authoring flows through the orchestrator chat + dispatched specialists.
+  'registerTransientSessionRoutes',
+  'startAgentDesigner',
+  'startWorkflowBuilder',
+  'startSetupWizard',
+  'hasLiveTransientSession',
+  'setWorkflowBuilderDraft',
+  'getWorkflowBuilderDraft',
+  'pc_save_workflow_draft',
+  'pc_read_workflow_draft',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 
@@ -108,14 +119,10 @@ const ALLOWLIST: Record<string, string> = {
   // ── Live RPC gate / ephemeral — not reconcilable facts ──
   'apps/server/src/features/chat-bridges/routes.ts':
     'ask: live RPC gate, latency-class. The durable record already rides the relay via the pending-interaction outbox row.',
-  'apps/server/src/features/workflow-compat/routes.ts':
-    'workflow-builder-draft: ephemeral builder-session echo, not a DB-owned fact.',
 
   // ── PTY / live I/O pass-through (ADR §4) — raw byte/event streams ──
   'apps/server/src/features/runtime-host/pty-handlers.ts':
     'PTY pass-through: raw run-output/state/turn-end/event/exit + runtime snapshot. Latency-class live I/O, never an outbox fact.',
-  'apps/server/src/features/transient-sessions/routes.ts':
-    'Transient-session PTY pass-through: raw -raw/-state/-event/-jsonl/-exit byte+event streams of a transient PTY (ADR §4), not DB lifecycle facts.',
   'apps/server/src/features/runtime-host/routes.ts':
     'Chat-session live channel: session-changed lifecycle + sessionReplay transcript bytes + runtime/send-queue snapshots. Transcript/PTY tier (ADR §4); session-changed is re-pushed on connect.',
   'apps/server/src/features/runtime-host/websocket-message.ts':

@@ -73,7 +73,6 @@ import {
 } from './features/projects/routes.ts';
 import { registerRuntimeHostRoutes } from './features/runtime-host/routes.ts';
 import { registerRuntimeHostWebSocketServer } from './features/runtime-host/websocket-server.ts';
-import { registerTransientSessionRoutes } from './features/transient-sessions/routes.ts';
 import { registerWorkItemRoutes } from './features/work-items/routes.ts';
 import { registerAreaRoutes } from './features/areas/routes.ts';
 import { registerContractRoutes } from './features/contracts/routes.ts';
@@ -966,14 +965,6 @@ registerProjectContextRoutes(app, {
 
 registerProjectDetailRoute(app, { resolveProject });
 
-registerTransientSessionRoutes<ReturnType<ProjectRuntime['startAgentDesigner']>, ProjectRuntime>(
-  app,
-  {
-    resolveProject,
-    broadcastTo,
-  },
-);
-
 registerWorkItemRoutes(app, {
   resolveProject,
   broadcastTo,
@@ -986,7 +977,7 @@ registerAreaRoutes(app, { resolveProject });
 
 registerContractRoutes(app, {});
 
-registerWorkflowCompatRoutes(app, { resolveProject, broadcastTo });
+registerWorkflowCompatRoutes(app, { resolveProject });
 
 registerWorktreeRoutes(app, { resolveProject });
 
