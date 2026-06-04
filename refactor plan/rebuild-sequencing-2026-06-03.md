@@ -35,7 +35,7 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 | Wave | Work | Why this order | FDs |
 |---|---|---|---|
 | P1 ✅ | **Step 2 — one reconciler, all states. DONE 2026-06-03.** `agent-run-reconciler.ts`; boot = first tick; legacy bulk-fail + boot-reconcile path DELETED; HOLD structural; paused-survives = law (guard-tested); live acceptance green. Scope: `step2-reconciler-scope-2026-06-03.md`. | Everything later assumes one loop. FD-14's "paused always survives" lands here as law. | FD-14 |
-| P2 | **In-process fork DELETE** (ledger row 3). | Dead in prod; needs P1 + null-host tests moved to a host fake. | FD-12 (one spawn path) |
+| P2 ✅ | **In-process fork DELETE. DONE 2026-06-03** (60ac149f, −288 lines). `constructAndStart` + `defaultAgentRunFactory` + `activeRunHandleForAgentRun` deleted; no hostClient = typed `host-unavailable`; banned-resurrection gate covers the three names. Test prereq was already satisfied (all factory tests host-fake). Live acceptance green. ⚠ Landing surfaced the Bash-git worktree-escape (🔴 in FD backlog). | Dead in prod; needs P1 + null-host tests moved to a host fake. | FD-12 (one spawn path) |
 | P3 | **Step 7 — Supervisor** *(in flight now; parallel with P1–P2)*. One spawn→watch→respawn module, dev + packaged. | Independent; fixes packaged-host-never-respawns. | — |
 | P4 | **Step 3 — Engine re-resolution + reattach.** Brain re-finds the Engine after a respawn. | Needs P3 (a respawn to test against). Hard prereq for P6. | — |
 | P5 ✅ | **FD-2 spike — shared HTTP tools server. PASSED 6/6, 2026-06-03.** Shared-HTTP WINS: identity via per-session mcp.json headers (`extra.requestInfo`) · turn-1 race gone (`deferred_tools_delta`) · concurrency clean · restart recovery ~5s via 404/-32001. Harness `labs/fd2-shared-http-mcp/` (re-run on every FD-22 version bump). Adoption rides P6. Bonus: caught + fixed the `encodeCwdForClaude` dot-divergence stall bug. | MUST land before P6: if shared-HTTP wins, Engine sessions spawn without per-session messengers — deciding after the orchestrator migration means migrating twice. | FD-2 |
@@ -88,8 +88,8 @@ Next up, parallel-safe, in value order:
 2. ~~**P1 — Step 2 one reconciler**~~ ✅ shipped 2026-06-03 (live acceptance green)
 3. ~~**S1 — Areas** + **S3 — version pin**~~ ✅ shipped 2026-06-03 (52a3723f, bf9615db)
 4. ~~**P5 — FD-2 spike**~~ ✅ PASSED 6/6 2026-06-03 — shared HTTP tools server wins; adoption rides P6
-5. **M2 — write-door guard** (cheap insurance while everything moves) ← next
-6. **P2 — in-process fork delete** (unblocked by P1)
+5. ~~**M2 — write-door guard**~~ ✅ shipped 2026-06-03 (1f57f560) — ONE gateway txn everywhere + structural import gate
+6. ~~**P2 — in-process fork delete**~~ ✅ shipped 2026-06-03 (60ac149f) — host owns every spawn; typed failure when unwired
 
 Gate check before each wave: does the live system still pass the acceptance loop
 (synthetic-stall-check → card flow → human gate → completed)?
