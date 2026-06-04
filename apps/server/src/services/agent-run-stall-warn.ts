@@ -1,11 +1,9 @@
-// T2.2 — non-terminal `stalled` warn pass (mode-agnostic).
+// Non-terminal `stalled` warn pass — rung 1 of the P9/FD-17 stall ladder.
 //
-// The intermediate signal the old two sweeps never had: a run that has gone
-// quiet past WARN_MS but is NOT yet killed gets a visible `stalled` badge,
-// instead of looking identical to a healthy run until it either resumes or
-// jumps straight to `failed` at KILL_MS. Runs in BOTH modes (host + in-process)
-// — warn-only, never terminal (the in-process liveness sweep owns the kill; the
-// host-mode terminal path is T1.4).
+// A run that has gone quiet past WARN_MS gets a visible `stalled` badge
+// instead of looking identical to a healthy run. Warn-only, never terminal —
+// there is NO idle kill anywhere anymore (Step 8: silence escalates, it never
+// executes; kills are wall-clock or confirmed-dead only).
 //
 // Emit-once via a caller-owned `Set<runId>`: announce `stalled` the first tick a
 // run crosses WARN, announce `reconciled` (un-stall) the first tick it drops

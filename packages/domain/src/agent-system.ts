@@ -32,6 +32,8 @@ export const AGENT_RUN_STATUSES: readonly AgentRunStatus[] = [
  *  route layer never invents new ones (preserves the closed-world property). */
 export type AgentRunFailureCause =
   | 'spawn-stuck'
+  /** ☠ HISTORICAL ONLY (Step 8/FD-17): no live writer — idle-kill is deleted.
+   *  Kept so pre-P9 terminal rows still type/display. */
   | 'idle-timeout'
   | 'wall-clock-timeout'
   | 'ready-timeout'
@@ -113,8 +115,9 @@ export interface AgentRunRow {
    *  the liveness sweep can probe process existence and hard-kill can target the
    *  real process. NULL before spawn / host-mode runs. */
   pid: number | null;
-  /** Epoch-ms of the last observed JSONL activity. Drives the idle-timeout
-   *  branch of the liveness sweep. NULL until the first event lands. */
+  /** Epoch-ms of the last observed JSONL activity. Drives the stall ladder's
+   *  idle computation (badge → verify-alive → notify — never a kill).
+   *  NULL until the first event lands. */
   lastActivityAt: number | null;
   /** Workflow-engine redesign — epoch-ms when the worker submitted its
    *  deliverable (`pc_submit_deliverable`). The positive done-receipt: a run

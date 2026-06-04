@@ -1,15 +1,16 @@
-// T2.2 — shared agent-run idle evaluation.
-//
-// One source of truth for "how quiet is this run, and what does that mean",
-// used by BOTH the in-process liveness path and the host-mode reconcile path so
-// the stall logic no longer lives in two mode-split copies.
+// Shared agent-run idle evaluation — the stall ladder's one idle calculation
+// (P9/FD-17: silence escalates, it never executes).
 //
 //   computeIdleMs(row, {now, jsonlMtime})  → ms since the last sign of life
 //
-// Two thresholds:
-//   WARN_MS  (~3 min)  → non-terminal `stalled` badge (visible, never kills)
-//   KILL_MS  (10 min)  → terminal idle-timeout (in-process only until T1.4 makes
-//                        host liveness authoritative; host-mode is warn-only)
+// Two thresholds, two rungs:
+//   WARN_MS    (3 min)  → non-terminal `stalled` badge (rung 1 — visible, never kills)
+//   NOTIFY_MS  (5 min)  → verify-alive + ONE mailbox notify to the orchestrator
+//                         (rung 2 — the old kill moment became the notify moment)
+//
+// There is NO kill threshold. Kills happen only on wall-clock (AgentRun, 2h
+// default) or confirmed-dead (onSpawnExit / host-lost). ☠ resolveIdleTimeoutMs
+// + PC_AGENT_IDLE_TIMEOUT_MS died with the in-process liveness sweep.
 
 import type { AgentRunRow } from '@pc/domain';
 
@@ -18,20 +19,20 @@ import type { AgentRunRow } from '@pc/domain';
  *  isn't flagged on every blip. Tune via PC_AGENT_STALL_WARN_MS. */
 const DEFAULT_STALL_WARN_MS = 3 * 60_000;
 
-/** Idle kill window: no activity for this long ⇒ wedged, finalize. Matches the
- *  pre-T2.2 liveness-sweep default. Tune via PC_AGENT_IDLE_TIMEOUT_MS. */
-const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60_000;
-
-export type IdleVerdict = 'ok' | 'warn' | 'kill';
+/** Idle notify window: no activity for this long ⇒ verify-alive + tell the
+ *  orchestrator once per stall episode. Matches the old idle-KILL default —
+ *  the moment we used to execute the run is now the moment we ask about it.
+ *  Tune via PC_AGENT_STALL_NOTIFY_MS. */
+const DEFAULT_STALL_NOTIFY_MS = 5 * 60_000;
 
 export function resolveStallWarnMs(): number {
   const raw = Number(process.env.PC_AGENT_STALL_WARN_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_STALL_WARN_MS;
 }
 
-export function resolveIdleTimeoutMs(): number {
-  const raw = Number(process.env.PC_AGENT_IDLE_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_IDLE_TIMEOUT_MS;
+export function resolveStallNotifyMs(): number {
+  const raw = Number(process.env.PC_AGENT_STALL_NOTIFY_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_STALL_NOTIFY_MS;
 }
 
 /** Ms since the most recent sign of life. The JSONL mtime is the live signal

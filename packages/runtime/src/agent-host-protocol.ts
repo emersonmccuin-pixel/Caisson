@@ -87,12 +87,14 @@ export interface AgentHostStartRunRequest {
    *  normalized CLAUDE_CONFIG_DIR (the same env the spawned agent inherits) and
    *  the host threads it straight through to the AgentRun instead of recomputing
    *  it from its own (possibly divergent) env. Without this the host can tail a
-   *  different folder than the agent writes to and never sees turn-end → the run
-   *  false-fails idle-timeout at exactly readyAt+idleMs. */
+   *  different folder than the agent writes to and never sees turn-end → the
+   *  run looks permanently quiet (blind turn-state, stall-ladder noise). */
   jsonlPath?: string;
+  // ☠ Step 8 (P9/FD-17): `idleMs` is gone from the wire — idle-kill is
+  // deleted. `wallClockMs` carries a workflow node's `timeout` (the one
+  // sanctioned timer kill).
   timeouts?: {
     spawnStuckMs?: number;
-    idleMs?: number;
     wallClockMs?: number;
     handshakeTimeoutMs?: number;
     readyTimeoutMs?: number;

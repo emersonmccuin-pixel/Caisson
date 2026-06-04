@@ -21,7 +21,6 @@ const { applyAgentRunTerminalEffects, replayMissingTerminalEnvelopes } = await i
   '../src/services/agent-run-terminal-effects.ts'
 );
 const { createAgentRunReconciler } = await import('../src/services/agent-run-reconciler.ts');
-const { sweepAgentRunLiveness } = await import('../src/services/agent-run-liveness-sweep.ts');
 const { ActiveRunRegistry } = await import('../src/services/agent-active-runs.ts');
 
 before(() => runMigrations());
@@ -135,7 +134,6 @@ test('reconciler boot: a host terminal event routes ONE mailbox turn', async () 
   const host = fakeHostClient(runningSnapshot(runId, projectId));
 
   const reconciler = createAgentRunReconciler({
-    mode: 'host',
     host: host.client as never,
     activeRunRegistry: new ActiveRunRegistry(),
     mailboxEnqueue: mb.port,
@@ -178,27 +176,8 @@ test('reconcile-sweep: a host terminal enqueues ONE mailbox turn', async () => {
   assert.equal(mb.calls.length, 1, 'reconcile-sweep terminal must enqueue ONE mailbox turn');
 });
 
-test('liveness-sweep finalize: a swept failure routes to the mailbox', async () => {
-  const { runId, projectId } = seedRun(`htg-live-mbox-${Date.now()}`);
-  void projectId;
-  const mb = fakeMailbox();
-  const row = getAgentRunRow(runId)!;
-
-  const res = sweepAgentRunLiveness({
-    mailboxEnqueue: mb.port,
-    broadcast: () => {},
-    listNonTerminalRuns: () => [{ ...row, pid: 4242 }],
-    // Process is gone => unexpected-exit, finalize immediately.
-    isProcessAlive: () => false,
-    killProcess: () => {},
-    // Fake mailbox port doesn't persist; stub the S3 replay (own test below).
-    replayEnvelopes: () => Promise.resolve({ scanned: 0, replayed: 0 }),
-  });
-  assert.equal(res.failedDead, 1);
-  await new Promise((r) => setTimeout(r, 150));
-
-  assert.equal(mb.calls.length, 1, 'swept failure enqueues a mailbox turn');
-});
+// (☠ P9: the in-process liveness sweep + its mailbox-routing test are deleted —
+// host-mode terminal routing is covered by the reconcile-sweep test above.)
 
 // One-terminal-authority guard (the link-2 race fix). The dispatch's `done`
 // promise resolves through a run-keyed settlement waiter on the ActiveRunRegistry

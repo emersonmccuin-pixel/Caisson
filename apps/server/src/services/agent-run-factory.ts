@@ -117,9 +117,12 @@ export interface DispatchFreshAgentInput {
    *  enforces worktree confinement for workflow-node agents. The orchestrator
    *  omits it. */
   extraEnv?: Record<string, string>;
-  /** Door-unification — per-dispatch idle-timeout override (ms). The workflow
-   *  engine forwards a node's `timeout`. Omitted = the AgentRun default (5min).*/
-  idleMs?: number;
+  /** Per-dispatch wall-clock ceiling override (ms). The workflow engine
+   *  forwards a node's `timeout`. Omitted = the AgentRun default (2h).
+   *  (P9/FD-17: was an idle-kill override; idle-kill is deleted — a step
+   *  timeout now means "this step may not run longer than X", the one
+   *  FD-17-sanctioned timer kill.) */
+  wallClockMs?: number;
 }
 
 export interface DispatchContinueAgentInput {
@@ -844,11 +847,14 @@ function buildHostStartRunRequest(args: ConstructAndStartArgs): AgentHostStartRu
     // Authoritative JSONL path computed with the SERVER's normalized env (the
     // same CLAUDE_CONFIG_DIR the spawned agent inherits via buildAgentEnv). The
     // host must NOT recompute this from its own env, or the two can diverge and
-    // the host tails a folder the agent never writes to → false idle-timeout.
+    // the host tails a folder the agent never writes to → turn-state goes
+    // blind (the run looks permanently quiet to the stall ladder).
     jsonlPath: jsonlPathFor(args.input.worktreeDir, args.ccSessionId),
-    // Door-unification — per-dispatch idle-timeout override (workflow node
-    // `timeout`). Omitted = host AgentRun default.
-    ...(args.input.idleMs !== undefined ? { timeouts: { idleMs: args.input.idleMs } } : {}),
+    // Per-dispatch wall-clock ceiling override (workflow node `timeout`).
+    // Omitted = host AgentRun default (2h).
+    ...(args.input.wallClockMs !== undefined
+      ? { timeouts: { wallClockMs: args.input.wallClockMs } }
+      : {}),
   };
 }
 

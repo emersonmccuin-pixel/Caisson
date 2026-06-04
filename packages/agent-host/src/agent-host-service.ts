@@ -541,7 +541,6 @@ export class AgentHostService extends EventEmitter {
       cols: request.cols,
       rows: request.rows,
       spawnStuckMs: request.timeouts?.spawnStuckMs,
-      idleMs: request.timeouts?.idleMs,
       wallClockMs: request.timeouts?.wallClockMs,
       handshakeTimeoutMs: request.timeouts?.handshakeTimeoutMs,
       readyTimeoutMs: request.timeouts?.readyTimeoutMs,

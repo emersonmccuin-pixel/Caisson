@@ -2,59 +2,25 @@
 //
 // 1. ONE-RECONCILER  — exactly one interval owner for run liveness; index.ts
 //                      consumes the module, never the raw sweeps; the deleted
-//                      boot-reconcile path stays deleted.
+//                      boot-reconcile path AND the deleted in-process liveness
+//                      sweep (P9/FD-17) stay deleted.
 // 2. HOLD            — an unreachable / unrefreshed host withholds the absence
 //                      signal, the counters, and handle registration: nothing
 //                      can finalize on no-information (boot AND tick).
-// 3. PAUSED-SURVIVES — FD-14 law: no reconciler path finalizes a paused run
-//                      (host mode is guarded in agent-host-reattach.test.ts;
-//                      the in-process sweep is guarded here).
-// 4. Queued-orphan   — the in-process replacement for the deleted bulk-fail:
-//                      a queued row with no registry entry finalizes
-//                      `server-restart` after consecutive confirmed misses.
+// (PAUSED-SURVIVES — FD-14 law — is guarded in agent-host-reattach.test.ts;
+//  queued/spawning rows the host never reports finalize via the spawn-lost
+//  tick counter there too. The in-process sweep that used to own those died
+//  in P9 — it had been dead code since P2 removed the in-process spawn path.)
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { AgentRunRow, ULID } from '@pc/domain';
-
 import { createAgentRunReconciler } from '../src/services/agent-run-reconciler.ts';
-import { sweepAgentRunLiveness } from '../src/services/agent-run-liveness-sweep.ts';
 import { ActiveRunRegistry } from '../src/services/agent-active-runs.ts';
 
 const SRC = join(import.meta.dirname, '..', 'src');
-
-function row(id: string, patch: Partial<AgentRunRow> = {}): AgentRunRow {
-  return {
-    id: id as ULID,
-    projectId: '01KRECONCILERPROJ00000001' as ULID,
-    dispatcherSessionId: 'orch-session',
-    ccSessionId: `cc-${id}`,
-    podName: 'researcher',
-    podRevisionAtDispatch: 'agent:1',
-    podRevisionAtResume: null,
-    status: 'queued',
-    continues: null,
-    parentInvokeDepth: 0,
-    parentWorkItemId: null,
-    input: 'input',
-    result: null,
-    failureCause: null,
-    failureReason: null,
-    queuedAt: 1_700_000_000_000,
-    spawnedAt: null,
-    readyAt: null,
-    pid: null,
-    lastActivityAt: null,
-    completedAt: null,
-    deliveredAt: null,
-    contractId: null,
-    rev: 0,
-    ...patch,
-  };
-}
 
 // ── 1. ONE-RECONCILER (structural guard) ─────────────────────────────────────
 
@@ -79,7 +45,14 @@ test('ONE-RECONCILER: the deleted boot-reconcile path stays deleted', () => {
     false,
     'agent-run-server-boot.ts must not regrow',
   );
-  const deletedImport = /from\s+'[^']*agent-run-(?:boot-reconcile|server-boot)/;
+  // P9 (FD-17): the in-process liveness sweep (pid-check + 10min idle-kill)
+  // is deleted — silence escalates via the ladder, it never executes.
+  assert.equal(
+    existsSync(join(SRC, 'services', 'agent-run-liveness-sweep.ts')),
+    false,
+    'agent-run-liveness-sweep.ts must not regrow',
+  );
+  const deletedImport = /from\s+'[^']*agent-run-(?:boot-reconcile|server-boot|liveness-sweep)/;
   for (const file of walkTsFiles(SRC)) {
     const content = readFileSync(file, 'utf8');
     assert.ok(
@@ -107,11 +80,10 @@ test('ONE-RECONCILER: index.ts consumes the reconciler module, never the raw swe
 test('ONE-RECONCILER: exactly one liveness interval owner in src', () => {
   // The loop's setInterval lives in agent-run-reconciler.ts. No other source
   // file may call the sweeps — one consumer (the loop), one definition each.
-  const sweepCalls = ['sweepAgentRunLiveness(', 'reconcileAgentRunsAgainstHost(', 'sweepStallWarn('];
+  const sweepCalls = ['reconcileAgentRunsAgainstHost(', 'sweepStallWarn('];
   const allowedCallers = new Set([
     join(SRC, 'services', 'agent-run-reconciler.ts'),
     // definitions (the export function lines match the `name(` probe):
-    join(SRC, 'services', 'agent-run-liveness-sweep.ts'),
     join(SRC, 'services', 'agent-host-reattach.ts'),
     join(SRC, 'services', 'agent-run-stall-warn.ts'),
   ]);
@@ -147,7 +119,6 @@ function holdProbe(opts: { refreshThrows: boolean; connected: boolean }) {
     onEvent: () => () => {},
   };
   const reconciler = createAgentRunReconciler({
-    mode: 'host',
     host: host as never,
     activeRunRegistry: new ActiveRunRegistry(),
     log: () => {},
@@ -203,100 +174,3 @@ test('HOLD: the missing-tick counter map persists across ticks (same identity)',
   assert.ok(captured[0].missingFromHostTicks === captured[1].missingFromHostTicks);
 });
 
-// ── 3. PAUSED-SURVIVES (FD-14 law, in-process sweep) ─────────────────────────
-
-interface TerminalSpyCall {
-  runId: string;
-  failureCause: string | null | undefined;
-}
-
-function livenessDeps(rows: AgentRunRow[], opts: { registry?: ActiveRunRegistry } = {}) {
-  const calls: TerminalSpyCall[] = [];
-  const queuedOrphanTicks = new Map<string, number>();
-  const deps = {
-    activeRunRegistry: opts.registry ?? new ActiveRunRegistry(),
-    listNonTerminalRuns: () => rows,
-    isProcessAlive: () => false, // every pid reads dead — the maximal kill press
-    killProcess: () => {},
-    queuedOrphanTicks,
-    applyTerminalEffects: ((input: { runId: string; failureCause?: string | null }) => {
-      calls.push({ runId: input.runId, failureCause: input.failureCause });
-      return { applied: 1 };
-    }) as never,
-  };
-  return { deps, calls, queuedOrphanTicks };
-}
-
-test('PAUSED-SURVIVES: paused row with a dead pid is never finalized by the sweep', () => {
-  const { deps, calls } = livenessDeps([
-    row('run-paused-ask', { status: 'paused', pid: 4242 }),
-    row('run-paused-stray', { status: 'paused', pid: 4243, lastActivityAt: 0 }),
-  ]);
-  const res = sweepAgentRunLiveness(deps);
-  assert.equal(res.failedDead, 0);
-  assert.equal(res.failedIdle, 0);
-  assert.equal(calls.length, 0, 'no terminal path may touch a paused run');
-});
-
-test('PAUSED-SURVIVES: a running dead-pid row IS finalized (the law is paused-specific)', () => {
-  const { deps, calls } = livenessDeps([row('run-dead', { status: 'running', pid: 4242 })]);
-  const res = sweepAgentRunLiveness(deps);
-  assert.equal(res.failedDead, 1);
-  assert.equal(calls[0].failureCause, 'unexpected-exit');
-});
-
-// ── 4. Queued-orphan (replaces the deleted legacy bulk-fail) ─────────────────
-
-test('queued row with no registry entry → server-restart after consecutive misses', () => {
-  const rows = [row('run-orphan-q', { status: 'queued' })];
-  const { deps, calls, queuedOrphanTicks } = livenessDeps(rows);
-
-  const first = sweepAgentRunLiveness(deps);
-  assert.equal(first.failedOrphanedQueued, 0, 'first miss only counts');
-  assert.equal(queuedOrphanTicks.get('run-orphan-q'), 1);
-
-  const second = sweepAgentRunLiveness(deps);
-  assert.equal(second.failedOrphanedQueued, 1, 'second consecutive miss finalizes');
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].failureCause, 'server-restart');
-  assert.equal(queuedOrphanTicks.has('run-orphan-q'), false);
-});
-
-test('queued row WITH a registry entry is owned by admission — never orphan-failed', () => {
-  const registry = new ActiveRunRegistry();
-  const rows = [row('run-admitted-q', { status: 'queued' })];
-  const { deps, calls, queuedOrphanTicks } = livenessDeps(rows, { registry });
-  registry.register({
-    run: {
-      getRecord: () => ({ agentRunId: 'run-admitted-q' }),
-      onTerminal: () => {},
-    } as never,
-    projectId: rows[0].projectId,
-    dispatcherSessionId: rows[0].dispatcherSessionId,
-    ccSessionId: rows[0].ccSessionId,
-    podName: rows[0].podName,
-    parentWorkItemId: null,
-    podRevisionAtDispatch: null,
-  });
-
-  sweepAgentRunLiveness(deps);
-  sweepAgentRunLiveness(deps);
-  assert.equal(calls.length, 0);
-  assert.equal(queuedOrphanTicks.has('run-admitted-q'), false, 'counter cleared while admitted');
-});
-
-test('no orphan counter wired → queued rows are never touched (conservatism)', () => {
-  const rows = [row('run-q-noctr', { status: 'queued' })];
-  const calls: TerminalSpyCall[] = [];
-  const res = sweepAgentRunLiveness({
-    listNonTerminalRuns: () => rows,
-    isProcessAlive: () => false,
-    killProcess: () => {},
-    applyTerminalEffects: ((input: { runId: string }) => {
-      calls.push({ runId: input.runId, failureCause: null });
-      return { applied: 1 };
-    }) as never,
-  });
-  assert.equal(res.failedOrphanedQueued, 0);
-  assert.equal(calls.length, 0);
-});

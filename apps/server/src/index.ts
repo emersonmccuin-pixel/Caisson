@@ -370,7 +370,7 @@ const projectCreate = new ProjectCreate(projectScaffold, projectRegistry);
 
 
 // ── Slice 009 — mailbox value bindings RELOCATED above the boot handlers ──
-// The boot-reattach / reconcile-sweep / liveness-sweep handlers below apply
+// The boot-reattach / reconcile-sweep handlers below apply
 // host terminals and must carry the agent delivery gate + mailbox port. They
 // run AT boot (the reattach is an inline await that can apply a terminal
 // synchronously), so a lazy reference to these bindings would hit the const
@@ -433,7 +433,6 @@ function enqueueMailboxAndFanout(input: EnqueueMailboxMessageInput): MailboxEnqu
 // loop converges when the host returns. Paused runs are NEVER finalized by the
 // loop, any mode, boot included (FD-14 law).
 const agentRunReconciler = createAgentRunReconciler({
-  mode: 'host',
   host: hostConnection,
   activeRunRegistry: getActiveRunRegistry(),
   broadcast: broadcastTo,

@@ -289,7 +289,8 @@ export function makeExecutorDeps(
     // spawns canonically, detects completion via the unified terminal path, and
     // runs verification on the contract. `done` resolves at the verified
     // terminal. PC_WORKFLOW_* keep path-guard worktree confinement; node.timeout
-    // maps to the idle-timeout override.
+    // maps to the wall-clock ceiling (P9/FD-17 — idle-kill is deleted; a step
+    // timeout means "may not run longer than X").
     const result = await dispatchFreshAgent(
       {
         projectId: opts.projectId,
@@ -306,7 +307,7 @@ export function makeExecutorDeps(
           PC_WORKFLOW_RUN_ID: run.id,
           PC_WORKFLOW_WORKTREE: worktreeDir,
         },
-        ...(node.timeout !== undefined ? { idleMs: node.timeout } : {}),
+        ...(node.timeout !== undefined ? { wallClockMs: node.timeout } : {}),
       },
       {
         broadcast: opts.broadcast,

@@ -41,9 +41,9 @@ export type AgentRunState =
 
 /** Step-4 Slice 1 — ONE run primitive, policy flags (north-star §4).
  *  'default' = dispatched worker (today's behavior, unchanged).
- *  'persistent-interactive' = the orchestrator chat: no idle/wall-clock/
- *  first-turn reaping (G3), cap-exempt admission (G4), interrupt/resize
- *  surface (G2/G6). */
+ *  'persistent-interactive' = the orchestrator chat: no wall-clock ceiling
+ *  (G3), cap-exempt admission (G4), interrupt/resize surface (G2/G6).
+ *  (Idle/first-turn reaping is gone for EVERYONE — Step 8/FD-17.) */
 export type AgentRunPolicy = 'default' | 'persistent-interactive';
 
 /** Turn-level state for interactive surfaces (G1): 'busy' while CC is
@@ -54,6 +54,8 @@ export type AgentRunTurnState = 'ready' | 'busy';
 
 export type AgentRunFailureCause =
   | 'spawn-stuck'
+  /** ☠ HISTORICAL ONLY (Step 8/FD-17): no live writer — idle-kill is deleted.
+   *  Kept so pre-P9 terminal rows still type/display. */
   | 'idle-timeout'
   | 'wall-clock-timeout'
   | 'ready-timeout'
@@ -124,8 +126,8 @@ export interface AgentRunInput {
   worktreePath: string;
   env: Record<string, string | undefined>;
   /** Lifecycle policy. 'persistent-interactive' (the orchestrator chat)
-   *  disarms idle/wall-clock/first-turn reaping and takes the cap-exempt
-   *  admission lane. Default 'default' — dispatched workers unchanged. */
+   *  disarms the wall-clock ceiling and takes the cap-exempt admission lane.
+   *  Default 'default' — dispatched worker. */
   policy?: AgentRunPolicy;
   /** Pasted as first user turn on fresh spawn (echo-ack). Ignored on resume. */
   initialInput?: string;
@@ -161,16 +163,13 @@ export interface AgentRunInput {
   cols?: number;
   rows?: number;
   // Timeouts (all configurable; defaults per design §4.1):
+  // ☠ Step 8 (P9/FD-17): `idleMs` (5min idle-kill) and `firstTurnMs` (90s
+  // resume fail-fast) are DELETED — silence never executes a run. The server's
+  // reconciler ladder owns quiet runs (badge → verify-alive → notify the
+  // orchestrator); kills happen only on wall-clock or confirmed-dead
+  // (onSpawnExit / host-lost).
   /** Catastrophic spawn-failure cap. Default 120_000 (2× handshake). */
   spawnStuckMs?: number;
-  /** Reset on every JSONL event. Default 300_000 (5min). */
-  idleMs?: number;
-  /** Resume-only first-output watchdog. After a resume sends its continuation
-   *  input, the agent must produce a real turn (assistant text / turn-end)
-   *  within this window or the run fails fast — a resume that reaches `running`
-   *  but never produces output (continuation didn't land) otherwise burns the
-   *  full idle window. Default 90_000 (90s). */
-  firstTurnMs?: number;
   /** Hard ceiling per dispatch; persists through paused. Default 7_200_000 (2h). */
   wallClockMs?: number;
   /** Passed through to LowLevelSpawn. Default 60_000. */
@@ -193,8 +192,6 @@ export interface AgentRunDeps {
 
 const DEFAULTS = {
   spawnStuckMs: 120_000,
-  idleMs: 300_000,
-  firstTurnMs: 90_000,
   wallClockMs: 7_200_000,
   handshakeTimeoutMs: 60_000,
   readyTimeoutMs: 60_000,
@@ -229,8 +226,6 @@ export class AgentRun extends EventEmitter {
 
   private timers: {
     spawnStuck?: NodeJS.Timeout;
-    idle?: NodeJS.Timeout;
-    firstTurn?: NodeJS.Timeout;
     wallClock?: NodeJS.Timeout;
     cancelGrace?: NodeJS.Timeout;
   } = {};
@@ -247,8 +242,6 @@ export class AgentRun extends EventEmitter {
     };
     this.timeouts = {
       spawnStuckMs: input.spawnStuckMs ?? DEFAULTS.spawnStuckMs,
-      idleMs: input.idleMs ?? DEFAULTS.idleMs,
-      firstTurnMs: input.firstTurnMs ?? DEFAULTS.firstTurnMs,
       wallClockMs: input.wallClockMs ?? DEFAULTS.wallClockMs,
       handshakeTimeoutMs:
         input.handshakeTimeoutMs ?? DEFAULTS.handshakeTimeoutMs,
@@ -312,7 +305,6 @@ export class AgentRun extends EventEmitter {
     // Once cancellation starts, lifecycle timeout timers should not race the
     // cancel-grace owner into a failed terminal state.
     this.clearSpawnStuck();
-    this.clearIdleTimer();
     this.clearWallClock();
 
     // spawning / running / paused -> kill and wait grace
@@ -345,7 +337,6 @@ export class AgentRun extends EventEmitter {
     if (this.state !== 'running') return;
     this.record.pendingAskId = askId;
     this.record.pausedAt = this.deps.now();
-    this.clearIdleTimer();
     this.setState('paused');
     this.emit('paused', askId);
   }
@@ -522,7 +513,6 @@ export class AgentRun extends EventEmitter {
 
     this.setState('running');
     this.record.runningAt = this.deps.now();
-    this.armIdleTimer();
     // G1 — composer is at the prompt. If we're about to paste an input body
     // the very next thing is a turn, so go (or stay) busy instead.
     this.setTurnState(
@@ -542,12 +532,11 @@ export class AgentRun extends EventEmitter {
       }
     }
 
-    // Resume first-output watchdog: a resume that reaches `running` but never
-    // produces a real turn (the continuation input didn't land) would otherwise
-    // sit idle for the full 5min idle window. Fail fast instead. Cleared by the
-    // first assistant-text / turn-end event in onJsonlEvent.
-    if (mode === 'resume') this.armFirstTurnWatchdog();
-
+    // ☠ Step 8 (P9/FD-17): the resume first-output watchdog is DELETED. A
+    // resume that reaches `running` but never produces output (the
+    // continuation input didn't land — the S2 ask-roundtrip killer) is now
+    // the reconciler ladder's job: badge → verify-alive → notify the
+    // orchestrator, never a 90s execution.
     // From here, lifecycle is event-driven via onJsonlEvent / onSpawnExit /
     // cancel / _markPaused.
   }
@@ -586,10 +575,6 @@ export class AgentRun extends EventEmitter {
 
   private onJsonlEvent(ev: JsonlEvent, meta?: JsonlEventMeta): void {
     this.emit('jsonl-event', ev, meta);
-    if (this.state === 'running') {
-      // Reset idle on activity.
-      this.resetIdleTimer();
-    }
     // G1 — turn boundaries: a user row (typed send / queued command popping)
     // opens a turn; a turn-end closes it.
     const kind = (ev as { kind?: unknown }).kind;
@@ -598,22 +583,14 @@ export class AgentRun extends EventEmitter {
     // Capture last assistant text for the completed-state result field.
     const text = extractAssistantText(ev);
     if (text !== null) this.lastAssistantText = text;
-    // Genuine agent activity (a turn-end, tool call/result, stream, or any
-    // assistant row) means the resume "took" — disarm the first-output
-    // watchdog. Harness/metadata kinds (system, session-state, last-prompt,
-    // agent-setting, …) are NOT activity, so a dead resume that emits only
-    // those still trips the watchdog.
-    if (this.timers.firstTurn && isAgentProgress(ev)) {
-      this.clearFirstTurn();
-    }
     // Workflow-engine redesign — a turn-end is NO LONGER a completion signal.
     // Completion comes solely from `complete()` (the agent's
-    // `pc_submit_deliverable` receipt). A turn-end here is just activity (idle
-    // already reset above); a worker that ends its turn or exits WITHOUT
-    // delivering falls to the idle/exit failure path, and the server's terminal
-    // gate records it as a `no-deliverable` failure — never a "completed-but-
-    // empty". This kills completion-by-JSONL-inference (and the dual-end_turn
-    // premature-complete race) at the root.
+    // `pc_submit_deliverable` receipt). A worker that ends its turn WITHOUT
+    // delivering gets the server's deliverable-nudge (P9), then the stall
+    // ladder; an exit without delivering falls to onSpawnExit, and the
+    // server's terminal gate records `no-deliverable` — never a "completed-
+    // but-empty". This kills completion-by-JSONL-inference (and the
+    // dual-end_turn premature-complete race) at the root.
   }
 
   private onSpawnExit(_code: number | null, _signal: number | null): void {
@@ -694,59 +671,12 @@ export class AgentRun extends EventEmitter {
     }
   }
 
-  private armIdleTimer(): void {
-    // G3 — a persistent chat sits idle by design; idle-reaping is for stuck
-    // workers. Never armed under persistent-interactive.
-    if (this.policy === 'persistent-interactive') return;
-    this.clearIdleTimer();
-    this.timers.idle = setTimeout(() => {
-      if (this.state === 'running') {
-        this.toTerminal('failed', 'idle-timeout');
-        if (this.spawn) {
-          try {
-            this.spawn.kill();
-          } catch {
-            /* already dead */
-          }
-        }
-      }
-    }, this.timeouts.idleMs);
-  }
-  private resetIdleTimer(): void {
-    if (this.timers.idle) this.armIdleTimer();
-  }
-  private clearIdleTimer(): void {
-    if (this.timers.idle) {
-      clearTimeout(this.timers.idle);
-      this.timers.idle = undefined;
-    }
-  }
-
-  /** Resume-only: expect a real turn within firstTurnMs of going `running`, or
-   *  fail fast (the continuation input didn't land / the resume didn't take). */
-  private armFirstTurnWatchdog(): void {
-    // G3 — persistent sessions are never fail-fast reaped.
-    if (this.policy === 'persistent-interactive') return;
-    this.clearFirstTurn();
-    this.timers.firstTurn = setTimeout(() => {
-      if (this.state === 'running') {
-        this.toTerminal('failed', 'idle-timeout', 'resume produced no turn within the first-output window');
-        if (this.spawn) {
-          try {
-            this.spawn.kill();
-          } catch {
-            /* already dead */
-          }
-        }
-      }
-    }, this.timeouts.firstTurnMs);
-  }
-  private clearFirstTurn(): void {
-    if (this.timers.firstTurn) {
-      clearTimeout(this.timers.firstTurn);
-      this.timers.firstTurn = undefined;
-    }
-  }
+  // ☠ Step 8 (P9/FD-17): armIdleTimer / resetIdleTimer / clearIdleTimer and
+  // armFirstTurnWatchdog / clearFirstTurn are DELETED. Silence is the
+  // reconciler ladder's business (badge → verify-alive → notify), never a
+  // kill. The only timer-driven kills left are spawn-stuck (the spawn never
+  // became ready — positive-receipt failure) and wall-clock (the FD-17
+  // sanctioned hard ceiling).
 
   private armWallClock(): void {
     // G3 — no 2h ceiling on the chat; it lives as long as the app does.
@@ -796,8 +726,6 @@ export class AgentRun extends EventEmitter {
 
   private clearAllTimers(): void {
     this.clearSpawnStuck();
-    this.clearIdleTimer();
-    this.clearFirstTurn();
     this.clearWallClock();
     this.clearCancelGrace();
   }
@@ -808,28 +736,6 @@ export class AgentRun extends EventEmitter {
 function stringify(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
-}
-
-/** True when the event signals the agent is actually responding (vs harness /
- *  metadata noise). Used to disarm the resume first-output watchdog. Covers the
- *  typed tailer activity kinds AND the raw-row assistant shape (so a resume
- *  whose first act is a text-less tool_use still counts as progress). */
-function isAgentProgress(ev: JsonlEvent): boolean {
-  const kind = (ev as { kind?: unknown }).kind;
-  if (
-    kind === 'jsonl-turn-end' ||
-    kind === 'jsonl-tool-call' ||
-    kind === 'jsonl-tool-result' ||
-    kind === 'jsonl-stream-event'
-  ) {
-    return true;
-  }
-  if (extractAssistantText(ev) !== null) return true;
-  const row = (ev as { row?: unknown }).row ?? (ev as { entry?: unknown }).entry;
-  if (row && typeof row === 'object' && (row as { type?: unknown }).type === 'assistant') {
-    return true;
-  }
-  return false;
 }
 
 /** Extract the assistant's text from a JSONL event. Handles both the v1

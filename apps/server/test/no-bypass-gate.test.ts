@@ -102,6 +102,13 @@ const BANNED_RESURRECTION = [
   'terminalBufferLooksReady',
   'TimedBracketedPasteQueue',
   'reattachLifecycle',
+  // P9 (Step 8/FD-17): silence escalates, it never executes. The idle-kill +
+  // resume first-turn watchdog are deleted from AgentRun; quiet runs are the
+  // reconciler ladder's business (badge → verify-alive → notify).
+  'armIdleTimer',
+  'resetIdleTimer',
+  'armFirstTurnWatchdog',
+  'sweepAgentRunLiveness',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 

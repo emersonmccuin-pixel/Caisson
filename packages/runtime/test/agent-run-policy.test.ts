@@ -1,7 +1,8 @@
 // Step-4 Slice 1 — persistent-interactive policy on the ONE run primitive.
 //
-// Guard tests per the scope doc: a persistent run is never idle-killed or
-// wall-clock-killed (G3), takes the cap-exempt lane (G4), exposes
+// Guard tests per the scope doc: NO run is ever idle-killed (Step 8/FD-17 —
+// silence escalates, never executes); a persistent run additionally has no
+// wall-clock ceiling (G3), takes the cap-exempt lane (G4), exposes
 // interrupt/resize (G2/G6), tracks turn-level ready⇌busy (G1), and re-emits
 // the tailer's source-cursor meta for the server replay writer (G7).
 // Dispatched workers ('default' policy) keep today's behavior — the
@@ -80,21 +81,25 @@ function awaitState(run: AgentRun, state: string): Promise<void> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-test('default policy: idle timeout still reaps a silent run', async () => {
-  const { run } = makeRun({ idleMs: 25 });
-  run.start();
-  await awaitState(run, 'running');
-  await sleep(80);
-  assert.equal(run.getState(), 'failed');
-  assert.equal(run.getRecord().cause, 'idle-timeout');
-});
-
-test('persistent-interactive: never idle-killed', async () => {
-  const { run } = makeRun({ policy: 'persistent-interactive', idleMs: 25 });
+// ☠ Step 8 (P9/FD-17): idle-kill is DELETED for every policy — silence
+// escalates via the server's reconciler ladder, it never executes a run.
+test('no policy is ever idle-killed: a silent running worker stays running', async () => {
+  const { run } = makeRun({});
   run.start();
   await awaitState(run, 'running');
   await sleep(80);
   assert.equal(run.getState(), 'running');
+  run.cancel(); // clear the wall-clock timer
+  await sleep(30);
+});
+
+test('default policy: wall-clock ceiling still reaps (the one sanctioned timer kill)', async () => {
+  const { run } = makeRun({ wallClockMs: 25 });
+  run.start();
+  await awaitState(run, 'running');
+  await sleep(80);
+  assert.equal(run.getState(), 'failed');
+  assert.equal(run.getRecord().cause, 'wall-clock-timeout');
 });
 
 test('persistent-interactive: no wall-clock ceiling', async () => {
@@ -123,7 +128,7 @@ test('persistent-interactive: cap-exempt — never consumes a worker slot', asyn
   await sleep(30);
   assert.equal(registry.getActiveCount(), 1);
 
-  worker.run.cancel(); // clear the worker's pending idle/wall-clock timers
+  worker.run.cancel(); // clear the worker's pending wall-clock timer
   await sleep(30);
 });
 
@@ -180,7 +185,7 @@ test('turn-state: fresh dispatch with initialInput goes straight to busy', async
   await awaitState(run, 'running');
   await sleep(5); // let the initialInput send settle
   assert.equal(run.getTurnState(), 'busy');
-  run.cancel(); // clear the default-policy idle/wall-clock timers
+  run.cancel(); // clear the default-policy wall-clock timer
   await sleep(30);
 });
 

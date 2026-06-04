@@ -32,10 +32,6 @@ import {
   type AgentHostReattachClient,
   type ReconcileSweepResult,
 } from './agent-host-reattach.ts';
-import {
-  sweepAgentRunLiveness,
-  type LivenessSweepResult,
-} from './agent-run-liveness-sweep.ts';
 import { sweepStallWarn, type StallWarnResult } from './agent-run-stall-warn.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
 
@@ -50,10 +46,11 @@ export interface ReconcilerHostPort extends AgentHostReattachClient {
 }
 
 export interface AgentRunReconcilerDeps {
-  /** 'host' = out-of-process agent host owns the runs (production).
-   *  'in-process' = legacy fallback (P2 deletes it); liveness = pid + idle. */
-  mode: 'host' | 'in-process';
-  host?: ReconcilerHostPort;
+  // ☠ P9: the 'in-process' mode + its liveness sweep (pid-check + 10min
+  // idle-kill) are DELETED — dead code since P2 removed the in-process spawn
+  // path (index.ts only ever constructed 'host'). The agent host owns every
+  // process; this loop reconciles against it. One path.
+  host: ReconcilerHostPort;
   activeRunRegistry?: ActiveRunRegistry;
   broadcast?: (projectId: ULID, msg: unknown) => void;
   mailboxEnqueue?: MailboxEnqueuePort | null;
@@ -71,7 +68,6 @@ export interface AgentRunReconcilerDeps {
   onTerminalError?: (error: Error) => void;
   /** Test seams — default to the real sweeps. */
   reconcileHost?: typeof reconcileAgentRunsAgainstHost;
-  sweepLiveness?: typeof sweepAgentRunLiveness;
   stallWarn?: typeof sweepStallWarn;
   applyHostEvent?: typeof applyAgentHostEvent;
   /** Threaded into the sweeps (S3 envelope replay). Test seam. */
@@ -83,12 +79,10 @@ type AgentHostReattachDepsReplay = NonNullable<
 >;
 
 export interface ReconcileTickResult {
-  mode: 'host' | 'in-process';
-  /** Host mode only — true when the host could not be reached this tick, so the
-   *  destructive (finalizing) half was withheld. */
+  /** True when the host could not be reached this tick, so the destructive
+   *  (finalizing) half was withheld. */
   held: boolean;
   hostReconcile: ReconcileSweepResult | null;
-  liveness: LivenessSweepResult | null;
   stallWarn: StallWarnResult;
 }
 
@@ -111,8 +105,8 @@ function envInt(name: string, fallback: number): number {
 }
 
 export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRunReconciler {
-  if (deps.mode === 'host' && !deps.host) {
-    throw new Error('agent-run-reconciler: host mode requires a host port');
+  if (!deps.host) {
+    throw new Error('agent-run-reconciler: a host port is required');
   }
   const registry = deps.activeRunRegistry ?? getActiveRunRegistry();
   const intervalMs = deps.intervalMs ?? DEFAULT_INTERVAL_MS;
@@ -123,7 +117,6 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
 
   // Loop-owned state (persists across ticks; the false-positive guards).
   const hostMissingTicks = new Map<string, number>();
-  const queuedOrphanTicks = new Map<string, number>();
   const stalledRuns = new Set<string>();
 
   let interval: NodeJS.Timeout | null = null;
@@ -133,7 +126,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
    *  HostConnection emitter, survives host respawns). Latency path only — the
    *  tick is the correctness path that converges anything this drops. */
   function subscribeHostEvents(): void {
-    if (subscribed || deps.mode !== 'host' || !deps.host?.onEvent) return;
+    if (subscribed || !deps.host.onEvent) return;
     subscribed = true;
     deps.host.onEvent((event) => {
       try {
@@ -155,63 +148,48 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
   }
 
   async function tick(opts: { boot?: boolean } = {}): Promise<ReconcileTickResult> {
-    let held = false;
-    let hostReconcile: ReconcileSweepResult | null = null;
-    let liveness: LivenessSweepResult | null = null;
-
-    if (deps.mode === 'host') {
-      const host = deps.host!;
-      // HOLD principle — a refresh that THROWS withholds the absence signal AND
-      // the counters, so nothing can finalize on stale/no information. The
-      // non-destructive half (terminal snapshots from cache, status drift)
-      // still runs: positive receipts are safe from any snapshot.
-      let refreshed = true;
-      try {
-        await host.refreshRuns();
-      } catch {
-        refreshed = false;
-      }
-      const reachable = refreshed && host.isConnected();
-      held = !reachable;
-
-      hostReconcile = (deps.reconcileHost ?? reconcileAgentRunsAgainstHost)({
-        hostClient: host,
-        activeRunRegistry: registry,
-        broadcast: deps.broadcast,
-        mailboxEnqueue: deps.mailboxEnqueue,
-        now: deps.now,
-        onTerminalError: deps.onTerminalError,
-        onHostCommandError: deps.onHostCommandError,
-        // Authoritative absence = we are CONNECTED to a host whose fresh
-        // list-runs we just pulled AND the row is absent from it.
-        hostAuthoritativelyAbsent: reachable,
-        missingFromHostTicks: refreshed ? hostMissingTicks : undefined,
-        hostLostAfterTicks,
-        spawnLostAfterTicks,
-        // Self-healing reattach: only against a freshly confirmed host list.
-        registerMissingHandles: reachable,
-        backfillOnRegister: opts.boot === true,
-        ...(deps.replayEnvelopes ? { replayEnvelopes: deps.replayEnvelopes } : {}),
-      });
-    } else {
-      liveness = (deps.sweepLiveness ?? sweepAgentRunLiveness)({
-        activeRunRegistry: registry,
-        broadcast: deps.broadcast,
-        mailboxEnqueue: deps.mailboxEnqueue,
-        now: deps.now,
-        queuedOrphanTicks,
-        ...(deps.replayEnvelopes ? { replayEnvelopes: deps.replayEnvelopes } : {}),
-      });
+    const host = deps.host;
+    // HOLD principle — a refresh that THROWS withholds the absence signal AND
+    // the counters, so nothing can finalize on stale/no information. The
+    // non-destructive half (terminal snapshots from cache, status drift)
+    // still runs: positive receipts are safe from any snapshot.
+    let refreshed = true;
+    try {
+      await host.refreshRuns();
+    } catch {
+      refreshed = false;
     }
+    const reachable = refreshed && host.isConnected();
+    const held = !reachable;
 
-    // Mode-agnostic, never-terminal `stalled` badge (the intermediate signal).
+    const hostReconcile = (deps.reconcileHost ?? reconcileAgentRunsAgainstHost)({
+      hostClient: host,
+      activeRunRegistry: registry,
+      broadcast: deps.broadcast,
+      mailboxEnqueue: deps.mailboxEnqueue,
+      now: deps.now,
+      onTerminalError: deps.onTerminalError,
+      onHostCommandError: deps.onHostCommandError,
+      // Authoritative absence = we are CONNECTED to a host whose fresh
+      // list-runs we just pulled AND the row is absent from it.
+      hostAuthoritativelyAbsent: reachable,
+      missingFromHostTicks: refreshed ? hostMissingTicks : undefined,
+      hostLostAfterTicks,
+      spawnLostAfterTicks,
+      // Self-healing reattach: only against a freshly confirmed host list.
+      registerMissingHandles: reachable,
+      backfillOnRegister: opts.boot === true,
+      ...(deps.replayEnvelopes ? { replayEnvelopes: deps.replayEnvelopes } : {}),
+    });
+
+    // Never-terminal `stalled` badge (the ladder's first rung).
     const stallWarnRes = (deps.stallWarn ?? sweepStallWarn)({
       stalledRuns,
       broadcast: deps.broadcast,
       now: deps.now,
     });
 
-    return { mode: deps.mode, held, hostReconcile, liveness, stallWarn: stallWarnRes };
+    return { held, hostReconcile, stallWarn: stallWarnRes };
   }
 
   async function boot(): Promise<ReconcileTickResult> {
@@ -241,12 +219,6 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
           if (r && (r.terminalApplied > 0 || r.statusUpdated > 0 || r.hostLost > 0 || r.registered > 0)) {
             log(
               `[agent-runs] reconcile: terminal=${r.terminalApplied}, status=${r.statusUpdated}, hostLost=${r.hostLost}, registered=${r.registered}, checked=${r.checked}`,
-            );
-          }
-          const l = res.liveness;
-          if (l && (l.failedDead > 0 || l.failedIdle > 0 || l.failedOrphanedQueued > 0)) {
-            log(
-              `[agent-runs] liveness: dead=${l.failedDead}, idle=${l.failedIdle}, orphanedQueued=${l.failedOrphanedQueued}, killed=${l.killed}, checked=${l.checked}`,
             );
           }
           if (res.stallWarn.warned > 0 || res.stallWarn.cleared > 0) {
