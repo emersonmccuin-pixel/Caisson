@@ -16,8 +16,13 @@ import { AgentHostService } from '../src/agent-host-service.ts';
 class FakeSpawn extends EventEmitter implements SpawnLike {
   interrupts = 0;
   resizes: Array<{ cols: number; rows: number }> = [];
+  rawWrites: string[] = [];
 
   start(): void {}
+  writeRaw(bytes: string): boolean {
+    this.rawWrites.push(bytes);
+    return true;
+  }
   async awaitReady(): Promise<never> {
     return { spawnedAt: 1, bannerAt: 2, readyAt: 3 } as never;
   }
@@ -108,6 +113,17 @@ test('resize routes cols/rows to the spawn', async () => {
   });
   if (!res.ok || res.command !== 'resize') assert.fail('expected resize ok');
   assert.deepEqual(spawn.resizes, [{ cols: 132, rows: 43 }]);
+});
+
+test('write-raw routes raw bytes to the spawn', async () => {
+  const { service, spawn } = await startedService();
+  const res = await service.handleCommand({
+    type: 'write-raw',
+    runId: '01RUN' as never,
+    data: '\x1b[B',
+  });
+  if (!res.ok || res.command !== 'write-raw') assert.fail('expected write-raw ok');
+  assert.deepEqual(spawn.rawWrites, ['\x1b[B']);
 });
 
 test('interrupt/resize on unknown run → not-found', async () => {

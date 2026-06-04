@@ -2,7 +2,7 @@
 //
 // PtySession + legacy JsonlTailer survive cutover (orchestrator + interview
 // surfaces use them). The agent-system primitives (LowLevelSpawn, AgentRun,
-// InteractiveSession, AgentRunJsonlTailer) sit alongside as named exports.
+// AgentRunJsonlTailer) sit alongside as named exports.
 
 export {
   encodeCwdForClaude,
@@ -105,12 +105,10 @@ export type {
   SpawnLike,
 } from './agent-run.ts';
 
-export { InteractiveSession } from './interactive-session.ts';
-export type {
-  InteractiveSessionState,
-  InteractiveSessionInput,
-  InteractiveSessionDeps,
-} from './interactive-session.ts';
+// ☠ Step-4 Slice 2 (2026-06-04) — InteractiveSession DELETED. The orchestrator
+// chat is an Engine-owned `persistent-interactive` AgentRun behind the
+// server's OrchestratorHostSession adapter; transient modals stay on
+// PtySession until P7 deletes them (FD-21).
 
 export { AgentRunJsonlTailer } from './agent-run-jsonl-tailer.ts';
 export type {

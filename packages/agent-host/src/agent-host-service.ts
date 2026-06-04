@@ -138,6 +138,8 @@ export class AgentHostService extends EventEmitter {
         return this.interrupt(command.runId);
       case 'resize':
         return this.resize(command.runId, command.cols, command.rows);
+      case 'write-raw':
+        return this.writeRaw(command.runId, command.data);
       case 'mark-paused':
         return this.markPaused(command.runId, command.askId);
       case 'answer-pending':
@@ -273,6 +275,25 @@ export class AgentHostService extends EventEmitter {
     return {
       ok: true,
       command: 'resize',
+      run: this.snapshot(entry),
+      lastSeq: this.seq,
+    };
+  }
+
+  /** Step-4 Slice 2 — raw terminal keystrokes (terminal-mode input). */
+  private writeRaw(runId: string, data: string): AgentHostCommandResponse {
+    const entry = this.runs.get(runId);
+    if (!entry) {
+      return this.error('write-raw', 'not-found', `run ${runId} not found`);
+    }
+
+    if (!entry.run.writeRaw(data)) {
+      return this.error('write-raw', 'send-failed', 'PTY rejected raw input');
+    }
+    entry.updatedAt = this.now();
+    return {
+      ok: true,
+      command: 'write-raw',
       run: this.snapshot(entry),
       lastSeq: this.seq,
     };
@@ -498,7 +519,9 @@ export class AgentHostService extends EventEmitter {
       env: request.env,
       policy: request.policy,
       initialInput: request.initialInput,
-      mode: isResumeRequest(request) ? 'resume' : 'fresh',
+      // Slice 2 — a plain start-run may carry mode:'resume' (the orchestrator
+      // resumes its own conversation without a continuation lineage).
+      mode: isResumeRequest(request) ? 'resume' : (request.mode ?? 'fresh'),
       continues: isResumeRequest(request) ? request.continues : undefined,
       mcpConfigPath: request.mcpConfigPath,
       settingsPath: request.settingsPath,
@@ -509,6 +532,14 @@ export class AgentHostService extends EventEmitter {
       // Thread it straight through instead of letting AgentRun/low-level-spawn
       // recompute from the host's own env — the recompute is the divergence bug.
       jsonlPath: request.jsonlPath,
+      jsonlStartLine: request.jsonlStartLine,
+      // Slice 2 — orchestrator spawn shaping (workers omit all of these).
+      envOverrides: request.envOverrides,
+      model: request.model,
+      requireReadySignal: request.requireReadySignal,
+      requireMcpHandshake: request.requireMcpHandshake,
+      cols: request.cols,
+      rows: request.rows,
       spawnStuckMs: request.timeouts?.spawnStuckMs,
       idleMs: request.timeouts?.idleMs,
       wallClockMs: request.timeouts?.wallClockMs,

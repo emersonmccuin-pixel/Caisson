@@ -25,11 +25,9 @@ import {
 } from '@pc/db';
 import {
   claudeConfigDirFromJsonlPath,
-  InteractiveSession,
   jsonlPathFor,
   PtySession,
 } from '@pc/runtime';
-import type { InteractiveSessionState } from '@pc/runtime';
 import { selectStageEntryWorkflows } from '@pc/workflows';
 
 import { renderTemplate } from './project-scaffold.ts';
@@ -45,6 +43,11 @@ import {
   type WorkflowRunFailedDelivery,
 } from './dag-run-service.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
+import {
+  asOrchestratorHostPort,
+  OrchestratorHostSession,
+  type OrchestratorHostSessionState,
+} from './orchestrator-host-session.ts';
 import { WorkItemService } from './work-item.ts';
 import { AttachmentService } from './attachment.ts';
 import { FieldSchemaService } from './field-schema.ts';
@@ -102,7 +105,11 @@ export interface ProjectRuntimeOptions {
 }
 
 export class ProjectRuntime {
-  private pty: InteractiveSession | null = null;
+  private pty: OrchestratorHostSession | null = null;
+  /** The previous chat session's host-terminal promise — the next spawn for
+   *  the same CC session awaits it (the Engine holds the ccSessionId until
+   *  the old run settles; see OrchestratorHostSession.settled). */
+  private lastOrchestratorSettled: Promise<void> | null = null;
   /** 17b.12 — transient agent-designer session that spawns CC with
    *  `--agent agent-designer` + the materialised pod (prompt + tools +
    *  knowledge from the agent-designer pod row). One per project at a time.
@@ -442,18 +449,20 @@ export class ProjectRuntime {
   }
 
   /**
-   * Lazy: InteractiveSession — spawned on first WS connect. cwd is still the
-   * user's project folder, but PC's Claude runtime files are passed explicitly
-   * from the per-session data dir so terminal-launched Claude does not inherit
-   * them.
+   * Lazy: the orchestrator chat session — Step-4 Slice 2: an Engine-owned
+   * `persistent-interactive` run behind the OrchestratorHostSession adapter
+   * (ONE owner of every Claude process). cwd is still the user's project
+   * folder; PC's Claude runtime files are materialised into the per-session
+   * data dir exactly as before — the host reads them off the shared disk.
    *
    * Session continuity: looks up the active OrchestratorSession row for this
    * project. If found → spawn with `--resume <uuid>` so Claude picks up the
    * conversation it had. If none → mint a UUID, insert a row, spawn with
    * `--session-id <uuid>` so the UI's events.jsonl and Claude's session JSONL
-   * stay in lockstep.
+   * stay in lockstep. After an API restart the adapter ADOPTS a still-live
+   * host run on the same CC session instead of double-spawning.
    */
-  ensurePty(): InteractiveSession {
+  ensurePty(): OrchestratorHostSession {
     if (this.pty && !['exited', 'failed'].includes(this.pty.getState())) return this.pty;
     this.refreshProjectCompanionFilesIfStale();
     const session = this.resolveSessionForSpawn();
@@ -510,67 +519,65 @@ export class ProjectRuntime {
       );
     }
 
-    this.pty = new InteractiveSession({
-      pcSessionId: session.row.id,
-      ccProviderSessionId: session.providerSessionId,
-      podDefinition: { name: podPrep.agentCliName },
-      worktreePath: this.project.folderPath,
-      env: {
-        ...(process.env as Record<string, string | undefined>),
-        ...podPrep.extraEnv,
-        PC_SESSION_ID: session.row.id,
-        PC_AGENT_SESSION_ID: session.providerSessionId,
-        ...(session.claudeConfigDir ? { CLAUDE_CONFIG_DIR: session.claudeConfigDir } : {}),
+    // Slice 2 — the host owns the spawn. No host connection = a loud typed
+    // failure (never an alternate in-process spawn; ONE-SPAWN-OWNER).
+    const hostPort = asOrchestratorHostPort(this.opts.getHostClient?.() ?? null);
+    if (!hostPort) {
+      throw new Error(
+        'agent host connection unavailable — the Engine owns the orchestrator chat (no in-process spawn path exists)',
+      );
+    }
+
+    const prior = this.lastOrchestratorSettled;
+    const adapter = new OrchestratorHostSession(
+      {
+        pcSessionId: session.row.id,
+        providerSessionId: session.providerSessionId,
+        projectId: this.project.id,
+        podDefinition: { name: podPrep.agentCliName, logicalName: 'orchestrator' },
+        worktreePath: this.project.folderPath,
+        env: {
+          ...(process.env as Record<string, string | undefined>),
+          ...podPrep.extraEnv,
+          PC_SESSION_ID: session.row.id,
+          PC_AGENT_SESSION_ID: session.providerSessionId,
+          ...(session.claudeConfigDir ? { CLAUDE_CONFIG_DIR: session.claudeConfigDir } : {}),
+        },
+        envOverrides: { ...CLAUDE_TERMINAL_ENV },
+        mode: session.resume ? 'resume' : 'fresh',
+        jsonlPath,
+        jsonlStartLine: session.resume ? session.row.jsonlLineCursor : 0,
+        mcpConfigPath: podPrep.mcpConfigPath,
+        settingsPath: podPrep.settingsPath,
+        settingSources: podPrep.settingSources,
+        pluginDirs: [podPrep.pluginDir],
+        transcriptPath: resolve(sessionDir, 'transcript.log'),
+        replayEventsPath: resolve(sessionDir, 'jsonl-events.jsonl'),
+        model: 'opus',
+        requireReadySignal: true,
+        requireMcpHandshake: !session.resume,
+        cols: this.orchestratorCols,
+        rows: this.orchestratorRows,
+        // The Engine holds the ccSessionId until the previous run settles —
+        // a restart (pod edit / new session) must not race it.
+        ...(prior ? { awaitBefore: prior } : {}),
+        // Session-local settings/plugin files clean up exactly once, at
+        // terminal — the host process reads them for the whole run lifetime.
+        onCleanup: () => {
+          try { podPrep.cleanup(); } catch { /* best-effort */ }
+        },
       },
-      envOverrides: { ...CLAUDE_TERMINAL_ENV },
-      mode: session.resume ? 'resume' : 'fresh',
-      jsonlPath,
-      jsonlStartLine: session.resume ? session.row.jsonlLineCursor : 0,
-      mcpConfigPath: podPrep.mcpConfigPath,
-      settingsPath: podPrep.settingsPath,
-      settingSources: podPrep.settingSources,
-      pluginDirs: [podPrep.pluginDir],
-      transcriptPath: resolve(sessionDir, 'transcript.log'),
-      replayEventsPath: resolve(sessionDir, 'jsonl-events.jsonl'),
-      model: 'opus',
-      // Reliability over phone handoff: local PC chat writes directly through
-      // the PTY, so the Claude remote-control bridge is not required. Keep a
-      // regular composer-ready signal so historical resumes that skip MCP
-      // handshake do not deliver into the dev-channel confirmation prompt.
-      remoteControl: false,
-      requireReadySignal: true,
-      requireMcpHandshake: !session.resume,
-      maxSpawnAttempts: 2,
-      retryBackoffMs: 1500,
-      spawnTimeoutMs: 120_000,
-      cols: this.orchestratorCols,
-      rows: this.orchestratorRows,
-    });
-    this.pty.start();
+      { hostClient: hostPort },
+    );
+    this.pty = adapter;
+    this.lastOrchestratorSettled = adapter.settled;
+    adapter.start();
 
-    // Process lifecycle is not chat lifecycle. A claude.exe child can exit
-    // because of a transient resume/config problem, a terminal disconnect, or
-    // a user-level Ctrl+D. The orchestrator session row stays active until PC
-    // explicitly starts another session; the next ensurePty() resumes the same
-    // row from its persisted JSONL path.
-    let cleaned = false;
-    const cleanupPodPrep = () => {
-      if (cleaned) return;
-      cleaned = true;
-      try { podPrep.cleanup(); } catch { /* best-effort */ }
-    };
-    // LowLevelSpawn emits `exit` for every child attempt. InteractiveSession may
-    // legitimately retry after an early child exit, and those retries still need
-    // the session-local settings/plugin files. Clean up only once the wrapper is
-    // terminal, not between attempts.
-    this.pty.once('exited', cleanupPodPrep);
-    this.pty.once('failed', cleanupPodPrep);
-
-    return this.pty;
+    return adapter;
   }
 
-  /** Returns the live orchestrator InteractiveSession if one is spawned. */
-  ptySession(): InteractiveSession | null {
+  /** Returns the live orchestrator chat session if one is attached. */
+  ptySession(): OrchestratorHostSession | null {
     return this.pty && !['exited', 'failed'].includes(this.pty.getState()) ? this.pty : null;
   }
 
@@ -595,7 +602,7 @@ export class ProjectRuntime {
   }
 
   /** Returns the current orchestrator process state without spawning. */
-  orchestratorPtyState(): InteractiveSessionState | null {
+  orchestratorPtyState(): OrchestratorHostSessionState | null {
     return this.pty ? this.pty.getState() : null;
   }
 

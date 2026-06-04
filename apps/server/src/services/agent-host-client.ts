@@ -628,6 +628,7 @@ function isAgentHostCommandResponse(
     // client rejects its receipt as malformed (the FD-15 set-config burn).
     case 'interrupt':
     case 'resize':
+    case 'write-raw':
     case 'mark-paused':
     case 'answer-pending':
     case 'cancel':

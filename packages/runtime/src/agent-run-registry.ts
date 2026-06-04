@@ -2,8 +2,9 @@
 //
 // Design §4.1: dispatched AgentRuns share a single global cap (default 5,
 // clamped 1..50; validated by labs scenario 03 — N=5 reliable, N=8 introduces
-// handshake-timeout rate). InteractiveSessions are uncapped and bypass this
-// registry entirely.
+// handshake-timeout rate). Persistent-interactive runs (the orchestrator
+// chat) take the cap-exempt lane via exempt() — admitted instantly, never
+// counted.
 //
 // Contract: callers obtain a Ticket via admit(). The ticket's `granted`
 // promise resolves when a slot is available. Calling release() returns the

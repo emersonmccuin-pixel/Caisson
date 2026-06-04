@@ -153,6 +153,19 @@ export interface AgentRunInput {
   pluginDirs?: readonly string[];
   claudeExe?: string;
   transcriptPath?: string;
+  // ── Step-4 Slice 2 — orchestrator spawn shaping (pass-through to
+  // LowLevelSpawn; workers omit all of these) ───────────────────────────────
+  /** Post-scrub env overrides (terminal color/capability env). */
+  envOverrides?: Record<string, string | undefined>;
+  /** `--model` override. */
+  model?: string;
+  /** Require CC's composer-ready UI marker in the ready gate. */
+  requireReadySignal?: boolean;
+  /** Gate readiness on the MCP handshake (orchestrator disables on resume). */
+  requireMcpHandshake?: boolean;
+  /** Initial PTY geometry. */
+  cols?: number;
+  rows?: number;
   // Timeouts (all configurable; defaults per design §4.1):
   /** Catastrophic spawn-failure cap. Default 120_000 (2× handshake). */
   spawnStuckMs?: number;
@@ -409,6 +422,18 @@ export class AgentRun extends EventEmitter {
     }
   }
 
+  /** Raw terminal keystrokes (Slice 2 — terminal-mode input). Bypasses the
+   *  chat send queue / bracketed paste / echo-ack. False when no live spawn
+   *  or the spawn doesn't expose raw writes. */
+  writeRaw(bytes: string): boolean {
+    if (this.isTerminal() || !this.spawn) return false;
+    try {
+      return this.spawn.writeRaw?.(bytes) ?? false;
+    } catch {
+      return false;
+    }
+  }
+
   getPolicy(): AgentRunPolicy {
     return this.policy;
   }
@@ -557,6 +582,13 @@ export class AgentRun extends EventEmitter {
       transcriptPath: this.input.transcriptPath,
       jsonlStartLine: this.input.jsonlStartLine,
       jsonlPath: this.input.jsonlPath,
+      // Step-4 Slice 2 — orchestrator spawn shaping (no-ops for workers).
+      envOverrides: this.input.envOverrides,
+      model: this.input.model,
+      requireReadySignal: this.input.requireReadySignal,
+      requireMcpHandshake: this.input.requireMcpHandshake,
+      cols: this.input.cols,
+      rows: this.input.rows,
       handshakeTimeoutMs: this.timeouts.handshakeTimeoutMs,
       readyTimeoutMs: this.timeouts.readyTimeoutMs,
     };

@@ -5,9 +5,9 @@
 // scrub, deterministic JSONL path resolution, and a single observability
 // contract.
 //
-// Scope: just the spawn. Lifecycle state machines (AgentRun + InteractiveSession)
-// live one layer above this and ship in Session 6. Delivery / tailer / persistence
-// services ship in Session 7.
+// Scope: just the spawn. The lifecycle state machine (AgentRun — ONE primitive,
+// policy flags per north-star §4) lives one layer above this. Delivery /
+// tailer / persistence services sit in the server.
 //
 // Construction discipline: no synchronous emit during construction. The
 // constructor returns the object; callers attach listeners; explicit start()

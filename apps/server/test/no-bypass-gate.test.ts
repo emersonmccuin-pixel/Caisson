@@ -78,6 +78,11 @@ const BANNED_RESURRECTION = [
   'constructAndStart',
   'defaultAgentRunFactory',
   'activeRunHandleForAgentRun',
+  // Step-4 Slice 2: the server-owned orchestrator spawn is dead — the Engine
+  // owns EVERY Claude process; the chat rides OrchestratorHostSession on a
+  // `persistent-interactive` host run. (Transient modals stay on PtySession
+  // until P7 deletes them — FD-21.)
+  'InteractiveSession',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 

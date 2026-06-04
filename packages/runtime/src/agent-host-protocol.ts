@@ -63,6 +63,26 @@ export interface AgentHostStartRunRequest {
    *  the cap-exempt admission lane. Omitted = 'default' (dispatched worker,
    *  unchanged). */
   policy?: AgentRunPolicy;
+  // ── Step-4 Slice 2 — orchestrator spawn shaping ──────────────────────────
+  /** Spawn mode on a plain start-run. The orchestrator resumes its OWN
+   *  conversation (`--resume <uuid>`) without a continuation lineage, so it
+   *  can't use `resume-run` (which requires `continues`). Omitted = 'fresh'. */
+  mode?: 'fresh' | 'resume';
+  /** Source JSONL line cursor handed to the spawn's tailer — a resume skips
+   *  already-replayed lines so prior turns don't re-emit as fresh events. */
+  jsonlStartLine?: number;
+  /** Post-scrub env overrides (terminal color/capability env for the chat). */
+  envOverrides?: Record<string, string | undefined>;
+  /** `--model` override. The orchestrator pins 'opus'. */
+  model?: string;
+  /** Require CC's composer-ready UI marker in the ready gate. */
+  requireReadySignal?: boolean;
+  /** Gate readiness on the MCP handshake. The orchestrator disables this on
+   *  resume (historical sessions may predate the current MCP config). */
+  requireMcpHandshake?: boolean;
+  /** Initial PTY geometry (the user's current chat panel size). */
+  cols?: number;
+  rows?: number;
   /** Server-authoritative CC JSONL path. The server computes this with ITS
    *  normalized CLAUDE_CONFIG_DIR (the same env the spawned agent inherits) and
    *  the host threads it straight through to the AgentRun instead of recomputing
@@ -97,6 +117,10 @@ export type AgentHostCommand =
   | { type: 'interrupt'; runId: ULID }
   // Step-4 G6 — terminal-grade resize for interactive surfaces.
   | { type: 'resize'; runId: ULID; cols: number; rows: number }
+  // Step-4 Slice 2 — raw terminal keystrokes (terminal-mode input). Bypasses
+  // the chat send queue / bracketed paste / echo-ack, exactly like the old
+  // PTY writeRaw.
+  | { type: 'write-raw'; runId: ULID; data: string }
   | { type: 'mark-paused'; runId: ULID; askId: string }
   | { type: 'answer-pending'; runId: ULID; text: string }
   | { type: 'cancel'; runId: ULID; reason?: string }
@@ -143,6 +167,7 @@ export type AgentHostCommandResponse =
         | 'send'
         | 'interrupt'
         | 'resize'
+        | 'write-raw'
         | 'mark-paused'
         | 'answer-pending'
         | 'cancel'
