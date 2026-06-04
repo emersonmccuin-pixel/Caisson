@@ -664,15 +664,14 @@ For substantial authoring, the main-chat orchestrator interviews the user and di
 
 Workflows do not declare triggers. Every run starts one of exactly two ways: the user clicks "Run now" on the Workflows tab, or the orchestrator calls pc_fire_workflow. Either can target an existing card (the fire carries a workItemId — that card becomes the run root). A card moving between stages never starts a workflow; schedules and webhooks do not exist. If automation is wanted, the orchestrator notices the moment and fires deliberately.
 
-## Node kinds
-
-The current v2 node set (2 kinds):
+## Node kinds (4 — the FD-9 step model: what the graph shows = what happens)
 
 - agent: dispatches a specialist to complete work — including any shell commands, builds, tests, or git it needs (it runs them itself in the worktree).
-- card-move (the \`move\` field on any step, not a node): advances the run's card to another stage when the step completes. A move never starts another workflow.
-- review: pauses the run at a human-judgment gate until a decision lands. \`reviewer: "orchestrator"\` posts the review bundle to the orchestrator's inbox (the orchestrator + user judge — the common gate); \`reviewer: "human"\` parks it in the user's own inbox. Both pause durably and never auto-advance.
+- review: pauses the run at a human-judgment gate until a decision lands. \`reviewer: "orchestrator"\` posts the review bundle to the orchestrator's inbox (the orchestrator + user judge — the common gate); \`reviewer: "human"\` parks it in the user's own inbox. Both pause durably and never auto-advance. On reject, \`reject: "<loopId>"\` routes to a loop step; no reject target = the review fails.
+- move: a REAL drawn step that advances the run's card to another stage (\`stage: <stageId>\`). A failed move fails the step. A move never starts another workflow. (The old hidden \`move\` property on steps is gone.)
+- loop: a review's reject target — the one retry construct. \`back_to\` names the step to re-run from; \`max_iterations\` (default 3) caps the loop, then the work escalates to a human. Loops carry no next/when/input; exactly one review points at each loop.
 
-Loop nodes and nested sub-workflows are deferred.
+Nested sub-workflows are deferred. There is no per-step retry — the loop step is it.
 
 ## How nodes read the root card
 
@@ -680,7 +679,7 @@ When a workflow is fired ON a card (the fire carried a workItemId), that card IS
 
 ## How a step's output feeds the next step (input ports)
 
-A step's output is its **deliverable** — what the agent submits (its one output slot). To feed it into a later step, give that step a declared input port: \`input: { name: "$earlierId.output" }\`, then reference \`{{name}}\` in the step's task. (An inline \`$earlierId.output\` in the task text works too, but the input map is clearer and is validated when you save — every \`{{name}}\` must match an input key and every ref must point at a strictly-earlier step.) \`$earlierId.output\` is that step's deliverable, not its task text; a \`.field\` ref (\`$earlierId.output.field\`) only works when the earlier step produces a \`payload\` (structured) output. On a review reject, the reviewer's notes are available to the kicked-back step as \`$carry.feedback\`. The \`move\` field advances the card when a step finishes (an agent on completion, a review on approve).
+A step's output is its **deliverable** — what the agent submits (its one output slot). To feed it into a later step, give that step a declared input port: \`input: { name: "$earlierId.output" }\`, then reference \`{{name}}\` in the step's task. (An inline \`$earlierId.output\` in the task text works too, but the input map is clearer and is validated when you save — every \`{{name}}\` must match an input key and every ref must point at a strictly-earlier step.) \`$earlierId.output\` is that step's deliverable, not its task text; a \`.field\` ref (\`$earlierId.output.field\`) only works when the earlier step produces a \`payload\` (structured) output — only AGENT steps have outputs (move/loop steps don't). On a review reject, the reviewer's notes are available to the re-run steps as \`$carry.feedback\`.
 
 ## Contracts vs. work items
 
@@ -694,9 +693,9 @@ Workflow runs still create work items, because a workflow walks a real card acro
 
 So contract-only agent dispatches (an answer, a structured payload) appear as contracts without a work item, while dispatches whose output needs a durable home (a written doc, a code change) get a linked work item. This is why some agent output lives only on its contract and some appears on work items and attachments.
 
-## Review and reject loops
+## Review and loop steps
 
-Review-reject is the kick-back mechanism. A review node can reject to a previous node with feedback. Reject edges default to max_iterations: 3. If the workflow exceeds the iteration ceiling, it escalates to a human review hold instead of looping forever.
+Review-reject routes to a loop step (the drawn retry construct). The loop re-runs from its back_to step with the reviewer's feedback; loops default to max_iterations: 3. If the workflow exceeds the iteration ceiling, it escalates to a human review hold instead of looping forever.
 
 ## Where users see workflow status
 

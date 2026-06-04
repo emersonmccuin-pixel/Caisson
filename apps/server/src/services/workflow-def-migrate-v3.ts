@@ -1,15 +1,19 @@
-// M6 / FD-10 (2026-06-04) — one-shot data migration for STORED workflow
-// definitions: strip the dead `triggers:` key from every row's yaml +
-// parsed_definition. The schema-level run columns died in migration 0043;
-// this sweep cleans the definition CONTENT (YAML can't be rewritten in SQL).
+// M6 (2026-06-04) — one-shot boot migration for STORED workflow definitions
+// to the v3 step model. Idempotent transforms via migrateWorkflowTextToV3:
+//   FD-10 (slice A): strip the dead `triggers:` key.
+//   FD-9  (slice B): node.move → inserted `move` step · review reject object →
+//                    minted `loop` step (`reject.move` dropped whole) · dead
+//                    `retry:` keys dropped.
+// The schema-level run columns died in migration 0043; this sweep rewrites the
+// definition CONTENT (YAML can't be rewritten in SQL).
 //
 // Idempotent: after the first pass nothing matches and the sweep is a no-op.
 // Rows whose definition is invalid for OTHER reasons keep their honest
-// `invalid` status — we only remove the triggers key, never repair anything
-// else. Runs at boot, before any project runtime loads.
+// `invalid` status — the sweep migrates, it never repairs. Runs at boot,
+// before any project runtime loads.
 
 import { workflowsRepo } from '@pc/db';
-import { stripTriggersFromWorkflowText } from '@pc/workflows';
+import { migrateWorkflowTextToV3 } from '@pc/workflows';
 import { createHash } from 'node:crypto';
 
 function sha256(text: string): string {
@@ -18,21 +22,21 @@ function sha256(text: string): string {
 
 /** Marker reason — mirrors the stock-seed convention (actor 'orchestrator' +
  *  a recognizable system reason) so the audit trail shows WHO rewrote the row. */
-const STRIP_REASON = 'M6/FD-10 system migration — strip dead triggers key';
+const MIGRATE_REASON = 'M6 system migration — v3 step model (strip triggers · move/loop steps)';
 
-export interface TriggerStripResult {
+export interface DefMigrateResult {
   scanned: number;
   rewritten: number;
   nowInvalid: string[];
 }
 
-export function stripTriggersFromStoredWorkflowDefs(): TriggerStripResult {
+export function migrateStoredWorkflowDefsToV3(): DefMigrateResult {
   const rows = workflowsRepo.listWorkflows();
   let rewritten = 0;
   const nowInvalid: string[] = [];
 
   for (const row of rows) {
-    const result = stripTriggersFromWorkflowText(row.yaml, row.slug);
+    const result = migrateWorkflowTextToV3(row.yaml, row.slug);
     if (!result.changed) continue;
 
     if (result.workflow) {
@@ -45,7 +49,7 @@ export function stripTriggersFromStoredWorkflowDefs(): TriggerStripResult {
           status: 'active',
           parseError: null,
         },
-        { actor: 'orchestrator', reason: STRIP_REASON },
+        { actor: 'orchestrator', reason: MIGRATE_REASON },
       );
     } else {
       workflowsRepo.updateWorkflow(
@@ -57,7 +61,7 @@ export function stripTriggersFromStoredWorkflowDefs(): TriggerStripResult {
           status: 'invalid',
           parseError: result.errors.join('; '),
         },
-        { actor: 'orchestrator', reason: STRIP_REASON },
+        { actor: 'orchestrator', reason: MIGRATE_REASON },
       );
       nowInvalid.push(row.slug);
     }

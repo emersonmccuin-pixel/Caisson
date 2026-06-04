@@ -55,9 +55,8 @@ export interface DagExecutorDeps {
   resolveRef(state: State): RefResolver;
   /** Create the child work item + spawn the pod; resolve when terminal. */
   dispatchAgent(node: WorkflowV2.AgentNode, ctx: DagNodeContext): Promise<NodeOutcome>;
-  /** Card-move TRANSITION EFFECT (locked decision 1) — move the run-root card to
-   *  `stage` without firing that stage's on-entry workflows. Applied after a step
-   *  settles `completed` (its `move`) or on a reject kick-back (`reject.move`). */
+  /** Move the run-root card to `stage` — the body of a `move` STEP (FD-9: a
+   *  drawn step, not a hidden property). A failed move fails the step. */
   moveCard(stage: string): Promise<{ ok: boolean; error?: string }>;
   /** Post the review gate (orchestrator channel event / Human Review inbox). */
   requestReview(
@@ -204,13 +203,27 @@ export class DagExecutor {
       const outcomes = await Promise.all(
         batch.map(async (id) => {
           const node = this.byId.get(id)!;
-          const carry = this.carryFor(id, resolve);
           try {
-            // runLayer only ever sees non-review ready nodes (review nodes pause
-            // via requestReview), and the only non-review kind is `agent`.
+            // runLayer sees non-review, non-loop ready nodes (reviews pause via
+            // requestReview; loops never dispatch). Two run kinds: agent + move.
+            if (node.kind === 'move') {
+              const res = await this.deps.moveCard(node.stage);
+              this.deps.event({
+                type: 'card_moved',
+                nodeId: id,
+                data: res.ok
+                  ? { stage: node.stage }
+                  : { stage: node.stage, error: res.error ?? 'move failed' },
+              });
+              // FD-9: the move is a real step — a failed move fails it honestly.
+              return res.ok
+                ? { id, outcome: { state: 'completed' as const } }
+                : { id, outcome: { state: 'failed' as const, error: `card move to "${node.stage}" failed: ${res.error ?? 'unknown error'}` } };
+            }
             if (node.kind !== 'agent') {
               return { id, outcome: { state: 'failed' as const, error: `unexpected node kind "${node.kind}" in run layer` } };
             }
+            const carry = this.carryFor(id, resolve);
             const outcome = await this.deps.dispatchAgent(node, this.ctx(resolve, carry));
             return { id, outcome };
           } catch (err) {
@@ -228,40 +241,31 @@ export class DagExecutor {
           nodeId: id,
           ...(outcome.error ? { data: { error: outcome.error } } : {}),
         });
-        // Card-move TRANSITION EFFECT (locked decision 1) — a step that declares
-        // `move` advances the run-root card on completion. Best-effort: a move
-        // failure is logged but does not fail the (already-completed) step.
-        const moved = this.byId.get(id)?.move;
-        if (outcome.state === 'completed' && moved) {
-          const res = await this.deps.moveCard(moved);
-          this.deps.event({
-            type: 'card_moved',
-            nodeId: id,
-            data: res.ok ? { stage: moved } : { stage: moved, error: res.error ?? 'move failed' },
-          });
-        }
       }
     }
   }
 
-  /** Carry values wired from a reject edge that targets this node. `$self.output`
-   *  resolves to the reviewer's reject notes (a review node's "output" IS its
-   *  verdict — stashed in `state.rejectFeedback` by applyReviewDecision so it
-   *  survives the loop-subtree reset); other `$nodeId.output` refs read upstream
-   *  child WIs via the resolver.
+  /** Carry values wired from a loop node whose `back_to` targets this node.
+   *  `$self.output` resolves to the OWNING review's reject notes (a review's
+   *  "output" IS its verdict — stashed in `state.rejectFeedback` by
+   *  applyReviewDecision so it survives the loop-subtree reset); other
+   *  `$nodeId.output` refs read upstream child WIs via the resolver.
    *
    *  The reviewer's notes are ALSO auto-exposed as `$carry.feedback` with no
-   *  manual wiring — so a re-dispatched node can address the rejection out of the
-   *  box. An explicit `reject.carry.feedback` entry overrides this default. */
+   *  manual wiring — so a re-dispatched node can address the rejection out of
+   *  the box. An explicit `carry.feedback` entry on the loop overrides it. */
   private carryFor(nodeId: string, resolve: RefResolver): Record<string, string> {
     const carry: Record<string, string> = {};
     for (const n of this.workflow.nodes) {
-      if (!isReview(n) || !n.reject || n.reject.back_to !== nodeId) continue;
-      const feedback = this.state.rejectFeedback?.[n.id] ?? '';
+      if (n.kind !== 'loop' || n.back_to !== nodeId) continue;
+      // The owning review = the one whose reject names this loop (validation
+      // guarantees exactly one).
+      const owner = this.workflow.nodes.find((r) => isReview(r) && r.reject === n.id);
+      const feedback = owner ? (this.state.rejectFeedback?.[owner.id] ?? '') : '';
       // Default: the reviewer's reject notes are available as `$carry.feedback`.
       // Seeded BEFORE the explicit-carry loop so an authored `feedback` wins.
       if (feedback && carry.feedback === undefined) carry.feedback = feedback;
-      for (const [key, expr] of Object.entries(n.reject.carry ?? {})) {
+      for (const [key, expr] of Object.entries(n.carry ?? {})) {
         carry[key] = expr
           // `$self.output[.field]` → the reviewer's notes (replacer fn avoids
           // `$`-mangling if the feedback text itself contains `$`).
@@ -294,36 +298,10 @@ export class DagExecutor {
       // only path ran through the failed review get skipped, and the run
       // finalizes to `failed`.
       this.deps.event({ type: 'iteration_ceiling_hit', nodeId: reviewNodeId });
-      this.deps.holdForHuman(reviewNodeId, 'reject iteration ceiling reached');
-    } else if (decision.kind === 'approve') {
-      // Card-move transition effect on APPROVE (locked decision 1) — a review
-      // node's `move` advances the run-root card when the gate is approved,
-      // symmetric with an agent step's `move` on completion. (Was silently
-      // ignored: only agent-node `move` + `reject.move` were wired.)
-      const reviewNode = this.byId.get(reviewNodeId);
-      const moved = reviewNode?.move;
-      if (moved) {
-        const res = await this.deps.moveCard(moved);
-        this.deps.event({
-          type: 'card_moved',
-          nodeId: reviewNodeId,
-          data: res.ok ? { stage: moved } : { stage: moved, error: res.error ?? 'move failed' },
-        });
-      }
-    } else if (outcome.kickedBack) {
-      // Card-move transition effect on kick-back (locked decision 1) — e.g. a QA
-      // gate reject moves the card back to the build stage before the loop re-runs.
-      const reviewNode = this.byId.get(reviewNodeId);
-      const moved = reviewNode && isReview(reviewNode) ? reviewNode.reject?.move : undefined;
-      if (moved) {
-        const res = await this.deps.moveCard(moved);
-        this.deps.event({
-          type: 'card_moved',
-          nodeId: reviewNodeId,
-          data: res.ok ? { stage: moved } : { stage: moved, error: res.error ?? 'move failed' },
-        });
-      }
+      this.deps.holdForHuman(reviewNodeId, 'loop iteration ceiling reached');
     }
+    // ☠ FD-9 (M6 slice B): the approve-move / reject-move card effects are
+    // gone — the card moves ONLY via explicit `move` steps on the forward path.
     return this.advance();
   }
 

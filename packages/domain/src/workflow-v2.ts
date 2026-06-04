@@ -23,14 +23,17 @@ import type { VerificationTier } from './contract.ts';
 // Node kinds
 // ---------------------------------------------------------------------------
 
-/** Node kinds. Workflow-engine redesign: just TWO workers — `agent` (runs
- *  autonomously, an agent runs any commands it needs and reports) and `review`
- *  (a human-judgment gate; `reviewer` = human | orchestrator). The old
- *  bash/script/move-work-item kinds + the two split review kinds are deleted —
- *  card-move is a node `move` effect, not a node. */
+/** Node kinds — FD-9 (M6 slice B): exactly FOUR visible step kinds, each doing
+ *  one thing. `agent` (hand a job to an agent) · `review` (human-judgment gate;
+ *  `reviewer` = human | orchestrator) · `move` (move the run-root card — a step
+ *  drawn in the graph, NOT a hidden property) · `loop` (the one retry
+ *  construct: a review's reject target; counts iterations up to a ceiling).
+ *  What the graph shows = what happens. */
 export const WORKFLOW_NODE_KINDS = [
   'agent',
   'review',
+  'move',
+  'loop',
 ] as const;
 export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
 
@@ -70,31 +73,14 @@ export const TRIGGER_RULES = [
 ] as const;
 export type TriggerRule = (typeof TRIGGER_RULES)[number];
 
-/** Per-node retry. Omitted = no retry (single attempt, fail-fast). */
-export interface RetryPolicy {
-  /** Total attempts including the first. Default 1. */
-  max_attempts: number;
-  /** Causes that trigger a retry. Default `['failed']`. */
-  on?: ('failed' | 'timeout')[];
-  /** Wait between attempts (ms). Exponential backoff applied by the executor. */
-  delay_ms?: number;
-}
-
-/** Reject kick-back — the single looping primitive (lock 1). Lives on review
- *  nodes only. Per-edge per-run iteration count (lock 4). */
-export interface RejectEdge {
-  /** Node id to re-run with the reviewer's feedback. */
-  back_to: string;
-  /** Cap on kick-backs for this edge per run. Default 3. `null` = unlimited.
-   *  Exceeding it escalates to a human-review hold (lock 4). */
-  max_iterations?: number | null;
-  /** Values wired into the back_to node's next run. e.g.
-   *  `{ feedback: '$self.output.notes' }`. `$self` = this review node. */
-  carry?: Record<string, string>;
-  /** Card move applied on kick-back (locked decision 1) — e.g. move the card
-   *  back to the build stage when a QA gate rejects. Omit = card stays put. */
-  move?: string;
-}
+// ☠ RetryPolicy DELETED (M6 slice B) — it was dead schema: validated at save,
+// documented in the builder prompt, implemented by NOTHING. An author could
+// write a retry that silently never happened. The Loop step is the ONE retry
+// construct.
+// ☠ RejectEdge DELETED (M6 slice B / FD-9) — the reject kick-back's mechanics
+// (back_to · ceiling · carry) moved onto the visible `loop` node; the
+// on-reject card move (`reject.move`) died whole (the card moves only on the
+// forward path, via explicit Move steps).
 
 /** Fields common to every node. */
 export interface WorkflowNodeBase {
@@ -116,18 +102,10 @@ export interface WorkflowNodeBase {
   when?: string;
   /** Join semantics over the edges pointing into this node. Default all_success. */
   trigger_rule?: TriggerRule;
-  /** Per-node retry policy. Omitted = no retry. */
-  retry?: RetryPolicy;
-  /** Hard ceiling (ms). bash/script: wall-clock kill (SIGKILL). agent: idle
-   *  ceiling (no JSONL activity). Default idle 5 min / wall-clock 2 h for agent
-   *  nodes; applied by the executor, not stored when unset. */
+  /** Hard ceiling (ms). Agent nodes: wall-clock ceiling (P9 remapped the old
+   *  idle meaning — silence escalates, it never executes). Applied by the
+   *  executor, not stored when unset. */
   timeout?: number;
-  /** Workflow-engine redesign (locked decision 1) — card move as a TRANSITION
-   *  EFFECT, not a node. After this step settles `completed`, the run-root card
-   *  moves to this stage id (without firing that stage's on-entry workflows, so a
-   *  workflow can advance its own card loop-safely). Omit = card stays put.
-   *  Replaces the separate `move-work-item` node. */
-  move?: string;
   /** Visualizer-layer position override. Persisted so user drags survive a
    *  reload and the agent-author can read positions between turns
    *  (sync-model-A, Section 19 lock 8). When absent, the visualizer falls back
@@ -159,7 +137,7 @@ export interface AgentNode extends WorkflowNodeBase {
 /** Unified review step (workflow-engine redesign). Pauses the run durably until
  *  a decision lands in an inbox — the user's (`reviewer: 'human'`) or the project
  *  orchestrator's (`reviewer: 'orchestrator'`). On approve, follows `next`; on
- *  reject, kicks back via `reject`. Same contract for both flavors. */
+ *  reject, routes to the named Loop step. Same contract for both flavors. */
 export interface ReviewNode extends WorkflowNodeBase {
   kind: 'review';
   /** Which inbox the run waits in. */
@@ -169,14 +147,58 @@ export interface ReviewNode extends WorkflowNodeBase {
   /** Aggregate these nodes' outputs into one review artifact (Review Bundle,
    *  19.5). Default = the node's immediate upstreams (inverse of `next`). */
   bundle_from?: string[];
-  reject?: RejectEdge;
+  /** On reject, route to this `loop` node (FD-9 — the loop is a drawn step).
+   *  Omitted = a reject FAILS this review node (nowhere to kick back to). */
+  reject?: string;
 }
 
-export type WorkflowNode = AgentNode | ReviewNode;
+/** Move card step (FD-9 — a VISIBLE step, replacing the old hidden `move`
+ *  property). When this step runs, the run-root card moves to `stage`. A
+ *  failed move fails the step honestly (it's a real step, not best-effort). */
+export interface MoveNode extends WorkflowNodeBase {
+  kind: 'move';
+  /** Destination stage id (from the project's stages — the id, never the name). */
+  stage: string;
+}
+
+/** Loop step (FD-9 — the ONE retry construct, drawn in the graph). The reject
+ *  target of exactly one review node. On each reject under the ceiling it
+ *  resets the `back_to` → review subtree to pending and re-runs it with the
+ *  reviewer's feedback; at the ceiling the work escalates to a human.
+ *  Deliberately NOT a flow node: no `next`/`when`/`input` — its routing is
+ *  fixed (under ceiling → back_to; at ceiling → human). */
+export interface LoopNode {
+  id: string;
+  kind: 'loop';
+  /** Node id to re-run from (must be an upstream of the owning review). */
+  back_to: string;
+  /** Cap on iterations per run. Default 3. `null` = unlimited. */
+  max_iterations?: number | null;
+  /** Values wired into the back_to node's re-run. e.g.
+   *  `{ feedback: '$self.output' }`. `$self` = the owning review's verdict. */
+  carry?: Record<string, string>;
+  /** Visualizer position override (same semantics as WorkflowNodeBase). */
+  position?: { x: number; y: number };
+  // Flow-node fields a loop deliberately CANNOT carry (typed `never` so generic
+  // `node.next` readers still compile while authoring them is a type error).
+  next?: never;
+  when?: never;
+  trigger_rule?: never;
+  input?: never;
+  timeout?: never;
+}
+
+export type WorkflowNode = AgentNode | ReviewNode | MoveNode | LoopNode;
 
 // Type guards
 export function isReviewNode(n: WorkflowNode): n is ReviewNode {
   return n.kind === 'review';
+}
+export function isMoveNode(n: WorkflowNode): n is MoveNode {
+  return n.kind === 'move';
+}
+export function isLoopNode(n: WorkflowNode): n is LoopNode {
+  return n.kind === 'loop';
 }
 
 // ---------------------------------------------------------------------------
@@ -246,13 +268,15 @@ export interface NodeRunRecord {
 export interface WorkflowDagState {
   /** node id → runtime record. */
   nodes: Record<string, NodeRunRecord>;
-  /** Reject-edge kick-back counts, keyed by the review node id owning the edge.
-   *  Compared against `RejectEdge.max_iterations` to trigger the ceiling hold. */
+  /** Loop iteration counts, keyed by the LOOP node id (M6 slice B — the loop
+   *  owns the ceiling). Compared against `LoopNode.max_iterations` to trigger
+   *  the ceiling hold. (Pre-M6 runs keyed these by review node id — all
+   *  terminal, never resumed.) */
   rejectIterations?: Record<string, number>;
   /** Latest reviewer reject notes, keyed by review node id. Survives the
-   *  loop-subtree reset (which wipes per-node records) so a reject edge's
+   *  loop-subtree reset (which wipes per-node records) so a loop's
    *  `carry: { x: $self.output[.field] }` injects the reviewer's feedback into
-   *  the re-dispatched `back_to` node. A review node's "output" IS its verdict. */
+   *  the re-run `back_to` node. A review node's "output" IS its verdict. */
   rejectFeedback?: Record<string, string>;
 }
 

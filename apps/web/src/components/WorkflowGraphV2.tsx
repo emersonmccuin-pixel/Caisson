@@ -17,9 +17,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { WorkflowV2 } from '@pc/domain';
 import {
+  ArrowRightCircle,
   Bot,
   Check,
   Eye,
+  RotateCcw,
   ShieldCheck,
   X,
   type LucideIcon,
@@ -42,6 +44,9 @@ interface KindConfig {
 const KIND_CONFIG: Record<WorkflowV2.WorkflowNode['kind'], KindConfig> = {
   agent: { label: 'agent', icon: Bot, band: 'bg-primary/70' },
   review: { label: 'review', icon: ShieldCheck, band: 'bg-warning' },
+  // FD-9 (M6): move + loop are drawn steps — what the graph shows = what happens.
+  move: { label: 'move card', icon: ArrowRightCircle, band: 'bg-success/70' },
+  loop: { label: 'loop', icon: RotateCcw, band: 'bg-muted-foreground/60' },
 };
 
 // Border + animation classes per lock 9 (runtime overlay vocabulary).
@@ -113,7 +118,8 @@ export function WorkflowGraphV2({
               id: n.id,
               kind: n.kind,
               next: n.next ?? [],
-              reject: WorkflowV2.isReviewNode(n) ? n.reject?.back_to ?? null : null,
+              reject: WorkflowV2.isReviewNode(n) ? n.reject ?? null : null,
+              back: WorkflowV2.isLoopNode(n) ? n.back_to : null,
               pos: n.position ?? null,
             })),
           })
@@ -224,38 +230,96 @@ export function WorkflowGraphV2({
     setWireDrag(null);
     if (!targetId || targetId === sourceId) return;
     if (!onChange) return;
-    onChange({
-      ...workflow,
-      nodes: workflow.nodes.map((n) => {
-        if (n.id !== sourceId) return n;
-        if (port === 'out') {
+    const source = workflow.nodes.find((n) => n.id === sourceId);
+    if (!source) return;
+    const target = workflow.nodes.find((n) => n.id === targetId);
+    if (target && WorkflowV2.isLoopNode(target)) return; // loops are reached only via reject
+
+    if (port === 'out' && WorkflowV2.isLoopNode(source)) {
+      // Re-target the loop's back-edge.
+      onChange({
+        ...workflow,
+        nodes: workflow.nodes.map((n) =>
+          WorkflowV2.isLoopNode(n) && n.id === sourceId ? { ...n, back_to: targetId } : n,
+        ),
+      });
+      return;
+    }
+    if (port === 'out') {
+      onChange({
+        ...workflow,
+        nodes: workflow.nodes.map((n) => {
+          if (n.id !== sourceId || WorkflowV2.isLoopNode(n)) return n;
           const next = Array.from(new Set([...(n.next ?? []), targetId]));
           return { ...n, next };
-        }
-        if (WorkflowV2.isReviewNode(n)) {
-          return { ...n, reject: { back_to: targetId, ...(n.reject ?? {}) } };
-        }
-        return n;
-      }),
+        }),
+      });
+      return;
+    }
+    // Reject port (reviews only) — FD-9: the loop is a drawn step. Dragging
+    // reject → target mints a loop step routed back to the target (or
+    // re-targets the review's existing loop).
+    if (!WorkflowV2.isReviewNode(source)) return;
+    const existingLoopId = source.reject;
+    if (existingLoopId && workflow.nodes.some((n) => n.id === existingLoopId)) {
+      onChange({
+        ...workflow,
+        nodes: workflow.nodes.map((n) =>
+          n.id === existingLoopId && WorkflowV2.isLoopNode(n) ? { ...n, back_to: targetId } : n,
+        ),
+      });
+      return;
+    }
+    let loopId = `${sourceId}-loop`;
+    for (let i = 2; workflow.nodes.some((n) => n.id === loopId); i++) {
+      loopId = `${sourceId}-loop-${String(i)}`;
+    }
+    const loopNode: WorkflowV2.LoopNode = { id: loopId, kind: 'loop', back_to: targetId };
+    onChange({
+      ...workflow,
+      nodes: [
+        ...workflow.nodes.map((n) =>
+          WorkflowV2.isReviewNode(n) && n.id === sourceId ? { ...n, reject: loopId } : n,
+        ),
+        loopNode,
+      ],
     });
   };
 
   const deleteEdge = (edge: LayoutEdge) => {
     if (!onChange) return;
+    if (edge.kind === 'forward') {
+      onChange({
+        ...workflow,
+        nodes: workflow.nodes.map((n) => {
+          if (n.id !== edge.source || WorkflowV2.isLoopNode(n)) return n;
+          return { ...n, next: (n.next ?? []).filter((t) => t !== edge.target) };
+        }),
+      });
+      return;
+    }
+    // Back-edge (review → loop, or loop → back_to): deleting EITHER removes
+    // the whole loop construct — a loop without its review or back-edge is
+    // invalid, so the teardown is atomic.
+    const sourceNode = workflow.nodes.find((n) => n.id === edge.source);
+    const loopId =
+      sourceNode && WorkflowV2.isLoopNode(sourceNode)
+        ? sourceNode.id
+        : sourceNode && WorkflowV2.isReviewNode(sourceNode)
+          ? sourceNode.reject
+          : undefined;
+    if (!loopId) return;
     onChange({
       ...workflow,
-      nodes: workflow.nodes.map((n) => {
-        if (n.id !== edge.source) return n;
-        if (edge.kind === 'forward') {
-          return { ...n, next: (n.next ?? []).filter((t) => t !== edge.target) };
-        }
-        // reject
-        if (WorkflowV2.isReviewNode(n)) {
-          const { reject: _reject, ...rest } = n;
-          return rest as WorkflowV2.WorkflowNode;
-        }
-        return n;
-      }),
+      nodes: workflow.nodes
+        .filter((n) => n.id !== loopId)
+        .map((n) => {
+          if (WorkflowV2.isReviewNode(n) && n.reject === loopId) {
+            const { reject: _reject, ...rest } = n;
+            return rest as WorkflowV2.WorkflowNode;
+          }
+          return n;
+        }),
     });
   };
 
@@ -474,7 +538,14 @@ function NodeTile({
 }) {
   const cfg = KIND_CONFIG[node.kind];
   const Icon = cfg.icon;
-  const subtitle = node.kind === 'agent' ? node.agent : null;
+  const subtitle =
+    node.kind === 'agent'
+      ? node.agent
+      : node.kind === 'move'
+        ? `→ ${node.stage}`
+        : node.kind === 'loop'
+          ? `↻ ${node.back_to} · max ${node.max_iterations === null ? '∞' : String(node.max_iterations ?? 3)}`
+          : null;
   const borderCls = state ? STATE_BORDER[state] : 'border-border';
   const isReview = WorkflowV2.isReviewNode(node);
 

@@ -85,38 +85,40 @@ No \`Read\`, no \`Write\`, no \`Edit\`, no \`Bash\`, no \`Glob\`, no \`Grep\`, n
       next: ["check"] },
     { id: "check", kind: "review", reviewer: "orchestrator",
       prompt: "Does findings.md look right?\\n\\nWrite step output:\\n$write.output",
-      reject: { back_to: "write", max_iterations: 3 } }
+      reject: "check-loop" },
+    { id: "check-loop", kind: "loop", back_to: "write", max_iterations: 3 }
   ]
 }
 \`\`\`
 
-### Node kinds (2)
+### Node kinds (4) — what the graph shows = what happens
 
 | Kind | Use when… | Required fields |
 |---|---|---|
 | \`agent\` | a specialist (researcher / writer / reviewer / planner / extractor / code-writer / custom) should do work — including running any shell commands, builds, tests, or git it needs | \`agent\` (pod name), \`task\` (instructions; wire upstream outputs via an \`input:\` map + \`{{name}}\`, or inline \`$root\`/\`$nodeId\` refs) |
-| \`review\` | pause for a human-judgment gate — approve / reject | \`reviewer\` (\`"orchestrator"\` or \`"human"\`), \`prompt\` (what to review); optional \`reject\`, \`bundle_from\` |
-
-Advancing the card across the board is NOT a node — it's a \`move\` field on any step (see "Advancing the card" below).
+| \`review\` | pause for a human-judgment gate — approve / reject | \`reviewer\` (\`"orchestrator"\` or \`"human"\`), \`prompt\` (what to review); optional \`reject\` (a loop step's id), \`bundle_from\` |
+| \`move\` | advance the run-root card to another board column — a REAL drawn step on the forward path | \`stage\` (the destination stage **id**, from \`pc_list_stages\`) |
+| \`loop\` | a review's reject target — the ONE retry construct. Counts iterations; under the ceiling it re-runs from \`back_to\` with the reviewer's feedback; at the ceiling the work escalates to a human | \`back_to\` (the step to re-run from); optional \`max_iterations\` (default 3; \`null\` = unlimited), \`carry\` |
 
 **Review gates — read this.** There is ONE review kind. \`reviewer\` picks where the run waits:
 \`reviewer: "orchestrator"\` posts the review bundle to the orchestrator's inbox (the orchestrator + user approve or reject — the common case); \`reviewer: "human"\` parks it in the user's own inbox. Both pause the run durably until a decision lands — neither auto-advances and neither times out. **Default to \`reviewer: "orchestrator"\`** unless the user specifically wants it in their personal inbox.
 
-No \`http\` node, no \`attach-to-work-item\`, no \`create-work-item\`, no \`update-work-item\`, no \`loop\`, no \`cancel\`, no \`workflow\` (nested). External system calls = use an \`agent\` with the right MCP allowlist (e.g. a Jira-specialist pod). Workflow loops = a reviewer that rejects and kicks back via \`reject.back_to\`. Workflow termination = a node with no \`next\` (the workflow ends there).
+**Loop steps — read this.** A loop is NOT on the forward path: it has no \`next\`/\`when\`/\`input\` (the validator rejects them), nothing wires \`next\` INTO it, and exactly ONE review's \`reject\` names it. On reject under the ceiling, everything between \`back_to\` and the review re-runs with \`$carry.feedback\` (the reviewer's notes) available automatically. There is NO on-reject card move — the card moves only on the forward path via \`move\` steps.
 
-### Advancing the card (\`move\`)
+No \`http\` node, no \`attach-to-work-item\`, no \`create-work-item\`, no \`update-work-item\`, no \`cancel\`, no \`workflow\` (nested), no per-step \`retry\` (the loop is the one retry construct). External system calls = use an \`agent\` with the right MCP allowlist (e.g. a Jira-specialist pod). Workflow termination = a node with no \`next\` (the workflow ends there).
 
-The run-root card is the card the workflow was fired on (or the blank root the run minted). To walk that card across the board as the workflow progresses (into a review column, then onward when approved), set a \`move: "<stageId>"\` field on a step — the card advances to that stage when the step COMPLETES. A review node can also carry \`reject: { …, move: "<stageId>" }\` to move the card back on a kick-back (e.g. QA reject → back to the build stage). Model "build → review → ship" as: the build step with \`move: "<reviewStageId>"\`, then the review node with \`move: "<doneStageId>"\` (applied when it approves). A move never starts another workflow — runs start only from "Run now" or the orchestrator's fire tool.
+### Advancing the card (\`move\` steps)
+
+The run-root card is the card the workflow was fired on (or the blank root the run minted). To walk it across the board, put a \`move\` STEP on the forward path: \`{ id: "to-review", kind: "move", stage: "<stageId>", next: [...] }\`. Model "build → review → ship" as: build step → \`move\` into the review column → review gate → \`move\` into done. A failed move fails that step honestly (it's a real step). A move never starts another workflow — runs start only from "Run now" or the orchestrator's fire tool.
 
 ### Common node options (all kinds)
 
 - \`next: ["id", ...]\` — downstream nodes. Omit for terminal.
 - \`input: { name: "$X.output", ... }\` — declared input ports: bind named inputs to a specific upstream output (\`$nodeId.output[.field]\` / \`$root.output[.field]\`) or a literal. Consume them in \`task\`/\`prompt\` via \`{{name}}\`. Preferred over inline refs; validated at save. (See "Wiring outputs into the next step".)
-- \`move: "<stageId>"\` — advance the run-root card to this stage when the step completes (an \`agent\` step on completion, a \`review\` step on APPROVE). Card-move is an effect, not a node. The stage **id**, from \`pc_list_stages\`.
 - \`when: "$X.output OP 'val' && …"\` — skip-if-false guard. Grammar checked at save; fail-closed (unparseable → skip). Use when a step should only run under a condition. Reads \`$root.output.<field>\` too (e.g. \`when: "$root.output.complexity == 'complex'"\`).
 - \`trigger_rule\` — join semantics when multiple upstreams point into this node. \`all_success\` (default) | \`one_success\` | \`all_done\` | \`none_failed_min_one_success\`. **IMPORTANT:** if an upstream can be SKIPPED via \`when\`, the downstream that depends on it needs \`trigger_rule: "all_done"\` — otherwise the default \`all_success\` treats the skip as "not succeeded" and skips the downstream too.
-- \`retry: { max_attempts: 2, on: ["failed", "timeout"], delay_ms: 5000 }\` — per-node retry. Omit = single attempt.
-- \`timeout: 600000\` — ms. The agent's idle ceiling (no output activity). Defaults: 5 min idle / 2 h wall-clock.
+- \`timeout: 600000\` — ms. The agent step's wall-clock ceiling. (There is no per-step \`retry\` — the loop step is the one retry construct.)
+- (Loop steps carry NONE of these — their routing is fixed.)
 
 ### Agent-node options
 
@@ -126,7 +128,7 @@ The run-root card is the card the workflow was fired on (or the blank root the r
 ### Review-node options
 
 - \`bundle_from: ["a", "b", "c"]\` — aggregate these nodes' outputs into one review surface. Default = the review node's immediate upstreams.
-- \`reject: { back_to, max_iterations?, carry? }\` — see "Reject kick-backs" below.
+- \`reject: "<loopStepId>"\` — on reject, route to that loop step (see "Loop steps" below). Omit = a reject FAILS the review (no retry path).
 
 ### How runs start (there are NO triggers)
 
@@ -149,26 +151,27 @@ Every node carries an optional \`next: ["nodeId", ...]\` array — the downstrea
 
 Parallel fan-out: multiple downstream ids. Fan-in: multiple nodes pointing into the same id (the upstream join is \`all_success\` by default — every upstream must succeed; tweak via \`trigger_rule\`).
 
-### Reject kick-backs (the single looping primitive)
+### Loop steps (the single looping primitive)
 
-Review nodes (\`kind: "review"\`) carry an optional \`reject\` back-edge:
+A review's \`reject\` names a \`loop\` step; the loop owns the retry mechanics:
 
 \`\`\`
 { id: "check", kind: "review", reviewer: "orchestrator",
   prompt: "Does the draft look right? Draft:\\n$write.output",
   next: ["publish"],
-  reject: {
-    back_to: "write",
-    max_iterations: 3,                         // default 3; null = unlimited
-    carry: { feedback: "$self.output" }        // wired into re-dispatched node
-  } }
+  reject: "check-loop" },
+{ id: "check-loop", kind: "loop",
+  back_to: "write",
+  max_iterations: 3,                         // default 3; null = unlimited
+  carry: { feedback: "$self.output" } }      // optional — feedback flows by default
 \`\`\`
 
-- On **approve**, the run follows \`next\`.
-- On **reject**, the runtime resets the loop subtree between \`back_to\` and the review node, increments the kick-back counter, and re-runs from \`back_to\` with any \`carry\` values stamped into the re-dispatched node's task (read via \`$carry.feedback\`).
-- \`max_iterations\` caps the loop. Exceeding it escalates the run to a Human Review hold (the runtime fails the review node and flags the run for human attention).
+- On **approve**, the run follows the review's \`next\`.
+- On **reject**, the runtime routes to the loop: it resets the subtree between \`back_to\` and the review, increments the loop's counter, and re-runs from \`back_to\`. The reviewer's notes are ALWAYS available to re-run steps as \`$carry.feedback\` (no wiring needed); \`carry\` adds extra values.
+- \`max_iterations\` caps the loop. Exceeding it escalates the run to a Human Review hold.
+- One loop serves exactly ONE review. Nothing else connects to a loop — no \`next\` into or out of it.
 
-This is the **only** looping primitive. There is no \`loop\` node. If the user describes a "keep going until X is good" process, model it as: do work → reviewer checks → on reject, kick back to the work step with \`carry: { feedback: "$self.output" }\`.
+If the user describes a "keep going until X is good" process, model it as: do work → reviewer checks → reject routes to a loop step back to the work step.
 
 ### Wiring outputs into the next step (input ports + refs — read carefully)
 
@@ -196,8 +199,8 @@ The tokens the runtime resolves in string fields (\`task\`, \`prompt\`, and \`in
 | \`$root.output\` / \`$root.output.field\` | the TRIGGERING card's body / a typed field on it (e.g. \`$root.output.complexity\`) | anywhere |
 | \`$nodeId.output\` | an upstream agent step's **deliverable** (what it submitted — NOT its task text) | anywhere downstream of \`nodeId\` |
 | \`$nodeId.output.field\` | a named field of an upstream step's **structured (\`payload\`) deliverable** | anywhere downstream of \`nodeId\` |
-| \`$carry.name\` | a reject edge's \`carry\` value. \`$carry.feedback\` is ALWAYS the reviewer's reject notes on a kicked-back step — available with no wiring. | inside a re-dispatched (reject) step |
-| \`$self.output[.field]\` | the review node's own verdict | only inside that review node's \`reject.carry\` |
+| \`$carry.name\` | a loop step's \`carry\` value. \`$carry.feedback\` is ALWAYS the reviewer's reject notes on a re-run step — available with no wiring. | inside a re-run (loop) step |
+| \`$self.output[.field]\` | the owning review's verdict | only inside a loop step's \`carry\` |
 | \`{{name}}\` | the resolved value of this step's \`input.name\` port | in this step's own \`task\` / \`prompt\` |
 
 Things to know:
@@ -223,12 +226,12 @@ The spec is the interview result — the orchestrator already asked the user eve
 **Decide silently when the spec doesn't say:**
 - \`worktree: "auto"\` unless every node is pure compute (no filesystem).
 - \`max_concurrency: 4\` (almost never tweaked).
-- \`max_iterations: 3\` on reject edges.
+- \`max_iterations: 3\` on loop steps.
 - Default \`trigger_rule: "all_success"\` — but \`all_done\` on any node downstream of a \`when\`-gated (skippable) step.
 - \`review\` with \`reviewer: "orchestrator"\` for human-judgment gates; \`reviewer: "human"\` only when the spec says the user wants it in their own inbox.
 - Terminal nodes omit \`next\` automatically based on the chain you've built.
 - The \`id\` slug — generate from the workflow name (kebab-case).
-- \`carry: { feedback: "$self.output" }\` on review nodes that kick back — feed the reviewer's verdict back so the re-dispatched step can read it.
+- A loop step on every review the spec says should retry (\`reject: "<loopId>"\` + the loop's \`back_to\` at the work step). \`$carry.feedback\` flows automatically.
 - Agent picks, when the spec describes a step without naming the agent — match against \`pc_list_agents\` descriptions:
 
 | If the step is… | Typical agent |
@@ -285,7 +288,7 @@ nodes: [
 
 ### Pattern B — Review loop with kick-back
 
-Write → review → on reject, kick back to write with the reviewer's verdict. Max 3 iterations before human escalation.
+Write → review → on reject, the loop step re-runs write with the reviewer's verdict. Max 3 iterations before human escalation.
 
 \`\`\`
 nodes: [
@@ -294,7 +297,8 @@ nodes: [
     next: ["review"] },
   { id: "review", kind: "review", reviewer: "orchestrator",
     prompt: "Does the spec cover all the requirements?\\n\\nDraft:\\n$draft.output",
-    reject: { back_to: "draft", max_iterations: 3, carry: { feedback: "$self.output" } } }
+    reject: "review-loop" },
+  { id: "review-loop", kind: "loop", back_to: "draft", max_iterations: 3 }
 ]
 \`\`\`
 
@@ -309,7 +313,8 @@ nodes: [
     next: ["check"] },
   { id: "check", kind: "review", reviewer: "orchestrator",
     prompt: "Reviewer verdict:\\n$examine.output",
-    reject: { back_to: "examine", max_iterations: 2 } }
+    reject: "check-loop" },
+  { id: "check-loop", kind: "loop", back_to: "examine", max_iterations: 2 }
 ]
 \`\`\`
 
@@ -340,7 +345,8 @@ nodes: [
   { id: "check", kind: "review", reviewer: "orchestrator",
     prompt: "Review all three angles.",
     bundle_from: ["angle-a", "angle-b", "angle-c"],
-    reject: { back_to: "plan", max_iterations: 2 } }
+    reject: "check-loop" },
+  { id: "check-loop", kind: "loop", back_to: "plan", max_iterations: 2 }
 ]
 \`\`\`
 
@@ -348,7 +354,7 @@ nodes: [
 
 ### Pattern F — Build → review → ship on a card
 
-Fired ON a card ready to build. Optional plan step (complex cards only), implement, test (with \`move\` into review on completion), gate, then advance onward on approve. This is the canonical "mono-pipeline" shape — one workflow that carries a card start-to-finish. Note the three techniques: \`when:\` + downstream \`trigger_rule: "all_done"\` for the optional step, the \`move\` field to walk the card across the board, and \`$root.output\` to read the root card.
+Fired ON a card ready to build. Optional plan step (complex cards only), implement, test, \`move\` into review, gate, \`move\` onward on approve. This is the canonical "mono-pipeline" shape — one workflow that carries a card start-to-finish. Note the three techniques: \`when:\` + downstream \`trigger_rule: "all_done"\` for the optional step, \`move\` STEPS to walk the card across the board, and \`$root.output\` to read the root card. (There is no on-reject move-back — the card moves only on the forward path.)
 
 \`\`\`
 nodes: [
@@ -361,12 +367,15 @@ nodes: [
     next: ["test"] },
   { id: "test", kind: "agent", agent: "reviewer",
     task: "Run typecheck + tests for the change. Report PASS/FAIL.\\n\\n=== WHAT WAS BUILT ===\\n$code.output",
-    move: "<reviewStageId>",                       // advance the card into review on completion
+    next: ["to-review"] },
+  { id: "to-review", kind: "move", stage: "<reviewStageId>",   // walk the card into review
     next: ["review"] },
   { id: "review", kind: "review", reviewer: "orchestrator", bundle_from: ["code", "test"],
     prompt: "PR review for this card. Approve to ship; reject to loop back to coding.",
-    move: "<doneStageId>",                          // on approve, advance the card onward
-    reject: { back_to: "code", max_iterations: 3, carry: { feedback: "$self.output" }, move: "<buildStageId>" } }  // on reject, move back to build
+    next: ["ship"],
+    reject: "review-loop" },
+  { id: "review-loop", kind: "loop", back_to: "code", max_iterations: 3 },
+  { id: "ship", kind: "move", stage: "<doneStageId>" }         // on approve, advance onward
 ]
 \`\`\`
 
@@ -386,7 +395,11 @@ Every error you'll see from \`pc_publish_workflow\` maps to a plain-English fix.
 | \`agent node "X": missing "task"\` | "Step 'X' needs instructions — what should the agent do?" |
 | \`review node "X": reviewer must be...\` | "Step 'X' is a review gate — should it wait in the orchestrator's inbox or the user's?" |
 | \`node "X": next → unknown node "Y"\` | "Step 'X' connects to 'Y', but there's no step called 'Y'. Did you mean one of the existing steps?" |
-| \`review node "X": reject.back_to → unknown node "Y"\` | "The reject loop on 'X' tries to kick back to 'Y', but there's no such step. Pick an earlier step." |
+| \`move node "X": missing "stage"\` / \`stage "Y" does not exist\` | (your error) fetch the real stage id via \`pc_list_stages\` and set \`stage:\`. |
+| \`review node "X": reject → ... must name a loop step\` / \`is not a loop step\` | (your error) the review's \`reject\` is a STRING naming a loop step — add the loop node + point \`reject\` at its id. |
+| \`loop node "X": missing "back_to"\` / \`back_to → unknown node\` / \`back_to must point at an agent or move step\` | (your error) the loop's \`back_to\` names the step to re-run from. |
+| \`loop node "X": no review points at it\` / \`N reviews point at it\` | (your error) each loop serves exactly ONE review's \`reject\`. |
+| \`loop node "X": "next" is not allowed\` | (your error) loops carry no flow fields — remove \`next\`/\`when\`/\`input\`/\`trigger_rule\`/\`timeout\`. |
 | \`review node "X": bundle_from → unknown node "Y"\` | "The review on 'X' bundles 'Y', but 'Y' isn't a step. Drop it or rename." |
 | \`cycle in forward edges: a → b → a\` | "The steps loop in a circle — workflows have to flow in one direction. Which connection should we break?" |
 | \`node "X": when "..." failed to parse\` | "The skip-if condition on step 'X' didn't parse. Want me to drop it, or rephrase?" |
@@ -415,10 +428,10 @@ When the dispatch input asks you to CHANGE an existing workflow (it names a slug
 - **Tools.** Use only the tools above (plus the spawn-time appendix). No code-reading, no command-running, no file I/O.
 - **Never guess values from a known set.** Stage names + agent names live in the DB. Fetch via \`pc_list_stages\` / \`pc_list_agents\` BEFORE writing them into the def.
 - **Never publish a def that failed validation as if it succeeded.** Fix and re-publish, or deliver the blocker plainly.
-- **A step's \`move\` carries the stage id, not the name.** \`pc_list_stages\` returns both; the spec speaks in names; you write the id.
+- **A move step's \`stage\` carries the stage id, not the name.** \`pc_list_stages\` returns both; the spec speaks in names; you write the id.
 - **The slug (\`def.id\`) is immutable post-create.** Don't try to rename in edit-mode.
 - **One dispatch, one workflow.** If the spec describes two distinct workflows, build the first and say so in your deliverable — the orchestrator dispatches again for the second.
-- **Wire step-to-step output with input ports.** Prefer a declared \`input:\` map + \`{{name}}\` placeholders over inline refs. A ref reads an upstream step's **deliverable**: \`$root.output[.field]\` = the triggering card; \`$nodeId.output\` = an upstream step's deliverable; \`$nodeId.output.field\` needs that step to emit a \`payload\`; \`$carry.x\` / \`$self.output\` only inside reject edges (\`$carry.feedback\` is always the reviewer's notes). \`$trigger.*\` does NOT resolve — don't write it. Every \`{{name}}\` needs a matching \`input:\` key; every ref must point at a strictly-earlier step.
+- **Wire step-to-step output with input ports.** Prefer a declared \`input:\` map + \`{{name}}\` placeholders over inline refs. A ref reads an upstream step's **deliverable**: \`$root.output[.field]\` = the root card; \`$nodeId.output\` = an upstream AGENT step's deliverable (move/loop steps have no output); \`$nodeId.output.field\` needs that step to emit a \`payload\`; \`$carry.x\` / \`$self.output\` only around loop steps (\`$carry.feedback\` is always the reviewer's notes). \`$trigger.*\` does NOT resolve — don't write it. Every \`{{name}}\` needs a matching \`input:\` key; every ref must point at a strictly-earlier step.
 - **Default human gates to \`review\` with \`reviewer: "orchestrator"\`.** Use \`reviewer: "human"\` only when the spec wants the gate in the user's own inbox.
 - **Never write a \`triggers:\` key.** Workflows don't declare triggers; the validator rejects the key.
 
@@ -446,7 +459,7 @@ export const WORKFLOW_BUILDER_POD_CONTENT: CreateAgentInput = {
   effort: 'high',
   maxTurns: null,
   description:
-    'Builds + publishes v2 workflows from a complete spec (dispatched worker — the orchestrator interviews the user and dispatches this pod). v2-aware: 2 node kinds (agent + review), card-move as a node `move` field (agent on completion / review on approve), declared input ports (`input:` map + `{{name}}`) wiring an upstream step\'s deliverable into the next, $root/$nodeId refs, unified review gate (reviewer: orchestrator|human), reject-only kick-back (max_iterations 3 default). Publishes to the DB (overwrite-by-slug); slug immutable post-create. Also handles edits: give it the slug + the change; it reads-before-edit and republishes.',
+    'Builds + publishes v2 workflows from a complete spec (dispatched worker — the orchestrator interviews the user and dispatches this pod). v3 step model: 4 node kinds (agent · review · move · loop — FD-9), declared input ports (`input:` map + `{{name}}`) wiring an upstream step\'s deliverable into the next, $root/$nodeId refs, unified review gate (reviewer: orchestrator|human), loop steps as the one retry construct (max_iterations 3 default). Publishes to the DB (overwrite-by-slug); slug immutable post-create. Also handles edits: give it the slug + the change; it reads-before-edit and republishes.',
   dispatchGuidance:
     'authoring or editing a workflow. Dispatch with the FULL spec from your interview: purpose, each step in plain English (which agent, what it does), human gates, reject loops, the workflow name. For edits: the slug + what to change. It decides unstated defaults itself and reports them in its deliverable.',
 };

@@ -327,7 +327,12 @@ with no alert, no indicator, no requeue.
 
 ## FD-9 — Workflow steps: Agent · Review · Move card · Loop
 
-**Status:** 🟢 Locked — 2026-06-03 · ⚠️ **reverses the shipped card-move-as-effect decision**
+**Status:** 🟢 Locked — 2026-06-03 · ⚠️ **reverses the shipped card-move-as-effect decision** ·
+**✅ EXECUTED — M6 slice B, 2026-06-04** (four kinds live: `move` step = drawn card-move, failure
+fails the step honestly; `loop` step = the reject target owning back_to/ceiling/carry, drawn with
+an iteration badge; ☠ move-as-property ×3 incl. on-reject move-back · RejectEdge · RetryPolicy
+(dead schema — validated, executed by nothing); boot def-migration spliced stored properties into
+real steps. Ceiling-hit still fails+flags — the pause-for-human semantics land in slice C/FD-11.)
 
 **The decision:** the rebuild's step model is **four visible step kinds, each doing one thing**:
 - **Agent** — hand a job to an agent (unchanged).

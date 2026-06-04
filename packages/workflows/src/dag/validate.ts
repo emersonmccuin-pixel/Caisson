@@ -17,9 +17,11 @@ export interface ValidationResult {
   errors: string[];
 }
 
-const NODE_KINDS = new Set(['agent', 'review']);
+const NODE_KINDS = new Set(['agent', 'review', 'move', 'loop']);
 const REVIEW_KINDS = new Set(['review']);
 const REVIEWERS = new Set(['human', 'orchestrator']);
+/** Flow fields a `loop` node cannot carry — its routing is fixed. */
+const LOOP_FORBIDDEN = ['next', 'when', 'trigger_rule', 'input', 'timeout'] as const;
 
 /** Grammar-only probe for `when:`. A resolver returning '0' lets every
  *  well-formed atom parse (string-eq AND numeric), so `parsed: false` means the
@@ -29,7 +31,8 @@ const GRAMMAR_PROBE: RefResolver = () => '0';
 /**
  * Validate a v2 workflow graph. Checks (in order): shell shape · unique node
  * ids · known kinds + per-kind required fields · ref integrity (next /
- * reject.back_to / bundle_from point to real nodes) · forward-edge acyclicity ·
+ * review reject → loop · loop back_to · bundle_from point to real nodes) ·
+ * loop↔review pairing · forward-edge acyclicity ·
  * `when:` grammar. Returns every error found.
  */
 export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationResult {
@@ -68,6 +71,22 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
       errors.push(`agent node "${id}": missing "task"`);
     if (kind === 'review' && !REVIEWERS.has(n.reviewer as string))
       errors.push(`review node "${id}": reviewer must be "human" or "orchestrator"`);
+    if (kind === 'move' && (typeof n.stage !== 'string' || n.stage === ''))
+      errors.push(`move node "${id}": missing "stage" (the destination stage id)`);
+    if (kind === 'loop') {
+      if (typeof n.back_to !== 'string' || n.back_to === '')
+        errors.push(`loop node "${id}": missing "back_to" (the node to re-run from)`);
+      if (
+        n.max_iterations !== undefined &&
+        n.max_iterations !== null &&
+        (typeof n.max_iterations !== 'number' || n.max_iterations < 1)
+      )
+        errors.push(`loop node "${id}": max_iterations must be a number ≥ 1 or null (unlimited)`);
+      for (const f of LOOP_FORBIDDEN) {
+        if (n[f] !== undefined)
+          errors.push(`loop node "${id}": "${f}" is not allowed — a loop's routing is fixed (under ceiling → back_to; at ceiling → human)`);
+      }
+    }
 
     // input map shape — an object of identifier → string (a `$ref` or literal).
     if (n.input !== undefined) {
@@ -86,19 +105,50 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
 
   // ── ref integrity ──
   const known = (id: unknown): boolean => typeof id === 'string' && ids.has(id);
+  const kindOf = (id: unknown): string | undefined =>
+    typeof id === 'string' ? (nodes.find((m) => m.id === id)?.kind as string | undefined) : undefined;
   for (const n of nodes) {
     const id = (n.id as string) || '?';
     for (const nx of Array.isArray(n.next) ? n.next : []) {
       if (!known(nx)) errors.push(`node "${id}": next → unknown node "${String(nx)}"`);
+      else if (kindOf(nx) === 'loop')
+        errors.push(`node "${id}": next → "${String(nx)}" is a loop step — loops are reached only via a review's reject`);
     }
     if (REVIEW_KINDS.has(n.kind as string)) {
-      const reject = n.reject as { back_to?: unknown } | undefined;
-      if (reject && !known(reject.back_to))
-        errors.push(`review node "${id}": reject.back_to → unknown node "${String(reject.back_to)}"`);
+      if (n.reject !== undefined) {
+        if (typeof n.reject !== 'string' || !known(n.reject))
+          errors.push(`review node "${id}": reject → unknown node "${String(n.reject)}" (must name a loop step)`);
+        else if (kindOf(n.reject) !== 'loop')
+          errors.push(`review node "${id}": reject → "${String(n.reject)}" is not a loop step (FD-9: the loop is a drawn step; on-reject card moves died with it)`);
+      }
       for (const b of Array.isArray(n.bundle_from) ? n.bundle_from : []) {
         if (!known(b)) errors.push(`review node "${id}": bundle_from → unknown node "${String(b)}"`);
       }
     }
+    if (n.kind === 'loop' && typeof n.back_to === 'string' && n.back_to !== '') {
+      if (!known(n.back_to))
+        errors.push(`loop node "${id}": back_to → unknown node "${String(n.back_to)}"`);
+      else if (kindOf(n.back_to) === 'loop' || kindOf(n.back_to) === 'review')
+        errors.push(`loop node "${id}": back_to must point at an agent or move step (the work to re-run)`);
+    }
+  }
+
+  // ── loop ↔ review pairing — every loop is the reject target of EXACTLY one
+  // review (the loop's iteration count is per-owning-review bookkeeping). ──
+  const loopOwners = new Map<string, string[]>();
+  for (const n of nodes) {
+    if (n.kind === 'loop' && typeof n.id === 'string') loopOwners.set(n.id, []);
+  }
+  for (const n of nodes) {
+    if (REVIEW_KINDS.has(n.kind as string) && typeof n.reject === 'string') {
+      loopOwners.get(n.reject)?.push((n.id as string) || '?');
+    }
+  }
+  for (const [loopId, owners] of loopOwners) {
+    if (owners.length === 0)
+      errors.push(`loop node "${loopId}": no review points at it — wire a review's reject to it or remove it`);
+    if (owners.length > 1)
+      errors.push(`loop node "${loopId}": ${String(owners.length)} reviews point at it (${owners.join(', ')}) — each loop serves exactly one review`);
   }
 
   // ── forward-edge acyclicity (reject back-edges are excluded by forwardEdges) ──
@@ -163,6 +213,13 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
           }
           if (!known(ref.nodeId)) {
             errors.push(`node "${id}": reads $${ref.nodeId}.output${fieldSuffix} — no such node`);
+            continue;
+          }
+          const refKind = kindOf(ref.nodeId);
+          if (refKind === 'move' || refKind === 'loop') {
+            errors.push(
+              `node "${id}": reads $${ref.nodeId}.output${fieldSuffix} but "${ref.nodeId}" is a ${refKind} step — only agent steps produce an output`,
+            );
             continue;
           }
           if (!ancestors.has(ref.nodeId)) {

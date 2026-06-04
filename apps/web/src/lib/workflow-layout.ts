@@ -83,12 +83,22 @@ export async function layoutWorkflow(wf: WorkflowV2.Workflow): Promise<LayoutRes
         labels: [{ id: `${n.id}-${next}-kind`, text: 'forward' }],
       });
     }
+    // FD-9: review reject → loop step, then loop → back_to. Both render as
+    // back-edge ('reject') styling.
     if (WorkflowV2.isReviewNode(n) && n.reject) {
       elkEdges.push({
-        id: `r:${n.id}->${n.reject.back_to}`,
+        id: `r:${n.id}->${n.reject}`,
         sources: [`${n.id}__reject`],
-        targets: [`${n.reject.back_to}__in`],
-        labels: [{ id: `${n.id}-reject-${n.reject.back_to}-kind`, text: 'reject' }],
+        targets: [`${n.reject}__in`],
+        labels: [{ id: `${n.id}-reject-${n.reject}-kind`, text: 'reject' }],
+      });
+    }
+    if (WorkflowV2.isLoopNode(n)) {
+      elkEdges.push({
+        id: `r:${n.id}->${n.back_to}`,
+        sources: [`${n.id}__out`],
+        targets: [`${n.back_to}__in`],
+        labels: [{ id: `${n.id}-loopback-${n.back_to}-kind`, text: 'reject' }],
       });
     }
   }
@@ -176,12 +186,23 @@ function layoutFromManualPositions(wf: WorkflowV2.Workflow): LayoutResult {
       });
     }
     if (WorkflowV2.isReviewNode(n) && n.reject) {
-      const tgt = byId.get(n.reject.back_to);
+      const tgt = byId.get(n.reject);
       if (!tgt) continue;
       edges.push({
-        id: `r:${n.id}->${n.reject.back_to}`,
+        id: `r:${n.id}->${n.reject}`,
         source: n.id,
-        target: n.reject.back_to,
+        target: n.reject,
+        kind: 'reject',
+        points: rejectSideEdge(src, tgt),
+      });
+    }
+    if (WorkflowV2.isLoopNode(n)) {
+      const tgt = byId.get(n.back_to);
+      if (!tgt) continue;
+      edges.push({
+        id: `r:${n.id}->${n.back_to}`,
+        source: n.id,
+        target: n.back_to,
         kind: 'reject',
         points: rejectSideEdge(src, tgt),
       });

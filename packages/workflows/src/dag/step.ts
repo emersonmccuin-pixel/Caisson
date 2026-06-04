@@ -25,6 +25,10 @@ function isReviewNode(n: Node): n is WorkflowV2.ReviewNode {
   return n.kind === 'review';
 }
 
+function isLoopNode(n: Node): n is WorkflowV2.LoopNode {
+  return n.kind === 'loop';
+}
+
 /** Map a node's run-state into the 5-term vocabulary checkTriggerRule expects.
  *  `awaiting-review` is in-flight, so it reads as `running` (not settled). */
 function toTriggerState(
@@ -69,6 +73,9 @@ export function selectReady(
   const skips: { nodeId: string; reason: SkipReason }[] = [];
 
   for (const node of workflow.nodes) {
+    // Loop nodes are routing, not flow — they never dispatch. Their record
+    // only tracks iteration counts (written by applyReviewDecision).
+    if (isLoopNode(node)) continue;
     if (state.nodes[node.id]?.state !== 'pending') continue;
 
     const ups = upstreams.get(node.id) ?? [];
@@ -194,10 +201,11 @@ const DEFAULT_MAX_ITERATIONS = 3;
 
 /**
  * Resolve a review node. Approve → node completes (its `next` becomes
- * eligible). Reject → bump the edge's iteration count; under the ceiling,
- * reset the back_to→review loop subtree to pending for re-run; at/over the
- * ceiling, fail the review node and flag a Human Review hold. A reject with no
- * `reject` edge configured fails the node (nowhere to kick back to).
+ * eligible). Reject → route to the review's `loop` node (FD-9): bump the
+ * LOOP's iteration count; under the ceiling, reset the back_to→review loop
+ * subtree to pending for re-run; at/over the ceiling, fail the review node and
+ * flag a Human Review hold. A reject with no `reject` loop configured fails
+ * the node (nowhere to kick back to).
  */
 export function applyReviewDecision(
   workflow: WorkflowV2.Workflow,
@@ -215,37 +223,41 @@ export function applyReviewDecision(
   }
 
   // Stash the reviewer's notes at run-level so they survive the subtree reset
-  // below and feed `reject.carry: { x: $self.output }` on re-dispatch (lock 1).
+  // below and feed `loop.carry: { x: $self.output }` on re-dispatch.
   if (decision.notes) {
     next.rejectFeedback = { ...(next.rejectFeedback ?? {}), [reviewNodeId]: decision.notes };
   }
 
-  const reject = node && isReviewNode(node) ? node.reject : undefined;
-  if (!reject) {
+  const loopId = node && isReviewNode(node) ? node.reject : undefined;
+  const loop = loopId ? workflow.nodes.find((n) => n.id === loopId) : undefined;
+  if (!loop || !isLoopNode(loop)) {
     next.nodes[reviewNodeId] = {
       ...next.nodes[reviewNodeId],
       state: 'failed',
-      error: 'review rejected (no reject edge configured)',
+      error: 'review rejected (no loop step configured)',
       endedAt: at,
     };
     return { state: next, kickedBack: null, heldForHuman: false };
   }
 
-  const count = (next.rejectIterations?.[reviewNodeId] ?? 0) + 1;
-  next.rejectIterations = { ...(next.rejectIterations ?? {}), [reviewNodeId]: count };
+  // Iterations are the LOOP's bookkeeping (it owns the ceiling); mirrored onto
+  // its node record so the graph can badge "2/3".
+  const count = (next.rejectIterations?.[loop.id] ?? 0) + 1;
+  next.rejectIterations = { ...(next.rejectIterations ?? {}), [loop.id]: count };
+  next.nodes[loop.id] = { ...next.nodes[loop.id], state: 'pending', iteration: count };
 
-  const max = reject.max_iterations === undefined ? DEFAULT_MAX_ITERATIONS : reject.max_iterations;
+  const max = loop.max_iterations === undefined ? DEFAULT_MAX_ITERATIONS : loop.max_iterations;
   if (max !== null && count >= max) {
     next.nodes[reviewNodeId] = {
       ...next.nodes[reviewNodeId],
       state: 'failed',
-      error: `reject iteration ceiling reached (${count}/${String(max)}) — held for human review`,
+      error: `loop iteration ceiling reached (${count}/${String(max)}) — held for human review`,
       endedAt: at,
     };
     return { state: next, kickedBack: null, heldForHuman: true };
   }
 
-  const subtree = loopSubtree(workflow, reject.back_to, reviewNodeId);
+  const subtree = loopSubtree(workflow, loop.back_to, reviewNodeId);
   for (const id of subtree) {
     next.nodes[id] = { state: 'pending', iteration: next.nodes[id]?.iteration ?? 0 };
   }
@@ -257,10 +269,13 @@ export type RunStatus = 'running' | 'completed' | 'failed' | 'awaiting-review';
 /**
  * Derive run-level status from node states. `awaiting-review` wins (a gate is
  * live). Else any pending/running → still running. Else all terminal: any
- * failure → failed; otherwise completed.
+ * failure → failed; otherwise completed. Loop nodes are routing, not flow —
+ * their records (eternally 'pending', tracking iterations) never gate the run.
  */
 export function computeRunStatus(workflow: WorkflowV2.Workflow, state: State): RunStatus {
-  const states = workflow.nodes.map((n) => state.nodes[n.id]?.state ?? 'pending');
+  const states = workflow.nodes
+    .filter((n) => !isLoopNode(n))
+    .map((n) => state.nodes[n.id]?.state ?? 'pending');
   if (states.some((s) => s === 'awaiting-review')) return 'awaiting-review';
   if (states.some((s) => s === 'pending' || s === 'running')) return 'running';
   return states.some((s) => s === 'failed') ? 'failed' : 'completed';

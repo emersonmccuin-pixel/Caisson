@@ -89,13 +89,13 @@ Every card move — whether you drag it on the board or the orchestrator calls `
 > a boot sweep stripped `triggers:` from stored definitions. The no-abstract-layer law (stage id,
 > nothing in between) carries forward to every remaining stage-id reference.
 
-### 6. Card-move as a workflow effect (not a step)
+### 6. Card-move as a workflow STEP (FD-9)
 
-When a workflow step finishes and has a `move` field set, the engine moves the card directly through the gateway. Card-move is a **property on a step's transition**, not a separate node kind. (`dag-run-service.ts`, `workflow-v2.ts`)
-
-> ☠ **FD-9 (locked 2026-06-03, reverses the above):** in the rebuild, **Move card is a visible step
-> of its own** in the graph — the move-as-property mechanism dies, including "on reject, move back."
-> What the graph shows = what happens.
+**✅ FD-9 EXECUTED (M6 slice B, 2026-06-04):** moving the card is a drawn `move` step
+(`kind: move`, `stage: <id>`) on the workflow's forward path — the engine calls the gateway
+move when the step runs, and a failed move fails the step honestly. The old move-as-property
+mechanism (on-completion / on-approve / on-reject move-back) is deleted; the boot def-migration
+spliced stored properties into real steps. What the graph shows = what happens.
 
 ---
 
@@ -115,7 +115,7 @@ Per the north-star design (`unified-process-supervision-2026-06-02.md`): stage a
 
 **What changes from today (Foundation Decisions, locked 2026-06-03):**
 - ☠ **Stage-entry triggers are deleted (FD-10).** ✅ EXECUTED M6 slice A (2026-06-04) — see §5.
-- ☠ **Card-move-as-effect is deleted (FD-9).** Moving a card becomes a visible **Move card step** in the workflow graph; the `move` property on step transitions dies. (M6 slice B.)
+- ☠ **Card-move-as-effect is deleted (FD-9).** ✅ EXECUTED M6 slice B (2026-06-04) — see §6.
 - **Areas get promoted (FD-19).** Page renamed "Areas"; cards (title · summary · open-vs-complete counts) → click → edit modal; every area carries a description; the orchestrator considers and assigns an area when creating work items, and can maintain area descriptions itself.
 
 ---

@@ -104,7 +104,7 @@ import { cleanupLegacyProjectRuntimeFiles } from './services/legacy-runtime-clea
 import { resetStockPodToDefault } from './services/stock-pod-reset.ts';
 import { detectStockPodDrift, listCanonicalStockPodNames } from './services/pod-drift.ts';
 import { seedStockPods } from './services/stock-pod-seed.ts';
-import { stripTriggersFromStoredWorkflowDefs } from './services/workflow-def-trigger-strip.ts';
+import { migrateStoredWorkflowDefsToV3 } from './services/workflow-def-migrate-v3.ts';
 import { createAgentRunReconciler } from './services/agent-run-reconciler.ts';
 import { getActiveRunRegistry } from './services/agent-active-runs.ts';
 import { writeRunStatus } from './services/workflow-run-writer.ts';
@@ -195,13 +195,13 @@ applyClaudeRuntimeSettings(readSettings());
   }
 }
 
-// M6/FD-10 — one-shot sweep: strip the dead `triggers:` key from stored
-// workflow definitions (idempotent; no-op once clean).
+// M6 — one-shot sweep: migrate stored workflow definitions to the v3 step
+// model (strip triggers · move/loop steps). Idempotent; no-op once clean.
 {
-  const res = stripTriggersFromStoredWorkflowDefs();
+  const res = migrateStoredWorkflowDefsToV3();
   if (res.rewritten > 0) {
     console.log(
-      `[pc] M6/FD-10 trigger strip: rewrote ${res.rewritten}/${res.scanned} workflow defs` +
+      `[pc] M6 def migration: rewrote ${res.rewritten}/${res.scanned} workflow defs to v3` +
         (res.nowInvalid.length ? ` (invalid for other reasons: ${res.nowInvalid.join(', ')})` : ''),
     );
   }

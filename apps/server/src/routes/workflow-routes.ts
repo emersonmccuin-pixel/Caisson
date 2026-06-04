@@ -319,7 +319,7 @@ function validateAgentNodesProjectScoped(
  *  will RUN (deterministic pathway, caught at authoring not at fire):
  *   (1) every agent node resolves an `expected_output` (node override → pod row
  *       → stock default) — the contract the dispatch door requires;
- *   (2) every move-work-item `to_stage` is a real stage in the project;
+ *   (2) every move step's `stage` is a real stage in the project;
  *   (3) every `$node.output` reference points at a real node (or `root`).
  *  Returns one error string per problem; empty when the workflow is runnable. */
 function validateWorkflowFeasibility(
@@ -345,15 +345,15 @@ function validateWorkflowFeasibility(
     );
   }
 
-  // (2) stages exist in the project.
+  // (2) stages exist in the project (move STEPS — FD-9).
   const project = getProjectById(projectId);
   const stageIds = new Set((project?.stages ?? []).map((s) => s.id));
   for (const node of nodes) {
-    if (node.kind !== 'move-work-item') continue;
-    const to = typeof node.to_stage === 'string' ? node.to_stage : '';
+    if (node.kind !== 'move') continue;
+    const to = typeof node.stage === 'string' ? node.stage : '';
     if (to && !stageIds.has(to)) {
       errors.push(
-        `move-work-item node "${String(node.id ?? '?')}": stage "${to}" does not exist in this project`,
+        `move node "${String(node.id ?? '?')}": stage "${to}" does not exist in this project`,
       );
     }
   }

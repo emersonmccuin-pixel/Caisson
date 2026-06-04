@@ -50,7 +50,7 @@ test('a failed run fires notifyRunFailed once with the derived reason', async ()
   assert.match(calls[0]!, /boom/, 'carries the failing node reason');
 });
 
-test('a step with `move` advances the card on completion (card-move effect)', async () => {
+test('a move STEP advances the card when it runs (FD-9 — a drawn step)', async () => {
   const moves: string[] = [];
   const deps = baseDeps({
     dispatchAgent: async () => ({ state: 'completed' }),
@@ -60,16 +60,20 @@ test('a step with `move` advances the card on completion (card-move effect)', as
     {
       id: 'wf',
       name: 'WF',
-      nodes: [{ id: 'a', kind: 'agent', agent: 'x', task: 'go', move: 'review' }],
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'x', task: 'go', next: ['to-review'] },
+        { id: 'to-review', kind: 'move', stage: 'review' },
+      ],
     },
     deps,
     ctxBase,
   );
-  await exec.advance();
-  assert.deepEqual(moves, ['review'], 'the card moves to the step\'s `move` stage');
+  const status = await exec.advance();
+  assert.equal(status, 'completed');
+  assert.deepEqual(moves, ['review'], 'the move step moves the card');
 });
 
-test('a failed step does NOT move the card', async () => {
+test('a failed move step fails honestly (and a failed upstream never reaches it)', async () => {
   const moves: string[] = [];
   const deps = baseDeps({
     dispatchAgent: async () => ({ state: 'failed', error: 'x' }),
@@ -79,16 +83,32 @@ test('a failed step does NOT move the card', async () => {
     {
       id: 'wf',
       name: 'WF',
-      nodes: [{ id: 'a', kind: 'agent', agent: 'x', task: 'go', move: 'review' }],
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'x', task: 'go', next: ['to-review'] },
+        { id: 'to-review', kind: 'move', stage: 'review' },
+      ],
     },
     deps,
     ctxBase,
   );
-  await exec.advance();
-  assert.deepEqual(moves, [], 'no move on a failed step');
+  const status = await exec.advance();
+  assert.equal(status, 'failed');
+  assert.deepEqual(moves, [], 'a failed upstream skips the move step');
+
+  // And a move whose card-move FAILS fails the step (it's a real step now).
+  const deps2 = baseDeps({
+    moveCard: async () => ({ ok: false, error: 'unknown stage' }),
+  });
+  const exec2 = DagExecutor.start(
+    { id: 'wf2', name: 'WF2', nodes: [{ id: 'm', kind: 'move', stage: 'nope' }] },
+    deps2,
+    ctxBase,
+  );
+  const status2 = await exec2.advance();
+  assert.equal(status2, 'failed', 'a failed card move fails the move step');
 });
 
-test('an approved review node applies its `move` (card-move on approve)', async () => {
+test('a move step on the approve path runs only after the gate approves', async () => {
   const moves: string[] = [];
   const deps = baseDeps({
     dispatchAgent: async (): Promise<NodeOutcome> => ({ state: 'completed', workItemId: 'wi-a' as ULID }),
@@ -99,7 +119,8 @@ test('an approved review node applies its `move` (card-move on approve)', async 
     name: 'WF',
     nodes: [
       { id: 'a', kind: 'agent', agent: 'x', task: 'go', next: ['gate'] },
-      { id: 'gate', kind: 'review', reviewer: 'human', move: 'done', next: [] },
+      { id: 'gate', kind: 'review', reviewer: 'human', next: ['ship'] },
+      { id: 'ship', kind: 'move', stage: 'done' },
     ],
   };
   const exec = DagExecutor.start(wf, deps, ctxBase);
@@ -108,7 +129,7 @@ test('an approved review node applies its `move` (card-move on approve)', async 
   assert.deepEqual(moves, [], 'no move until the gate is approved');
   const s2 = await exec.onReviewDecision('gate', { kind: 'approve' });
   assert.equal(s2, 'completed');
-  assert.deepEqual(moves, ['done'], 'approving the gate moves the card to its `move` stage');
+  assert.deepEqual(moves, ['done'], 'approving the gate runs the downstream move step');
 });
 
 test('reject notes auto-flow to the kicked-back node as $carry.feedback', async () => {
@@ -126,7 +147,8 @@ test('reject notes auto-flow to the kicked-back node as $carry.feedback', async 
     name: 'WF',
     nodes: [
       { id: 'build', kind: 'agent', agent: 'x', task: 'build it' },
-      { id: 'gate', kind: 'review', reviewer: 'human', reject: { back_to: 'build', max_iterations: 3 } },
+      { id: 'gate', kind: 'review', reviewer: 'human', reject: 'gate-loop' },
+      { id: 'gate-loop', kind: 'loop', back_to: 'build', max_iterations: 3 },
     ],
   };
   const exec = DagExecutor.start(wf, deps, ctxBase);
@@ -144,7 +166,7 @@ test('reject notes auto-flow to the kicked-back node as $carry.feedback', async 
   );
 });
 
-test('an explicit reject.carry.feedback overrides the auto-seeded notes', async () => {
+test('an explicit loop carry.feedback overrides the auto-seeded notes', async () => {
   const carries: Record<string, string>[] = [];
   let dispatched = 0;
   const deps = baseDeps({
@@ -159,18 +181,20 @@ test('an explicit reject.carry.feedback overrides the auto-seeded notes', async 
     name: 'WF',
     nodes: [
       { id: 'build', kind: 'agent', agent: 'x', task: 'build it' },
+      { id: 'gate', kind: 'review', reviewer: 'human', reject: 'gate-loop' },
       {
-        id: 'gate',
-        kind: 'review',
-        reviewer: 'human',
-        reject: { back_to: 'build', max_iterations: 3, carry: { feedback: 'CUSTOM' } },
+        id: 'gate-loop',
+        kind: 'loop',
+        back_to: 'build',
+        max_iterations: 3,
+        carry: { feedback: 'CUSTOM' },
       },
     ],
   };
   const exec = DagExecutor.start(wf, deps, ctxBase);
   await exec.advance();
   await exec.onReviewDecision('gate', { kind: 'reject', notes: 'ignored by override' });
-  assert.equal(carries[1]?.feedback, 'CUSTOM', 'explicit reject.carry wins over the default');
+  assert.equal(carries[1]?.feedback, 'CUSTOM', 'explicit loop carry wins over the default');
 });
 
 test('a completed run does NOT fire notifyRunFailed', async () => {

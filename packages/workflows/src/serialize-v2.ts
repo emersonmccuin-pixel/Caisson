@@ -73,13 +73,18 @@ export function parseWorkflowV2Text(yamlText: string, opts: { expectedId?: strin
   return { ok: true, workflow };
 }
 
-/** M6/FD-10 one-shot data-migration helper — remove a dead top-level
- *  `triggers:` key from a stored definition's YAML. Returns `changed: false`
- *  when the text has no triggers key (or doesn't parse — nothing to strip
- *  safely). When changed, returns the re-serialized YAML plus the re-validated
- *  workflow (`workflow: null` + `errors` when the def is invalid for OTHER
- *  reasons — the caller keeps its honest `invalid` status). */
-export function stripTriggersFromWorkflowText(
+/** M6 one-shot data-migration helper — rewrite a stored definition's YAML to
+ *  the v3 step model. Idempotent transforms:
+ *  - FD-10 (slice A): drop a dead top-level `triggers:` key.
+ *  - FD-9 (slice B): `node.move: S` → an inserted `move` step spliced into the
+ *    node's forward path · review `reject: {back_to, max_iterations?, carry?}`
+ *    → a minted `loop` step + `reject: <loopId>` · `reject.move` DROPPED whole
+ *    (on-reject move-back died with FD-9) · dead `retry:` keys dropped.
+ *  Returns `changed: false` when nothing matches (or the text doesn't parse —
+ *  nothing to rewrite safely). When changed, returns the re-serialized YAML +
+ *  the re-validated workflow (`workflow: null` + `errors` when the def is
+ *  invalid for OTHER reasons — the caller keeps its honest `invalid` status). */
+export function migrateWorkflowTextToV3(
   yamlText: string,
   expectedId: string,
 ):
@@ -93,9 +98,67 @@ export function stripTriggersFromWorkflowText(
   }
   if (doc === null || typeof doc !== 'object') return { changed: false };
   const raw = doc as Record<string, unknown>;
-  if (raw.triggers === undefined) return { changed: false };
 
-  delete raw.triggers;
+  let changed = false;
+  if (raw.triggers !== undefined) {
+    delete raw.triggers;
+    changed = true;
+  }
+
+  const nodes = Array.isArray(raw.nodes) ? (raw.nodes as Record<string, unknown>[]) : [];
+  const ids = new Set(nodes.map((n) => (typeof n.id === 'string' ? n.id : '')));
+  const mintId = (base: string): string => {
+    let candidate = base;
+    for (let i = 2; ids.has(candidate); i++) candidate = `${base}-${String(i)}`;
+    ids.add(candidate);
+    return candidate;
+  };
+
+  const inserted: Record<string, unknown>[] = [];
+  for (const n of nodes) {
+    const nodeId = typeof n.id === 'string' ? n.id : '?';
+    // dead retry keys (never executed)
+    if (n.retry !== undefined) {
+      delete n.retry;
+      changed = true;
+    }
+    // node.move → spliced move step on the forward path
+    if (typeof n.move === 'string' && n.move) {
+      const moveId = mintId(`${nodeId}-move`);
+      const moveNode: Record<string, unknown> = { id: moveId, kind: 'move', stage: n.move };
+      if (Array.isArray(n.next) && n.next.length > 0) moveNode.next = n.next;
+      n.next = [moveId];
+      delete n.move;
+      inserted.push(moveNode);
+      changed = true;
+    } else if (n.move !== undefined) {
+      delete n.move;
+      changed = true;
+    }
+    // review reject object → loop step (reject.move DROPPED — FD-9)
+    if (n.kind === 'review' && n.reject !== undefined && typeof n.reject !== 'string') {
+      const reject = (n.reject ?? {}) as Record<string, unknown>;
+      if (typeof reject.back_to === 'string' && reject.back_to) {
+        const loopId = mintId(`${nodeId}-loop`);
+        const loopNode: Record<string, unknown> = {
+          id: loopId,
+          kind: 'loop',
+          back_to: reject.back_to,
+        };
+        if (reject.max_iterations !== undefined) loopNode.max_iterations = reject.max_iterations;
+        if (reject.carry !== undefined) loopNode.carry = reject.carry;
+        n.reject = loopId;
+        inserted.push(loopNode);
+      } else {
+        delete n.reject;
+      }
+      changed = true;
+    }
+  }
+  if (inserted.length > 0) raw.nodes = [...nodes, ...inserted];
+
+  if (!changed) return { changed: false };
+
   const { version: _v, ...rest } = raw;
   const workflow = { ...rest, id: expectedId } as unknown as WorkflowV2.Workflow;
   const result = validateWorkflowV2(workflow);

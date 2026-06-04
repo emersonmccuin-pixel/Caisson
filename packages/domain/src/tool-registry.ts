@@ -855,7 +855,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
       "properties": {
         "def": {
           "type": "object",
-          "description": "v2 workflow object: { id, name, nodes: [...], description?, worktree? } (NO triggers key — runs start via Run-now or pc_fire_workflow). Nodes are kind 'agent' { agent, task, input?, expected_output?, move?, next?, when? } or 'review' { reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire step-to-step output via input ports — `input: { name: \"$earlierId.output\" }` + `{{name}}` in task/prompt (preferred) — or inline `$earlierId.output` refs (= the upstream step's deliverable; `.field` needs a `payload` output). Every `{{name}}` needs an `input:` key and every ref must point at a strictly-earlier step, else the publish returns a validation error.",
+          "description": "v2 workflow object: { id, name, nodes: [...], description?, worktree? } (NO triggers key — runs start via Run-now or pc_fire_workflow). FOUR node kinds (FD-9): 'agent' { agent, task, input?, expected_output?, next?, when? } · 'review' { reviewer:'human'|'orchestrator', prompt?, reject?: '<loopId>', next? } · 'move' { stage: '<stageId>', next? } (a drawn card-move step) · 'loop' { back_to, max_iterations? (default 3), carry? } (the one retry construct — the reject target of exactly one review; no next/when/input). Wire step-to-step output via input ports — `input: { name: \"$earlierId.output\" }` + `{{name}}` in task/prompt (preferred) — or inline `$earlierId.output` refs (= the upstream AGENT step's deliverable; `.field` needs a `payload` output). Every `{{name}}` needs an `input:` key and every ref must point at a strictly-earlier agent step, else the publish returns a validation error.",
           "additionalProperties": true
         }
       },
@@ -1031,7 +1031,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "def": {
           "type": "object",
-          "description": "v2 workflow graph object (alternative to yaml). { id, name, nodes:[...] } (NO triggers key — runs start via Run-now or pc_fire_workflow). Nodes are kind 'agent' { agent, task, input?, expected_output?, move?, next?, when? } or 'review' { reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire step output→input via input ports `input:{ name:\"$earlierId.output\" }` + `{{name}}` (preferred) or inline `$earlierId.output` refs (the upstream deliverable; `.field` needs a `payload` output). Refs must point at strictly-earlier steps.",
+          "description": "v2 workflow graph object (alternative to yaml). { id, name, nodes:[...] } (NO triggers key — runs start via Run-now or pc_fire_workflow). FOUR node kinds (FD-9): 'agent' { agent, task, input?, expected_output?, next?, when? } · 'review' { reviewer:'human'|'orchestrator', prompt?, reject?: '<loopId>', next? } · 'move' { stage:'<stageId>', next? } · 'loop' { back_to, max_iterations?, carry? } (reject target of exactly one review; no next/when/input). Wire step output→input via input ports `input:{ name:\"$earlierId.output\" }` + `{{name}}` (preferred) or inline `$earlierId.output` refs (the upstream AGENT step's deliverable; `.field` needs a `payload` output). Refs must point at strictly-earlier agent steps.",
           "additionalProperties": true
         },
         "scope": {

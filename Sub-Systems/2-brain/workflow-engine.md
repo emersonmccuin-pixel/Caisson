@@ -49,20 +49,15 @@ the one deliberate door.
 
 ### 3. The steps (nodes)
 
-Exactly **two kinds of step**, on purpose — everything else was deleted to keep one door:
+**✅ FD-9 EXECUTED (M6 slice B, 2026-06-04): exactly FOUR visible step kinds — what the graph
+shows = what happens:**
 
 - **Agent step** — hand a job to an agent. The step names the agent (pod), the task text, and its inputs. Dispatch goes through the same single door as every other agent spawn in the app. The engine waits for the agent's handed-in work.
 - **Review step** — a quality gate. The reviewer is either the **orchestrator** or a **human** (one step kind, a `reviewer:` switch). The run *pauses durably* until a decision:
-  - **Approve** → the step completes; the card can move; the line continues.
-  - **Reject** → the work goes *back* to an earlier step **with the reviewer's notes attached** (the kicked-back step can read them as `$carry.feedback`). There's a retry ceiling (3 by default); hitting it fails the run and flags a human.
-
-Not steps today (both decided for the rebuild — see FD-9):
-- **Move card** — today this is a **property on a step**, not a step of its own: "when this agent finishes, move the card to X" / "when this review approves, move to Y" (and optionally "on reject, move back to Z"). 🟢 **FD-9 (locked 2026-06-03):** becomes a **visible step** in the rebuild; the property mechanism dies, including on-reject move-back.
-- **Loops** — **not built.** The only loop today is the review-reject kickback. 🟢 **FD-9 (locked 2026-06-03):** the rebuild gets a real **Loop step** — review rejects loop back to the agent with feedback, retry ceiling (default 3), ceiling hit → Human Inbox (FD-7).
-
-> 🟢 **FD-9 target step model: Agent · Review · Move card · Loop** — four visible kinds, each one
-> thing. Consciously reverses the shipped card-move-as-effect decision; the rebuild deletes the
-> property path.
+  - **Approve** → the step completes; the line follows `next`.
+  - **Reject** → routes to the review's named **Loop step** (`reject: "<loopId>"`); no loop = the review fails.
+- **Move card step** (`kind: move`, `stage: <id>`) — moving the card is a DRAWN step on the forward path. A failed move fails the step honestly. ☠ the old hidden `move` property (all three sites: on-completion, on-approve, on-reject move-back) is deleted; the boot def-migration spliced existing properties into real steps.
+- **Loop step** (`kind: loop`, `back_to`, `max_iterations` default 3, `carry`) — THE one retry construct. On reject under the ceiling it resets the `back_to`→review subtree and re-runs it with `$carry.feedback` (the reviewer's notes) flowing automatically; the graph badges its iteration count. At the ceiling the work escalates to a human (the run-pause semantics land in slice C; today it fails + flags). Loops carry no `next`/`when`/`input` (validator-enforced); exactly ONE review points at each loop; nothing wires `next` into one. ☠ `RetryPolicy` died with it (it was validated-but-never-executed dead schema).
 
 ### 4. Passing work down the line (data flow)
 
@@ -137,7 +132,9 @@ The first-principles spec reduces the engine to three concepts: **step → trans
 
 **✅ FD-10 EXECUTED (M6 slice A, 2026-06-04):** triggers deleted whole — see §2. Fire route gained the optional `workItemId` card target.
 
-**Remaining:** FD-9 four-kind step model (M6 slice B) · FD-11 ceiling→human + cancel wired + restart-at-step (M6 slice C) · user-facing resume (#6) · re-attach instead of fail-closed on boot (the one-reconciler work, Step 2).
+**✅ FD-9 EXECUTED (M6 slice B, 2026-06-04):** the four-kind step model is live — see §3. Move + loop are drawn steps; move-as-property and RejectEdge/RetryPolicy are dead; the boot def-migration rewrote stored definitions.
+
+**Remaining:** FD-11 ceiling→human + cancel wired + restart-at-step (M6 slice C) · user-facing resume (#6) · re-attach instead of fail-closed on boot (the one-reconciler work, Step 2).
 
 ---
 
