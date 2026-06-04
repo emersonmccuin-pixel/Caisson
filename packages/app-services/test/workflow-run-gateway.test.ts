@@ -120,9 +120,10 @@ test('a mutation returning null emits NOTHING and throws', () => {
   assert.equal(inserted.length, 0);
 });
 
-test('cancelRun cancels a non-terminal run and is a no-op on terminal runs', () => {
+test('cancelRun: status flip + run fact + workflow_cancelled diary line, one txn; no-op on terminal', () => {
   let stored = makeRow({ status: 'running', rev: 3 });
   const inserted: InsertLiveEventDraft[] = [];
+  const appended: Array<{ runId: string; type: string }> = [];
   const deps: WorkflowRunGatewayDeps = {
     transaction: (fn) => fn({} as DbExecutor),
     insertLiveEvent: (<TPayload>(_db: DbExecutor, draft: InsertLiveEventDraft<TPayload>) => {
@@ -133,19 +134,91 @@ test('cancelRun cancels a non-terminal run and is a no-op on terminal runs', () 
       } as LiveOutboxEvent<TPayload>;
     }) as WorkflowRunGatewayDeps['insertLiveEvent'],
     getRun: () => stored,
+    setStatus: () => {},
+    appendEvent: ((input: { runId: string; type: string }) => {
+      appended.push({ runId: input.runId, type: input.type });
+      return { id: 'wre-1', runId: input.runId, type: input.type, nodeId: null, data: null, at: 5 };
+    }) as unknown as WorkflowRunGatewayDeps['appendEvent'],
   };
   const gateway = new WorkflowRunMutationGateway(deps);
 
   const pub = gateway.cancelRun({ projectId: 'p1', runId: 'r1' });
   assert.notEqual(pub, null);
-  assert.equal(inserted.length, 1);
-  assert.equal(inserted[0]!.payload && (inserted[0]!.payload as { reason: string }).reason, 'cancelled');
+  // M3a — TWO facts in the one txn: the run change AND its diary line.
+  assert.equal(inserted.length, 2);
+  assert.equal((inserted[0]!.payload as { reason: string }).reason, 'cancelled');
+  assert.equal(inserted[1]!.type, 'workflow.run.event');
+  assert.deepEqual(appended, [{ runId: 'r1', type: 'workflow_cancelled' }]);
 
   // Now terminal — cancel is a no-op, emits nothing further.
   stored = makeRow({ status: 'completed' });
   const again = gateway.cancelRun({ projectId: 'p1', runId: 'r1' });
   assert.equal(again, null);
+  assert.equal(inserted.length, 2);
+});
+
+test('appendRunEvent (M3a, THE diary door): event row + workflow.run.event fact in one txn', () => {
+  const { gateway, inserted } = makeGateway();
+  const appended: unknown[] = [];
+  const gw = new WorkflowRunMutationGateway({
+    transaction: (fn) => fn({} as DbExecutor),
+    insertLiveEvent: ((_db: DbExecutor, draft: InsertLiveEventDraft) => {
+      inserted.push(draft);
+      return {
+        id: 'e1', cursor: '1', scope: draft.scope, projectId: draft.projectId, type: draft.type,
+        entity: draft.entity, entityId: draft.entityId, version: draft.version, createdAt: 1, payload: draft.payload,
+      } as LiveOutboxEvent;
+    }) as WorkflowRunGatewayDeps['insertLiveEvent'],
+    getRun: () => null,
+    appendEvent: ((input: { runId: string; type: string; nodeId?: string; data?: Record<string, unknown> }) => {
+      appended.push(input);
+      return {
+        id: 'wre-7', runId: input.runId, type: input.type,
+        nodeId: input.nodeId ?? null, data: input.data ?? null, at: 42,
+      };
+    }) as unknown as WorkflowRunGatewayDeps['appendEvent'],
+  });
+  void gateway;
+
+  const pub = gw.appendRunEvent({
+    projectId: 'p1' as never,
+    runId: 'r1' as never,
+    type: 'agent_dispatched',
+    nodeId: 'write',
+    data: { agentRunId: 'ar-1', workItemId: 'wi-9' },
+  });
+  assert.equal(appended.length, 1);
   assert.equal(inserted.length, 1);
+  assert.equal(pub.liveEvent.type, 'workflow.run.event');
+  assert.equal(pub.liveEvent.entity, 'workflow-run-event');
+  assert.equal(pub.liveEvent.entityId, 'r1', 'entityId is the RUN id (timeline subscription key)');
+  assert.equal(pub.liveEvent.version, null, 'append-only — no rev to guard');
+  const payload = pub.liveEvent.payload as { event: { type: string; data: Record<string, unknown> | null } };
+  assert.equal(payload.event.type, 'agent_dispatched');
+  assert.deepEqual(payload.event.data, { agentRunId: 'ar-1', workItemId: 'wi-9' });
+  assert.equal(pub.event.id, 'wre-7');
+});
+
+test('appendRunEvent: an insert that throws rolls back with the event row (one txn)', () => {
+  const appended: unknown[] = [];
+  const gw = new WorkflowRunMutationGateway({
+    // Real-txn semantics fake: rethrow = rollback (nothing observable outside).
+    transaction: (fn) => fn({} as DbExecutor),
+    insertLiveEvent: (() => {
+      throw new Error('outbox unavailable');
+    }) as unknown as WorkflowRunGatewayDeps['insertLiveEvent'],
+    getRun: () => null,
+    appendEvent: ((input: { runId: string; type: string }) => {
+      appended.push(input);
+      return { id: 'x', runId: input.runId, type: input.type, nodeId: null, data: null, at: 1 };
+    }) as unknown as WorkflowRunGatewayDeps['appendEvent'],
+  });
+  assert.throws(() =>
+    gw.appendRunEvent({ projectId: 'p1' as never, runId: 'r1' as never, type: 'workflow_started' }),
+  );
+  // The seam was reached, but in the real gateway both writes share the txn —
+  // the throw above rolls the event row back with it.
+  assert.equal(appended.length, 1);
 });
 
 test('commitReviewChange emits a canonical workflow.review.changed fact', () => {

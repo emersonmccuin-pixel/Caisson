@@ -15,6 +15,7 @@ export type LiveOutboxEntity =
   | 'attachment'
   | 'workflow-definition'
   | 'workflow-run'
+  | 'workflow-run-event'
   | 'workflow-review'
   | 'agent-run'
   | 'mailbox-message'

@@ -10,6 +10,7 @@ export type LiveEventEntity =
   | 'attachment'
   | 'workflow-definition'
   | 'workflow-run'
+  | 'workflow-run-event'
   | 'workflow-review'
   | 'agent-run'
   | 'mailbox-message'
@@ -29,6 +30,7 @@ export type LiveEventTypeName =
   | 'field-schema.list.changed'
   | 'attachment.changed'
   | 'workflow.run.changed'
+  | 'workflow.run.event'
   | 'workflow.review.changed'
   | 'workflow.definition.changed'
   | 'agent.run.changed'
@@ -49,6 +51,7 @@ const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'field-schema.list.changed',
   'attachment.changed',
   'workflow.run.changed',
+  'workflow.run.event',
   'workflow.review.changed',
   'workflow.definition.changed',
   'agent.run.changed',
@@ -244,6 +247,7 @@ function isLiveEventEntity(value: unknown): value is LiveEventEntity {
     value === 'attachment' ||
     value === 'workflow-definition' ||
     value === 'workflow-run' ||
+    value === 'workflow-run-event' ||
     value === 'workflow-review' ||
     value === 'agent-run' ||
     value === 'mailbox-message' ||

@@ -20,6 +20,7 @@ import type {
   WorkflowRunChangedLivePayload,
   WorkflowRunChangedReason,
   WorkflowRunDto,
+  WorkflowRunEventLivePayload,
 } from '@pc/contracts';
 import {
   getDb,
@@ -30,6 +31,9 @@ import {
   type LiveOutboxEvent,
   type WorkflowRunV2Record,
 } from '@pc/db';
+
+/** The repo is namespace-exported; alias its event-record type locally. */
+type WorkflowRunEventRecord = workflowRunsV2Repo.WorkflowRunEventRecord;
 import type { ULID, WorkflowV2 } from '@pc/domain';
 import { toWorkflowRunDto } from './adapters.ts';
 
@@ -40,6 +44,11 @@ export interface WorkflowRunChangedPublication {
 
 export interface WorkflowReviewChangedPublication {
   liveEvent: LiveOutboxEvent<WorkflowReviewChangedLivePayload>;
+}
+
+export interface WorkflowRunEventPublication {
+  liveEvent: LiveOutboxEvent<WorkflowRunEventLivePayload>;
+  event: WorkflowRunEventRecord;
 }
 
 const TERMINAL: ReadonlySet<WorkflowV2.WorkflowRunStatus> = new Set([
@@ -61,6 +70,23 @@ export function buildWorkflowRunChangedDraft(input: {
     entityId: input.run.id as ULID,
     version: input.run.rev,
     payload: { reason: input.reason, run: input.run },
+  };
+}
+
+/** M3a — one diary line as a first-class live fact. `version` is null: diary
+ *  lines are append-only (no rev to guard); clients key dedup off the event id. */
+export function buildWorkflowRunEventDraft(input: {
+  projectId: ULID;
+  event: WorkflowRunEventRecord;
+}): InsertLiveEventDraft<WorkflowRunEventLivePayload> {
+  return {
+    scope: 'project',
+    projectId: input.projectId,
+    type: 'workflow.run.event',
+    entity: 'workflow-run-event',
+    entityId: input.event.runId,
+    version: null,
+    payload: { event: input.event },
   };
 }
 
@@ -100,17 +126,25 @@ export interface WorkflowRunGatewayDeps {
   insertLiveEvent?: typeof insertLiveEvent;
   /** Read a run by id (defaults to the v2 repo). Overridable for tests. */
   getRun?: (id: ULID) => WorkflowRunV2Record | null;
+  /** M3a — diary event-row insert (defaults to the v2 repo). Test seam. */
+  appendEvent?: typeof workflowRunsV2Repo.appendEvent;
+  /** Status write used by cancelRun (defaults to the v2 repo). Test seam. */
+  setStatus?: typeof workflowRunsV2Repo.setStatus;
 }
 
 export class WorkflowRunMutationGateway {
   private readonly tx: <T>(fn: (tx: DbExecutor) => T) => T;
   private readonly insert: typeof insertLiveEvent;
   private readonly getRun: (id: ULID) => WorkflowRunV2Record | null;
+  private readonly appendEvent: typeof workflowRunsV2Repo.appendEvent;
+  private readonly setStatus: typeof workflowRunsV2Repo.setStatus;
 
   constructor(deps: WorkflowRunGatewayDeps = {}) {
     this.tx = deps.transaction ?? ((fn) => getDb().transaction(fn));
     this.insert = deps.insertLiveEvent ?? insertLiveEvent;
     this.getRun = deps.getRun ?? ((id) => workflowRunsV2Repo.getRun(id));
+    this.appendEvent = deps.appendEvent ?? workflowRunsV2Repo.appendEvent;
+    this.setStatus = deps.setStatus ?? workflowRunsV2Repo.setStatus;
   }
 
   /** Run a product mutation that returns the changed run row + record the
@@ -148,6 +182,33 @@ export class WorkflowRunMutationGateway {
     });
   }
 
+  /** M3a — THE diary door (FD-11/FD-13): append one `workflow_run_events` row
+   *  + its `workflow.run.event` outbox fact in ONE transaction. Every diary
+   *  line in the codebase flows through here; a direct repo `appendEvent` is
+   *  an FD-12 bypass (gate-tested). The repo write joins the surrounding
+   *  drizzle txn (same connection — the getRunInTx pattern). */
+  appendRunEvent(input: {
+    projectId: ULID;
+    runId: ULID;
+    type: WorkflowV2.WorkflowEventType;
+    nodeId?: string | null;
+    data?: Record<string, unknown>;
+  }): WorkflowRunEventPublication {
+    return this.tx((tx) => {
+      const event = this.appendEvent({
+        runId: input.runId,
+        type: input.type,
+        ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}),
+        ...(input.data !== undefined ? { data: input.data } : {}),
+      });
+      const liveEvent = this.insert(
+        tx,
+        buildWorkflowRunEventDraft({ projectId: input.projectId, event }),
+      );
+      return { liveEvent, event };
+    });
+  }
+
   /** Record a durable review fact (pending / approved / rejected). */
   commitReviewChange(input: {
     projectId: ULID;
@@ -179,18 +240,24 @@ export class WorkflowRunMutationGateway {
   }
 
   /** Cancel a run through the gateway. Terminal runs are a no-op (returns null,
-   *  emits nothing). Sets `cancelled` + the outbox fact in one tx. */
+   *  emits nothing). Sets `cancelled` + the run fact + the `workflow_cancelled`
+   *  diary line (M3a — the lifecycle bookend that was never written) in one tx. */
   cancelRun(input: { projectId: ULID; runId: ULID }): WorkflowRunChangedPublication | null {
     const existing = this.getRun(input.runId);
     if (!existing) return null;
     if (TERMINAL.has(existing.status)) return null;
-    return this.commitRunChange({
-      projectId: input.projectId,
-      reason: 'cancelled',
-      mutate: (tx) => {
-        workflowRunsV2Repo.setStatus(input.runId, 'cancelled', { lastReason: 'cancelled' });
-        return this.getRunInTx(tx, input.runId);
-      },
+    return this.tx((tx) => {
+      this.setStatus(input.runId, 'cancelled', { lastReason: 'cancelled' });
+      const row = this.getRunInTx(tx, input.runId);
+      if (!row) throw new Error('workflow run mutation produced no row');
+      const run = toWorkflowRunDto(row);
+      const liveEvent = this.insert(
+        tx,
+        buildWorkflowRunChangedDraft({ projectId: input.projectId, reason: 'cancelled', run }),
+      );
+      const event = this.appendEvent({ runId: input.runId, type: 'workflow_cancelled' });
+      this.insert(tx, buildWorkflowRunEventDraft({ projectId: input.projectId, event }));
+      return { liveEvent, run };
     });
   }
 

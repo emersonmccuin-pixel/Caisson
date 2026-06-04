@@ -462,6 +462,14 @@ try {
             return workflowRunsV2Repo.getRun(run.id);
           },
         });
+        // M3a — the diary line the fail-close never wrote: a restarted server
+        // is part of the run's story, not a silent status flip (FD-11).
+        workflowRunGateway.appendRunEvent({
+          projectId: run.projectId,
+          runId: run.id,
+          type: 'run_interrupted',
+          data: { reason },
+        });
       },
     });
     if (wfResult.failed > 0) {

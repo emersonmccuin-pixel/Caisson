@@ -171,7 +171,10 @@ export function setStatus(
   getDb().update(workflowRunsV2).set(patch).where(eq(workflowRunsV2.id, id)).run();
 }
 
-// --- event log (observability/audit only) --------------------------------
+// --- event log: THE RUN DIARY (M3a/FD-11/FD-13) ---------------------------
+// `appendEvent` may be called ONLY through WorkflowRunMutationGateway.
+// appendRunEvent (event row + workflow.run.event outbox fact, one txn) —
+// a direct call is an FD-12 bypass; the diary gate test enforces it.
 
 export interface AppendEventInput {
   runId: ULID;

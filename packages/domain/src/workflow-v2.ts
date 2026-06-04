@@ -294,8 +294,11 @@ export interface WorkflowDagState {
 }
 
 // ---------------------------------------------------------------------------
-// Event log — `workflow_run_events` (19.3). OBSERVABILITY/AUDIT ONLY. Resume
-// reads the children's terminal states, NOT this log (see port map).
+// Event log — `workflow_run_events`: THE RUN DIARY (M3a/FD-11/FD-13). Every
+// line flows through WorkflowRunMutationGateway.appendRunEvent (event row +
+// `workflow.run.event` outbox fact, one txn) — direct repo writes are gated.
+// Execution still resumes from the children's terminal states + dag_state;
+// state-projection-from-the-diary lands with the M6 step-model rebuild.
 // ---------------------------------------------------------------------------
 
 export const WORKFLOW_EVENT_TYPES = [
@@ -303,10 +306,16 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow_completed',
   'workflow_failed',
   'workflow_cancelled',
+  /** M3a — the server died/restarted with the run in flight; boot fail-closed
+   *  it (`data.reason`). The diary line the old fail-close never wrote. */
+  'run_interrupted',
   'node_started',
   'node_completed',
   'node_failed',
   'node_skipped',
+  /** M3a — a node's worker dispatch landed; `data.agentRunId` +
+   *  `data.workItemId` cross-link the diary to the agent run (FD-11 debugging). */
+  'agent_dispatched',
   'review_requested',
   'review_approved',
   'review_rejected',

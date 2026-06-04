@@ -183,6 +183,51 @@ export type WorkflowReviewChangedLiveEventFrame = LiveEventFrame<WorkflowReviewC
   event: WorkflowReviewChangedLiveEvent;
 };
 
+// ── M3a — the run-diary line as a first-class live fact ─────────────────────
+
+/** One `workflow_run_events` row on the wire. `type` is the domain
+ *  WorkflowEventType (workflow_started, node_started, agent_dispatched, …);
+ *  kept as string here to stay browser-safe without importing @pc/domain. */
+export interface WorkflowRunEventDto {
+  id: ULID;
+  runId: ULID;
+  type: string;
+  nodeId: string | null;
+  data: Record<string, unknown> | null;
+  at: number;
+}
+
+export interface WorkflowRunEventLivePayload {
+  event: WorkflowRunEventDto;
+}
+
+export type WorkflowRunEventLiveEvent = LiveEvent<WorkflowRunEventLivePayload> & {
+  type: 'workflow.run.event';
+  entity: 'workflow-run-event';
+  scope: 'project';
+  projectId: ULID;
+};
+
+export type WorkflowRunEventLiveEventFrame = LiveEventFrame<WorkflowRunEventLivePayload> & {
+  event: WorkflowRunEventLiveEvent;
+};
+
+export function isWorkflowRunEventLivePayload(
+  value: unknown,
+): value is WorkflowRunEventLivePayload {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const ev = (value as { event?: unknown }).event;
+  if (ev === null || typeof ev !== 'object' || Array.isArray(ev)) return false;
+  const e = ev as Record<string, unknown>;
+  return (
+    typeof e.id === 'string' &&
+    typeof e.runId === 'string' &&
+    typeof e.type === 'string' &&
+    (e.nodeId === null || typeof e.nodeId === 'string') &&
+    typeof e.at === 'number'
+  );
+}
+
 // ── Legacy compatibility projections ─────────────────────────────────────────
 
 /** Legacy `workflow-v2-run-changed` envelope. The server already emits this

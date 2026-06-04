@@ -91,6 +91,7 @@ export const liveOutbox = sqliteTable(
         | 'attachment'
         | 'workflow-definition'
         | 'workflow-run'
+        | 'workflow-run-event'
         | 'workflow-review'
         | 'agent-run'
         | 'mailbox-message'

@@ -75,7 +75,9 @@ export type WorkflowRunFailedDelivery = (input: {
 // it. The run-row state still flows through workflow-run-writer; this is the
 // review audit/action surface. The old hand-fanned canonical frame + legacy
 // `workflow-v2-review-pending` envelope are deleted — delivery is door-only.
-const reviewGateway = new WorkflowRunMutationGateway();
+// M3a — the same gateway is now also THE diary door (appendRunEvent): every
+// run-diary line below pairs its event row with a `workflow.run.event` fact.
+const runGateway = new WorkflowRunMutationGateway();
 
 function emitReviewFact(
   opts: { projectId: ULID },
@@ -88,7 +90,7 @@ function emitReviewFact(
     notes?: string;
   },
 ): void {
-  reviewGateway.commitReviewChange({
+  runGateway.commitReviewChange({
     projectId: opts.projectId,
     runId: input.runId,
     nodeId: input.nodeId,
@@ -321,6 +323,17 @@ export function makeExecutorDeps(
       return { state: 'failed', workItemId: childWi.id as ULID, error: result.error };
     }
 
+    // M3a — the diary's debugging cross-link (FD-11): which agent run + child
+    // work item this node dispatched. "Step write is stuck" → the diary hands
+    // you the runId to inspect.
+    runGateway.appendRunEvent({
+      projectId: opts.projectId,
+      runId: run.id,
+      type: 'agent_dispatched',
+      nodeId: node.id,
+      data: { agentRunId: result.agentRunId, workItemId: childWi.id, agent: node.agent },
+    });
+
     // Await the verified terminal. A node fails when the run didn't complete OR
     // verification failed (drives reject/loop edges). `pending` (tier-2/3 hold)
     // is NOT a failure — it leaves the node completed.
@@ -389,7 +402,7 @@ export function makeExecutorDeps(
     // the web `scanWorkflowLiveEvents` consumer reads the canonical frame. The
     // old hand-fanned frame + legacy `workflow-v2-review-pending` envelope are
     // deleted — delivery flows through the door only.
-    reviewGateway.commitReviewChange({
+    runGateway.commitReviewChange({
       projectId: opts.projectId,
       runId: run.id,
       nodeId: node.id,
@@ -422,8 +435,12 @@ export function makeExecutorDeps(
     moveCard,
     requestReview,
     persist,
+    // M3a — every executor diary line through THE door: event row +
+    // workflow.run.event outbox fact in one txn (was a direct repo write,
+    // the FD-12 bypass #2).
     event: (ev) => {
-      workflowRunsV2Repo.appendEvent({
+      runGateway.appendRunEvent({
+        projectId: opts.projectId,
         runId: run.id,
         type: ev.type,
         ...(ev.nodeId ? { nodeId: ev.nodeId } : {}),
@@ -518,6 +535,14 @@ export async function fireDagWorkflow(
   // Re-read after markStarted so the snapshot carries the started rev.
   const startedRow = workflowRunsV2Repo.getRun(run.id);
   if (startedRow) announceRunCreated(startedRow, opts.projectId, opts.broadcast);
+  // M3a — the diary's opening line (declared in the union since 19.3, never
+  // written until now).
+  runGateway.appendRunEvent({
+    projectId: opts.projectId,
+    runId: run.id,
+    type: 'workflow_started',
+    data: { trigger: trigger.kind, workflowName: workflow.name },
+  });
 
   const deps = makeExecutorDeps(
     { id: run.id, workItemId: rootWiId, worktreePath },
