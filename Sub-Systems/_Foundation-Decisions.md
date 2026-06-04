@@ -620,6 +620,12 @@ These came up and need their own entries once we talk them through:
   payload may contain an absolute path outside the agent's fence; instructions reference files
   relative to the agent's own root ("create `docs/x.md`"), and "the project" IS the cwd. Folds into
   the FD-5 Work Contract shape + the dispatch-payload audit findings.
+  **Talked through 2026-06-03, then SHELVED (Emerson):** direction tentatively agreed — **block at
+  the dispatch door** (typed refusal naming the exact offending text; orchestrator-sent → it
+  self-fixes and retries; workflow-step-sent → step fails visibly with the reason, future Human
+  Inbox item). NOT locked — needs another pass, and the bigger open question is **app-owned
+  worktree creation + teardown lifecycle**, which is its own design conversation. Revisit alongside
+  FD-5.
 
 - ⚪ **Work Item vs Work Contract model** — what each is, how they relate (goal vs. assignment), and
   the rule for a contract with no work item. *(See `0-store/contracts-system.md` and `3-product/work-items.md`.)*
