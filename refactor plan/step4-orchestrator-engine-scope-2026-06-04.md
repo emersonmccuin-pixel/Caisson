@@ -115,17 +115,34 @@ No live-fire — nothing starts a persistent run until Slice 2 (its swap gauntle
 live gate). ⚠️ Flake seen twice then gone: `tsx --test` subprocess teardown crash
 0xC0000409 on Windows; tests pass direct-run and on re-run — infra, not product.
 
-**Slice 2 — the swap + delete.**
-ProjectRuntime orchestrator spawn → host `start-run {policy}` · pty-handlers wiring rebound to
-host events (send-queue correlation G8, status-enum remap, titles, summaries, replay persist,
-FD-18 states) · WS send/interrupt/resize → host commands · reconciler re-dispatch-on-host-death
-branch · ☠ DELETE InteractiveSession-orchestrator path + `ensurePty` spawn (banned-resurrection).
-*Guard:* ONE-SPAWN-OWNER extends to the orchestrator names.
+**Slice 2 — the swap + delete. ✅ SHIPPED + LIVE-VERIFIED 2026-06-04 (9ebc2c9a + fix 215b4dc3).**
+`OrchestratorHostSession` (apps/server/src/services/) presents the EXACT InteractiveSession
+port+events surface, backed by host `start-run {policy:'persistent-interactive'}` — NO consumer
+rewiring needed (pty-handlers/send-queue/titles/summaries/conversation-send all untouched).
+Protocol grew start-run spawn shaping (mode/jsonlStartLine/envOverrides/model/requireReadySignal/
+requireMcpHandshake/cols/rows) + `write-raw` command (terminal-mode keystrokes). Adapter survival
+contracts: **ADOPT** a still-live host run after an API restart (roster match on ccSessionId — no
+double-spawn) · **host respawn → FD-18 'spawning' + self-re-dispatch `--resume`** past the replay
+cursor · replay log re-persisted server-side from run-jsonl wire meta · 'raw' terminal view =
+transcript-file tail (decision 6) · kill→cancel + `settled`-on-host-terminal (successor awaits it;
+cancelGraceMs 500 for chat). ☠ interactive-session.ts DELETED; banned-resurrection gate +=
+'InteractiveSession' (caught its first offender — a doc comment — on first run).
+**DEVIATION from decision 5, deliberate:** no reconciler policy branch — the chat has NO
+agent_runs row, so the reconciler can't touch it; G5 recovery lives in the adapter.
+*Live gauntlet (dev stack):* send→spawn→busy/ready→turn-end+reply ✓ queued-ack→delivered→
+jsonl-user correlation ✓ title+cursor persist ✓ API restart→ADOPT (CC tools session re-opened,
+same cc id) ✓ **host kill mid-chat → supervisor respawn → adapter self-re-dispatched (log:
+"host changed — re-dispatching chat") → next reply quoted the pre-kill string exactly — full
+history survived** ✓. *Live-fire bug found+fixed (215b4dc3):* one provider row → usage+turn-end
+SHARING a source cursor; a live-advancing dedup threshold ate the turn-end (reply text never
+rendered). Fix: dedup floor frozen at construct; + a close()d adapter stops writing the replay
+file. Suites: server 251 · runtime 44 · agent-host 12 · typecheck green.
 
-**Slice 3 — live acceptance gauntlet.**
-Chat end-to-end (send/stream/interrupt/queued/title/reload-replay) · kill host mid-chat →
-loading → auto-resume with history · API restart → reconnect+replay · agents dispatch normally
-alongside · packaged-mode pass · spike harness green.
+**Slice 3 — live acceptance gauntlet. MOSTLY COVERED by Slice 2's live-fire; remainder below.**
+✅ already verified live: chat send/stream/queued/title · kill host mid-chat → loading →
+auto-resume with history · API restart → adopt. ⬜ remaining: interrupt live-fire · reload-replay
+visual check (Emerson, in-app) · agents dispatch normally alongside the chat · packaged-mode
+pass · spike harness green · Sessions-tab resume/new-session flows.
 
 ## Open questions (carried, not blocking Slice 0)
 
