@@ -16,7 +16,7 @@
 // HTTP/MCP layers wire it to PC's surfaces.
 
 import { EventEmitter } from 'node:events';
-import type { JsonlEvent } from './jsonl-tailer.ts';
+import type { JsonlEvent, JsonlEventMeta } from './jsonl-tailer.ts';
 import {
   AgentRunRegistry,
   type AdmissionTicket,
@@ -38,6 +38,19 @@ export type AgentRunState =
   | 'completed'
   | 'failed'
   | 'cancelled';
+
+/** Step-4 Slice 1 — ONE run primitive, policy flags (north-star §4).
+ *  'default' = dispatched worker (today's behavior, unchanged).
+ *  'persistent-interactive' = the orchestrator chat: no idle/wall-clock/
+ *  first-turn reaping (G3), cap-exempt admission (G4), interrupt/resize
+ *  surface (G2/G6). */
+export type AgentRunPolicy = 'default' | 'persistent-interactive';
+
+/** Turn-level state for interactive surfaces (G1): 'busy' while CC is
+ *  producing a turn, 'ready' when the composer is idle awaiting input.
+ *  Derived from sends + JSONL signals; coarse but sufficient for the chat
+ *  send-queue drain + UI affordances. */
+export type AgentRunTurnState = 'ready' | 'busy';
 
 export type AgentRunFailureCause =
   | 'spawn-stuck'
@@ -79,6 +92,10 @@ export interface AgentRunRecord {
   continues?: string;
   /** Set when an external observer signals a pause via _markPaused. */
   pendingAskId?: string;
+  /** Lifecycle policy this run was started with. Default 'default'. */
+  policy?: AgentRunPolicy;
+  /** Turn-level ready⇌busy (G1). Meaningful from `running` onward. */
+  turnState?: AgentRunTurnState;
 }
 
 /** Minimal interface LowLevelSpawn satisfies — lets tests inject a fake. */
@@ -106,6 +123,10 @@ export interface AgentRunInput {
   podDefinition: PodDescriptor;
   worktreePath: string;
   env: Record<string, string | undefined>;
+  /** Lifecycle policy. 'persistent-interactive' (the orchestrator chat)
+   *  disarms idle/wall-clock/first-turn reaping and takes the cap-exempt
+   *  admission lane. Default 'default' — dispatched workers unchanged. */
+  policy?: AgentRunPolicy;
   /** Pasted as first user turn on fresh spawn (echo-ack). Ignored on resume. */
   initialInput?: string;
   /** Default 'fresh'. 'resume' is used by Session 8's continuation primitive
@@ -194,6 +215,8 @@ export class AgentRun extends EventEmitter {
   private started = false;
   private cancelling = false;
   private lastAssistantText: string | null = null;
+  private turnState: AgentRunTurnState = 'busy';
+  private readonly policy: AgentRunPolicy;
   private readonly deps: Required<AgentRunDeps>;
   private readonly timeouts: typeof DEFAULTS;
 
@@ -225,6 +248,7 @@ export class AgentRun extends EventEmitter {
       readyTimeoutMs: input.readyTimeoutMs ?? DEFAULTS.readyTimeoutMs,
       cancelGraceMs: input.cancelGraceMs ?? DEFAULTS.cancelGraceMs,
     };
+    this.policy = input.policy ?? 'default';
     this.record = {
       agentRunId: input.agentRunId,
       ccProviderSessionId: input.ccProviderSessionId,
@@ -233,12 +257,19 @@ export class AgentRun extends EventEmitter {
       createdAt: this.deps.now(),
       queuedAt: this.deps.now(),
       continues: input.continues,
+      policy: this.policy,
+      turnState: this.turnState,
     };
+    // Persistent-interactive runs take the cap-exempt lane (G4) — the chat
+    // never consumes an agent slot or queues behind dispatched workers.
     // Reattached runs were already admitted in the prior process lifetime —
     // bypass the FIFO/cap so a restart doesn't queue live agents behind it.
-    this.ticket = input.reattach
-      ? this.deps.registry.reattach()
-      : this.deps.registry.admit();
+    this.ticket =
+      this.policy === 'persistent-interactive'
+        ? this.deps.registry.exempt()
+        : input.reattach
+          ? this.deps.registry.reattach()
+          : this.deps.registry.admit();
   }
 
   /** Begin the lifecycle. Idempotent at the type level — calling twice
@@ -350,7 +381,40 @@ export class AgentRun extends EventEmitter {
     if (this.state !== 'running' || !this.spawn || this.isTerminal()) {
       return 'exited';
     }
+    // A submitted user turn means CC is (about to be) producing — busy until
+    // the next jsonl-turn-end (G1).
+    this.setTurnState('busy');
     return this.spawn.send(body, echoTimeoutMs);
+  }
+
+  /** Graceful interrupt (G2) — Escape, CC's stop-streaming key. Non-destructive:
+   *  the session stays alive at the composer. No-op unless a spawn is live. */
+  interrupt(): void {
+    if (this.isTerminal() || !this.spawn) return;
+    try {
+      this.spawn.interrupt();
+    } catch {
+      /* already dead */
+    }
+  }
+
+  /** Terminal-grade resize (G6). No-op when the spawn (or a test fake)
+   *  doesn't expose resize. */
+  resize(cols: number, rows: number): void {
+    if (this.isTerminal() || !this.spawn) return;
+    try {
+      this.spawn.resize?.(cols, rows);
+    } catch {
+      /* already dead */
+    }
+  }
+
+  getPolicy(): AgentRunPolicy {
+    return this.policy;
+  }
+
+  getTurnState(): AgentRunTurnState {
+    return this.turnState;
   }
 
   getJsonlPath(): string | null {
@@ -414,7 +478,9 @@ export class AgentRun extends EventEmitter {
     const spawn = this.deps.spawnFactory(this.buildSpawnInput(mode));
     this.spawn = spawn;
 
-    spawn.on('jsonl-event', (ev: JsonlEvent) => this.onJsonlEvent(ev));
+    spawn.on('jsonl-event', (ev: JsonlEvent, meta?: JsonlEventMeta) =>
+      this.onJsonlEvent(ev, meta),
+    );
     spawn.on('exit', (code, signal) => this.onSpawnExit(code, signal));
     spawn.on('state', (s: SpawnState) => this.emit('spawn-state', s));
     spawn.on('chunk', (text: string) => this.emit('chunk', text));
@@ -442,6 +508,11 @@ export class AgentRun extends EventEmitter {
     this.setState('running');
     this.record.runningAt = this.deps.now();
     this.armIdleTimer();
+    // G1 — composer is at the prompt. If we're about to paste an input body
+    // the very next thing is a turn, so go (or stay) busy instead.
+    this.setTurnState(
+      inputBody !== undefined && inputBody.length > 0 ? 'busy' : 'ready',
+    );
 
     if (inputBody !== undefined && inputBody.length > 0) {
       try {
@@ -504,7 +575,9 @@ export class AgentRun extends EventEmitter {
     const spawn = this.deps.spawnFactory(this.buildSpawnInput('resume'));
     this.spawn = spawn;
 
-    spawn.on('jsonl-event', (ev: JsonlEvent) => this.onJsonlEvent(ev));
+    spawn.on('jsonl-event', (ev: JsonlEvent, meta?: JsonlEventMeta) =>
+      this.onJsonlEvent(ev, meta),
+    );
     spawn.on('exit', (code, signal) => this.onSpawnExit(code, signal));
     spawn.on('state', (s: SpawnState) => this.emit('spawn-state', s));
     spawn.on('chunk', (text: string) => this.emit('chunk', text));
@@ -523,14 +596,23 @@ export class AgentRun extends EventEmitter {
     this.setState('running');
     this.record.runningAt = this.deps.now();
     this.armIdleTimer();
+    // G1 — mid-turn vs at-prompt is unknowable at reattach. Report 'ready':
+    // a send into a still-streaming session queues in CC (a real feature);
+    // reporting 'busy' with no future turn-end would deadlock the send-queue.
+    this.setTurnState('ready');
   }
 
-  private onJsonlEvent(ev: JsonlEvent): void {
-    this.emit('jsonl-event', ev);
+  private onJsonlEvent(ev: JsonlEvent, meta?: JsonlEventMeta): void {
+    this.emit('jsonl-event', ev, meta);
     if (this.state === 'running') {
       // Reset idle on activity.
       this.resetIdleTimer();
     }
+    // G1 — turn boundaries: a user row (typed send / queued command popping)
+    // opens a turn; a turn-end closes it.
+    const kind = (ev as { kind?: unknown }).kind;
+    if (kind === 'jsonl-user') this.setTurnState('busy');
+    else if (kind === 'jsonl-turn-end') this.setTurnState('ready');
     // Capture last assistant text for the completed-state result field.
     const text = extractAssistantText(ev);
     if (text !== null) this.lastAssistantText = text;
@@ -567,6 +649,15 @@ export class AgentRun extends EventEmitter {
     this.state = next;
     this.record.state = next;
     this.emit('state', next, prev);
+  }
+
+  /** G1 — turn-level ready⇌busy. Emits 'turn-state' on change so the host
+   *  service can refresh snapshots (the chat send-queue drains on ready). */
+  private setTurnState(next: AgentRunTurnState): void {
+    if (this.turnState === next) return;
+    this.turnState = next;
+    this.record.turnState = next;
+    this.emit('turn-state', next);
   }
 
   private toTerminal(
@@ -622,6 +713,9 @@ export class AgentRun extends EventEmitter {
   }
 
   private armIdleTimer(): void {
+    // G3 — a persistent chat sits idle by design; idle-reaping is for stuck
+    // workers. Never armed under persistent-interactive.
+    if (this.policy === 'persistent-interactive') return;
     this.clearIdleTimer();
     this.timers.idle = setTimeout(() => {
       if (this.state === 'running') {
@@ -649,6 +743,8 @@ export class AgentRun extends EventEmitter {
   /** Resume-only: expect a real turn within firstTurnMs of going `running`, or
    *  fail fast (the continuation input didn't land / the resume didn't take). */
   private armFirstTurnWatchdog(): void {
+    // G3 — persistent sessions are never fail-fast reaped.
+    if (this.policy === 'persistent-interactive') return;
     this.clearFirstTurn();
     this.timers.firstTurn = setTimeout(() => {
       if (this.state === 'running') {
@@ -671,6 +767,8 @@ export class AgentRun extends EventEmitter {
   }
 
   private armWallClock(): void {
+    // G3 — no 2h ceiling on the chat; it lives as long as the app does.
+    if (this.policy === 'persistent-interactive') return;
     if (this.timers.wallClock) return; // arm once; persists through paused
     this.timers.wallClock = setTimeout(() => {
       if (!this.isTerminal()) {

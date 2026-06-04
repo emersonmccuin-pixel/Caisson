@@ -92,3 +92,36 @@ function await_rejection(ticket: { granted: Promise<void> }): void {
   // granted already has an internal .catch; just confirm it rejects.
   ticket.granted.catch(() => {});
 }
+
+// Step-4 Slice 1 (G4) — cap-exempt lane for persistent-interactive runs.
+
+test('exempt ticket is born admitted and never counts toward the cap', () => {
+  const reg = new AgentRunRegistry({ maxConcurrent: 1 });
+  const chat = reg.exempt();
+  assert.equal(chat.state, 'admitted');
+  assert.equal(reg.getActiveCount(), 0);
+
+  // A worker still gets the one real slot — the chat consumed nothing.
+  const worker = reg.admit();
+  assert.equal(worker.state, 'admitted');
+  assert.equal(reg.getActiveCount(), 1);
+});
+
+test('exempt release/abort never touch the slot math', () => {
+  const reg = new AgentRunRegistry({ maxConcurrent: 1 });
+  const worker = reg.admit();
+  const queued = reg.admit();
+  assert.equal(queued.state, 'queued');
+
+  const chat = reg.exempt();
+  chat.release();
+  // Releasing the exempt ticket must NOT admit the queued worker (it never
+  // held a slot to free).
+  assert.equal(queued.state, 'queued');
+  assert.equal(reg.getActiveCount(), 1);
+
+  chat.abort(); // idempotent no-op
+  assert.equal(reg.getActiveCount(), 1);
+  worker.release();
+  assert.equal(queued.state, 'admitted');
+});

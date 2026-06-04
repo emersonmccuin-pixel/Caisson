@@ -134,6 +134,10 @@ export class AgentHostService extends EventEmitter {
         return this.startRun('resume-run', command.request);
       case 'send':
         return this.send(command.runId, command.text);
+      case 'interrupt':
+        return this.interrupt(command.runId);
+      case 'resize':
+        return this.resize(command.runId, command.cols, command.rows);
       case 'mark-paused':
         return this.markPaused(command.runId, command.askId);
       case 'answer-pending':
@@ -230,6 +234,45 @@ export class AgentHostService extends EventEmitter {
     return {
       ok: true,
       command: 'send',
+      run: this.snapshot(entry),
+      lastSeq: this.seq,
+    };
+  }
+
+  /** Step-4 G2 — graceful interrupt (Escape). Non-destructive; `cancel`
+   *  remains the kill path. */
+  private interrupt(runId: string): AgentHostCommandResponse {
+    const entry = this.runs.get(runId);
+    if (!entry) {
+      return this.error('interrupt', 'not-found', `run ${runId} not found`);
+    }
+
+    entry.run.interrupt();
+    entry.updatedAt = this.now();
+    return {
+      ok: true,
+      command: 'interrupt',
+      run: this.snapshot(entry),
+      lastSeq: this.seq,
+    };
+  }
+
+  /** Step-4 G6 — terminal-grade resize for interactive surfaces. */
+  private resize(
+    runId: string,
+    cols: number,
+    rows: number,
+  ): AgentHostCommandResponse {
+    const entry = this.runs.get(runId);
+    if (!entry) {
+      return this.error('resize', 'not-found', `run ${runId} not found`);
+    }
+
+    entry.run.resize(cols, rows);
+    entry.updatedAt = this.now();
+    return {
+      ok: true,
+      command: 'resize',
       run: this.snapshot(entry),
       lastSeq: this.seq,
     };
@@ -366,12 +409,26 @@ export class AgentHostService extends EventEmitter {
       entry.updatedAt = this.now();
       this.emitRunState(entry);
     });
-    entry.run.on('jsonl-event', (event: unknown) => {
-      this.appendEvent({
-        type: 'run-jsonl',
-        runId: entry.request.runId,
-        event,
-      });
+    entry.run.on(
+      'jsonl-event',
+      (event: unknown, meta?: { sourceCursor?: number }) => {
+        // G7 — replay meta rides the wire so the server can re-persist its
+        // jsonl-events.jsonl replay log from the one host stream.
+        this.appendEvent({
+          type: 'run-jsonl',
+          runId: entry.request.runId,
+          event,
+          cursor: meta?.sourceCursor,
+          kind: extractEventKind(event),
+          source: 'claude-jsonl',
+        });
+      },
+    );
+    // G1 — turn-state changes refresh the snapshot stream (the chat
+    // send-queue drains on 'ready').
+    entry.run.on('turn-state', () => {
+      entry.updatedAt = this.now();
+      this.emitRunState(entry);
     });
     entry.run.on('chunk', (text: string) => {
       this.appendEvent({
@@ -419,6 +476,8 @@ export class AgentHostService extends EventEmitter {
       podName: record.podName,
       worktreeDir: entry.request.worktreePath,
       state: record.state,
+      policy: record.policy,
+      turnState: record.turnState,
       jsonlPath: entry.run.getJsonlPath(),
       transcriptPath: entry.request.transcriptPath ?? null,
       queuedAt: record.queuedAt ?? record.createdAt,
@@ -437,6 +496,7 @@ export class AgentHostService extends EventEmitter {
       podDefinition: request.podDefinition,
       worktreePath: request.worktreePath,
       env: request.env,
+      policy: request.policy,
       initialInput: request.initialInput,
       mode: isResumeRequest(request) ? 'resume' : 'fresh',
       continues: isResumeRequest(request) ? request.continues : undefined,
@@ -481,6 +541,14 @@ export class AgentHostService extends EventEmitter {
       lastSeq: this.seq,
     };
   }
+}
+
+/** G7 — mirror the event's `kind` onto the wire envelope so the server-side
+ *  replay writer doesn't have to parse `unknown`. */
+function extractEventKind(event: unknown): string | undefined {
+  if (!event || typeof event !== 'object') return undefined;
+  const kind = (event as { kind?: unknown }).kind;
+  return typeof kind === 'string' ? kind : undefined;
 }
 
 function isResumeRequest(

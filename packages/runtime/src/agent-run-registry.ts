@@ -78,6 +78,14 @@ export class AgentRunRegistry {
     return ticket;
   }
 
+  /** Step-4 G4 — cap-exempt lane for `persistent-interactive` runs (the
+   *  orchestrator chat). Admitted immediately, NEVER counts toward `active`,
+   *  never queues, and release/abort never touch the slot math — the chat
+   *  must not consume an agent slot or wait behind dispatched workers. */
+  exempt(): AdmissionTicket {
+    return new ExemptTicket();
+  }
+
   getMaxConcurrent(): number {
     return this.cap;
   }
@@ -112,6 +120,20 @@ export class AgentRunRegistry {
       this.active++;
       next.markAdmitted();
     }
+  }
+}
+
+/** Cap-exempt ticket — born admitted, holds no slot, releases nothing. */
+class ExemptTicket implements AdmissionTicket {
+  state: TicketState = 'admitted';
+  readonly granted: Promise<void> = Promise.resolve();
+
+  release(): void {
+    if (this.state === 'admitted') this.state = 'released';
+  }
+
+  abort(): void {
+    this.release();
   }
 }
 

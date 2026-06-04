@@ -95,6 +95,8 @@ export type {
 export { AgentRun } from './agent-run.ts';
 export type {
   AgentRunState,
+  AgentRunPolicy,
+  AgentRunTurnState,
   AgentRunFailureCause,
   AgentRunRecord,
   AgentRunInput,

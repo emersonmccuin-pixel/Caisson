@@ -624,6 +624,10 @@ function isAgentHostCommandResponse(
     case 'start-run':
     case 'resume-run':
     case 'send':
+    // Step-4 Slice 1 (G2/G6) — every new command MUST be listed here or the
+    // client rejects its receipt as malformed (the FD-15 set-config burn).
+    case 'interrupt':
+    case 'resize':
     case 'mark-paused':
     case 'answer-pending':
     case 'cancel':

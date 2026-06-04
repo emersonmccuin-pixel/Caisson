@@ -1,4 +1,5 @@
 import type { AgentRunStatus, ULID } from '@pc/domain';
+import type { AgentRunPolicy, AgentRunTurnState } from './agent-run.ts';
 
 export interface AgentHostIdentity {
   hostId: string;
@@ -24,6 +25,12 @@ export interface AgentHostRunSnapshot {
   podName: string;
   worktreeDir: string;
   state: AgentHostRunState;
+  /** Step-4 Slice 1 — lifecycle policy ('default' when absent; older hosts
+   *  omit it). */
+  policy?: AgentRunPolicy;
+  /** G1 — turn-level ready⇌busy for interactive surfaces. Meaningful from
+   *  `running` onward; the chat send-queue drains on 'ready'. */
+  turnState?: AgentRunTurnState;
   jsonlPath: string | null;
   transcriptPath: string | null;
   queuedAt: number;
@@ -51,6 +58,11 @@ export interface AgentHostStartRunRequest {
   settingSources?: string;
   pluginDirs?: readonly string[];
   transcriptPath?: string;
+  /** Step-4 Slice 1 — lifecycle policy. 'persistent-interactive' (the
+   *  orchestrator chat) disarms idle/wall-clock/first-turn reaping and takes
+   *  the cap-exempt admission lane. Omitted = 'default' (dispatched worker,
+   *  unchanged). */
+  policy?: AgentRunPolicy;
   /** Server-authoritative CC JSONL path. The server computes this with ITS
    *  normalized CLAUDE_CONFIG_DIR (the same env the spawned agent inherits) and
    *  the host threads it straight through to the AgentRun instead of recomputing
@@ -79,6 +91,12 @@ export type AgentHostCommand =
   | { type: 'start-run'; request: AgentHostStartRunRequest }
   | { type: 'resume-run'; request: AgentHostResumeRunRequest }
   | { type: 'send'; runId: ULID; text: string }
+  // Step-4 G2 — graceful interrupt (Escape, CC's stop-streaming key).
+  // Non-destructive: the session stays alive at the composer; `cancel`
+  // remains the kill path.
+  | { type: 'interrupt'; runId: ULID }
+  // Step-4 G6 — terminal-grade resize for interactive surfaces.
+  | { type: 'resize'; runId: ULID; cols: number; rows: number }
   | { type: 'mark-paused'; runId: ULID; askId: string }
   | { type: 'answer-pending'; runId: ULID; text: string }
   | { type: 'cancel'; runId: ULID; reason?: string }
@@ -123,6 +141,8 @@ export type AgentHostCommandResponse =
         | 'start-run'
         | 'resume-run'
         | 'send'
+        | 'interrupt'
+        | 'resize'
         | 'mark-paused'
         | 'answer-pending'
         | 'cancel'
@@ -153,7 +173,19 @@ export type AgentHostCommandResponse =
 export type AgentHostEvent =
   | { seq: number; type: 'host-ready'; identity: AgentHostIdentity }
   | { seq: number; type: 'run-state'; run: AgentHostRunSnapshot }
-  | { seq: number; type: 'run-jsonl'; runId: ULID; event: unknown; cursor?: number }
+  // G7 — replay meta rides the wire: `cursor` is the 1-based line in CC's
+  // source JSONL that produced the event; `kind` mirrors event.kind so the
+  // server-side replay writer needn't parse `unknown`; `source` names the
+  // provenance (matches the jsonl-events.jsonl envelope's source.kind).
+  | {
+      seq: number;
+      type: 'run-jsonl';
+      runId: ULID;
+      event: unknown;
+      cursor?: number;
+      kind?: string;
+      source?: 'claude-jsonl';
+    }
   | { seq: number; type: 'run-chunk'; runId: ULID; text: string }
   | { seq: number; type: 'run-terminal'; run: AgentHostRunSnapshot }
   | { seq: number; type: 'run-error'; runId: ULID; error: string };
