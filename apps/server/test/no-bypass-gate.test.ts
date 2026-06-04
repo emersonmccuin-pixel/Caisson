@@ -64,6 +64,10 @@ const DECL_RE = new RegExp(
 // FD-12 (M2): `announceWorkItem`/`announceWorkItemRow` (the deleted two-step
 // work-item-writer — save in one txn, receipt in another, crash window in
 // between) join the banned set. The one door is WorkItemMutationGateway.
+// P2 (ledger row 3): `constructAndStart`/`defaultAgentRunFactory`/
+// `activeRunHandleForAgentRun` (the deleted in-process spawn fallback) join
+// too — the agent host owns every spawn (ONE-SPAWN-OWNER); no hostClient is a
+// typed `host-unavailable` failure, never an alternate spawn path.
 const BANNED_RESURRECTION = [
   'enqueueAndPush',
   'drainPendingForSession',
@@ -71,6 +75,9 @@ const BANNED_RESURRECTION = [
   'forwardToProjectChildren',
   'announceWorkItemRow',
   'announceWorkItem',
+  'constructAndStart',
+  'defaultAgentRunFactory',
+  'activeRunHandleForAgentRun',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 

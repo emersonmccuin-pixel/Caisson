@@ -18,7 +18,6 @@ import type {
   AgentHostCommand,
   AgentHostCommandResponse,
   AgentHostRunSnapshot,
-  AgentRun,
   AgentRunRecord,
   AgentRunState,
 } from '@pc/runtime';
@@ -56,26 +55,9 @@ export interface ActiveRunHandle {
   onTerminal(listener: () => void): void;
 }
 
-export function activeRunHandleForAgentRun(run: AgentRun): ActiveRunHandle {
-  return {
-    getRecord: () => run.getRecord(),
-    getState: () => run.getState(),
-    cancel: () => run.cancel(),
-    notifyMcpHandshake: () => run.notifyMcpHandshake(),
-    markPaused: (askId) => run._markPaused(askId),
-    // In-process: `answerPendingAsk` pre-validates `state==='paused'`, so this
-    // drives the resume synchronously; a spawn failure surfaces async through
-    // the run's own terminal path. Always reports `ok` here.
-    resumeWithAnswer: async (answer) => {
-      run._resumeWithAnswer(answer);
-      return { ok: true };
-    },
-    complete: (result) => run.complete(result),
-    onTerminal: (listener) => {
-      run.once('terminal', listener);
-    },
-  };
-}
+// ☠ P2 (2026-06-03) — `activeRunHandleForAgentRun` (the in-process AgentRun
+// wrapper) DELETED with the in-process spawn branch. Every live run is
+// host-backed; `HostBackedActiveRunHandle` below is the one handle.
 
 export interface AgentHostCommandSender {
   sendCommand(
