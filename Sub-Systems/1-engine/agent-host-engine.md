@@ -91,7 +91,10 @@ The Engine keeps the last 1,000 events in a ring buffer (an in-memory queue that
 - **Auto-rediscovers after a respawn.** If the Engine dies and restarts on a new port, the server re-reads the lock file and reconnects automatically — no server restart needed.
 - **Watermark tracking.** Remembers the last event sequence number so reconnection picks up where it left off.
 - **Heartbeat with backoff.** Checks in every 10–30 seconds and publishes a health status (`connected` / `reconnecting` / `down`) for the health indicator in the UI.
-- **Protocol version mismatch = terminal.** If the lock file shows a different `protocolVersion` than expected, health goes to permanent `down` rather than keep retrying.
+- **Protocol version mismatch = terminal.** If the lock file shows a different `protocolVersion` than expected, health goes to permanent `down` rather than keep retrying. (The heartbeat re-checks the lock, so a fixed/upgraded Engine recovers within ~30s — `down` is terminal for that lock, not forever.)
+- **A cleanly-ended event stream restarts too** *(Step 3 fix, 2026-06-04)*. If the Engine closes the `/events` stream politely (no socket error), the client now reports it like any stream death and the 500ms debounce re-opens it from the watermark. Before the fix this path reported nothing — the server went deaf (no run updates) while commands kept succeeding and health stayed `connected`.
+
+> ✅ **Step 3 (Engine re-resolution) CLOSED — live-verified 2026-06-04.** Killed the Engine mid-run twice on the dev stack: supervisor respawned it (new pid/port/hostId), the server re-resolved + reconnected hands-off in <10s, the orphaned run finalized `host-lost` in ~30s with the workflow step failing visibly + mailbox notify (`agent-terminal` + `workflow-run-failed`), and the next dispatch completed end-to-end on the new Engine. Bonus proofs: a run paused at a review gate **survived** the respawn (FD-14) and `claude.exe` children die with the Engine within ~1.5s (ConPTY teardown — no token-burning zombies). Accepted/deferred: Windows pid-recycle can cost one failed-command retry (self-heals — accepted) · no "resume" path for `host-lost` runs (S5/FD-14) · JSONL backfill is boot-only (M3 diary-as-truth).
 
 ### 8. How the Engine process is run (Step 7 — ONE runtime, shipped 2026-06-04)
 
@@ -119,7 +122,7 @@ Electron main supervises the Engine as a child process (`@pc/supervisor`) in dev
 
 Per `unified-process-supervision-2026-06-02.md` §9, Steps 3–6:
 
-- **Step 3 (Brain re-resolution):** `HostConnection` can already rediscover after an Engine respawn. Remaining: the server must **hold** (not act on stale state) if the Engine is unreachable — it currently could act on an empty snapshot.
+- ✅ **Step 3 (Brain re-resolution) — DONE 2026-06-04.** Rediscovery + reattach live-verified (see Part 7); the hold-on-unreachable half shipped earlier as Step 2's HOLD law.
 - **Step 4:** Engine absorbs the orchestrator session (`InteractiveSession`). Server stops owning the orchestrator's Claude process; hands it to the Engine as a policy run (`{ persistent, interactive, fire-and-watch }`).
 - **Step 5:** Engine absorbs the three modal sessions (`PtySession`). Same move, policy `{ ephemeral, streaming }`.
 - **Step 6:** With all sessions on the Engine, delete the duplicates: `PtySession`, `InteractiveSession`, the banner-regex ready detector (`terminalBufferLooksReady`), and PtySession's file-watching. `AgentRun` becomes the one session primitive, differentiated by policy flags. `jsonl-tailer.ts` (the base transcript reader) stays.
@@ -135,7 +138,7 @@ The current gap: today the Engine owns dispatched agents only. The orchestrator 
 - ✅ ~~Packaged host never respawns~~ — closed by Step 7 (2026-06-04, live-verified). See Part 8.
 - ✅ ~~`shutdown host-exit` never exits~~ — `server.close()` waited on the persistent `/events` stream forever; close now destroys live sockets with a deadline and the CLI awaits a `closed` promise that cannot hang (fix + 3 regression tests, 2026-06-04).
 - **Lock-file drift twin.** See Part 2. No compile-time safety net — a format change must be mirrored by hand.
-- **Step 3 is incomplete.** The server can rediscover after an Engine respawn, but its reconciler does not yet hold on an unreachable Engine. It could act on stale state. This is Step 2/3 work.
+- ✅ ~~Step 3 is incomplete~~ — HOLD shipped with Step 2 (the reconciler never acts on an unreachable/stale Engine snapshot); re-resolution + reattach live-verified 2026-06-04 incl. the graceful-stream-end deafness fix (Part 7).
 - **Stdio path is a latent dual transport.** `cli.ts` still supports the JSON-line stdio mode. In any real run, the HTTP path is always taken. The stdio branch is only exercised by tests; it is not a behavior risk in production, but it is an untested surface.
 - **Event buffer is lossy.** See Part 6. 1,000-event cap is not a correctness bug but means the stream is not a durable replay log.
 

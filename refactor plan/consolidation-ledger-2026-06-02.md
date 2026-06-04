@@ -190,7 +190,7 @@ Each row independently shippable. Risky moves after prereqs. `✅` = code alread
 | 2 | Step 2 one reconciler | **✅ DONE 2026-06-03** — `agent-run-reconciler.ts`; boot = first tick; old path deleted; live acceptance green (scope: `step2-reconciler-scope-2026-06-03.md`) | 1 | ONE-RECONCILER + HOLD + PAUSED-SURVIVES ✅ | med |
 | 3 | in-process fork DELETE | **✅ DONE 2026-06-03** (60ac149f, −288 lines; banned-resurrection gate; live green) | 2 + move null-host tests to host-fake | ONE-SPAWN-OWNER (partial) ✅ | low |
 | 4 | Step 7 Supervisor | **✅ DONE 2026-06-04** — ONE RUNTIME: Electron main supervises api+host bundle-children both modes (e39fbcbc); ☠ dev-supervisor + startInProcessServer + one-shot host spawn; host shutdown-hang fixed (ec7159f4); live acceptance green dev AND packaged | — (parallel w/ 2) | ONE-SUPERVISOR ✅ | med |
-| 5 | Step 3 Engine re-resolution | Brain re-finds Engine after respawn | 4 (need a respawn to test) | RECONNECT | med |
+| 5 | Step 3 Engine re-resolution | **✅ DONE 2026-06-04** — trace+refute found most of it already shipped (Step 2 HOLD + lock-rediscovery/hostId/lastSeq w/ tests); built the 2 real gaps: graceful `/events` end left the server silently deaf (now restarts via the S4 debounce; regression test) + a SECOND trunk-root hop-count in `claude-runtime-bundle.ts` broke EVERY dev agent dispatch since Step 7 (→ `server-root.ts`, the one derivation). Live: 2× mid-run host kills → respawn, auto-reconnect <10s, run `host-lost` ~30s + visible workflow fail + mailbox notify, next dispatch green; paused-gate survived respawn (FD-14); claude.exe dies with the host (ConPTY, no zombies). Deferred: host-lost resume → S5/FD-14 · JSONL backfill boot-only → M3 · pid-recycle accepted | 4 (need a respawn to test) | RECONNECT (host-connection suite) + ONE-ROOT ✅ | med |
 | 6 | Step 4 orchestrator→Engine | policy {persistent,interactive}; fix `thinking` type-width | 5 | (migration) | high |
 | 7 | ~~Step 5 modals→Engine~~ **☠ FD-21: modals DELETED, not migrated** (orchestrator-led authoring replaces them) | delete the 3 modal paths outright; no Engine policy needed | 6 (orchestrator must own authoring first) | (deletion) | med↓ |
 | 8 | Step 6 converge primitive | DELETE PtySession + InteractiveSession + banner-regex + file-watching + reattach field | 6,7 | ONE-TRANSCRIPT-READER / ONE-READY-DETECTOR / ONE-SPAWN-OWNER (full) | high |
@@ -199,5 +199,5 @@ Each row independently shippable. Risky moves after prereqs. `✅` = code alread
 | 11 | wi.body re-scope | KEEP; document dual purpose | — | $root.output round-trip | low |
 | 12 | workflow events = truth | route `appendEvent` through gateway/live_outbox | slice 3 | EVENTS-ARE-TRUTH | high |
 
-**Ready now (no prereq):** Step 3 Engine re-resolution (row 5 — unblocked by row 4 ✅) ·
-sync-invoke DELETE · wi.body re-scope.
+**Ready now (no prereq):** row 6 Step 4 orchestrator→Engine (unblocked by row 5 ✅; FD-2 shared-HTTP
+adoption rides it) · sync-invoke DELETE · wi.body re-scope.
