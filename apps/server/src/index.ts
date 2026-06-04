@@ -611,7 +611,10 @@ function deliverWorkflowRunFailed(input: {
     `Workflow "${input.workflowName}" failed.\n\n` +
     `Reason: ${input.reason}\n` +
     `Run: ${input.runId}` +
-    (input.workItemId ? `\nCard: ${input.workItemId}` : '');
+    (input.workItemId ? `\nCard: ${input.workItemId}` : '') +
+    // M3a — the diary IS the debugging read (FD-11): point the orchestrator at
+    // it before it guesses from the one-line reason.
+    `\n\nFor the step-by-step story (which agent ran, what the review said, where it died): pc_get_workflow_run({ runId: "${input.runId}" }) via pc_call_tool.`;
   enqueueMailboxAndFanout({
     message: {
       id: newId(),

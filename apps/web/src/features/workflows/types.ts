@@ -103,7 +103,9 @@ export interface V2RunEvent {
   type: string;
   nodeId: string | null;
   data: Record<string, unknown> | null;
-  occurredAt: number;
+  /** Epoch ms (the server's `at` column — was misnamed `occurredAt` while the
+   *  UI still discarded events; fixed when the M3a diary timeline landed). */
+  at: number;
 }
 
 export interface WorkflowFireResult {

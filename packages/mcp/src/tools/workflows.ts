@@ -363,6 +363,90 @@ export async function handleWorkflowTool(
       }
     }
 
+    // M3a — the run-diary read (FD-11): one run's state + its readable story.
+    case 'pc_get_workflow_run': {
+      const runId = typeof args.runId === 'string' ? args.runId.trim() : '';
+      if (!runId) {
+        return {
+          content: [{ type: 'text', text: 'pc_get_workflow_run: runId required' }],
+          isError: true,
+        };
+      }
+      if (!ctx.projectId) {
+        return {
+          content: [
+            { type: 'text', text: 'pc_get_workflow_run: PC_PROJECT_ID env not set — requires a project scope.' },
+          ],
+          isError: true,
+        };
+      }
+      try {
+        const res = await ctx.getServer(
+          `/api/projects/${encodeURIComponent(ctx.projectId)}/workflow-v2/runs/${encodeURIComponent(runId)}`,
+        );
+        if (res.status < 200 || res.status >= 300) {
+          return {
+            content: [{ type: 'text', text: `pc_get_workflow_run failed (${res.status}): ${res.body}` }],
+            isError: true,
+          };
+        }
+        const parsed = JSON.parse(res.body) as {
+          run?: {
+            id: string;
+            workflowName?: string;
+            status: string;
+            lastReason?: string | null;
+            startedAt?: number | null;
+            endedAt?: number | null;
+          };
+          events?: Array<{
+            type: string;
+            nodeId: string | null;
+            data: Record<string, unknown> | null;
+            at: number;
+          }>;
+        };
+        const run = parsed.run;
+        if (!run) {
+          return {
+            content: [{ type: 'text', text: `pc_get_workflow_run: run ${runId} not found` }],
+            isError: true,
+          };
+        }
+        const diary = (parsed.events ?? []).map((ev) => ({
+          at: ev.at,
+          line: diaryLine(ev),
+          type: ev.type,
+          nodeId: ev.nodeId,
+          data: ev.data,
+        }));
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: true,
+                run: {
+                  id: run.id,
+                  workflowName: run.workflowName,
+                  status: run.status,
+                  lastReason: run.lastReason ?? null,
+                  startedAt: run.startedAt ?? null,
+                  endedAt: run.endedAt ?? null,
+                },
+                diary,
+              }),
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_get_workflow_run failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
     case 'pc_get_workflow': {
       const workflowId = typeof args.id === 'string' ? args.id.trim() : '';
       if (!workflowId) {
@@ -391,4 +475,56 @@ export async function handleWorkflowTool(
     default:
       return null;
   }
+}
+
+/** M3a — one diary row → one plain-English line. Dual-audience rule: the
+ *  orchestrator narrates these to a non-technical user, so lead with what
+ *  happened in normal words; ids stay in the structured fields alongside. */
+function diaryLine(ev: {
+  type: string;
+  nodeId: string | null;
+  data: Record<string, unknown> | null;
+}): string {
+  const node = ev.nodeId ? `step "${ev.nodeId}"` : 'the run';
+  const d = ev.data ?? {};
+  switch (ev.type) {
+    case 'workflow_started':
+      return `Run started (trigger: ${String(d.trigger ?? 'manual')}).`;
+    case 'workflow_completed':
+      return 'Run completed.';
+    case 'workflow_failed':
+      return 'Run failed.';
+    case 'workflow_cancelled':
+      return 'Run cancelled.';
+    case 'run_interrupted':
+      return `Run interrupted — the server restarted with it in flight (${String(d.reason ?? 'interrupted-on-boot')}).`;
+    case 'node_started':
+      return `${cap(node)} started.`;
+    case 'node_completed':
+      return `${cap(node)} completed.`;
+    case 'node_failed':
+      return `${cap(node)} failed${d.error ? ` — ${String(d.error)}` : ''}.`;
+    case 'node_skipped':
+      return `${cap(node)} skipped${d.reason ? ` (${String(d.reason)})` : ''}.`;
+    case 'agent_dispatched':
+      return `${cap(node)}: agent "${String(d.agent ?? '?')}" dispatched (agentRunId ${String(d.agentRunId ?? '?')} — inspectable via pc_inspect_agent_run).`;
+    case 'review_requested':
+      return `Review requested at ${node}.`;
+    case 'review_approved':
+      return `Review at ${node} approved.`;
+    case 'review_rejected':
+      return `Review at ${node} rejected — the work goes back for another round.`;
+    case 'iteration_ceiling_hit':
+      return `Reject ceiling reached at ${node} — held for a human decision.`;
+    case 'card_moved':
+      return d.error
+        ? `Card move to "${String((d.stage as string) ?? '?')}" FAILED — ${String(d.error)}.`
+        : `Card moved to "${String((d.stage as string) ?? '?')}".`;
+    default:
+      return `${ev.type}${ev.nodeId ? ` (${ev.nodeId})` : ''}.`;
+  }
+}
+
+function cap(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

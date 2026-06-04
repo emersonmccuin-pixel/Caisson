@@ -19,11 +19,11 @@ import type { WorkflowV2 } from '@pc/domain';
 import { isWorkflowRunChangedLivePayload } from '@pc/contracts';
 
 import type { Project, ULID } from '@/features/projects/client';
-import { workflowsApi, type V2RunDetail, type V2RunStatus, type V2RunSummary, type WorkflowRow } from '@/features/workflows/client';
+import { workflowsApi, type V2RunDetail, type V2RunEvent, type V2RunStatus, type V2RunSummary, type WorkflowRow } from '@/features/workflows/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useProjectWorkflows } from '@/hooks/use-project-workflows';
 import { useProjectWorkflowV2Runs } from '@/hooks/use-project-workflow-v2-runs';
-import { useLiveEvents } from '@/store/live-store';
+import { useLiveEntitySignature, useLiveEvents } from '@/store/live-store';
 import { useWorkflowsListNav } from '@/store/workflows-list-nav';
 import { CreateWorkflowModal } from './CreateWorkflowModal';
 import { WorkflowGraphV2 } from './WorkflowGraphV2';
@@ -845,15 +845,19 @@ function RunInlineDetail({
   onClose: () => void;
 }) {
   const [run, setRun] = useState<V2RunDetail | null>(null);
+  const [diary, setDiary] = useState<V2RunEvent[]>([]);
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setRun(null);
+    setDiary([]);
     setLoadErr(null);
     void workflowsApi.getV2Run(project.id, runId)
       .then((res) => {
-        if (!cancelled) setRun(res.run);
+        if (cancelled) return;
+        setRun(res.run);
+        setDiary(res.events ?? []);
       })
       .catch((e: Error) => {
         if (!cancelled) setLoadErr(e.message);
@@ -862,6 +866,27 @@ function RunInlineDetail({
       cancelled = true;
     };
   }, [project.id, runId]);
+
+  // M3a — the run diary is a first-class live fact (`workflow.run.event`).
+  // The store keeps the latest line per run (identity-keyed); the signature
+  // flips on every genuine new line → refetch the full ordered diary once.
+  const diarySig = useLiveEntitySignature('workflow-run-event', project.id);
+  useEffect(() => {
+    if (!diarySig) return;
+    let cancelled = false;
+    void workflowsApi.getV2Run(project.id, runId)
+      .then((res) => {
+        if (cancelled) return;
+        setRun(res.run);
+        setDiary(res.events ?? []);
+      })
+      .catch(() => {
+        /* transient — the next line or reopen converges it */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [diarySig, project.id, runId]);
 
   // Latest live run snapshot for THIS run from the identity-keyed store (the
   // version-deduped run-changed frame carries the full DTO incl. dagState).
@@ -914,7 +939,7 @@ function RunInlineDetail({
           Close
         </button>
       </header>
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {loadErr ? (
           <div className="p-4 text-xs text-destructive">
             Couldn't load run: {loadErr}
@@ -922,11 +947,90 @@ function RunInlineDetail({
         ) : !run || !def ? (
           <div className="p-4 text-xs text-muted-foreground">Loading run…</div>
         ) : (
-          <WorkflowGraphV2 workflow={def} runState={liveDag} />
+          <>
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <WorkflowGraphV2 workflow={def} runState={liveDag} />
+            </div>
+            <RunDiary diary={diary} />
+          </>
         )}
       </div>
     </div>
   );
+}
+
+/** M3a — the run diary timeline (FD-11: "a frozen run is never a mystery").
+ *  One plain-English line per `workflow_run_events` row, oldest first; live
+ *  lines land via the workflow.run.event refetch in RunInlineDetail. */
+function RunDiary({ diary }: { diary: V2RunEvent[] }) {
+  const endRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [diary.length]);
+
+  return (
+    <aside className="flex w-80 shrink-0 flex-col border-l border-border bg-muted/20">
+      <div className="border-b border-border px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        Run diary
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+        {diary.length === 0 ? (
+          <div className="text-[11px] italic text-muted-foreground/70">
+            No diary entries yet.
+          </div>
+        ) : (
+          <ol className="space-y-1.5">
+            {diary.map((ev) => (
+              <li key={ev.id} className="text-[11px] leading-snug">
+                <span className="mr-1.5 font-mono text-[10px] text-muted-foreground">
+                  {new Date(ev.at).toLocaleTimeString()}
+                </span>
+                <span className={diaryTone(ev.type)}>{diaryLine(ev)}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+        <div ref={endRef} />
+      </div>
+    </aside>
+  );
+}
+
+/** Web twin of the pc_get_workflow_run renderer (different surface, same
+ *  vocabulary — compact for the panel; the tool's prose is for the chat). */
+function diaryLine(ev: V2RunEvent): string {
+  const node = ev.nodeId ? `"${ev.nodeId}"` : '';
+  const d = ev.data ?? {};
+  switch (ev.type) {
+    case 'workflow_started': return `Run started (${String(d.trigger ?? 'manual')}).`;
+    case 'workflow_completed': return 'Run completed.';
+    case 'workflow_failed': return 'Run failed.';
+    case 'workflow_cancelled': return 'Run cancelled.';
+    case 'run_interrupted': return 'Run interrupted — server restarted mid-flight.';
+    case 'node_started': return `Step ${node} started.`;
+    case 'node_completed': return `Step ${node} completed.`;
+    case 'node_failed': return `Step ${node} failed${d.error ? ` — ${String(d.error)}` : ''}.`;
+    case 'node_skipped': return `Step ${node} skipped${d.reason ? ` (${String(d.reason)})` : ''}.`;
+    case 'agent_dispatched': return `Step ${node}: agent ${String(d.agent ?? '?')} dispatched.`;
+    case 'review_requested': return `Review requested at ${node}.`;
+    case 'review_approved': return `Review ${node} approved.`;
+    case 'review_rejected': return `Review ${node} rejected — sent back.`;
+    case 'iteration_ceiling_hit': return `Reject ceiling hit at ${node} — held for a human.`;
+    case 'card_moved':
+      return d.error
+        ? `Card move to "${String(d.stage ?? '?')}" failed.`
+        : `Card moved to "${String(d.stage ?? '?')}".`;
+    default: return `${ev.type}${node ? ` ${node}` : ''}.`;
+  }
+}
+
+function diaryTone(type: string): string {
+  if (type === 'workflow_failed' || type === 'node_failed' || type === 'run_interrupted') {
+    return 'text-destructive';
+  }
+  if (type === 'workflow_completed') return 'text-foreground font-medium';
+  if (type === 'review_rejected' || type === 'iteration_ceiling_hit') return 'text-amber-600';
+  return 'text-foreground/90';
 }
 
 function YamlTab({ row, onSaved }: { row: WorkflowRow; onSaved: () => void }) {

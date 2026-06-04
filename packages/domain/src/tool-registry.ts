@@ -1127,6 +1127,25 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
+    "name": "pc_get_workflow_run",
+    "family": "workflow",
+    "label": "Read a workflow run + its diary",
+    "description": "Fetch one workflow run's current state AND its full step-by-step diary (the run's readable story: started, agent dispatched (with the agentRunId to inspect), node completed/failed, review requested/rejected with notes, card moved, cancelled/interrupted, ...). THE debugging read for a stuck, failed, or mysterious run — read the diary before guessing. Cross-link: an `agent_dispatched` line carries `agentRunId`; follow it with pc_inspect_agent_run. Returns { ok, run: { id, status, lastReason, startedAt, endedAt }, diary: [{ at, line, type, nodeId, data }] }.",
+    "catalogDescription": "One run's status + readable step-by-step diary (the run's story; debugging read).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "description": "workflow run ULID (from pc_fire_workflow, a workflow-run-failed notice, or the Workflows page)"
+        }
+      },
+      "required": [
+        "runId"
+      ]
+    }
+  },
+  {
     "name": "pc_replace_stages",
     "family": "project",
     "label": "Replace project stages",
@@ -1673,6 +1692,8 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   // Workflow authoring — workflow-builder-owned default.
   pc_create_workflow: 'on-demand',
   pc_get_workflow: 'on-demand',
+  // M3a — the run-diary read (FD-11 debugging; reach it via pc_call_tool).
+  pc_get_workflow_run: 'on-demand',
   pc_update_workflow: 'on-demand',
   pc_delete_workflow: 'on-demand',
   pc_publish_workflow: 'on-demand',

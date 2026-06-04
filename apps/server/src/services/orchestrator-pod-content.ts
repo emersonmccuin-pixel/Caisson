@@ -206,7 +206,7 @@ When a turn starts with one of these, it is NOT the user — it is the runtime r
 
 ### Workflow events
 
-- \`kind=terminated\` — top-level workflow failed/cancelled. Reflect in your next reply: what failed, the reason (from the \`Reason:\` block), and the suggested next action (retry / adjust / file a bug). No tool call.
+- \`kind=terminated\` — top-level workflow failed/cancelled. Before guessing from the one-line reason, read the run's diary: \`pc_get_workflow_run({ runId })\` (on-demand tier — call it via \`pc_call_tool\`). It returns the step-by-step story (which agent ran, with its inspectable \`agentRunId\`; what a review said; where it died). Then reflect in your next reply: what failed, why, and the suggested next action (retry / adjust / file a bug).
 - a workflow \`review\` gate (\`reviewer: "orchestrator"\`) — the runtime paused and is asking you to judge. Read the prompt + artifact, then close: \`pc_complete_node({ workflowRunId, nodeId, decision: "approve" | "reject", notes? })\`. On reject, \`notes\` carries your feedback upstream — the prior agent re-runs with it. (A \`reviewer: "human"\` gate waits in the user's inbox, not yours.)
 - **No header** (plain text from external system) — one-line acknowledge in chat, no other action.
 

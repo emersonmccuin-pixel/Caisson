@@ -969,6 +969,22 @@
       }
     },
     {
+      "name": "pc_get_workflow_run",
+      "description": "Fetch one workflow run's current state AND its full step-by-step diary (the run's readable story: started, agent dispatched (with the agentRunId to inspect), node completed/failed, review requested/rejected with notes, card moved, cancelled/interrupted, ...). THE debugging read for a stuck, failed, or mysterious run — read the diary before guessing. Cross-link: an `agent_dispatched` line carries `agentRunId`; follow it with pc_inspect_agent_run. Returns { ok, run: { id, status, lastReason, startedAt, endedAt }, diary: [{ at, line, type, nodeId, data }] }.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "description": "workflow run ULID (from pc_fire_workflow, a workflow-run-failed notice, or the Workflows page)"
+          }
+        },
+        "required": [
+          "runId"
+        ]
+      }
+    },
+    {
       "name": "pc_replace_stages",
       "description": "Bulk-replace a project's stages. The server validates uniqueness, flag constraints, and in-use stage safety. When a removed stage still has work items, the server returns 409 STAGE_HAS_ITEMS with an `orphans` array — surface this to the caller instead of swallowing. Pass `force: true` + `fallbackStageId` (a retained stage id) to force-remove and reassign orphaned items. Always call `pc_request_approval` before removing, reordering, or re-flagging stages.",
       "inputSchema": {
@@ -1454,6 +1470,7 @@
     "mcp__pc-rig__pc_update_workflow",
     "mcp__pc-rig__pc_delete_workflow",
     "mcp__pc-rig__pc_get_workflow",
+    "mcp__pc-rig__pc_get_workflow_run",
     "mcp__pc-rig__pc_replace_stages",
     "mcp__pc-rig__pc_replace_field_schemas",
     "mcp__pc-rig__pc_attach_to_work_item",
@@ -1745,6 +1762,12 @@
       "slug": "mcp__pc-rig__pc_get_workflow",
       "label": "Read a workflow",
       "description": "Fetch a single workflow row by DB ULID or slug.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_get_workflow_run",
+      "label": "Read a workflow run + its diary",
+      "description": "One run's status + readable step-by-step diary (the run's story; debugging read).",
       "source": "pc-rig"
     },
     {
