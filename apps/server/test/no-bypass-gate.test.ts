@@ -203,7 +203,7 @@ const MUTATOR_IMPORT_ALLOWLIST: Record<string, string> = {
   'apps/server/src/services/auto-advance-done.ts':
     'helper ONLY: returns the moved row to callers that wrap it in their own gateway commit (verification paths).',
   'apps/server/src/services/agent-audit.ts':
-    '☠ M3 — appendWorkItemHistory is audit-only (no version bump, deliberately no receipt); folds into the FD-13 diary.',
+    'appendWorkItemHistory is audit-only (no version bump, deliberately no receipt). M3a verdict 2026-06-04: a WORK-ITEM activity concern, not a run happening — the fold rides the WI activity model (M5/M6), not the run diary.',
   'apps/server/src/features/work-items/routes.ts':
     'fields-only PATCH via gateway; reassignStage = stage-delete bulk fallback whose receipt rides stage.list.changed.',
 };
