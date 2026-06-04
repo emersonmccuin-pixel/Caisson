@@ -18,11 +18,10 @@ function makeRow(over: Partial<WorkflowRunV2Record> = {}): WorkflowRunV2Record {
     workflowName: 'Deploy',
     projectId: 'p1',
     workItemId: 'wi1',
-    trigger: 'manual',
     stageId: null,
     triggeredBySessionId: null,
     status: 'running',
-    workflowYamlSnapshot: JSON.stringify({ id: 'deploy', name: 'Deploy', triggers: [], nodes: [] }),
+    workflowYamlSnapshot: JSON.stringify({ id: 'deploy', name: 'Deploy', nodes: [] }),
     worktreePath: null,
     dagState: { nodes: {} },
     triggerContext: {},
@@ -87,7 +86,7 @@ test('commitRunChange emits exactly one canonical workflow.run.changed with rev 
 });
 
 test('definitionHash is surfaced on the run DTO and is snapshot-derived', () => {
-  const snapshot = JSON.stringify({ id: 'deploy', name: 'Deploy', triggers: [], nodes: [{ id: 'a', kind: 'agent', agent: 'writer', task: 'go' }] });
+  const snapshot = JSON.stringify({ id: 'deploy', name: 'Deploy', nodes: [{ id: 'a', kind: 'agent', agent: 'writer', task: 'go' }] });
   const { gateway } = makeGateway(makeRow({ workflowYamlSnapshot: snapshot }));
   const pub = gateway.commitRunChange({ projectId: 'p1', reason: 'advanced', mutate: () => makeRow({ workflowYamlSnapshot: snapshot }) });
   assert.equal(typeof pub.run.definitionHash, 'string');

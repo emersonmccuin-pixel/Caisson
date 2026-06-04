@@ -211,7 +211,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_move_work_item",
     "family": "work-item",
     "label": "Move work item to a stage",
-    "description": "Move a work item to a different stage. Pass EITHER `toStage` (an explicit stage slug) OR `toFlag` (one of 'done' | 'cancelled' | 'new' — the system resolves to whichever stage carries that flag, surviving renames). When the destination has an `on_enter` workflow trigger, that workflow fires automatically against the bound wi-<id> worktree. Landing in an is_done stage flips status to `complete`; is_cancelled → `cancelled`. Use the optional `notes` to capture a reason (e.g. when cancelling) — lands on the card's move history. `id` accepts ULID or callsign (e.g. `pc-2.1`).",
+    "description": "Move a work item to a different stage. Pass EITHER `toStage` (an explicit stage slug) OR `toFlag` (one of 'done' | 'cancelled' | 'new' — the system resolves to whichever stage carries that flag, surviving renames). A move never starts a workflow — if a workflow should run on this card, fire it deliberately with pc_fire_workflow. Landing in an is_done stage flips status to `complete`; is_cancelled → `cancelled`. Use the optional `notes` to capture a reason (e.g. when cancelling) — lands on the card's move history. `id` accepts ULID or callsign (e.g. `pc-2.1`).",
     "catalogDescription": "Advance / move a card to a different stage.",
     "inputSchema": {
       "type": "object",
@@ -848,14 +848,14 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_publish_workflow",
     "family": "workflow",
     "label": "Publish workflow",
-    "description": "Section 19.17 — publish the v2 workflow to the DB-backed `/api/workflows` surface. Validates the graph (cycles, unknown node ids, `when:` grammar, trigger shape, ref integrity), upserts the row (GET → match by slug → PUT or POST), which records a `workflow.definition.changed` live-event so the Workflows tab refreshes. Returns 201 on first-write, 200 on overwrite. 400 on validation errors with per-path `errors:` array — translate to plain English and re-publish after fixing.",
+    "description": "Section 19.17 — publish the v2 workflow to the DB-backed `/api/workflows` surface. Validates the graph (cycles, unknown node ids, `when:` grammar, ref integrity; a `triggers:` key is rejected — workflows have no triggers), upserts the row (GET → match by slug → PUT or POST), which records a `workflow.definition.changed` live-event so the Workflows tab refreshes. Returns 201 on first-write, 200 on overwrite. 400 on validation errors with per-path `errors:` array — translate to plain English and re-publish after fixing.",
     "catalogDescription": "Commit the v2 workflow to the project DB (overwrite by slug).",
     "inputSchema": {
       "type": "object",
       "properties": {
         "def": {
           "type": "object",
-          "description": "v2 workflow object: { id, name, triggers: [...], nodes: [...], description?, worktree? }. Nodes are kind 'agent' { agent, task, input?, expected_output?, move?, next?, when? } or 'review' { reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire step-to-step output via input ports — `input: { name: \"$earlierId.output\" }` + `{{name}}` in task/prompt (preferred) — or inline `$earlierId.output` refs (= the upstream step's deliverable; `.field` needs a `payload` output). Every `{{name}}` needs an `input:` key and every ref must point at a strictly-earlier step, else the publish returns a validation error.",
+          "description": "v2 workflow object: { id, name, nodes: [...], description?, worktree? } (NO triggers key — runs start via Run-now or pc_fire_workflow). Nodes are kind 'agent' { agent, task, input?, expected_output?, move?, next?, when? } or 'review' { reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire step-to-step output via input ports — `input: { name: \"$earlierId.output\" }` + `{{name}}` in task/prompt (preferred) — or inline `$earlierId.output` refs (= the upstream step's deliverable; `.field` needs a `payload` output). Every `{{name}}` needs an `input:` key and every ref must point at a strictly-earlier step, else the publish returns a validation error.",
           "additionalProperties": true
         }
       },
@@ -887,7 +887,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_list_stages",
     "family": "project",
     "label": "List project stages",
-    "description": "List the project's stages live from the server. Use this BEFORE asking the user which stage should trigger a workflow (or which stage a create/update-work-item step should target). Returns { ok: true, stages: [{ id, name, order, isDone?, isCancelled?, isNew? }, ...] }. Stage `id` is what goes into `triggers.on_enter.stage_id` — never use the name. Use `isDone` / `isCancelled` / `isNew` for semantic stage roles instead of guessing from labels. No arguments; PC_PROJECT_ID env is the implicit scope.",
+    "description": "List the project's stages live from the server. Use this BEFORE writing any stage id into a workflow step's `move` field or a work-item create/move. Returns { ok: true, stages: [{ id, name, order, isDone?, isCancelled?, isNew? }, ...] }. Always use the stage `id`, never the name. Use `isDone` / `isCancelled` / `isNew` for semantic stage roles instead of guessing from labels. No arguments; PC_PROJECT_ID env is the implicit scope.",
     "catalogDescription": "List the project's stages by id + label.",
     "inputSchema": {
       "type": "object",
@@ -920,8 +920,8 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_fire_workflow",
     "family": "workflow",
     "label": "Fire a workflow",
-    "description": "Fire a workflow by slug (the `id:` field, e.g. \"triage\") or DB ULID. Resolves the row, dispatches through the v2 executor, and returns the runId + rootWorkItemId. Use this when the user explicitly names a workflow (\"run the triage workflow\"). Trigger defaults to `{ kind: \"manual\" }`. Returns { ok: true, runId, rootWorkItemId } on success; 400 on disabled / invalid rows; 404 on unknown slug. PC_PROJECT_ID env is the implicit project scope.",
-    "catalogDescription": "Trigger a workflow by slug or ULID; returns the new runId + root work item id.",
+    "description": "Fire a workflow by slug (the `id:` field, e.g. \"triage\") or DB ULID — one of exactly two ways a run starts (the other is the UI \"Run now\" button; workflows have no triggers). Resolves the row, dispatches through the v2 executor, and returns the runId + rootWorkItemId. Pass `work_item_id` to run the workflow ON an existing card (it becomes the run root — its body is `$root.output`); omit it to mint a blank root. Returns { ok: true, runId, rootWorkItemId } on success; 400 on disabled / invalid rows; 404 on unknown slug. PC_PROJECT_ID env is the implicit project scope.",
+    "catalogDescription": "Fire a workflow by slug or ULID, optionally on an existing card; returns the new runId + root work item id.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -929,9 +929,9 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
           "type": "string",
           "description": "workflow slug (preferred — the `id:` field in the YAML) or DB ULID"
         },
-        "trigger": {
-          "type": "object",
-          "description": "optional trigger payload. Defaults to { kind: \"manual\" }. For stage-on-entry, supply { kind: \"stage-on-entry\", stage: \"<stageId>\" } — but typically you fire manually."
+        "work_item_id": {
+          "type": "string",
+          "description": "optional work item ULID — run the workflow ON this existing card (it becomes the run root). Omit to mint a blank root card."
         }
       },
       "required": [
@@ -1031,7 +1031,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "def": {
           "type": "object",
-          "description": "v2 workflow graph object (alternative to yaml). { id, name, triggers:[...], nodes:[...] }. Nodes are kind 'agent' { agent, task, input?, expected_output?, move?, next?, when? } or 'review' { reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire step output→input via input ports `input:{ name:\"$earlierId.output\" }` + `{{name}}` (preferred) or inline `$earlierId.output` refs (the upstream deliverable; `.field` needs a `payload` output). Refs must point at strictly-earlier steps.",
+          "description": "v2 workflow graph object (alternative to yaml). { id, name, nodes:[...] } (NO triggers key — runs start via Run-now or pc_fire_workflow). Nodes are kind 'agent' { agent, task, input?, expected_output?, move?, next?, when? } or 'review' { reviewer:'human'|'orchestrator', prompt?, reject?, move?, next? }. Wire step output→input via input ports `input:{ name:\"$earlierId.output\" }` + `{{name}}` (preferred) or inline `$earlierId.output` refs (the upstream deliverable; `.field` needs a `payload` output). Refs must point at strictly-earlier steps.",
           "additionalProperties": true
         },
         "scope": {

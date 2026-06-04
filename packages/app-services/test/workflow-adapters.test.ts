@@ -11,7 +11,7 @@ import {
 import { isWorkflowDefinitionDto, isWorkflowRunDto } from '@pc/contracts';
 import type { WorkflowRunV2Record } from '@pc/db';
 
-const snapshot = JSON.stringify({ id: 'deploy', name: 'Deploy', triggers: [], nodes: [] });
+const snapshot = JSON.stringify({ id: 'deploy', name: 'Deploy', nodes: [] });
 
 const runRow: WorkflowRunV2Record = {
   id: 'r1',
@@ -19,7 +19,6 @@ const runRow: WorkflowRunV2Record = {
   workflowName: 'Deploy',
   projectId: 'p1',
   workItemId: 'wi1',
-  trigger: 'manual',
   stageId: null,
   triggeredBySessionId: null,
   status: 'running',

@@ -319,12 +319,9 @@ export const workflowRunsV2 = sqliteTable(
       .references(() => projects.id),
     /** The `is_workflow_root` work item for this run. */
     workItemId: text('work_item_id').$type<ULID | null>(),
-    /** Trigger kind that fired this run (`manual` | `stage-on-entry` | …). */
-    trigger: text('trigger').notNull().$type<WorkflowV2.TriggerKind>(),
-    /** stage_id slug when trigger = `stage-on-entry`. */
-    stageId: text('stage_id'),
-    /** Session that fired a manual / orchestrator run. */
-    triggeredBySessionId: text('triggered_by_session_id').$type<ULID | null>(),
+    // ☠ M6/FD-10 (migration 0043): trigger · stage_id · triggered_by_session_id
+    // · trigger_context columns dropped — runs no longer record a trigger; the
+    // only two fire doors are "Run now" and the orchestrator fire tool.
     status: text('status')
       .notNull()
       .default('pending')
@@ -337,11 +334,6 @@ export const workflowRunsV2 = sqliteTable(
       .notNull()
       .default(sql`'{"nodes":{}}'`)
       .$type<WorkflowV2.WorkflowDagState>(),
-    /** Trigger payload (`$trigger.*`) — stage-move context, webhook body, etc. */
-    triggerContext: text('trigger_context', { mode: 'json' })
-      .notNull()
-      .default(sql`'{}'`)
-      .$type<Record<string, unknown>>(),
     metadata: text('metadata', { mode: 'json' })
       .notNull()
       .default(sql`'{}'`)

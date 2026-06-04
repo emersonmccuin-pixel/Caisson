@@ -28,8 +28,6 @@ function runDtoToSummary(run: WorkflowRunDto): V2RunSummary {
     workflowName: run.workflowName,
     projectId: run.projectId,
     workItemId: run.workItemId,
-    trigger: run.trigger,
-    stageId: run.stageId,
     status: run.status as V2RunStatus,
     worktreePath: run.worktreePath,
     lastReason: run.lastReason,

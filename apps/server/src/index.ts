@@ -104,6 +104,7 @@ import { cleanupLegacyProjectRuntimeFiles } from './services/legacy-runtime-clea
 import { resetStockPodToDefault } from './services/stock-pod-reset.ts';
 import { detectStockPodDrift, listCanonicalStockPodNames } from './services/pod-drift.ts';
 import { seedStockPods } from './services/stock-pod-seed.ts';
+import { stripTriggersFromStoredWorkflowDefs } from './services/workflow-def-trigger-strip.ts';
 import { createAgentRunReconciler } from './services/agent-run-reconciler.ts';
 import { getActiveRunRegistry } from './services/agent-active-runs.ts';
 import { writeRunStatus } from './services/workflow-run-writer.ts';
@@ -191,6 +192,18 @@ applyClaudeRuntimeSettings(readSettings());
       case 'unchanged':
         break;
     }
+  }
+}
+
+// M6/FD-10 — one-shot sweep: strip the dead `triggers:` key from stored
+// workflow definitions (idempotent; no-op once clean).
+{
+  const res = stripTriggersFromStoredWorkflowDefs();
+  if (res.rewritten > 0) {
+    console.log(
+      `[pc] M6/FD-10 trigger strip: rewrote ${res.rewritten}/${res.scanned} workflow defs` +
+        (res.nowInvalid.length ? ` (invalid for other reasons: ${res.nowInvalid.join(', ')})` : ''),
+    );
   }
 }
 
@@ -927,10 +940,10 @@ registerWorkflowRoutes(app, {
       }
     }
   },
-  fireWorkflow: async (projectId, def, trigger) => {
+  fireWorkflow: async (projectId, def, rootWorkItemId) => {
     const runtime = resolveProject(projectId);
     if (!runtime) throw new Error(`unknown project: ${projectId}`);
-    return runtime.fireV2Workflow(def, trigger);
+    return runtime.fireV2Workflow(def, rootWorkItemId);
   },
 });
 

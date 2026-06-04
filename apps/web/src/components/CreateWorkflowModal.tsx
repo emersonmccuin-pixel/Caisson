@@ -55,7 +55,6 @@ export function CreateWorkflowModal({
           name: trimmed,
           description: '',
           disabled: true, // skeleton can't fire until the user finishes + enables it
-          triggers: [{ kind: 'manual' }],
           nodes: [
             {
               id: 'step-1',

@@ -31,7 +31,6 @@ function oneAgentWorkflow(): WorkflowV2.Workflow {
   return {
     id: 'wf',
     name: 'Test Flow',
-    triggers: [],
     nodes: [{ id: 'a', kind: 'agent', agent: 'writer', task: 'do it' }],
   };
 }
@@ -61,7 +60,6 @@ test('a step with `move` advances the card on completion (card-move effect)', as
     {
       id: 'wf',
       name: 'WF',
-      triggers: [],
       nodes: [{ id: 'a', kind: 'agent', agent: 'x', task: 'go', move: 'review' }],
     },
     deps,
@@ -81,7 +79,6 @@ test('a failed step does NOT move the card', async () => {
     {
       id: 'wf',
       name: 'WF',
-      triggers: [],
       nodes: [{ id: 'a', kind: 'agent', agent: 'x', task: 'go', move: 'review' }],
     },
     deps,
@@ -100,7 +97,6 @@ test('an approved review node applies its `move` (card-move on approve)', async 
   const wf: WorkflowV2.Workflow = {
     id: 'wf',
     name: 'WF',
-    triggers: [],
     nodes: [
       { id: 'a', kind: 'agent', agent: 'x', task: 'go', next: ['gate'] },
       { id: 'gate', kind: 'review', reviewer: 'human', move: 'done', next: [] },
@@ -128,7 +124,6 @@ test('reject notes auto-flow to the kicked-back node as $carry.feedback', async 
   const wf: WorkflowV2.Workflow = {
     id: 'wf',
     name: 'WF',
-    triggers: [],
     nodes: [
       { id: 'build', kind: 'agent', agent: 'x', task: 'build it' },
       { id: 'gate', kind: 'review', reviewer: 'human', reject: { back_to: 'build', max_iterations: 3 } },
@@ -162,7 +157,6 @@ test('an explicit reject.carry.feedback overrides the auto-seeded notes', async 
   const wf: WorkflowV2.Workflow = {
     id: 'wf',
     name: 'WF',
-    triggers: [],
     nodes: [
       { id: 'build', kind: 'agent', agent: 'x', task: 'build it' },
       {

@@ -1,7 +1,7 @@
 // Section 19 — v2 workflow store (serialize/parse + registry).
 // v1 surfaces (validator/parser, serializer, registry, typed-parser/
 // validator/migration) deleted in 19.12.
-export { serializeWorkflowV2, parseWorkflowV2Text, isV2WorkflowText, WORKFLOW_V2_VERSION } from './serialize-v2.ts';
+export { serializeWorkflowV2, parseWorkflowV2Text, isV2WorkflowText, stripTriggersFromWorkflowText, WORKFLOW_V2_VERSION } from './serialize-v2.ts';
 export type { ParseV2Result } from './serialize-v2.ts';
 export { WorkflowV2Registry } from './registry-v2.ts';
 export type {
@@ -19,10 +19,6 @@ export {
   checkTriggerRule,
   validateWorkflowV2,
   type ValidationResult,
-  isForwardStageMove,
-  firesOnStageEntry,
-  selectStageEntryWorkflows,
-  type StageMove,
   substituteRefs,
   substituteInputs,
   extractInputPlaceholders,

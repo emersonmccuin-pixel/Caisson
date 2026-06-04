@@ -196,11 +196,10 @@ export async function handleWorkflowTool(
           }
           rowId = match.id;
         }
-        const trigger =
-          args.trigger && typeof args.trigger === 'object'
-            ? args.trigger
-            : { kind: 'manual' };
-        const body: Record<string, unknown> = { trigger, projectId: ctx.projectId };
+        const body: Record<string, unknown> = { projectId: ctx.projectId };
+        if (typeof args.work_item_id === 'string' && args.work_item_id.trim()) {
+          body.workItemId = args.work_item_id.trim();
+        }
         // Slice 011 — typed client parses WorkflowRunDto; raw body emitted verbatim.
         const res = await ctx.client.fireWorkflow(`/api/workflows/${encodeURIComponent(rowId)}/fire`, body);
         if (res.status >= 200 && res.status < 300) {

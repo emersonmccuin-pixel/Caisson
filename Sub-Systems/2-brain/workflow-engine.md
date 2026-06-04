@@ -31,15 +31,21 @@ Under the hood a workflow is stored in the database as the definition of record.
 
 > 📌 **Rebuild requirement (Emerson):** the graphical representation must be robust, good, and *editable* — today visual editing is the weakest part of authoring.
 
-### 2. Triggering (what starts the line)
+### 2. Starting a run (what starts the line)
 
-Three ways a run starts today:
-- **A card enters a specific stage.** Each workflow binds to one exact stage in one project — no roles, no tags, no indirection. Only *forward* moves count (a card dragged backward doesn't re-fire the line). (`project-runtime.ts:362`, `dag/triggers.ts`) ⚠️ **Sentenced by FD-10:** stage-entry triggering is deleted in the rebuild.
-- **Manually** — "run this now" over HTTP. (`workflow-routes.ts`)
-- **The orchestrator fires it** with its `pc_fire_workflow` tool.
+**☠ FD-10 EXECUTED (M6 slice A, 2026-06-04): workflows declare NO triggers.** The definition has no
+`triggers:` key (the validator rejects one); the stage-watching machinery (`dag/triggers.ts`, the
+firing half of the old `moveAndFireV2` — now `moveWorkItemV2`), the schedule/event vapor kinds, and
+the run row's trigger columns (migration 0043) are all deleted. A boot-time sweep stripped the key
+from every stored definition.
 
-> 🟢 **FD-10 (locked 2026-06-03):** the rebuild keeps exactly two triggers — orchestrator fire tool +
-> manual. The stage-watching machinery goes.
+Exactly two ways a run starts, both landing on the ONE fire route (`POST /api/workflows/:id/fire`):
+- **Manually** — the "Run now" button. (`workflow-routes.ts`)
+- **The orchestrator fires it** with `pc_fire_workflow`.
+
+Either can target an existing card: the fire carries an optional `workItemId` and that card becomes
+the run root (`$root.output` = its body) — the capability stage-entry used to provide, now through
+the one deliberate door.
 
 ### 3. The steps (nodes)
 
@@ -103,7 +109,7 @@ the new semantics on the spine once).
 
 ### 9. Saving safely (validation + publishing)
 
-- **"Saved ⇒ runnable."** Saving validates everything: step kinds, unique names, wiring points backward only, placeholders bind, no cycles (except reject back-edges), trigger shape, and no two workflows fighting over the same stage. Invalid files land visibly as `invalid`, never silently. (`dag/validate.ts`)
+- **"Saved ⇒ runnable."** Saving validates everything: step kinds, unique names, wiring points backward only, placeholders bind, no cycles (except reject back-edges), and a leftover `triggers:` key is rejected outright (☠ FD-10). Invalid files land visibly as `invalid`, never silently. (`dag/validate.ts`)
 - Definitions are versionless today — editing a definition doesn't touch in-flight runs (each run froze its own snapshot of the workflow at start). ⚠️ No decided rule yet for "what should editing do to runs in flight?"
 
 ### 10. Watching and stopping a run
@@ -116,7 +122,7 @@ the new semantics on the spine once).
 ## How it connects
 
 - **Depends on:** the one agent-dispatch door (`dispatchFreshAgent`) · the Work Contract service (reads deliverables for `$step.output`) · the run gateway (all writes = row + live-event in one transaction) · the mailbox (reviews + failure notices) · card moves (`moveWorkItemStage`) · optional git worktrees per run.
-- **Used by:** stage-entry firing (`ProjectRuntime`), the HTTP routes, boot reconciliation, the orchestrator (reviews via mailbox), the human inbox (reviews via UI).
+- **Used by:** the HTTP routes (the one fire door), boot reconciliation, the orchestrator (fire tool + reviews via mailbox), the human inbox (reviews via UI).
 - **Crossing the boundary:** `workflow.run.changed` / `workflow.run.event` (M3a — one fact per diary line) / `workflow.review.changed` / `workflow.definition.changed` live events; the `workflow_runs_v2` table (run + state blob + frozen workflow snapshot); the `workflow_run_events` diary table (read by `pc_get_workflow_run` + the run panel).
 
 ---
@@ -129,7 +135,9 @@ The first-principles spec reduces the engine to three concepts: **step → trans
 
 **Locked 2026-06-03 (Foundation Decisions):** step model becomes Agent · Review · Move card · Loop — move-as-property dies (FD-9) · stage-entry triggers die (FD-10) · run diary becomes the truth + restart-at-step + repair-until-reliable + expert builder agent (FD-11).
 
-**Remaining:** build the FD-9/10/11 items above · user-facing resume (#6) · re-attach instead of fail-closed on boot (the one-reconciler work, Step 2).
+**✅ FD-10 EXECUTED (M6 slice A, 2026-06-04):** triggers deleted whole — see §2. Fire route gained the optional `workItemId` card target.
+
+**Remaining:** FD-9 four-kind step model (M6 slice B) · FD-11 ceiling→human + cancel wired + restart-at-step (M6 slice C) · user-facing resume (#6) · re-attach instead of fail-closed on boot (the one-reconciler work, Step 2).
 
 ---
 

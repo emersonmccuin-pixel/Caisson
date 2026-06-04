@@ -354,7 +354,7 @@ You can create, update, delete, explain, and diagnose workflows. You hold the wo
 
 - **Explaining workflows** (how they work, why one fired or didn't, where output went) — use the workflows knowledge doc.
 - **Reading a workflow** (pc_get_workflow / pc_list_workflows) — read before you edit so you don't clobber fields you didn't mean to touch.
-- **Creating a workflow** (pc_create_workflow) — author the definition from the user's description. Read current stages (pc_list_stages) and field schemas (pc_list_field_schemas) FIRST so trigger stage ids and field refs are real, not invented.
+- **Creating a workflow** (pc_create_workflow) — author the definition from the user's description. Read current stages (pc_list_stages) and field schemas (pc_list_field_schemas) FIRST so move-step stage ids and field refs are real, not invented.
 - **Updating a workflow** (pc_update_workflow) — read it first, then replace or patch. The slug is immutable; rename by duplicate + delete.
 - **Deleting a workflow** (pc_delete_workflow) — approval-gated; confirm before removing.
 
@@ -406,7 +406,7 @@ Caisson is a local-first command center for one person running work across multi
 - Attachment: content stored on a work item. Agents and workflows use attachments for longer reports, JSON, markdown, or evidence.
 - Agent or pod: a specialist persona with instructions, tools, model settings, and optional knowledge docs. Stock agents are built in; project agents are user-created for one project.
 - Knowledge: reference documents attached to an agent. The agent sees doc names and summaries at spawn and reads full content with pc_knowledge_read when relevant.
-- Workflow: a repeatable recipe. In the current v2 system, a workflow definition has triggers and nodes. Running a workflow creates a root work item and child work items for node outputs.
+- Workflow: a repeatable recipe. In the current v2 system, a workflow definition is a set of nodes; runs start from "Run now" or the orchestrator's fire tool (no triggers). Running a workflow creates a root work item (or runs on an existing card) and child work items for node outputs.
 - Activity: the right panel and modal surfaces that show running agents, running workflows, waiting-for-user items, failed recent work, and transcripts.
 
 ## Mental model for users
@@ -652,38 +652,31 @@ Use this when the user asks how workflows work, why one did or did not run, or w
 
 ## Current workflow model
 
-Caisson uses workflow v2 as the active workflow surface. A workflow is a repeatable definition with triggers and nodes. The UI hides YAML for normal users; workflows are authored through the workflow-builder.
+Caisson uses workflow v2 as the active workflow surface. A workflow is a repeatable definition made of nodes — it declares NO triggers. The UI hides YAML for normal users; workflows are authored through the workflow-builder.
 
 ## Authoring — caisson can do it; workflow-builder is the deep specialist
 
-caisson can create, update, and delete workflows directly (pc_create_workflow / pc_update_workflow / pc_delete_workflow), plus read them (pc_get_workflow / pc_list_workflows). When the user asks in chat to build or change a workflow from a plain-English description, caisson does it — reading stages and field schemas first so trigger ids and field refs are real, validating the definition, and surfacing any parse error in plain English before reporting success.
+caisson can create, update, and delete workflows directly (pc_create_workflow / pc_update_workflow / pc_delete_workflow), plus read them (pc_get_workflow / pc_list_workflows). When the user asks in chat to build or change a workflow from a plain-English description, caisson does it — reading stages and field schemas first so move-step stage ids and field refs are real, validating the definition, and surfacing any parse error in plain English before reporting success.
 
 For substantial authoring, the main-chat orchestrator interviews the user and dispatches the workflow-builder specialist (the deep workflow expert) with a full spec. Manual authoring also exists: Workflows tab > + New workflow creates a named skeleton to fill in on the YAML tab; the Graph tab visualises any workflow's shape. Deleting a workflow is approval-gated either way.
 
-## Triggers
+## How runs start (no triggers)
 
-The schema supports four trigger kinds:
-
-- manual: user can run it on demand.
-- stage-on-entry: workflow fires when a work item moves into a chosen stage.
-- schedule: planned schema support, UI follow-up.
-- event: planned schema support, UI follow-up.
-
-The v1 UI affordances are manual and stage-on-entry. Stage-on-entry fires on forward moves by default. Backward moves do not fire unless the workflow explicitly opts into regression firing.
+Workflows do not declare triggers. Every run starts one of exactly two ways: the user clicks "Run now" on the Workflows tab, or the orchestrator calls pc_fire_workflow. Either can target an existing card (the fire carries a workItemId — that card becomes the run root). A card moving between stages never starts a workflow; schedules and webhooks do not exist. If automation is wanted, the orchestrator notices the moment and fires deliberately.
 
 ## Node kinds
 
 The current v2 node set (2 kinds):
 
 - agent: dispatches a specialist to complete work — including any shell commands, builds, tests, or git it needs (it runs them itself in the worktree).
-- card-move (the \`move\` field on any step, not a node): advances the run's card to another stage when the step completes. It does NOT re-fire stage-on-entry triggers, so a workflow can move its own card across the board without re-triggering itself.
+- card-move (the \`move\` field on any step, not a node): advances the run's card to another stage when the step completes. A move never starts another workflow.
 - review: pauses the run at a human-judgment gate until a decision lands. \`reviewer: "orchestrator"\` posts the review bundle to the orchestrator's inbox (the orchestrator + user judge — the common gate); \`reviewer: "human"\` parks it in the user's own inbox. Both pause durably and never auto-advance.
 
 Loop nodes and nested sub-workflows are deferred.
 
-## How nodes read the triggering card
+## How nodes read the root card
 
-A stage-on-entry workflow's run root IS the card that entered the stage. Node instructions can read that card's body via $root.output, and a typed field via $root.output.<field> (e.g. $root.output.complexity). There is no $trigger.* — that older syntax resolves to empty.
+When a workflow is fired ON a card (the fire carried a workItemId), that card IS the run root. Node instructions can read its body via $root.output, and a typed field via $root.output.<field> (e.g. $root.output.complexity). There is no $trigger.* — that older syntax resolves to empty.
 
 ## How a step's output feeds the next step (input ports)
 
@@ -714,9 +707,9 @@ Review-reject is the kick-back mechanism. A review node can reject to a previous
 
 ## Common explanations
 
-"Why didn't my workflow run when I moved a card backward?"
+"Why didn't my workflow run when I moved a card?"
 
-Stage-on-entry triggers fire on forward moves by default. Backward/regression moves do not fire unless the workflow was configured to also fire on regression.
+Card moves never start workflows — that machinery was removed on purpose. Runs start from "Run now" or the orchestrator firing it. Ask the orchestrator to fire the workflow on that card.
 
 "Where did the result go?"
 
@@ -853,7 +846,7 @@ Built-in agents are read-only in the project Agents tab. Edit them in App settin
 
 "Why did my workflow not fire?"
 
-Check whether the workflow is enabled, whether it has a manual or stage-on-entry trigger, whether the card moved into the trigger stage, and whether the move was forward. Stage-on-entry does not fire on backward moves by default.
+Workflows never fire on their own — there are no triggers. Check whether the workflow is enabled, then fire it from "Run now" or have the orchestrator fire it (optionally on a specific card).
 
 "Why is my workflow waiting?"
 

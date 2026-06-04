@@ -14,7 +14,6 @@ function makeRow(id: string, status: WorkflowRunV2Record['status']): WorkflowRun
     workflowName: 'Deploy',
     projectId: 'p1',
     workItemId: null,
-    trigger: 'manual',
     stageId: null,
     triggeredBySessionId: null,
     status,

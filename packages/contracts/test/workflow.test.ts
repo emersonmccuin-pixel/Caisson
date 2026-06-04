@@ -29,8 +29,6 @@ const run: WorkflowRunDto = {
   definitionHash: 'abc123',
   status: 'running',
   rev: 2,
-  trigger: 'manual',
-  stageId: null,
   workItemId: 'wi1',
   worktreePath: null,
   lastReason: null,
@@ -153,12 +151,13 @@ test('run event adapts to legacy workflow-v2-run-changed (null without snapshot)
 });
 
 test('fire + review request parsers validate input', () => {
-  assert.deepEqual(parseFireWorkflowRequest({ trigger: 'manual' }), {
+  assert.deepEqual(parseFireWorkflowRequest({ workItemId: 'wi1' }), {
     ok: true,
-    value: { trigger: 'manual' },
+    value: { workItemId: 'wi1' },
   });
   assert.deepEqual(parseFireWorkflowRequest(undefined), { ok: true, value: {} });
   assert.equal(parseFireWorkflowRequest({ projectId: '' }).ok, false);
+  assert.equal(parseFireWorkflowRequest({ workItemId: '' }).ok, false);
 
   assert.deepEqual(parseWorkflowReviewRequest({ runId: 'r1', nodeId: 'n1', decision: 'approve' }), {
     ok: true,

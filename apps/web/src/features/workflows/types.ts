@@ -9,17 +9,6 @@ export type CatalogType =
   | 'object'
   | 'array';
 
-export type EdgeRef =
-  | { kind: 'node'; nodeId: string; output: string }
-  | { kind: 'trigger'; output: string }
-  | { kind: 'env'; name: string };
-
-export interface NodeEdges {
-  inputs?: Record<string, EdgeRef>;
-  wire?: Record<string, EdgeRef>;
-  output_schema?: Record<string, CatalogType>;
-}
-
 export type NodeOutputStatus =
   | 'pending'
   | 'running'
@@ -42,7 +31,6 @@ export interface V2WorkflowDefSummary {
   id: string;
   name: string;
   description?: string;
-  triggers: Array<{ kind: string; stage?: string }>;
   nodes: Array<{ id: string; kind: string }>;
   disabled?: boolean;
 }
@@ -61,8 +49,6 @@ export interface V2RunSummary {
   workflowName: string;
   projectId: string;
   workItemId: string | null;
-  trigger: string;
-  stageId: string | null;
   status: V2RunStatus;
   worktreePath: string | null;
   lastReason: string | null;
@@ -91,9 +77,7 @@ export interface V2RunDetail extends V2RunSummary {
     rejectFeedback?: Record<string, string>;
   };
   workflowYamlSnapshot: string;
-  triggerContext: Record<string, unknown>;
   metadata: Record<string, unknown>;
-  triggeredBySessionId: string | null;
   lastActivityAt: number | null;
 }
 

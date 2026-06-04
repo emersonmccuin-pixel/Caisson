@@ -30,8 +30,7 @@ test('listRunsByStatus returns only runs in the requested statuses, oldest-first
       workflowId: 'deploy',
       workflowName: 'Deploy',
       projectId: project.id,
-      workflowYamlSnapshot: JSON.stringify({ id: 'deploy', name: 'Deploy', triggers: [], nodes: [] }),
-      trigger: 'manual',
+      workflowYamlSnapshot: JSON.stringify({ id: 'deploy', name: 'Deploy', nodes: [] }),
       status,
     });
   }

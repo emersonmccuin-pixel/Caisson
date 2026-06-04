@@ -48,7 +48,7 @@ export interface WorkItemRoutesRuntime {
   workItemService(): WorkItemService;
   attachmentService(): AttachmentService;
   fieldSchemaService(): FieldSchemaService;
-  moveAndFireV2(args: {
+  moveWorkItemV2(args: {
     id: string;
     toStage: string;
     expectedVersion?: number;
@@ -163,12 +163,12 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       resolvedStage = match.id;
     }
     try {
-      const workItem = await runtime.moveAndFireV2({
+      const workItem = await runtime.moveWorkItemV2({
         id: wiId,
         toStage: resolvedStage,
         notes: notes || null,
       });
-      // Announce is fired inside moveAndFireV2 (via workItemService or
+      // Announce is fired inside moveWorkItemV2 (via workItemService or
       // project-runtime's write-door); no additional broadcast here.
       return c.json({ ok: true, workItem });
     } catch (err) {
@@ -515,13 +515,13 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     const stageId = typeof body.stageId === 'string' ? body.stageId.trim() : '';
     if (!stageId) return c.json({ ok: false, error: 'stageId required' }, 400);
     try {
-      const moveArgs: Parameters<typeof runtime.moveAndFireV2>[0] = {
+      const moveArgs: Parameters<typeof runtime.moveWorkItemV2>[0] = {
         id: wiId,
         toStage: stageId,
         expectedVersion: body.version,
       };
       if (body.position !== undefined) moveArgs.position = body.position;
-      const workItem = await runtime.moveAndFireV2(moveArgs);
+      const workItem = await runtime.moveWorkItemV2(moveArgs);
       return c.json({ ok: true, workItem });
     } catch (err) {
       if (err instanceof WorkItemVersionConflictError) {

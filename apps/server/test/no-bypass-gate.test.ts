@@ -126,6 +126,18 @@ const BANNED_RESURRECTION = [
   // pc_invoke_agent is ALWAYS async — receipt now, terminal via mailbox +
   // deliverable door.
   'PcInvokeAgentResultSync',
+  // M6 Slice A (FD-10): ☠ stage-entry/schedule/event triggers whole — a card
+  // entering a stage never starts a workflow; runs start via "Run now" or the
+  // orchestrator fire tool ONLY. The matcher, the trigger types, and the
+  // collision-check opt-out are all dead names.
+  'selectStageEntryWorkflows',
+  'firesOnStageEntry',
+  'isForwardStageMove',
+  'StageOnEntryTrigger',
+  'ScheduleTrigger',
+  'EventTrigger',
+  'allow_stage_workflow_skip',
+  'also_fire_on_regression',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 

@@ -18,7 +18,6 @@ export interface ValidationResult {
 }
 
 const NODE_KINDS = new Set(['agent', 'review']);
-const TRIGGER_KINDS = new Set(['manual', 'stage-on-entry', 'schedule', 'event']);
 const REVIEW_KINDS = new Set(['review']);
 const REVIEWERS = new Set(['human', 'orchestrator']);
 
@@ -27,24 +26,13 @@ const REVIEWERS = new Set(['human', 'orchestrator']);
  *  expression is genuinely malformed — not merely that a value was absent. */
 const GRAMMAR_PROBE: RefResolver = () => '0';
 
-export interface CrossWorkflowValidationOpts {
-  /** Other active workflows in the project that have stage-on-entry triggers.
-   *  When provided, move-work-item nodes whose `to_stage` collides with one of
-   *  these stages produce an error unless `allow_stage_workflow_skip: true` is set. */
-  stageOnEntryWorkflows?: Array<{ workflowId: string; name: string; stage: string }>;
-}
-
 /**
  * Validate a v2 workflow graph. Checks (in order): shell shape · unique node
  * ids · known kinds + per-kind required fields · ref integrity (next /
  * reject.back_to / bundle_from point to real nodes) · forward-edge acyclicity ·
- * `when:` grammar · trigger shape · cross-workflow stage collisions (when opts
- * supplied). Returns every error found.
- *
- * `opts` is optional. When omitted, behavior is identical to the fire-time call
- * (no cross-workflow checks), preserving back-compat for all existing call sites.
+ * `when:` grammar. Returns every error found.
  */
-export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWorkflowValidationOpts): ValidationResult {
+export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationResult {
   const errors: string[] = [];
   const wf = workflow as unknown as {
     name?: unknown;
@@ -217,48 +205,15 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow, opts?: CrossWo
     }
   }
 
-  // ── triggers ──
-  const triggers = (Array.isArray(wf.triggers) ? wf.triggers : []) as Record<string, unknown>[];
-  if (triggers.length === 0) errors.push('workflow needs at least one trigger');
-  for (const t of triggers) {
-    const kind = t.kind as string;
-    if (!TRIGGER_KINDS.has(kind)) {
-      errors.push(`unknown trigger kind "${String(kind)}"`);
-      continue;
-    }
-    if (kind === 'stage-on-entry' && (typeof t.stage !== 'string' || t.stage === ''))
-      errors.push('stage-on-entry trigger: missing "stage"');
-    if (kind === 'schedule' && (typeof t.cron !== 'string' || t.cron === ''))
-      errors.push('schedule trigger: missing "cron"');
-    if (kind === 'event' && (typeof t.source !== 'string' || t.source === ''))
-      errors.push('event trigger: missing "source"');
-  }
-
-  // ── cross-workflow stage-on-entry collision ──
-  // A card-move EFFECT (a step's `move`, or a review `reject.move`) does NOT fire
-  // the destination stage's on-entry workflows — so moving a card into a stage
-  // that owns one silently skips it. Flag unless `allow_stage_workflow_skip`.
-  if (opts?.stageOnEntryWorkflows && opts.stageOnEntryWorkflows.length > 0) {
-    const collidesWith = (stage: unknown): { name: string } | undefined =>
-      typeof stage === 'string' && stage
-        ? opts.stageOnEntryWorkflows!.find((w) => w.stage === stage)
-        : undefined;
-    for (const n of nodes) {
-      const id = typeof n.id === 'string' ? n.id : '?';
-      if ((n as Record<string, unknown>).allow_stage_workflow_skip === true) continue;
-      const reject = n.reject as { move?: unknown } | undefined;
-      for (const [where, stage] of [
-        ['move', n.move],
-        ['reject.move', reject?.move],
-      ] as const) {
-        const collision = collidesWith(stage);
-        if (collision) {
-          errors.push(
-            `node "${id}": ${where} → "${String(stage)}" is the on-entry trigger of workflow "${collision.name}" — that workflow will be silently skipped. Inline its steps, pick another stage, or set allow_stage_workflow_skip: true to do this intentionally.`,
-          );
-        }
-      }
-    }
+  // ── triggers — ☠ DELETED (M6/FD-10) ──
+  // Workflows no longer declare triggers; runs start via "Run now" or the
+  // orchestrator's fire tool. A leftover `triggers:` key is rejected at the
+  // door so authors (human or agent) learn immediately instead of carrying a
+  // dead key forward.
+  if (wf.triggers !== undefined) {
+    errors.push(
+      'workflows no longer declare triggers — remove the "triggers:" key. Every run starts via "Run now" or the orchestrator fire tool.',
+    );
   }
 
   return { ok: errors.length === 0, errors };

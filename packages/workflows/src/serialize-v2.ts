@@ -30,7 +30,6 @@ export function serializeWorkflowV2(workflow: WorkflowV2.Workflow): string {
   if (workflow.worktree !== undefined) out.worktree = workflow.worktree;
   if (workflow.max_concurrency !== undefined) out.max_concurrency = workflow.max_concurrency;
   if (workflow.disabled === true) out.disabled = true;
-  out.triggers = workflow.triggers;
   out.nodes = workflow.nodes;
   return yamlDump(out, { lineWidth: 0, noRefs: true });
 }
@@ -40,7 +39,7 @@ export type ParseV2Result =
   /** File parsed but isn't a v2 workflow (no `version: 2`). Registry skips it. */
   | { ok: false; notV2: true }
   /** File IS v2 but failed YAML parse or graph validation. Registry flags it. */
-  | { ok: false; notV2?: false; errors: string[]; partialStageId?: string };
+  | { ok: false; notV2?: false; errors: string[] };
 
 /**
  * Parse + validate a v2 workflow YAML document. Returns `notV2` for non-v2 files
@@ -69,15 +68,39 @@ export function parseWorkflowV2Text(yamlText: string, opts: { expectedId?: strin
 
   const result = validateWorkflowV2(workflow);
   if (!result.ok) {
-    // Best-effort: surface the first stage-on-entry stage even on invalid files,
-    // so a partially-broken file can still report what it would have triggered on.
-    const triggers = Array.isArray(raw.triggers) ? (raw.triggers as Record<string, unknown>[]) : [];
-    const stage = triggers.find((t) => t.kind === 'stage-on-entry')?.stage;
-    return {
-      ok: false,
-      errors: result.errors,
-      ...(typeof stage === 'string' ? { partialStageId: stage } : {}),
-    };
+    return { ok: false, errors: result.errors };
   }
   return { ok: true, workflow };
+}
+
+/** M6/FD-10 one-shot data-migration helper — remove a dead top-level
+ *  `triggers:` key from a stored definition's YAML. Returns `changed: false`
+ *  when the text has no triggers key (or doesn't parse — nothing to strip
+ *  safely). When changed, returns the re-serialized YAML plus the re-validated
+ *  workflow (`workflow: null` + `errors` when the def is invalid for OTHER
+ *  reasons — the caller keeps its honest `invalid` status). */
+export function stripTriggersFromWorkflowText(
+  yamlText: string,
+  expectedId: string,
+):
+  | { changed: false }
+  | { changed: true; yaml: string; workflow: WorkflowV2.Workflow | null; errors: string[] } {
+  let doc: unknown;
+  try {
+    doc = yamlLoad(yamlText);
+  } catch {
+    return { changed: false };
+  }
+  if (doc === null || typeof doc !== 'object') return { changed: false };
+  const raw = doc as Record<string, unknown>;
+  if (raw.triggers === undefined) return { changed: false };
+
+  delete raw.triggers;
+  const { version: _v, ...rest } = raw;
+  const workflow = { ...rest, id: expectedId } as unknown as WorkflowV2.Workflow;
+  const result = validateWorkflowV2(workflow);
+  const yaml = serializeWorkflowV2(workflow);
+  return result.ok
+    ? { changed: true, yaml, workflow, errors: [] }
+    : { changed: true, yaml, workflow: null, errors: result.errors };
 }

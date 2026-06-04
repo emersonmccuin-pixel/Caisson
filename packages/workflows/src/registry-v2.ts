@@ -1,12 +1,8 @@
 // Section 19 — v2 workflow registry. Scans `.project-companion/workflows/` for
 // `version: 2` YAML files, parses + validates each (parseWorkflowV2Text), and
-// indexes valid/invalid for the UI + the trigger path. Coexists with the v1
-// WorkflowRegistry until the 19.13 cutover: each registry skips the other's
-// files (v2 by the `version: 2` marker, v1 by its absence).
-//
-// Unlike v1's `findByStageEnter` (which errors on ambiguous matches), v2 exposes
-// `listValid()` so the pure `selectStageEntryWorkflows` matcher (19.7a) decides
-// firing — v2 allows multiple workflows to fire on one stage entry.
+// indexes valid/invalid for the UI. Coexists with the v1 WorkflowRegistry until
+// the 19.13 cutover: each registry skips the other's files (v2 by the
+// `version: 2` marker, v1 by its absence).
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
@@ -24,7 +20,6 @@ export interface InvalidWorkflowV2Entry {
   filePath: string;
   fileName: string;
   errors: string[];
-  partialStageId?: string;
 }
 
 export interface RegistryV2State {
@@ -68,12 +63,7 @@ export class WorkflowV2Registry {
       } else if (result.notV2) {
         continue; // a v1 file — the v1 registry owns it
       } else {
-        next.invalid.push({
-          filePath,
-          fileName,
-          errors: result.errors,
-          ...(result.partialStageId ? { partialStageId: result.partialStageId } : {}),
-        });
+        next.invalid.push({ filePath, fileName, errors: result.errors });
       }
     }
 

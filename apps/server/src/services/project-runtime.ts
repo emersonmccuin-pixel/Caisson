@@ -26,7 +26,6 @@ import {
   claudeConfigDirFromJsonlPath,
   jsonlPathFor,
 } from '@pc/runtime';
-import { selectStageEntryWorkflows } from '@pc/workflows';
 
 import { preparePodSpawn, type PodSpawnPrep } from './pod-spawn.ts';
 import { WorktreeService } from './worktree.ts';
@@ -272,34 +271,28 @@ export class ProjectRuntime {
    *  the run itself proceeds in the background (the executor advances on its
    *  own and broadcasts state). Errors after setup are logged, not thrown.
    *
-   *  When `triggerWorkItemId` is supplied (stage-on-entry path) the existing
-   *  card is used as the run root — no new work item is minted and the card's
-   *  stage is left unchanged. Without it (manual fire) a blank root is created. */
+   *  When `rootWorkItemId` is supplied the existing card is used as the run
+   *  root — no new work item is minted and the card's stage is left unchanged.
+   *  Without it a blank root is created. */
   async fireV2Workflow(
     workflow: WorkflowV2.Workflow,
-    trigger: WorkflowV2.WorkflowTrigger = { kind: 'manual' },
-    triggerWorkItemId?: ULID,
+    rootWorkItemId?: ULID,
   ): Promise<{ runId: ULID; rootWorkItemId: ULID }> {
-    const res = await fireDagWorkflow(workflow, trigger, this.dagRunOptions(), triggerWorkItemId);
+    const res = await fireDagWorkflow(workflow, this.dagRunOptions(), rootWorkItemId);
     res.done.catch((err: Error) => {
       console.error(`[dag-run] run ${res.runId} failed:`, err.message);
     });
     return { runId: res.runId, rootWorkItemId: res.rootWorkItemId };
   }
 
-  /** Section 19.12 — pure stage-move + v2 stage-on-entry firing. Reads
-   *  `fromStageId` before the move, commits the move (version-checked when
-   *  `expectedVersion` is supplied, legacy otherwise), then evaluates v2
-   *  workflows whose `stage-on-entry` trigger matches and fires each.
+  /** The one stage-move door. Commits the move (version-checked when
+   *  `expectedVersion` is supplied, legacy otherwise). Move errors (unknown
+   *  stage, version conflict) propagate — the card stays put.
    *
-   *  Move errors (unknown stage, version conflict) propagate — the card stays
-   *  put. v2 firing errors are logged, not thrown: the move already succeeded
-   *  and a misconfigured v2 workflow shouldn't retro-fail the move.
-   *
-   *  v1's on_enter trigger + lock-on-fire + worktree-ensure semantics are
-   *  gone — v2 attaches the run to a `WorkItem` via the runtime's own
-   *  attach-to-work-item node instead. */
-  async moveAndFireV2(args: {
+   *  ☠ M6/FD-10 (2026-06-04): the stage-on-entry firing half is DELETED — a
+   *  card entering a stage no longer starts workflows. Runs start via "Run
+   *  now" or the orchestrator fire tool only. */
+  async moveWorkItemV2(args: {
     id: string;
     toStage: string;
     expectedVersion?: number;
@@ -308,7 +301,6 @@ export class ProjectRuntime {
   }): Promise<WorkItem> {
     const pre = getWorkItem(args.id as ULID);
     if (!pre) throw new Error(`unknown work item: ${args.id}`);
-    const fromStageId = pre.stageId ?? null;
     const destStage = this.project.stages.find((s) => s.id === args.toStage);
     if (!destStage) throw new Error(`unknown stage: ${args.toStage}`);
 
@@ -336,32 +328,6 @@ export class ProjectRuntime {
         },
       });
       moved = out;
-    }
-
-    if (fromStageId !== args.toStage) {
-      const stages = (this.project.stages ?? []).map((s) => ({
-        id: s.id,
-        ...(s.order !== undefined ? { order: s.order } : {}),
-      }));
-      const validDefs = this.listV2Workflows().valid.map((e) => e.workflow);
-      const matches = selectStageEntryWorkflows(validDefs, stages, {
-        fromStageId,
-        toStageId: args.toStage,
-      });
-      for (const workflow of matches) {
-        try {
-          await this.fireV2Workflow(
-            workflow,
-            { kind: 'stage-on-entry', stage: args.toStage },
-            args.id as ULID,
-          );
-        } catch (err) {
-          console.error(
-            `[project-runtime] v2 fire failed (workflow=${workflow.id} stage=${args.toStage}):`,
-            (err as Error).message,
-          );
-        }
-      }
     }
 
     return moved;

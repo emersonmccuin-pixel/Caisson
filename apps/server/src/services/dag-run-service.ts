@@ -474,31 +474,31 @@ export interface FireResult {
 }
 
 /**
- * Fire a v2 workflow.
+ * Fire a v2 workflow. The ONLY two callers are the fire route ("Run now" /
+ * `pc_fire_workflow`) — stage-entry firing is ☠ (M6/FD-10).
  *
- * When `triggerWorkItemId` is supplied (stage-on-entry path): the existing card
- * becomes the run root — no new work item is minted, its stage is unchanged, and
- * `isWorkflowRoot` is not set on it. Child-node `parentWorkItemId` and the
- * worktree acquire still hang off that card.
+ * When `rootWorkItemId` is supplied: the existing card becomes the run root —
+ * no new work item is minted, its stage is unchanged, and `isWorkflowRoot` is
+ * not set on it. Child-node `parentWorkItemId` and the worktree acquire still
+ * hang off that card.
  *
- * When absent (manual fire / HTTP route): a blank root work item is created in
- * stage[0] with `isWorkflowRoot: true`, preserving the previous behaviour.
+ * When absent: a blank root work item is created in stage[0] with
+ * `isWorkflowRoot: true`, preserving the previous behaviour.
  *
  * `done` resolves at the first pause/terminal; callers that don't want to block
  * (HTTP route) ignore it.
  */
 export async function fireDagWorkflow(
   workflow: WorkflowV2.Workflow,
-  trigger: WorkflowV2.WorkflowTrigger,
   opts: DagRunServiceOptions,
-  triggerWorkItemId?: ULID,
+  rootWorkItemId?: ULID,
 ): Promise<FireResult> {
   let rootWiId: ULID;
 
-  if (triggerWorkItemId) {
-    const existing = getWorkItem(triggerWorkItemId);
-    if (!existing) throw new Error(`trigger work item not found: ${triggerWorkItemId}`);
-    rootWiId = triggerWorkItemId;
+  if (rootWorkItemId) {
+    const existing = getWorkItem(rootWorkItemId);
+    if (!existing) throw new Error(`root work item not found: ${rootWorkItemId}`);
+    rootWiId = rootWorkItemId;
   } else {
     const project = opts.getProject();
     const stages = (project.stages ?? []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -524,8 +524,6 @@ export async function fireDagWorkflow(
     workflowName: workflow.name,
     projectId: opts.projectId,
     workflowYamlSnapshot: JSON.stringify(workflow),
-    trigger: trigger.kind,
-    ...(trigger.kind === 'stage-on-entry' ? { stageId: trigger.stage } : {}),
     workItemId: rootWiId,
     worktreePath,
     status: 'running',
@@ -541,7 +539,7 @@ export async function fireDagWorkflow(
     projectId: opts.projectId,
     runId: run.id,
     type: 'workflow_started',
-    data: { trigger: trigger.kind, workflowName: workflow.name },
+    data: { workflowName: workflow.name },
   });
 
   const deps = makeExecutorDeps(

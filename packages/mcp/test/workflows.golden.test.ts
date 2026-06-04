@@ -33,7 +33,7 @@ test('pc_get_workflow failure: exact failure string', async () => {
   assert.equal(res!.isError, true);
 });
 
-test('pc_fire_workflow by ULID: posts trigger to /fire, emits raw body', async () => {
+test('pc_fire_workflow by ULID: posts to /fire, emits raw body', async () => {
   const ulid = '01HFGHJKMNPQRSTVWXYZ012345'; // 26 chars, valid alphabet
   const serverBody = JSON.stringify({ ok: true, runId: 'RUN1', rootWorkItemId: 'WI1' });
   const { ctx, calls } = makeFakeContext({ responder: () => ok(serverBody) });
@@ -42,7 +42,25 @@ test('pc_fire_workflow by ULID: posts trigger to /fire, emits raw body', async (
   assert.deepEqual(calls[0], {
     method: 'POST',
     path: `/api/workflows/${ulid}/fire`,
-    body: { trigger: { kind: 'manual' }, projectId: 'P01' },
+    body: { projectId: 'P01' },
+  });
+});
+
+test('pc_fire_workflow with work_item_id: fires ON the existing card', async () => {
+  const ulid = '01HFGHJKMNPQRSTVWXYZ012345';
+  const wi = '01HFGHJKMNPQRSTVWXYZ0WI001';
+  const serverBody = JSON.stringify({ ok: true, runId: 'RUN1', rootWorkItemId: wi });
+  const { ctx, calls } = makeFakeContext({ responder: () => ok(serverBody) });
+  const res = await handleWorkflowTool(
+    'pc_fire_workflow',
+    { workflow: ulid, work_item_id: wi },
+    ctx,
+  );
+  assert.equal(firstText(res), serverBody);
+  assert.deepEqual(calls[0], {
+    method: 'POST',
+    path: `/api/workflows/${ulid}/fire`,
+    body: { projectId: 'P01', workItemId: wi },
   });
 });
 

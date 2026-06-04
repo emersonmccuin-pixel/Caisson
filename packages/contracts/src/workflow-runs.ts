@@ -66,8 +66,6 @@ export interface WorkflowRunDto {
   status: WorkflowRunStatus;
   /** Monotonic write counter (workflow_runs_v2.rev). */
   rev: number;
-  trigger: string;
-  stageId: string | null;
   workItemId: ULID | null;
   worktreePath: string | null;
   lastReason: string | null;
@@ -85,8 +83,9 @@ export interface WorkflowReviewDecision {
 // ── Request schemas ──────────────────────────────────────────────────────────
 
 export interface FireWorkflowRequest {
-  trigger?: string;
   projectId?: ULID;
+  /** Run the workflow ON this existing card (it becomes the run root). */
+  workItemId?: ULID;
 }
 
 export interface WorkflowReviewRequest {
@@ -102,9 +101,11 @@ export function parseFireWorkflowRequest(input: unknown): ParseResult<FireWorkfl
   }
   const rec = isRecord(input) ? input : {};
   const request: FireWorkflowRequest = {};
-  if (rec.trigger !== undefined) {
-    if (typeof rec.trigger !== 'string') return parseErr('trigger must be a string');
-    request.trigger = rec.trigger;
+  if (rec.workItemId !== undefined) {
+    if (typeof rec.workItemId !== 'string' || !rec.workItemId) {
+      return parseErr('workItemId must be a non-empty string');
+    }
+    request.workItemId = rec.workItemId as ULID;
   }
   if (rec.projectId !== undefined) {
     if (typeof rec.projectId !== 'string' || !rec.projectId) {
@@ -271,8 +272,6 @@ export function isWorkflowRunDto(value: unknown): value is WorkflowRunDto {
     typeof value.definitionHash === 'string' &&
     isWorkflowRunStatus(value.status) &&
     typeof value.rev === 'number' &&
-    typeof value.trigger === 'string' &&
-    (value.stageId === null || typeof value.stageId === 'string') &&
     (value.workItemId === null || typeof value.workItemId === 'string') &&
     (value.worktreePath === null || typeof value.worktreePath === 'string') &&
     (value.lastReason === null || typeof value.lastReason === 'string') &&

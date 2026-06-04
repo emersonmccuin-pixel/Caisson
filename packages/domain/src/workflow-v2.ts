@@ -45,46 +45,15 @@ export const REVIEWERS = ['human', 'orchestrator'] as const;
 export type Reviewer = (typeof REVIEWERS)[number];
 
 // ---------------------------------------------------------------------------
-// Triggers — four in schema from day one (lock 10). UI exposes manual +
-// stage-on-entry only in v1 (lock 11); schedule + event are schema-complete
-// but UI-deferred to the follow-up section.
+// Triggers — ☠ DELETED (M6 / FD-10, 2026-06-04). Workflows do not declare
+// triggers. Exactly two ways a run starts: the UI "Run now" button and the
+// orchestrator's `pc_fire_workflow` tool — both land on the one fire route,
+// optionally targeting an existing card via `workItemId`. The stage-on-entry
+// machinery (a card entering a stage starts a workflow) was a hidden tripwire
+// and is gone; schedule/event were validated-but-never-implemented vapor. If
+// automation returns it comes back deliberately — the orchestrator noticing
+// a move and CHOOSING to fire, keeping one brain in charge.
 // ---------------------------------------------------------------------------
-
-export const TRIGGER_KINDS = ['manual', 'stage-on-entry', 'schedule', 'event'] as const;
-export type TriggerKind = (typeof TRIGGER_KINDS)[number];
-
-/** Fired from the UI "Run now" button or `pc_run_workflow`. */
-export interface ManualTrigger {
-  kind: 'manual';
-}
-
-/** Fired when a work item enters `stage`. Forward moves only by default;
- *  opt into backward moves with `also_fire_on_regression` (lock 2). */
-export interface StageOnEntryTrigger {
-  kind: 'stage-on-entry';
-  stage: string;
-  also_fire_on_regression?: boolean;
-}
-
-/** Schema-complete, UI-deferred. In-process cron registry (follow-up). */
-export interface ScheduleTrigger {
-  kind: 'schedule';
-  cron: string;
-}
-
-/** Schema-complete, UI-deferred. Channel-server webhook route (follow-up).
- *  `when` is a `$trigger.event.*` predicate in the when: grammar. */
-export interface EventTrigger {
-  kind: 'event';
-  source: string;
-  when?: string;
-}
-
-export type WorkflowTrigger =
-  | ManualTrigger
-  | StageOnEntryTrigger
-  | ScheduleTrigger
-  | EventTrigger;
 
 // ---------------------------------------------------------------------------
 // Shared node bits
@@ -159,10 +128,6 @@ export interface WorkflowNodeBase {
    *  workflow can advance its own card loop-safely). Omit = card stays put.
    *  Replaces the separate `move-work-item` node. */
   move?: string;
-  /** Opt-in to a `move` whose destination stage owns another workflow's
-   *  stage-on-entry trigger (which the move will silently skip). Suppresses the
-   *  save-time collision error for an intentional skip. */
-  allow_stage_workflow_skip?: boolean;
   /** Visualizer-layer position override. Persisted so user drags survive a
    *  reload and the agent-author can read positions between turns
    *  (sync-model-A, Section 19 lock 8). When absent, the visualizer falls back
@@ -223,8 +188,6 @@ export interface Workflow {
   id: string;
   name: string;
   description?: string;
-  /** At least one trigger. `manual` is the implicit fallback if empty. */
-  triggers: WorkflowTrigger[];
   nodes: WorkflowNode[];
   /** `auto` (default) = runtime creates/reuses a worktree bound to the run;
    *  `none` = no worktree (bash/script nodes then run in the project dir). */

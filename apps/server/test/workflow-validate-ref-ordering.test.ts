@@ -10,7 +10,7 @@ import type { WorkflowV2 } from '@pc/domain';
 import { validateWorkflowV2, substituteInputs, extractInputPlaceholders } from '@pc/workflows';
 
 function wf(nodes: WorkflowV2.WorkflowNode[]): WorkflowV2.Workflow {
-  return { id: 'wf', name: 'WF', triggers: [{ kind: 'manual' }], nodes };
+  return { id: 'wf', name: 'WF', nodes };
 }
 
 test('a ref to an upstream step is valid', () => {

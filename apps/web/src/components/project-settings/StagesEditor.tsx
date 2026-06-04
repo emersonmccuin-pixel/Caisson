@@ -495,7 +495,7 @@ function StageRow({
           />
         )}
         {row.isExisting ? (
-          <span className="italic">locked — workflow triggers reference this id</span>
+          <span className="italic">locked — workflows + work items reference this id</span>
         ) : (
           <span className="italic">slug-style; locked once saved</span>
         )}

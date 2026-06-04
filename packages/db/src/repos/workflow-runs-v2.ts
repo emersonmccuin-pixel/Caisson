@@ -19,14 +19,10 @@ export interface WorkflowRunV2Record {
   workflowName: string;
   projectId: ULID;
   workItemId: ULID | null;
-  trigger: WorkflowV2.TriggerKind;
-  stageId: string | null;
-  triggeredBySessionId: ULID | null;
   status: WorkflowV2.WorkflowRunStatus;
   workflowYamlSnapshot: string;
   worktreePath: string | null;
   dagState: WorkflowV2.WorkflowDagState;
-  triggerContext: Record<string, unknown>;
   metadata: Record<string, unknown>;
   lastReason: string | null;
   /** Monotonic write counter. Incremented inside every mutating write. */
@@ -42,14 +38,10 @@ export interface CreateRunInput {
   workflowName: string;
   projectId: ULID;
   workflowYamlSnapshot: string;
-  trigger: WorkflowV2.TriggerKind;
   status?: WorkflowV2.WorkflowRunStatus;
   workItemId?: ULID | null;
-  stageId?: string | null;
-  triggeredBySessionId?: ULID | null;
   worktreePath?: string | null;
   dagState?: WorkflowV2.WorkflowDagState;
-  triggerContext?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 
@@ -67,14 +59,10 @@ export function createRun(input: CreateRunInput): WorkflowRunV2Record {
     workflowName: input.workflowName,
     projectId: input.projectId,
     workItemId: input.workItemId ?? null,
-    trigger: input.trigger,
-    stageId: input.stageId ?? null,
-    triggeredBySessionId: input.triggeredBySessionId ?? null,
     status: input.status ?? 'pending',
     workflowYamlSnapshot: input.workflowYamlSnapshot,
     worktreePath: input.worktreePath ?? null,
     dagState: input.dagState ?? { nodes: {} },
-    triggerContext: input.triggerContext ?? {},
     metadata: input.metadata ?? {},
     lastReason: null,
     rev: 0,

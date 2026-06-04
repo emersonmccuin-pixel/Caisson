@@ -84,8 +84,6 @@ export function toWorkflowRunDto(run: WorkflowRunV2Record): WorkflowRunDto {
     definitionHash: definitionHashOf(run.workflowYamlSnapshot),
     status: run.status,
     rev: run.rev,
-    trigger: run.trigger,
-    stageId: run.stageId,
     workItemId: run.workItemId,
     worktreePath: run.worktreePath,
     lastReason: run.lastReason,

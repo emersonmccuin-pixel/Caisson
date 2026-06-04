@@ -34,7 +34,6 @@ interface WorkflowsListProps {
 }
 
 type StatusFilter = 'all' | 'enabled' | 'disabled' | 'invalid';
-type TriggerFilter = 'all' | 'manual' | 'stage-on-entry' | 'schedule' | 'event';
 type DetailTab = 'graph' | 'runs' | 'yaml';
 
 export function WorkflowsList({ project, events }: WorkflowsListProps) {
@@ -46,7 +45,6 @@ export function WorkflowsList({ project, events }: WorkflowsListProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [status, setStatus] = useState<StatusFilter>('all');
-  const [triggerKind, setTriggerKind] = useState<TriggerFilter>('all');
   const [tab, setTab] = useState<DetailTab>('graph');
   const [actionErr, setActionErr] = useState<string | null>(null);
 
@@ -65,7 +63,6 @@ export function WorkflowsList({ project, events }: WorkflowsListProps) {
     setSelectedRunId(null);
     setFilter('');
     setStatus('all');
-    setTriggerKind('all');
     setTab('graph');
     setActionErr(null);
   }, [project.id]);
@@ -136,15 +133,10 @@ export function WorkflowsList({ project, events }: WorkflowsListProps) {
       if (status === 'enabled') return !w.disabled && w.status === 'active';
       return true;
     };
-    const matchTrigger = (w: WorkflowRow) => {
-      if (triggerKind === 'all') return true;
-      const triggers = parsedTriggers(w);
-      return triggers.some((t) => t.kind === triggerKind);
-    };
     const apply = (rows: WorkflowRow[]) =>
-      rows.filter((w) => matchText(w) && matchStatus(w) && matchTrigger(w));
+      rows.filter((w) => matchText(w) && matchStatus(w));
     return { proj: apply(projectRows), glob: apply(globalRows) };
-  }, [filter, status, triggerKind, projectRows, globalRows]);
+  }, [filter, status, projectRows, globalRows]);
 
   const selectedRow = useMemo(
     () => (selectedId ? workflows.find((w) => w.id === selectedId) ?? null : null),
@@ -264,18 +256,6 @@ export function WorkflowsList({ project, events }: WorkflowsListProps) {
               { value: 'enabled', label: 'Enabled' },
               { value: 'disabled', label: 'Disabled' },
               { value: 'invalid', label: 'Invalid' },
-            ]}
-          />
-          <ChipGroup
-            label="Trigger"
-            value={triggerKind}
-            onChange={setTriggerKind}
-            options={[
-              { value: 'all', label: 'All' },
-              { value: 'manual', label: 'Manual' },
-              { value: 'stage-on-entry', label: 'Stage' },
-              { value: 'schedule', label: 'Schedule' },
-              { value: 'event', label: 'Event' },
             ]}
           />
         </div>
@@ -424,7 +404,6 @@ function ListRow({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const triggers = parsedTriggers(row);
   const runningCount = runs.filter(
     (r) => r.status === 'running' || r.status === 'paused',
   ).length;
@@ -470,18 +449,6 @@ function ListRow({
       </div>
       <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
         <span className="truncate">{row.slug}</span>
-        {triggers.length > 0 && <span>·</span>}
-        <span className="flex shrink-0 gap-1">
-          {triggers.slice(0, 3).map((t, i) => (
-            <span
-              key={i}
-              className="border border-border/60 px-1 text-[9px] uppercase tracking-wider"
-              title={triggerLabel(t)}
-            >
-              {triggerShortLabel(t)}
-            </span>
-          ))}
-        </span>
       </div>
       {row.description && (
         <div className="line-clamp-2 text-[11px] leading-tight text-muted-foreground">
@@ -526,7 +493,6 @@ function DetailPane({
   onSaved: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const triggers = parsedTriggers(row);
   const nodeCount = nodeCountOf(row);
   const isProject = row.scope === 'project';
   const isInvalid = row.status === 'invalid';
@@ -572,7 +538,7 @@ function DetailPane({
               onClick={onRunNow}
               disabled={row.disabled || isInvalid}
               className="border border-border bg-card px-3 py-1.5 text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-              title="Fire this workflow with kind=manual"
+              title="Fire this workflow now"
             >
               Run now
             </button>
@@ -612,21 +578,6 @@ function DetailPane({
           <p className="max-w-3xl text-sm text-muted-foreground">{row.description}</p>
         )}
 
-        {triggers.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
-              Triggers
-            </span>
-            {triggers.map((t, i) => (
-              <span
-                key={i}
-                className="border border-border/60 bg-card px-2 py-0.5 text-[11px] text-foreground"
-              >
-                {triggerLabel(t)}
-              </span>
-            ))}
-          </div>
-        )}
       </header>
 
       <nav className="flex items-center gap-1 border-b border-border px-4 pt-2">
@@ -815,7 +766,6 @@ function RunRow({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-3 text-[10px] text-muted-foreground">
-        <span>{run.trigger}</span>
         <span>{formatRelativeTime(started)}</span>
       </div>
     </div>
@@ -1002,7 +952,7 @@ function diaryLine(ev: V2RunEvent): string {
   const node = ev.nodeId ? `"${ev.nodeId}"` : '';
   const d = ev.data ?? {};
   switch (ev.type) {
-    case 'workflow_started': return `Run started (${String(d.trigger ?? 'manual')}).`;
+    case 'workflow_started': return 'Run started.';
     case 'workflow_completed': return 'Run completed.';
     case 'workflow_failed': return 'Run failed.';
     case 'workflow_cancelled': return 'Run cancelled.';
@@ -1323,37 +1273,9 @@ function EmptyDetail({ onAdd }: { onAdd: () => void }) {
 
 // ── Pure helpers ─────────────────────────────────────────────────────────
 
-interface TriggerLike {
-  kind: string;
-  stage?: string;
-  cron?: string;
-  source?: string;
-}
-
-function parsedTriggers(row: WorkflowRow): TriggerLike[] {
-  const def = row.parsedDefinition as { triggers?: TriggerLike[] } | null;
-  return def?.triggers ?? [];
-}
-
 function nodeCountOf(row: WorkflowRow): number {
   const def = row.parsedDefinition as { nodes?: unknown[] } | null;
   return def?.nodes?.length ?? 0;
-}
-
-function triggerShortLabel(t: TriggerLike): string {
-  if (t.kind === 'manual') return 'manual';
-  if (t.kind === 'stage-on-entry') return 'stage';
-  if (t.kind === 'schedule') return 'cron';
-  if (t.kind === 'event') return 'event';
-  return t.kind;
-}
-
-function triggerLabel(t: TriggerLike): string {
-  if (t.kind === 'stage-on-entry' && t.stage) return `on stage entry · ${t.stage}`;
-  if (t.kind === 'manual') return 'manual';
-  if (t.kind === 'schedule' && t.cron) return `cron · ${t.cron}`;
-  if (t.kind === 'event' && t.source) return `event · ${t.source}`;
-  return t.kind;
 }
 
 function StatusPill({ status }: { status: V2RunStatus }) {

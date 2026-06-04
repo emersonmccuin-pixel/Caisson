@@ -67,31 +67,31 @@ Area changes broadcast a `area.changed` live event the same way stage changes do
 
 **Dragging a card:**
 - Same column → updates the card's position only.
-- Different column → moves the card to the new stage and position, then checks for workflow triggers.
+- Different column → moves the card to the new stage and position. (A move never starts a workflow — ☠ FD-10.)
 
 **Staying live:** the board merges incoming `work-item.changed` events without re-fetching the whole list — identity-keyed on card id, version-checked so stale frames are discarded. (`KanbanBoard.tsx:140`)
 
 **Area filter:** the left rail loads areas on mount and refetches whenever it sees an `area.changed` event. When an area is deleted, the board does an extra full card-list refetch because the bulk-null reassignment produces no per-card change events (see Known issues). (`KanbanBoard.tsx:165–169`)
 
-### 5. Moving a card → firing a workflow
+### 5. Moving a card (one door, no firing)
 
-Every card move — whether you drag it on the board or the orchestrator calls `pc_move_work_item` — runs through `ProjectRuntime.moveAndFireV2` (`project-runtime.ts:330`):
+Every card move — whether you drag it on the board or the orchestrator calls `pc_move_work_item` — runs through `ProjectRuntime.moveWorkItemV2` (`project-runtime.ts`):
 
 1. Confirms the target stage exists in this project.
 2. Commits the move to the database (version-checked).
 3. Broadcasts a `work-item.changed` live event.
-4. If the card actually changed columns (not just reordered within one), checks for matching workflow triggers: a workflow fires if its `stage-on-entry` trigger names the destination stage id. Only forward moves count — dragging a card backward doesn't re-fire the line. Multiple matching workflows all fire. (`packages/workflows/src/dag/triggers.ts:52`)
 
-**The trigger is a direct stage-id match — no role, tag, or category layer exists between the trigger and the stage.** This is a locked decision.
-
-> ☠ **FD-10 (locked 2026-06-03):** the entire stage-entry trigger mechanism above is **deleted in the
-> rebuild**. A card entering a stage never starts a workflow; runs start only from the orchestrator's
-> fire tool or manual "run now." The no-abstract-layer law (stage id, nothing in between) carries
-> forward to every remaining stage-id reference.
+> ☠ **FD-10 EXECUTED (M6 slice A, 2026-06-04):** the stage-entry trigger mechanism is **deleted**.
+> A card entering a stage never starts a workflow; runs start only from the orchestrator's fire tool
+> or manual "Run now" (either can target a card via the fire's `workItemId`). `dag/triggers.ts`,
+> the firing half of `moveAndFireV2` (renamed `moveWorkItemV2`), the trigger types, the schedule/
+> event vapor kinds, the run-row trigger columns (migration 0043), and the trigger UI are all gone;
+> a boot sweep stripped `triggers:` from stored definitions. The no-abstract-layer law (stage id,
+> nothing in between) carries forward to every remaining stage-id reference.
 
 ### 6. Card-move as a workflow effect (not a step)
 
-When a workflow step finishes and has a `move` field set, the engine moves the card directly — bypassing `moveAndFireV2` so it does *not* re-fire stage-entry workflows (loop-safe). Card-move is a **property on a step's transition**, not a separate node kind. (`dag-run-service.ts:334`, `workflow-v2.ts:156`)
+When a workflow step finishes and has a `move` field set, the engine moves the card directly through the gateway. Card-move is a **property on a step's transition**, not a separate node kind. (`dag-run-service.ts`, `workflow-v2.ts`)
 
 > ☠ **FD-9 (locked 2026-06-03, reverses the above):** in the rebuild, **Move card is a visible step
 > of its own** in the graph — the move-as-property mechanism dies, including "on reject, move back."
@@ -101,9 +101,9 @@ When a workflow step finishes and has a `move` field set, the engine moves the c
 
 ## How it connects
 
-- **Depends on:** `@pc/db` (`areas`, `projects` tables; stage/area CRUD; `moveWorkItemStage`) · `live_outbox` + live-relay (durable fanout for `stage.list.changed` and `area.changed`) · `ProjectRuntime` (holds the in-memory stage list used for trigger matching and move validation).
-- **Used by:** `dag-run-service.ts` (move card as a transition effect) · `project-runtime.ts` (trigger matching on every card move) · `KanbanBoard.tsx` + area filter rail (UI) · `pc_move_work_item` MCP tool (the orchestrator's move door).
-- **Events crossed:** `StageDto` / `StageListChangedLivePayload` (`@pc/contracts/stages.ts`) · `AreaDto` / `AreaChangedLivePayload` (`@pc/contracts/areas.ts`) · `WorkflowV2.StageOnEntryTrigger` (`packages/domain/src/workflow-v2.ts:63`).
+- **Depends on:** `@pc/db` (`areas`, `projects` tables; stage/area CRUD; `moveWorkItemStage`) · `live_outbox` + live-relay (durable fanout for `stage.list.changed` and `area.changed`) · `ProjectRuntime` (holds the in-memory stage list used for move validation).
+- **Used by:** `dag-run-service.ts` (move card as a transition effect) · `KanbanBoard.tsx` + area filter rail (UI) · `pc_move_work_item` MCP tool (the orchestrator's move door).
+- **Events crossed:** `StageDto` / `StageListChangedLivePayload` (`@pc/contracts/stages.ts`) · `AreaDto` / `AreaChangedLivePayload` (`@pc/contracts/areas.ts`).
 
 ---
 
@@ -114,8 +114,8 @@ The consolidation ledger (`consolidation-ledger-2026-06-02.md`) has no verdict r
 Per the north-star design (`unified-process-supervision-2026-06-02.md`): stage and area data are Store — DB-backed, announced through the outbox, projected via the live-relay. The `announceStageList` / `announceWorkItemRow` outbox pattern is already the target write-door.
 
 **What changes from today (Foundation Decisions, locked 2026-06-03):**
-- ☠ **Stage-entry triggers are deleted (FD-10).** The trigger-matching machinery in `ProjectRuntime.moveAndFireV2` and `dag/triggers.ts` goes; a card move never starts a workflow. Runs start only from the orchestrator's fire tool or manual "run now."
-- ☠ **Card-move-as-effect is deleted (FD-9).** Moving a card becomes a visible **Move card step** in the workflow graph; the `move` property on step transitions dies.
+- ☠ **Stage-entry triggers are deleted (FD-10).** ✅ EXECUTED M6 slice A (2026-06-04) — see §5.
+- ☠ **Card-move-as-effect is deleted (FD-9).** Moving a card becomes a visible **Move card step** in the workflow graph; the `move` property on step transitions dies. (M6 slice B.)
 - **Areas get promoted (FD-19).** Page renamed "Areas"; cards (title · summary · open-vs-complete counts) → click → edit modal; every area carries a description; the orchestrator considers and assigns an area when creating work items, and can maintain area descriptions itself.
 
 ---

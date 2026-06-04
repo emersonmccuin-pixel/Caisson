@@ -124,8 +124,9 @@ export const workflowsApi = {
   fireWorkflowRow: (
     id: ULID,
     input?: {
-      trigger?: { kind: 'manual' | 'stage-on-entry' | 'schedule' | 'event'; [k: string]: unknown };
       projectId?: ULID;
+      /** Run the workflow ON this existing card (it becomes the run root). */
+      workItemId?: ULID;
     },
   ) =>
     postJson<WorkflowFireResult>(

@@ -63,11 +63,13 @@ export interface WorkflowRoutesDeps {
    *  from DELETE when `?cancel=1` is set. */
   cancelInFlightRuns?: (projectId: ULID, slug: string) => Promise<void> | void;
   /** Fire a persisted workflow by parsed definition. The route resolves the
-   *  DB row, casts `parsedDefinition` to the v2 shape, and invokes this. */
+   *  DB row, casts `parsedDefinition` to the v2 shape, and invokes this.
+   *  `rootWorkItemId` (validated by the route) runs the workflow ON that
+   *  existing card instead of minting a blank root. */
   fireWorkflow: (
     projectId: ULID,
     def: WorkflowV2.Workflow,
-    trigger: WorkflowV2.WorkflowTrigger,
+    rootWorkItemId?: ULID,
   ) => Promise<{ runId: ULID; rootWorkItemId: ULID }>;
 }
 
@@ -317,8 +319,7 @@ function validateAgentNodesProjectScoped(
  *  will RUN (deterministic pathway, caught at authoring not at fire):
  *   (1) every agent node resolves an `expected_output` (node override → pod row
  *       → stock default) — the contract the dispatch door requires;
- *   (2) every move-work-item `to_stage` + stage-on-entry trigger stage is a real
- *       stage in the project;
+ *   (2) every move-work-item `to_stage` is a real stage in the project;
  *   (3) every `$node.output` reference points at a real node (or `root`).
  *  Returns one error string per problem; empty when the workflow is runnable. */
 function validateWorkflowFeasibility(
@@ -356,17 +357,6 @@ function validateWorkflowFeasibility(
       );
     }
   }
-  const triggers = Array.isArray((def as unknown as { triggers?: unknown }).triggers)
-    ? ((def as unknown as { triggers: Record<string, unknown>[] }).triggers)
-    : [];
-  for (const t of triggers) {
-    if (t.kind !== 'stage-on-entry') continue;
-    const st = typeof t.stage === 'string' ? t.stage : '';
-    if (st && !stageIds.has(st)) {
-      errors.push(`stage-on-entry trigger: stage "${st}" does not exist in this project`);
-    }
-  }
-
   // (3) `$node.output` refs point at a real node (or the synthetic `root`/`self`).
   const ids = new Set<string>(
     nodes.map((n) => (typeof n.id === 'string' ? n.id : '')).filter(Boolean),
@@ -493,29 +483,8 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
       return c.json({ ok: false, error: 'def.id (workflow slug) required' }, 400);
     }
 
-    // Cross-workflow stage-collision check at publish time.
-    // New workflow not in DB yet → no slug exclusion needed.
-    if (projectId && normalised.status === 'active' && normalised.parsedDefinition !== null) {
-      const stageOnEntryWorkflows: Array<{ workflowId: string; name: string; stage: string }> = [];
-      for (const r of workflowsRepo.listWorkflows({ projectId })) {
-        if (r.status !== 'active' || r.disabled) continue;
-        const def = r.parsedDefinition as WorkflowV2.Workflow | null;
-        if (!def) continue;
-        for (const t of (def.triggers ?? [])) {
-          if (t.kind === 'stage-on-entry' && typeof (t as { stage?: unknown }).stage === 'string' && (t as { stage: string }).stage) {
-            stageOnEntryWorkflows.push({ workflowId: r.slug, name: r.name, stage: (t as { stage: string }).stage });
-          }
-        }
-      }
-      if (stageOnEntryWorkflows.length > 0) {
-        const crossResult = validateWorkflowV2(normalised.parsedDefinition, { stageOnEntryWorkflows });
-        if (!crossResult.ok) {
-          normalised.status = 'invalid';
-          normalised.parseError = crossResult.errors.join('; ');
-          normalised.parsedDefinition = null;
-        }
-      }
-    }
+    // ☠ M6/FD-10: the cross-workflow stage-collision check is gone with
+    // stage-entry triggers — a card move can no longer fire anything to skip.
 
     // Pod-scope enforcement: for project workflows every agent node must
     // reference a project-scoped pod. Reject publish if any pod is missing.
@@ -620,29 +589,7 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
         return c.json({ ok: false, error: normalised.error }, 400);
       }
 
-      // Cross-workflow stage-collision check at publish time. Excludes self by slug.
-      const checkProjectId = existing.projectId;
-      if (checkProjectId && normalised.status === 'active' && normalised.parsedDefinition !== null) {
-        const stageOnEntryWorkflows: Array<{ workflowId: string; name: string; stage: string }> = [];
-        for (const r of workflowsRepo.listWorkflows({ projectId: checkProjectId })) {
-          if (r.status !== 'active' || r.disabled || r.slug === existing.slug) continue;
-          const def = r.parsedDefinition as WorkflowV2.Workflow | null;
-          if (!def) continue;
-          for (const t of (def.triggers ?? [])) {
-            if (t.kind === 'stage-on-entry' && typeof (t as { stage?: unknown }).stage === 'string' && (t as { stage: string }).stage) {
-              stageOnEntryWorkflows.push({ workflowId: r.slug, name: r.name, stage: (t as { stage: string }).stage });
-            }
-          }
-        }
-        if (stageOnEntryWorkflows.length > 0) {
-          const crossResult = validateWorkflowV2(normalised.parsedDefinition, { stageOnEntryWorkflows });
-          if (!crossResult.ok) {
-            normalised.status = 'invalid';
-            normalised.parseError = crossResult.errors.join('; ');
-            normalised.parsedDefinition = null;
-          }
-        }
-      }
+      // ☠ M6/FD-10: stage-collision check gone (see create route).
 
       // Pod-scope enforcement on update: same rule as on create.
       if (existing.scope === 'project' && existing.projectId && normalised.status === 'active' && normalised.parsedDefinition !== null) {
@@ -875,14 +822,15 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
 
   // ---- fire -------------------------------------------------------------
 
-  /** Fire a workflow by DB id. Resolves the row, reads its
-   *  `parsedDefinition`, and dispatches through the runtime's v2 executor.
-   *  Replaces the legacy `POST /api/projects/:projectId/workflow-v2/fire`
-   *  endpoint (which took the def inline). Trigger defaults to manual.
+  /** Fire a workflow by DB id — THE one fire door ("Run now" + the
+   *  orchestrator's pc_fire_workflow both land here; ☠ M6/FD-10: triggers are
+   *  gone). Resolves the row, reads its `parsedDefinition`, and dispatches
+   *  through the runtime's v2 executor.
    *
-   *  Body: `{ trigger?: { kind: 'manual' | 'stage-on-entry' | 'schedule' |
-   *  'event', ... }, projectId?: ULID }`. `projectId` only consulted for
-   *  global rows — project-scope rows fire in their owning project. */
+   *  Body: `{ projectId?: ULID, workItemId?: ULID }`. `projectId` only
+   *  consulted for global rows — project-scope rows fire in their owning
+   *  project. `workItemId` runs the workflow ON that existing card (it becomes
+   *  the run root; no blank root is minted). */
   app.post('/api/workflows/:id/fire', async (c) => {
     const id = c.req.param('id') as ULID;
     const row = workflowsRepo.getWorkflowById(id);
@@ -896,8 +844,8 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
     if (row.disabled) {
       return c.json({ ok: false, error: `workflow ${row.slug} is disabled` }, 400);
     }
-    const body = await c.req.json<{ trigger?: unknown; projectId?: unknown }>().catch(
-      () => ({}) as { trigger?: unknown; projectId?: unknown },
+    const body = await c.req.json<{ projectId?: unknown; workItemId?: unknown }>().catch(
+      () => ({}) as { projectId?: unknown; workItemId?: unknown },
     );
 
     let projectId: ULID | null = row.projectId;
@@ -920,10 +868,13 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
       );
     }
 
-    const trigger =
-      body.trigger && typeof body.trigger === 'object'
-        ? (body.trigger as WorkflowV2.WorkflowTrigger)
-        : ({ kind: 'manual' } as WorkflowV2.WorkflowTrigger);
+    let workItemId: ULID | undefined;
+    if (body.workItemId !== undefined) {
+      if (typeof body.workItemId !== 'string' || !body.workItemId) {
+        return c.json({ ok: false, error: 'workItemId must be a non-empty string' }, 400);
+      }
+      workItemId = body.workItemId as ULID;
+    }
 
     // Pod-scope enforcement at fire time (last-mile guard). Even if the
     // workflow was published before enforcement was added, firing it with
@@ -939,7 +890,7 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
 
     try {
       const def = row.parsedDefinition as WorkflowV2.Workflow;
-      const res = await deps.fireWorkflow(projectId, def, trigger);
+      const res = await deps.fireWorkflow(projectId, def, workItemId);
       return c.json({ ok: true, ...res });
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 400);

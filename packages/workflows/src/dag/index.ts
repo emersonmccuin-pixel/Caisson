@@ -5,12 +5,6 @@ export { buildTopologicalLayers, computeUpstreams, forwardEdges, findForwardCycl
 export { evaluateCondition, checkTriggerRule } from './when.ts';
 export { validateWorkflowV2, type ValidationResult } from './validate.ts';
 export {
-  isForwardStageMove,
-  firesOnStageEntry,
-  selectStageEntryWorkflows,
-  type StageMove,
-} from './triggers.ts';
-export {
   substituteRefs,
   substituteInputs,
   extractInputPlaceholders,

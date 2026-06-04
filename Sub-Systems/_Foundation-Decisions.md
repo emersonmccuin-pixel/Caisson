@@ -350,7 +350,7 @@ redesign (shipped days earlier). The rebuild **deletes** the property path — n
 
 ## FD-10 — No stage-entry triggers
 
-**Status:** 🟢 Locked — 2026-06-03
+**Status:** 🟢 Locked — 2026-06-03 · **✅ EXECUTED — M6 slice A, 2026-06-04**
 
 **The decision:** a card entering a stage **does not start a workflow**. Exactly two ways a run
 starts: the **orchestrator's fire tool** and **manual "run now."** The stage-watching trigger
@@ -359,6 +359,14 @@ machinery is deleted in the rebuild.
 **Why:** stage-entry triggering "causes too much issue" (Emerson) — it's a hidden tripwire that
 fights the agent-centric direction. If automation demand returns, it comes back deliberately — most
 likely as the orchestrator *noticing* the move and choosing to fire, keeping one brain in charge.
+
+**✅ Delivered (M6 slice A):** definitions have NO `triggers:` key (validator rejects one; schedule/
+event vapor kinds died too — validation accepting what the runtime can't do was a lie at the save
+door); ☠ `dag/triggers.ts` + the firing half of `moveAndFireV2` (→ `moveWorkItemV2`) + run-row
+trigger columns (migration 0043) + trigger UI; boot sweep strips the key from stored defs. The
+fire route + `pc_fire_workflow` gained optional `workItemId` — fire ON an existing card (it becomes
+the run root), preserving stage-entry's one real capability through the one deliberate door.
+Banned names: the matcher fns + trigger types + `allow_stage_workflow_skip` + `also_fire_on_regression`.
 
 ---
 
