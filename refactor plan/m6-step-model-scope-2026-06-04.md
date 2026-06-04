@@ -2,9 +2,14 @@
 
 > **Progress:** Slice A ✅ SHIPPED + LIVE (80a09a3b — fire→deliver→gate→approve→completed through
 > the trigger-less door; migration 0043 + boot def-sweep verified on the dev DB). Slice B ✅
-> SHIPPED (b2fdd67f — four kinds live; live loop gauntlet below). Migration note: the def-sweep
-> honestly flipped 9 v1-era corpse defs (bash/move-work-item kinds, dead since the first-principles
-> redesign) from "active"-but-unrunnable to `invalid` — visible truth, not a regression.
+> SHIPPED + LIVE (b2fdd67f — four kinds; live reject→loop→feedback-carried→approve gauntlet).
+> Slice C ✅ SHIPPED (e6a24583 + race fix c7acfc28) — live proofs: cancel cascade (run cancelled +
+> child worker cancelled + diary line; **live-caught race**: a cancel landing mid-layer used to be
+> stomped to `failed` by the executor's persist — fixed at the write door + finalize) ·
+> interrupt→resume (run_interrupted → run_resumed → completed, the FD-11 repair loop on a real
+> boot-fail-closed run) · ceiling-pause (below). Migration note: the def-sweep honestly flipped 9
+> v1-era corpse defs (bash/move-work-item kinds, dead since the first-principles redesign) from
+> "active"-but-unrunnable to `invalid` — visible truth, not a regression.
 
 Sequencing row M6 (FD-9 + FD-10 + FD-11 req 2+3). Prereqs ✅: M3a (diary spine) + M5 (contract
 refs). M7 (ask door) and M8 (Human Inbox) build on this pass's loop-ceiling/review semantics.
