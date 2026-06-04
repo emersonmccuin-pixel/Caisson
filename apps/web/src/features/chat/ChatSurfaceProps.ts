@@ -8,7 +8,7 @@ export interface ChatSurfaceProps {
   /** Per-project WS-shaped envelope stream (event / jsonl / ask / state / turn-end / etc).
    *  Wrappers adapt their source-of-truth into this shape before passing in. */
   events: WsEnvelope[];
-  /** Project id - needed for AskCard reply POST + ApprovalBubble POST. */
+  /** Project id - needed for AskCard reply POST. */
   projectId: string;
   /** Current session id (orchestrator session ULID, or null when unknown).
    *  Used to scope `ask` envelopes to this session. */

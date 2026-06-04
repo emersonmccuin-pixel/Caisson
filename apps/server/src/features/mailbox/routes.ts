@@ -1,34 +1,33 @@
 // Slice 007 — mailbox HTTP routes (additive; no existing route changed).
 //
 // Project-scoped inbox + delivery inspector + an app-level global single-user
-// inbox + a pending-interaction answer route. All NEW routes (no legacy parity).
-// Contract parsers gate input; reads never emit.
+// inbox. All NEW routes (no legacy parity). Contract parsers gate input; reads
+// never emit. (☠ M8/FD-7: the pending-interaction answer route — gone with the
+// write-only shadow table.)
 //
-// Slice 015b — mailbox-message AND pending-interaction delivery are now the
-// relay's job. The mailbox + pending-interaction services write the canonical
-// `live_outbox` row inside their mutation txn; the 250ms relay drains it to
-// subscribers per scope/project. ALL ad-hoc `broadcastTo`/`broadcastAll` fanout
-// that used to live here is DELETED (the relay delivers the identical frame,
-// deduped by `event.id`). No fanout deps remain on these routes.
+// Slice 015b — mailbox-message delivery is the relay's job. The mailbox service
+// writes the canonical `live_outbox` row inside its mutation txn; the 250ms
+// relay drains it to subscribers per scope/project. ALL ad-hoc
+// `broadcastTo`/`broadcastAll` fanout that used to live here is DELETED (the
+// relay delivers the identical frame, deduped by `event.id`). No fanout deps
+// remain on these routes.
 
 import type { Hono } from 'hono';
 import type {
   MailboxEnqueuePublication,
   MailboxService,
-  PendingInteractionService,
 } from '@pc/app-services';
 import {
+  isActionableMailboxKind,
   mailboxAddressProjectId,
   parseEnqueueMailboxMessageRequest,
   parseListMailboxQuery,
-  parseAnswerPendingInteractionRequest,
   type EnqueueMailboxMessageRequest,
   type MailboxAddress,
 } from '@pc/contracts';
 import {
   getMailboxMessage,
   getMailboxRecipient,
-  getPendingInteraction,
   listDeliveriesForProject,
   listRecipientsForInbox,
   newId,
@@ -46,7 +45,6 @@ import {
 
 export interface MailboxRouteDeps {
   mailbox: MailboxService;
-  interactions: PendingInteractionService;
   now?: () => number;
 }
 
@@ -69,7 +67,6 @@ export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
         payload: req.payload ?? {},
         sourceKind: req.source?.kind ?? 'system',
         sourceId: req.source?.id ?? null,
-        interactionId: (req.interactionId as ULID | undefined) ?? null,
         idempotencyKey: req.idempotencyKey,
       },
       recipients: req.recipients.map((r) => ({
@@ -161,24 +158,6 @@ export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
     return c.json({ ok: true, deliveries });
   });
 
-  // ── Answer a pending interaction (durable shadow; not the /api/ask authority). ─
-  app.post('/api/projects/:projectId/pending-interactions/:interactionId/answer', async (c) => {
-    const interactionId = c.req.param('interactionId') as ULID;
-    if (!getPendingInteraction(interactionId)) {
-      return c.json({ ok: false, error: 'unknown interaction' }, 404);
-    }
-    const parsed = parseAnswerPendingInteractionRequest(await safeJson(c));
-    if (!parsed.ok) return c.json({ ok: false, error: parsed.error }, 400);
-    const pub = deps.interactions.answer({
-      id: interactionId,
-      answer: parsed.value.answer,
-      answeredBy: parsed.value.answeredBy,
-      now: now(),
-    });
-    if (!pub) return c.json({ ok: false, error: 'interaction not open' }, 409);
-    // Outbox row written in the answer txn; the relay delivers it.
-    return c.json({ ok: true });
-  });
 }
 
 function filterInbox(
@@ -190,7 +169,7 @@ function filterInbox(
     .filter((r) => (query.unreadOnly ? r.recipient.readAt === null && r.recipient.dismissedAt === null : true))
     .filter((r) =>
       query.actionableOnly
-        ? r.message!.interactionId !== null && r.recipient.actionedAt === null && r.recipient.dismissedAt === null
+        ? isActionableMailboxKind(r.message!.kind) && r.recipient.actionedAt === null && r.recipient.dismissedAt === null
         : true,
     )
     .map((r) => ({

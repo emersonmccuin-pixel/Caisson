@@ -291,7 +291,6 @@ function isUnreadChatEvent(type: unknown, event: unknown): boolean {
   if (type !== 'event') return false;
   return (
     (kind === 'assistant' && hasText(event, 'text')) ||
-    kind === 'approval-required' ||
     kind === 'subagent-failure' ||
     kind === 'stop-failure'
   );

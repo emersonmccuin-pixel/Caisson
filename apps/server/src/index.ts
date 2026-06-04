@@ -34,7 +34,6 @@ import {
 import {
   ConversationSendService,
   MailboxService,
-  PendingInteractionService,
   reconcileWorkflowRunsOnBoot,
   RECONCILE_SCAN_STATUSES,
   WorkflowRunMutationGateway,
@@ -96,7 +95,6 @@ import {
 import { registerMailboxRoutes } from './features/mailbox/routes.ts';
 import { MailboxOrchestratorTurnAdapter } from './services/mailbox-orchestrator-turn-adapter.ts';
 import { MailboxWorker } from './services/mailbox-worker.ts';
-import { AskShadow, sweepOrphanedPendingInteractions } from './services/ask-shadow.ts';
 import { registerPodRoutes } from './routes/pod-routes.ts';
 import { registerWorkflowRoutes } from './routes/workflow-routes.ts';
 import { seedOrchestratorPodIfMissing } from './services/orchestrator-pod-seed.ts';
@@ -568,20 +566,14 @@ app.all('/api/mcp', async (c) => {
 // handlers (~:366) so the boot-reattach/reconcile/liveness handlers can carry
 // the agent delivery gate without a const TDZ. The routes + worker setInterval
 // stay here.
-const pendingInteractionService = new PendingInteractionService();
-const askShadow = new AskShadow({ interactions: pendingInteractionService });
-
 registerChatBridgeRoutes(app, {
   broadcastTo,
   pendingAsks,
-  askShadow,
 });
 
 registerMailboxRoutes(app, {
   mailbox: mailboxService,
-  interactions: pendingInteractionService,
-  // Mailbox-message AND pending-interaction delivery ride the relay (015b);
-  // no fanout deps.
+  // Mailbox-message delivery rides the relay (015b); no fanout deps.
 });
 
 // Workflow-review delivery. Hoisted so the ProjectRegistry built at boot can
@@ -737,17 +729,6 @@ function pruneLiveOutboxSafe(): void {
 pruneLiveOutboxSafe();
 const liveOutboxPruneSweep = setInterval(pruneLiveOutboxSafe, LIVE_OUTBOX_PRUNE_MS);
 if (typeof liveOutboxPruneSweep.unref === 'function') liveOutboxPruneSweep.unref();
-
-// Boot-sweep orphaned `open` ask-shadow rows to `expired` (a lost /api/ask
-// connection cannot be unblocked). Inspectable, not a resume.
-{
-  try {
-    const swept = sweepOrphanedPendingInteractions();
-    if (swept > 0) console.log(`[mailbox] swept ${swept} orphaned pending interaction(s) to expired`);
-  } catch (err) {
-    console.warn('[mailbox] pending-interaction boot sweep failed:', (err as Error).message);
-  }
-}
 
 /**
  * Listens on the `jsonl-event` channel for the first `jsonl-user` envelope of
@@ -1123,9 +1104,7 @@ const wss = registerRuntimeHostWebSocketServer<ReturnType<ProjectRuntime['ensure
     liveRelay.catchUp(socket, lastVersion, projectId),
   ensureOrchestratorPty,
   resolvePendingAsk: (id, answer) => {
-    const resolved = pendingAsks.resolve(id, answer);
-    // Slice 007 — terminalize the durable ask-shadow `answered` (side write).
-    if (resolved) askShadow.onResolved(id, answer);
+    pendingAsks.resolve(id, answer);
   },
 });
 

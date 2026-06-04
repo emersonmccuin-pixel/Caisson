@@ -1,11 +1,12 @@
-// Slice 007 — mailbox inbox surface. Lists recipients grouped by message kind,
-// renders action forms for actionable items (answer / dismiss), and refetches
-// on canonical live frames via useMailboxInbox. No route strings live here (the
-// client owns them); no raw event parsing in the view (the live helper owns it).
+// Slice 007 — mailbox inbox surface. Lists recipients grouped by message kind
+// and refetches on canonical live frames via useMailboxInbox. No route strings
+// live here (the client owns them); no raw event parsing in the view (the live
+// helper owns it). M8 slice C grows this into the actionable decision-card
+// Human Inbox (approve/reject via the existing decision doors).
 
 import { useEffect, useState } from 'react';
 
-import type { MailboxMessageKind } from '@pc/contracts';
+import { isActionableMailboxKind, type MailboxMessageKind } from '@pc/contracts';
 import { mailboxApi } from './client';
 import { useMailboxInbox } from '@/hooks/use-mailbox-inbox';
 import type { MailboxInboxItem } from './types';
@@ -140,10 +141,9 @@ function MailboxInboxRow({ item, onChanged }: { item: MailboxInboxItem; onChange
   const projectId = message.projectId;
   const unread = recipient.readAt === null && recipient.dismissedAt === null;
   const actionable =
-    message.interactionId !== null &&
+    isActionableMailboxKind(message.kind) &&
     recipient.actionedAt === null &&
     recipient.dismissedAt === null;
-  const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);
   // Collapsed by default — the card shows a title + type; the full body lives
   // behind a click so completed-agent dumps don't flood the rail.
@@ -200,36 +200,7 @@ function MailboxInboxRow({ item, onChanged }: { item: MailboxInboxItem; onChange
         {message.body}
       </div>
 
-      {/* Answer form */}
-      {actionable && message.interactionId && projectId && (
-        <form
-          className="mb-1.5 flex items-center gap-1"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!answer.trim()) return;
-            void act(async () => {
-              await mailboxApi.answerInteraction(projectId, message.interactionId!, answer.trim());
-              await mailboxApi.markActioned(projectId, recipient.id);
-            });
-          }}
-        >
-          <input
-            type="text"
-            value={answer}
-            placeholder="Your answer…"
-            onChange={(e) => setAnswer(e.target.value)}
-            disabled={busy}
-            className="min-w-0 flex-1 border border-border bg-background px-1.5 py-0.5 text-[11px]"
-          />
-          <button
-            type="submit"
-            disabled={busy || !answer.trim()}
-            className="shrink-0 border border-border bg-card px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted disabled:opacity-50"
-          >
-            Answer
-          </button>
-        </form>
-      )}
+      {/* Decision actions (approve/reject via the typed doors) land in M8 slice C. */}
 
       {/* Action controls */}
       <div className="flex items-center gap-1">

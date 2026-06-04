@@ -5,14 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Hono } from 'hono';
-import type { ULID } from '@pc/domain';
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-mailbox-routes-'));
 process.env.PC_DATA_DIR = tmpDir;
 
-const { closeDb, createProject, runMigrations, getPendingInteraction, createPendingInteraction, newId } =
-  await import('@pc/db');
-const { MailboxService, PendingInteractionService } = await import('@pc/app-services');
+const { closeDb, createProject, runMigrations, newId } = await import('@pc/db');
+const { MailboxService } = await import('@pc/app-services');
 const { registerMailboxRoutes } = await import('../src/features/mailbox/routes.ts');
 const { LiveRelay } = await import('../src/services/live-relay.ts');
 
@@ -32,11 +30,9 @@ interface Fan {
 // Slice 015b — the mailbox routes no longer hand-fan message frames; the relay
 // delivers them from the committed outbox row. The test harness drives a relay
 // over the same DB (mirroring the live 250ms drain) and asserts delivery there.
-// `broadcasts` now only ever receives pending-interaction (`/answer`) frames —
-// the one fanout the mailbox routes still own this commit.
+// (☠ M8/FD-7: the pending-interaction `/answer` route + service are gone.)
 function makeApp() {
   const app = new Hono();
-  const broadcasts: { projectId: ULID | null; event: unknown }[] = [];
   const fan: Fan = { globalAll: [], perProject: new Map() };
   const relay = new LiveRelay({
     hub: {
@@ -55,15 +51,13 @@ function makeApp() {
   relay.primeToHead();
   registerMailboxRoutes(app, {
     mailbox: new MailboxService(),
-    interactions: new PendingInteractionService(),
-    broadcastTo: (projectId, event) => broadcasts.push({ projectId, event }),
   });
   // Drain the relay and return what reached each scope.
   const drain = () => {
     relay.drain();
     return fan;
   };
-  return { app, broadcasts, drain, fan };
+  return { app, drain, fan };
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -71,7 +65,7 @@ async function json<T>(res: Response): Promise<T> {
 }
 
 test('enqueue → project inbox lists it → read/dismiss updates recipient state', async () => {
-  const { app, broadcasts, drain, fan } = makeApp();
+  const { app, drain, fan } = makeApp();
   const project = createProject({
     slug: `mbx-${Date.now()}`,
     name: 'Mailbox P',
@@ -106,7 +100,6 @@ test('enqueue → project inbox lists it → read/dismiss updates recipient stat
     'mailbox.message.changed',
   );
   assert.equal(fan.globalAll.length, 0, 'project enqueue must not reach the global scope');
-  assert.equal(broadcasts.length, 0, 'no mailbox-message hand-fanout remains');
 
   const list = await app.request(`/api/projects/${project.id}/mailbox`);
   const listBody = await json<{ items: { recipient: { id: string }; message: { body: string } }[] }>(list);
@@ -218,7 +211,7 @@ test('delivery inspector returns deliveries; bad request is 400', async () => {
 });
 
 test('app-level enqueue with a project-less user-inbox recipient → global inbox', async () => {
-  const { app, broadcasts, drain, fan } = makeApp();
+  const { app, drain, fan } = makeApp();
   const enq = await app.request('/api/mailbox/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -246,7 +239,6 @@ test('app-level enqueue with a project-less user-inbox recipient → global inbo
     ),
     'relay delivers the global mailbox frame to all sockets',
   );
-  assert.equal(broadcasts.length, 0, 'no mailbox-message hand-fanout remains');
 
   const list = await app.request('/api/mailbox');
   const body = await json<{ items: { message: { body: string } }[] }>(list);
@@ -285,7 +277,9 @@ test('app-level enqueue derives projectId from a project-bound recipient', async
   ));
 });
 
-test('answer a pending interaction route (404 unknown, 200 ok, 409 already terminal)', async () => {
+// ☠ M8/FD-7: the pending-interaction answer route is gone with the shadow
+// table — it must 404 like any unknown route.
+test('pending-interaction answer route stays deleted (404)', async () => {
   const { app } = makeApp();
   const project = createProject({
     slug: `mbx-int-${Date.now()}`,
@@ -293,34 +287,10 @@ test('answer a pending interaction route (404 unknown, 200 ok, 409 already termi
     stages,
     folderPath: join(tmpDir, 'mbx-int'),
   });
-  const missing = await app.request(`/api/projects/${project.id}/pending-interactions/nope/answer`, {
+  const res = await app.request(`/api/projects/${project.id}/pending-interactions/x/answer`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ answer: 'y', answeredBy: 'user' }),
   });
-  assert.equal(missing.status, 404);
-
-  const interaction = createPendingInteraction({
-    id: newId(),
-    projectId: project.id,
-    kind: 'runtime-hook-ask',
-    sourceKind: 'runtime-hook',
-    sourceId: `tool-${Date.now()}`,
-    prompt: 'pick',
-    now: Date.now(),
-  });
-  const ok = await app.request(`/api/projects/${project.id}/pending-interactions/${interaction.id}/answer`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ answer: 'yes', answeredBy: 'user' }),
-  });
-  assert.equal(ok.status, 200);
-  assert.equal(getPendingInteraction(interaction.id)!.status, 'answered');
-
-  const replay = await app.request(`/api/projects/${project.id}/pending-interactions/${interaction.id}/answer`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ answer: 'no', answeredBy: 'user' }),
-  });
-  assert.equal(replay.status, 409);
+  assert.equal(res.status, 404);
 });

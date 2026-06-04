@@ -94,7 +94,6 @@ export const liveOutbox = sqliteTable(
         | 'workflow-review'
         | 'agent-run'
         | 'mailbox-message'
-        | 'pending-interaction'
         | 'session-title'
         | 'pod'
         | 'area'
@@ -852,47 +851,17 @@ export const postTurnSummaries = sqliteTable(
   ],
 );
 
-// ── Slice 007 — mailbox platform + pending interactions ──────────────────────
+// ── Slice 007 — mailbox platform ──────────────────────────────────────────────
 //
-// FIRST real schema migration of the refactor (migration 0036). All six tables
-// are additive CREATE-only and inert until the mailbox worker/routes are wired;
-// they run ALONGSIDE Channel/agent_inbox (no cutover this slice). Project
-// references are soft (no FK) — a project-less message (global user-inbox) is
-// valid. JSON columns are `text({ mode:'json' })` in schema.ts but plain `text`
-// in 0036_mailbox_platform.sql (mirrors live_outbox.payload). Every column here
-// MUST appear verbatim in the SQL or assertSchemaIntact() fails on a fresh boot.
-
-/** General cross-system ask/review/approval state (separate from delivery). */
-export const pendingInteractions = sqliteTable(
-  'pending_interactions',
-  {
-    id: text('id').primaryKey().$type<ULID>(),
-    /** Soft project reference (no FK); always non-null in the DTO. */
-    projectId: text('project_id').notNull().$type<ULID>(),
-    kind: text('kind').notNull(),
-    status: text('status').notNull().default('open'),
-    sourceKind: text('source_kind').notNull(),
-    sourceId: text('source_id').notNull(),
-    sourceRef: text('source_ref', { mode: 'json' }).$type<Record<string, unknown> | null>(),
-    prompt: text('prompt').notNull(),
-    context: text('context'),
-    options: text('options', { mode: 'json' }).$type<{ value: string; label: string }[] | null>(),
-    answerBody: text('answer_body'),
-    answeredBy: text('answered_by').$type<'orchestrator' | 'user' | null>(),
-    createdAt: integer('created_at').notNull(),
-    updatedAt: integer('updated_at').notNull(),
-    answeredAt: integer('answered_at'),
-    cancelledAt: integer('cancelled_at'),
-    expiresAt: integer('expires_at'),
-    /** Monotonic write counter for live-event stale-update guards. */
-    version: integer('version').notNull().default(1),
-  },
-  (t) => [
-    index('pending_interactions_project_idx').on(t.projectId, t.status, t.createdAt),
-    index('pending_interactions_source_idx').on(t.sourceKind, t.sourceId),
-    index('pending_interactions_kind_idx').on(t.kind, t.status),
-  ],
-);
+// FIRST real schema migration of the refactor (migration 0036). Tables are
+// additive CREATE-only. Project references are soft (no FK) — a project-less
+// message (global user-inbox) is valid. JSON columns are `text({ mode:'json' })`
+// in schema.ts but plain `text` in 0036_mailbox_platform.sql (mirrors
+// live_outbox.payload).
+//
+// ☠ M8 (FD-7, 2026-06-04): `pending_interactions` — the write-only AskShadow
+// side-table — archived in migration 0045. The mailbox user-inbox channel IS
+// the one durable human inbox; pending_asks stays as ask-state.
 
 /** A durable mailbox message. `idempotency_key` dedupes replayed sources. */
 export const mailboxMessages = sqliteTable(
@@ -907,7 +876,6 @@ export const mailboxMessages = sqliteTable(
     payload: text('payload', { mode: 'json' }).notNull().default(sql`'{}'`).$type<Record<string, unknown>>(),
     sourceKind: text('source_kind').notNull(),
     sourceId: text('source_id'),
-    interactionId: text('interaction_id').$type<ULID | null>(),
     idempotencyKey: text('idempotency_key').notNull(),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),

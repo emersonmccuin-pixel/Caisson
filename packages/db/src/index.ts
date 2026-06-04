@@ -335,7 +335,8 @@ export type {
   RecordDeliveredOrchestratorSendInput,
 } from './repos/orchestrator-send-queue.ts';
 
-// Slice 007 — mailbox + pending-interaction repos (additive; alongside Channel).
+// Slice 007 — mailbox repos. (☠ M8/FD-7: pending-interaction repo — the
+// write-only AskShadow side-table; archived in migration 0045.)
 export {
   acquireDeliveryLease,
   enqueueMailboxMessage,
@@ -370,20 +371,3 @@ export type {
   MailboxRecipientRow,
   WriteAuditInput,
 } from './repos/mailbox.ts';
-
-export {
-  answerPendingInteraction,
-  cancelPendingInteraction,
-  createPendingInteraction,
-  expireOpenPendingInteractions,
-  expirePendingInteraction,
-  findOpenPendingInteractionBySource,
-  getPendingInteraction,
-  listOpenPendingInteractions,
-  listPendingInteractionsForProject,
-} from './repos/pending-interactions.ts';
-export type {
-  AnswerPendingInteractionInput,
-  CreatePendingInteractionInput,
-  PendingInteractionRow,
-} from './repos/pending-interactions.ts';

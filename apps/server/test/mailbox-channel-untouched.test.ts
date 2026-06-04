@@ -17,7 +17,7 @@ const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const MAILBOX_MODULES = [
   'services/mailbox-worker.ts',
   'services/mailbox-orchestrator-turn-adapter.ts',
-  'services/ask-shadow.ts',
+  // ☠ M8/FD-7: services/ask-shadow.ts — gone with pending_interactions.
   'features/mailbox/routes.ts',
 ];
 
@@ -77,5 +77,28 @@ test('NO-INBOX-WRITE (M4a): the agent_inbox path stays deleted', () => {
   assert.ok(
     !/sqliteTable\(\s*'agent_delivery_audit'/.test(schema),
     'agent_delivery_audit table must not regrow',
+  );
+});
+
+test('M8 (FD-7): the ask-shadow / pending_interactions layer stays deleted', () => {
+  assert.equal(
+    existsSync(`${repoRoot}/apps/server/src/services/ask-shadow.ts`),
+    false,
+    'services/ask-shadow.ts must not regrow',
+  );
+  assert.equal(
+    existsSync(`${repoRoot}/packages/db/src/repos/pending-interactions.ts`),
+    false,
+    'repos/pending-interactions.ts must not regrow',
+  );
+  assert.equal(
+    existsSync(`${repoRoot}/packages/app-services/src/mailbox/pending-interaction-service.ts`),
+    false,
+    'pending-interaction-service.ts must not regrow',
+  );
+  const schema = stripComments(readFileSync(`${repoRoot}/packages/db/src/schema.ts`, 'utf8'));
+  assert.ok(
+    !/sqliteTable\(\s*'pending_interactions'/.test(schema),
+    'pending_interactions table must not regrow',
   );
 });

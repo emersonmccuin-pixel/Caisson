@@ -180,7 +180,9 @@ test('live replay query parser validates cursors, type, and clamps limit', () =>
     ok: true,
     value: { includeGlobal: false, limit: 100, type: 'agent.run.changed' },
   });
-  // slice 007 — mailbox + pending-interaction type names accepted by replay.
+  // slice 007 — mailbox type names accepted by replay. (☠ M8/FD-7:
+  // pending-interaction.changed — gone with the shadow table; asserted
+  // rejected below.)
   assert.deepEqual(parseListLiveEventsQuery({ type: 'mailbox.message.changed' }), {
     ok: true,
     value: { includeGlobal: false, limit: 100, type: 'mailbox.message.changed' },
@@ -190,8 +192,9 @@ test('live replay query parser validates cursors, type, and clamps limit', () =>
     value: { includeGlobal: false, limit: 100, type: 'mailbox.delivery.changed' },
   });
   assert.deepEqual(parseListLiveEventsQuery({ type: 'pending-interaction.changed' }), {
-    ok: true,
-    value: { includeGlobal: false, limit: 100, type: 'pending-interaction.changed' },
+    ok: false,
+    error: 'unsupported live event type',
+    code: 'VALIDATION',
   });
   assert.deepEqual(parseListLiveEventsQuery({ type: 'pod.changed' }), {
     ok: true,

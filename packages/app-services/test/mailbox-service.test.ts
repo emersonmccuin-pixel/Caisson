@@ -3,14 +3,11 @@ import assert from 'node:assert/strict';
 
 import {
   MailboxService,
-  PendingInteractionService,
   type MailboxServiceDeps,
-  type PendingInteractionServiceDeps,
 } from '../src/mailbox/index.ts';
 import {
   isMailboxDeliveryChangedLiveEvent,
   isMailboxMessageChangedLiveEvent,
-  isPendingInteractionChangedLiveEvent,
 } from '@pc/contracts';
 import type {
   DbExecutor,
@@ -19,7 +16,6 @@ import type {
   MailboxDeliveryRow,
   MailboxMessageRow,
   MailboxRecipientRow,
-  PendingInteractionRow,
 } from '@pc/db';
 
 let seq = 0;
@@ -49,7 +45,6 @@ function message(over: Partial<MailboxMessageRow> = {}): MailboxMessageRow {
     payload: {},
     sourceKind: 'system',
     sourceId: null,
-    interactionId: null,
     idempotencyKey: 'k1',
     createdAt: 1,
     updatedAt: 1,
@@ -214,70 +209,5 @@ test('T3.1 — message-fact and delivery frames for the same message use DISTINC
   assert.equal(delFact!.liveEvent.entityId, 'd1');
 });
 
-// ── pending interaction service ──────────────────────────────────────────────
-
-function interaction(over: Partial<PendingInteractionRow> = {}): PendingInteractionRow {
-  return {
-    id: 'i1' as never,
-    projectId: 'p1' as never,
-    kind: 'runtime-hook-ask',
-    status: 'open',
-    sourceKind: 'runtime-hook',
-    sourceId: 'tool-1',
-    sourceRef: null,
-    prompt: 'pick',
-    context: null,
-    options: null,
-    answerBody: null,
-    answeredBy: null,
-    createdAt: 1,
-    updatedAt: 1,
-    answeredAt: null,
-    cancelledAt: null,
-    expiresAt: null,
-    version: 1,
-    ...over,
-  };
-}
-
-function interactionHarness(opts: { answered?: PendingInteractionRow | null } = {}) {
-  const inserted: InsertLiveEventDraft[] = [];
-  const deps: PendingInteractionServiceDeps = {
-    transaction: (fn) => fn({} as DbExecutor),
-    insertLiveEvent: ((db, draft) => {
-      inserted.push(draft as InsertLiveEventDraft);
-      return fakeInsert(db, draft);
-    }) as PendingInteractionServiceDeps['insertLiveEvent'],
-    createPendingInteraction: () => interaction(),
-    answerPendingInteraction: () =>
-      opts.answered === undefined ? interaction({ status: 'answered', version: 2, answerBody: 'yes' }) : opts.answered,
-  };
-  return { service: new PendingInteractionService(deps), inserted };
-}
-
-test('create + answer emit pending-interaction.changed with version', () => {
-  const h = interactionHarness();
-  const created = h.service.create({
-    id: 'i1' as never,
-    projectId: 'p1' as never,
-    kind: 'runtime-hook-ask',
-    sourceKind: 'runtime-hook',
-    sourceId: 'tool-1',
-    prompt: 'pick',
-    now: 1,
-  });
-  assert.equal(isPendingInteractionChangedLiveEvent(created.liveEvent), true);
-  assert.equal(created.liveEvent.payload.status, 'open');
-
-  const answered = h.service.answer({ id: 'i1' as never, answer: 'yes', answeredBy: 'user', now: 2 });
-  assert.ok(answered);
-  assert.equal(answered!.liveEvent.payload.status, 'answered');
-  assert.equal(answered!.liveEvent.version, 2);
-});
-
-test('a no-op terminal flip (replayed answer) emits nothing', () => {
-  const h = interactionHarness({ answered: null });
-  const res = h.service.answer({ id: 'i1' as never, answer: 'yes', answeredBy: 'user', now: 2 });
-  assert.equal(res, null);
-  assert.equal(h.inserted.length, 0);
-});
+// ☠ M8/FD-7: the PendingInteractionService tests are gone with the write-only
+// shadow table (archived in migration 0045).

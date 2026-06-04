@@ -258,7 +258,10 @@ test('terminal replay throw → 500 (no Retry-After)', async () => {
   assert.equal((await json<{ error: string }>(res)).error, 'unexpected boom');
 });
 
-test('replay returns project-scoped pending-interaction.changed', async () => {
+// M8/FD-7: the typed-replay-filter coverage that lived on pending-interaction
+// (☠ with the shadow table) now rides mailbox.message.changed — same
+// project-scoped `type=` filter mechanics.
+test('replay returns project-scoped mailbox.message.changed via type filter', async () => {
   const app = new Hono();
   registerLiveEventRoutes(app);
   const p1 = createProject({
@@ -271,13 +274,17 @@ test('replay returns project-scoped pending-interaction.changed', async () => {
   const evt = insertLiveEvent(getDb(), {
     scope: 'project',
     projectId: p1.id,
-    type: 'pending-interaction.changed',
-    entity: 'pending-interaction',
-    entityId: 'i1' as ULID,
-    version: 2,
-    payload: { interactionId: 'i1', kind: 'runtime-hook-ask', status: 'answered', version: 2 },
+    type: 'mailbox.message.changed',
+    entity: 'mailbox-message',
+    entityId: 'm1' as ULID,
+    version: null,
+    payload: {
+      messageId: 'm1',
+      kind: 'workflow-review',
+      recipientSummary: { total: 1, unread: 1, actionable: 1 },
+    },
   });
-  const res = await app.request(`/api/live-events?after=${after}&projectId=${p1.id}&type=pending-interaction.changed`);
+  const res = await app.request(`/api/live-events?after=${after}&projectId=${p1.id}&type=mailbox.message.changed`);
   const body = await json<{ events: { id: string }[] }>(res);
   assert.deepEqual(body.events.map((e) => e.id), [evt.id]);
 });

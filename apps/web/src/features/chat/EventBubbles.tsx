@@ -7,7 +7,6 @@ import remarkGfm from 'remark-gfm';
 import { ExternalLink } from '@/components/ExternalLink';
 import { LiveRichLink } from '@/components/LiveRichLink';
 import type {
-  ApprovalRequiredEvent,
   AssistantEvent,
   ChatEvent,
   SubagentFailureEvent,
@@ -25,7 +24,6 @@ import {
   TaskStartBubble,
   TodosBubble,
 } from '@/features/chat/AgentWorkflowBubbles';
-import { ApprovalBubble } from '@/features/chat/approvals';
 import {
   CompactBoundaryRule,
   MicrocompactDivider,
@@ -164,20 +162,11 @@ export function ChatTurnCard({
 interface EventBubbleProps {
   event: ChatEvent;
   projectId: string;
-  resolvedApprovals: Record<string, { approved: boolean; response: string }>;
-  onApprovalResolved: (
-    workflowRunId: string,
-    nodeId: string,
-    approved: boolean,
-    response: string,
-  ) => void;
 }
 
 export function EventBubble({
   event,
   projectId,
-  resolvedApprovals,
-  onApprovalResolved,
 }: EventBubbleProps) {
   switch (event.kind) {
     case 'user':
@@ -195,19 +184,9 @@ export function EventBubble({
       return <TaskStartBubble event={event as TaskStartEvent} />;
     case 'task-end':
       return <TaskEndBubble event={event as TaskEndEvent} />;
-    case 'approval-required':
-      return (
-        <ApprovalBubble
-          event={event as ApprovalRequiredEvent}
-          projectId={projectId}
-          resolved={
-            resolvedApprovals[
-              `${(event as ApprovalRequiredEvent).workflowRunId}:${(event as ApprovalRequiredEvent).nodeId}`
-            ]
-          }
-          onResolved={onApprovalResolved}
-        />
-      );
+    // ☠ M8/FD-7: 'approval-required' / ApprovalBubble — a v1 corpse. The server
+    // never emitted the event and its respond route never existed. Reviews ride
+    // the Human Inbox.
     case 'subagent-failure':
       return <FailureBubble event={event as SubagentFailureEvent} />;
     case 'system': {

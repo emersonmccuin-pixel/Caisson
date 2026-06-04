@@ -55,7 +55,6 @@ export interface EnqueueMailboxMessageInput {
     payload?: Record<string, unknown>;
     sourceKind: string;
     sourceId?: string | null;
-    interactionId?: ULID | null;
     idempotencyKey: string;
   };
   recipients: EnqueueMailboxRecipientRow[];
@@ -97,7 +96,6 @@ export function enqueueMailboxMessage(
       payload: input.message.payload ?? {},
       sourceKind: input.message.sourceKind,
       sourceId: input.message.sourceId ?? null,
-      interactionId: input.message.interactionId ?? null,
       idempotencyKey: input.message.idempotencyKey,
       createdAt: input.now,
       updatedAt: input.now,

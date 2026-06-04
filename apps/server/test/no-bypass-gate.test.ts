@@ -153,6 +153,16 @@ const BANNED_RESURRECTION = [
   'AgentAsksUserPayload',
   'PcAskUserInput',
   'PcAskUserResult',
+  // M8 (FD-7): ☠ the write-only ask-shadow layer — pending_interactions table
+  // (archived 0045) + its repo/service/side-writer. The mailbox user-inbox
+  // channel is THE durable human inbox; pending_asks stays as ask-state.
+  // (The v1 web approval corpse — ApprovalBubble posting to a route that never
+  // existed — died in the same pass; web names are outside this gate's scope.)
+  'PendingInteractionService',
+  'createPendingInteraction',
+  'answerPendingInteraction',
+  'AskShadow',
+  'sweepOrphanedPendingInteractions',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 
@@ -177,7 +187,7 @@ const ALLOWLIST: Record<string, string> = {
 
   // ── Live RPC gate / ephemeral — not reconcilable facts ──
   'apps/server/src/features/chat-bridges/routes.ts':
-    'ask: live RPC gate, latency-class. The durable record already rides the relay via the pending-interaction outbox row.',
+    'ask: live RPC gate, latency-class. The in-memory resolver is the one authority (M8/FD-7: the shadow row is gone).',
 
   // ── PTY / live I/O pass-through (ADR §4) — raw byte/event streams ──
   'apps/server/src/features/runtime-host/pty-handlers.ts':

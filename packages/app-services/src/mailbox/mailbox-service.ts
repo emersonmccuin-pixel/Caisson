@@ -304,7 +304,6 @@ export function buildMessageDraft(
     messageId: message.id,
     kind: toMailboxMessageDto(message).kind,
     recipientSummary: recipientSummaryOf(message, recipients),
-    interactionId: message.interactionId,
   };
   return scopeForProject(message.projectId, {
     type: 'mailbox.message.changed',

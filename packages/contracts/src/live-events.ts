@@ -14,7 +14,6 @@ export type LiveEventEntity =
   | 'workflow-review'
   | 'agent-run'
   | 'mailbox-message'
-  | 'pending-interaction'
   | 'session-title'
   | 'pod'
   | 'area'
@@ -36,7 +35,6 @@ export type LiveEventTypeName =
   | 'agent.run.changed'
   | 'mailbox.message.changed'
   | 'mailbox.delivery.changed'
-  | 'pending-interaction.changed'
   | 'session.title.changed'
   | 'pod.changed'
   | 'area.changed'
@@ -57,7 +55,6 @@ const LIVE_EVENT_TYPE_NAMES: readonly LiveEventTypeName[] = [
   'agent.run.changed',
   'mailbox.message.changed',
   'mailbox.delivery.changed',
-  'pending-interaction.changed',
   'session.title.changed',
   'pod.changed',
   'area.changed',
@@ -251,7 +248,6 @@ function isLiveEventEntity(value: unknown): value is LiveEventEntity {
     value === 'workflow-review' ||
     value === 'agent-run' ||
     value === 'mailbox-message' ||
-    value === 'pending-interaction' ||
     value === 'session-title' ||
     value === 'pod' ||
     value === 'area' ||

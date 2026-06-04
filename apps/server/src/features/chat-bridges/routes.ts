@@ -40,16 +40,8 @@ export function createPendingAskStore(): PendingAskStore {
   return new InMemoryPendingAskStore();
 }
 
-/** Slice 007 — durable ask-shadow seam. A SIDE write around the UNCHANGED
- *  in-memory resolver: the shadow `pending_interactions` row is inspectable, NOT
- *  the answer authority. `onAsk` is called when /api/ask arrives (creates the
- *  open shadow); `onResolved`/`onTimedOut` terminalize it (answered/expired).
- *  All three are best-effort no-ops if the seam is absent — the exact current
- *  /api/ask behavior is preserved when no shadow is injected. */
-export interface AskShadowPort {
-  onAsk(input: { projectId: ULID; toolUseId: string; toolName: string; prompt: string }): void;
-  onTimedOut(toolUseId: string): void;
-}
+// ☠ M8/FD-7: the AskShadow seam (write-only `pending_interactions` side-table)
+// is gone. The in-memory resolver below is — and always was — the one authority.
 
 export interface ChatBridgeRouteDeps {
   broadcastTo(projectId: ULID, msg: unknown): void;
@@ -59,27 +51,10 @@ export interface ChatBridgeRouteDeps {
   claudeProjectsDir?: string;
   fileExists?: (path: string) => boolean;
   readFileText?: (path: string) => Promise<string>;
-  askShadow?: AskShadowPort;
 }
 
 async function defaultReadFileText(path: string): Promise<string> {
   return await readFile(path, 'utf-8');
-}
-
-/** Best-effort prompt text from a tool input for the shadow row. */
-function derivePrompt(toolInput: unknown): string {
-  if (toolInput && typeof toolInput === 'object') {
-    const obj = toolInput as Record<string, unknown>;
-    for (const key of ['question', 'prompt', 'message', 'text']) {
-      if (typeof obj[key] === 'string') return obj[key] as string;
-    }
-    try {
-      return JSON.stringify(toolInput);
-    } catch {
-      return '';
-    }
-  }
-  return typeof toolInput === 'string' ? toolInput : '';
 }
 
 export function registerChatBridgeRoutes(app: Hono, deps: ChatBridgeRouteDeps): void {
@@ -114,23 +89,11 @@ export function registerChatBridgeRoutes(app: Hono, deps: ChatBridgeRouteDeps): 
 
     deps.broadcastTo(projectId, { type: 'ask', sessionId, toolName, toolUseId, toolInput });
 
-    // Slice 007 — durable ask-shadow: a SIDE write. The in-memory resolver below
-    // stays the authoritative blocking answer path; the shadow row is only an
-    // inspectable durable record (terminalized on resolve via the index.ts
-    // resolvePendingAsk wrapper, or on timeout here).
-    deps.askShadow?.onAsk({
-      projectId,
-      toolUseId,
-      toolName,
-      prompt: derivePrompt(toolInput),
-    });
-
     const answer = await new Promise<string>((resolveAnswer) => {
       deps.pendingAsks.set(toolUseId, resolveAnswer);
       services.scheduleAskTimeout(() => {
         if (deps.pendingAsks.has(toolUseId)) {
           deps.pendingAsks.delete(toolUseId);
-          deps.askShadow?.onTimedOut(toolUseId);
           resolveAnswer('(timeout — no user response)');
         }
       }, services.askTimeoutMs);

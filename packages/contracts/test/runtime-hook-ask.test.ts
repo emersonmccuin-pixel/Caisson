@@ -29,9 +29,9 @@ test('parseRuntimeHookAskRequest mirrors the /api/ask body', () => {
   assert.equal(parseRuntimeHookAskRequest({ projectId: 'p', toolName: 't' }).ok, false);
 });
 
-test('isRuntimeHookAskResponse mirrors { answer } with optional interactionId', () => {
+// ☠ M8/FD-7: the optional interactionId (reserved for the shadow row) is gone.
+test('isRuntimeHookAskResponse mirrors { answer }', () => {
   assert.equal(isRuntimeHookAskResponse({ answer: 'yes' }), true);
-  assert.equal(isRuntimeHookAskResponse({ answer: 'yes', interactionId: 'i1' }), true);
   assert.equal(isRuntimeHookAskResponse({ answer: 9 }), false);
-  assert.equal(isRuntimeHookAskResponse({ answer: 'y', interactionId: 9 }), false);
+  assert.equal(isRuntimeHookAskResponse({}), false);
 });

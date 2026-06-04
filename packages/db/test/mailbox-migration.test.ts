@@ -1,10 +1,12 @@
 // Fresh-DB migration safety (slice 007 — the FIRST real schema migration).
 //
 // Extends the live-outbox.test.ts runMigrations()-on-tmp pattern: a clean DB
-// migrates cleanly, all six mailbox/interaction tables + every schema.ts column
-// exist (assert via pragma table_info), assertSchemaIntact() does not throw, and
+// migrates cleanly, every mailbox table + every schema.ts column exists
+// (assert via pragma table_info), assertSchemaIntact() does not throw, and
 // the idempotency unique index is enforced. Guards the Drizzle "ledger lies →
 // fresh-DB boot crash" trap (a recorded-but-not-applied migration).
+// M8/FD-7 (migration 0045): pending_interactions is archive-renamed and
+// mailbox_messages.interaction_id dropped — asserted below.
 
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,26 +26,6 @@ after(() => {
 });
 
 const EXPECTED_COLUMNS: Record<string, string[]> = {
-  pending_interactions: [
-    'id',
-    'project_id',
-    'kind',
-    'status',
-    'source_kind',
-    'source_id',
-    'source_ref',
-    'prompt',
-    'context',
-    'options',
-    'answer_body',
-    'answered_by',
-    'created_at',
-    'updated_at',
-    'answered_at',
-    'cancelled_at',
-    'expires_at',
-    'version',
-  ],
   mailbox_messages: [
     'id',
     'project_id',
@@ -53,7 +35,6 @@ const EXPECTED_COLUMNS: Record<string, string[]> = {
     'payload',
     'source_kind',
     'source_id',
-    'interaction_id',
     'idempotency_key',
     'created_at',
     'updated_at',
@@ -101,7 +82,7 @@ const EXPECTED_COLUMNS: Record<string, string[]> = {
   ],
 };
 
-test('0036 creates all six tables with every schema.ts column on a fresh DB', () => {
+test('migrations create every mailbox table with every schema.ts column on a fresh DB', () => {
   const raw = getRawDb();
   for (const [table, columns] of Object.entries(EXPECTED_COLUMNS)) {
     const info = raw.pragma(`table_info("${table}")`) as { name: string }[];
@@ -111,6 +92,18 @@ test('0036 creates all six tables with every schema.ts column on a fresh DB', ()
       assert.ok(actual.has(column), `${table}.${column} should exist`);
     }
   }
+});
+
+test('M8/FD-7 (0045): pending_interactions archived; interaction_id dropped', () => {
+  const raw = getRawDb();
+  const live = raw.pragma(`table_info("pending_interactions")`) as { name: string }[];
+  assert.equal(live.length, 0, 'pending_interactions must not exist live');
+  const archived = raw.pragma(`table_info("pending_interactions_v2_archive")`) as { name: string }[];
+  assert.ok(archived.length > 0, 'archive table should exist (rename, not drop)');
+  const msgCols = new Set(
+    (raw.pragma(`table_info("mailbox_messages")`) as { name: string }[]).map((c) => c.name),
+  );
+  assert.ok(!msgCols.has('interaction_id'), 'mailbox_messages.interaction_id must be dropped');
 });
 
 test('assertSchemaIntact does not throw after a fresh migrate', () => {

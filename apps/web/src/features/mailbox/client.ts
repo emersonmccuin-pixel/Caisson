@@ -33,17 +33,6 @@ export const mailboxApi = {
       `/api/projects/${projectId}/mailbox/recipients/${recipientId}/dismiss`,
       {},
     ),
-
-  answerInteraction: (
-    projectId: ULID,
-    interactionId: string,
-    answer: string,
-    answeredBy: 'user' | 'orchestrator' = 'user',
-  ) =>
-    postJson<{ ok: boolean }>(
-      `/api/projects/${projectId}/pending-interactions/${interactionId}/answer`,
-      { answer, answeredBy },
-    ),
 };
 
 function query(opts: { unreadOnly?: boolean; actionableOnly?: boolean }): string {

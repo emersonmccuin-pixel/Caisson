@@ -1,4 +1,5 @@
-// Slice 007 — mailbox + pending-interaction row<->DTO adapters.
+// Slice 007 — mailbox row<->DTO adapters. (☠ M8/FD-7: pending-interaction
+// adapter — gone with the write-only shadow table.)
 //
 // Pure mappers between the @pc/db rows and the browser-safe @pc/contracts DTOs.
 // Boundary purity: @pc/contracts + @pc/db (type-only) + @pc/domain.
@@ -12,17 +13,12 @@ import type {
   MailboxMessageKind,
   MailboxRecipientDto,
   MailboxTargetRefKind,
-  PendingInteractionDto,
-  PendingInteractionKind,
-  PendingInteractionSourceKind,
-  PendingInteractionStatus,
 } from '@pc/contracts';
-import { parseMailboxAddress } from '@pc/contracts';
+import { isActionableMailboxKind, parseMailboxAddress } from '@pc/contracts';
 import type {
   MailboxDeliveryRow,
   MailboxMessageRow,
   MailboxRecipientRow,
-  PendingInteractionRow,
 } from '@pc/db';
 import type { ULID } from '@pc/domain';
 
@@ -42,7 +38,6 @@ export function toMailboxMessageDto(row: MailboxMessageRow): MailboxMessageDto {
     body: row.body,
     payload: row.payload ?? {},
     source: { kind: row.sourceKind, id: row.sourceId },
-    interactionId: row.interactionId,
     idempotencyKey: row.idempotencyKey,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -83,28 +78,10 @@ export function toMailboxDeliveryDto(row: MailboxDeliveryRow): MailboxDeliveryDt
   };
 }
 
-export function toPendingInteractionDto(row: PendingInteractionRow): PendingInteractionDto {
-  return {
-    id: row.id,
-    projectId: row.projectId,
-    kind: row.kind as PendingInteractionKind,
-    status: row.status as PendingInteractionStatus,
-    source: { kind: row.sourceKind as PendingInteractionSourceKind, id: row.sourceId },
-    prompt: row.prompt,
-    context: row.context,
-    options: row.options ?? null,
-    answer: row.answerBody,
-    answeredBy: row.answeredBy,
-    createdAt: row.createdAt,
-    answeredAt: row.answeredAt,
-    cancelledAt: row.cancelledAt,
-    version: row.version,
-  };
-}
-
 /** Compute the recipient summary (total / unread / actionable) for a message
  *  from its recipient rows. `unread` = no readAt and not dismissed; `actionable`
- *  = the message carries an interaction and the recipient hasn't actioned it. */
+ *  = the kind asks for a decision and the recipient hasn't actioned/dismissed it
+ *  (M8/FD-7 — was the never-set `interactionId` link, an always-empty set). */
 export function recipientSummaryOf(
   message: MailboxMessageRow,
   recipients: readonly MailboxRecipientRow[],
@@ -113,7 +90,9 @@ export function recipientSummaryOf(
   let actionable = 0;
   for (const r of recipients) {
     if (r.readAt === null && r.dismissedAt === null) unread += 1;
-    if (message.interactionId && r.actionedAt === null && r.dismissedAt === null) actionable += 1;
+    if (isActionableMailboxKind(message.kind) && r.actionedAt === null && r.dismissedAt === null) {
+      actionable += 1;
+    }
   }
   return { total: recipients.length, unread, actionable };
 }

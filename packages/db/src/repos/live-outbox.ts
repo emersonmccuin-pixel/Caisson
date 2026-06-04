@@ -19,7 +19,6 @@ export type LiveOutboxEntity =
   | 'workflow-review'
   | 'agent-run'
   | 'mailbox-message'
-  | 'pending-interaction'
   | 'session-title'
   | 'pod'
   | 'area'

@@ -8,7 +8,6 @@ export type {
   MailboxMessageDto,
   MailboxMessageKind,
   MailboxRecipientDto,
-  PendingInteractionDto,
 } from '@pc/contracts';
 
 import type { MailboxMessageDto, MailboxRecipientDto } from '@pc/contracts';

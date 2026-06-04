@@ -110,7 +110,6 @@ test('DTO guards', () => {
       body: 'hi',
       payload: {},
       source: { kind: 'system', id: null },
-      interactionId: null,
       idempotencyKey: 'k',
       createdAt: 1,
       updatedAt: 1,

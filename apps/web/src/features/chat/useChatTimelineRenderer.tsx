@@ -24,7 +24,6 @@ import { SystemTurnCard } from '@/features/chat/SystemBubbles';
 import { formatElapsed } from '@/features/chat/ThinkingIndicator';
 import { EditBubble, ToolGroupBubble } from '@/features/chat/ToolBubbles';
 import type {
-  ApprovalRequiredEvent,
   ChatEvent,
   SystemEvent,
   TaskEndEvent,
@@ -46,25 +45,7 @@ export function useChatTimelineRenderer({
   wsEvents: WsEnvelope[];
   onAskReply?: (toolUseId: string, answer: string) => boolean;
 }): (item: RenderItem, index: number) => ReactNode {
-  const [resolvedApprovals, setResolvedApprovals] = useState<
-    Record<string, { approved: boolean; response: string }>
-  >({});
   const [answeredAsks, setAnsweredAsks] = useState<Record<string, string>>({});
-
-  const markApprovalResolved = useCallback(
-    (
-      workflowRunId: string,
-      nodeId: string,
-      approved: boolean,
-      response: string,
-    ) => {
-      setResolvedApprovals((prev) => ({
-        ...prev,
-        [`${workflowRunId}:${nodeId}`]: { approved, response },
-      }));
-    },
-    [],
-  );
 
   return useCallback(
     (item: RenderItem, idx: number): ReactNode => {
@@ -179,8 +160,6 @@ export function useChatTimelineRenderer({
             key={item.key}
             event={ev}
             projectId={projectId}
-            resolvedApprovals={resolvedApprovals}
-            onApprovalResolved={markApprovalResolved}
           />
         );
       }
@@ -192,8 +171,6 @@ export function useChatTimelineRenderer({
             key={item.key}
             event={ev}
             projectId={projectId}
-            resolvedApprovals={resolvedApprovals}
-            onApprovalResolved={markApprovalResolved}
           />
         );
       }
@@ -208,8 +185,6 @@ export function useChatTimelineRenderer({
               key={item.key}
               event={ev}
               projectId={projectId}
-              resolvedApprovals={resolvedApprovals}
-              onApprovalResolved={markApprovalResolved}
             />
           );
         }
@@ -232,10 +207,6 @@ export function useChatTimelineRenderer({
       }
       const turnKind: 'user' | 'pm' = ev.kind === 'user' ? 'user' : 'pm';
       let bubbleId: string | undefined;
-      if (ev.kind === 'approval-required') {
-        const ar = ev as ApprovalRequiredEvent;
-        bubbleId = `approval-${ar.workflowRunId}-${ar.nodeId}`;
-      }
       let sub: string | undefined;
       let status: ChatTurnStatus | undefined;
       let pendingStatus: PendingPromptStatus | undefined;
@@ -246,9 +217,6 @@ export function useChatTimelineRenderer({
         bubbleId = `pending-${ev.pendingClientMessageId}`;
       } else if (ev.kind === 'assistant' && typeof assistantDurationMs === 'number') {
         sub = formatElapsed(assistantDurationMs);
-      } else if (ev.kind === 'approval-required') {
-        sub = 'approval required';
-        status = 'warning';
       } else if (ev.kind === 'subagent-failure') {
         sub = 'subagent failed';
         status = 'danger';
@@ -279,19 +247,15 @@ export function useChatTimelineRenderer({
           <EventBubble
             event={ev}
             projectId={projectId}
-            resolvedApprovals={resolvedApprovals}
-            onApprovalResolved={markApprovalResolved}
           />
         </ChatTurnCard>
       );
     },
     [
       answeredAsks,
-      markApprovalResolved,
       onAskReply,
       projectId,
       renderItems,
-      resolvedApprovals,
       wsEvents,
     ],
   );

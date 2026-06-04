@@ -69,9 +69,9 @@ export interface TerminalInputAckEnvelope extends WsEnvelope {
 
 // Chat-event shapes
 // Server emits hook-driven events as `{type:'event', event:{kind,...}}`. The
-// kinds + fields below mirror templates/.claude/hooks/event-capture.cjs
-// (plus the workflow-runtime's `approval-required`). Keep in sync if those
-// hook payloads grow.
+// kinds + fields below mirror templates/.claude/hooks/event-capture.cjs.
+// Keep in sync if those hook payloads grow. (☠ M8/FD-7: 'approval-required' —
+// a v1 corpse the server never emitted; reviews ride the Human Inbox.)
 
 export interface ChatEventBase {
   ts?: string;
@@ -144,14 +144,6 @@ export interface TaskEndEvent extends ChatEventBase {
   kind: 'task-end';
   subagent: string;
   result?: string;
-}
-
-export interface ApprovalRequiredEvent extends ChatEventBase {
-  kind: 'approval-required';
-  workflowRunId: string;
-  nodeId: string;
-  message?: string;
-  on_reject_prompt?: string;
 }
 
 // Section 0 phase 0e - supplemental hook events.
@@ -287,7 +279,6 @@ export type ChatEvent =
   | TodosEvent
   | TaskStartEvent
   | TaskEndEvent
-  | ApprovalRequiredEvent
   | NotificationEvent
   | SessionEndEvent
   | SubagentStopEvent

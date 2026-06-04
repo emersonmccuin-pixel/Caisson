@@ -1,11 +1,8 @@
 // Runtime hook-ask contract family (slice 006). Browser-safe, zero runtime deps.
 //
 // Parse-only mirror of the EXISTING `/api/ask` request body + `{ answer }`
-// response. The optional `interactionId` is reserved for the durable
-// pending-interaction shadow row — which is DEFERRED to slice 007 per the
-// human scope decision (slice 006 ships zero migrations and does NOT change
-// `/api/ask` semantics). The field is additive and ignorable by the hook; the
-// route does NOT emit it this slice.
+// response. The in-memory resolver is the one authority (☠ M8/FD-7: the
+// pending-interaction shadow row this once reserved a field for is gone).
 
 import { parseErr, parseOk, type ParseResult, type ULID } from './shared.ts';
 
@@ -19,8 +16,6 @@ export interface RuntimeHookAskRequest {
 
 export interface RuntimeHookAskResponse {
   answer: string;
-  /** Reserved for the slice-007 durable shadow row. Omitted this slice. */
-  interactionId?: ULID;
 }
 
 export function parseRuntimeHookAskRequest(
@@ -47,9 +42,6 @@ export function parseRuntimeHookAskRequest(
 export function isRuntimeHookAskResponse(value: unknown): value is RuntimeHookAskResponse {
   if (!isRecord(value)) return false;
   if (typeof value.answer !== 'string') return false;
-  if (value.interactionId !== undefined && typeof value.interactionId !== 'string') {
-    return false;
-  }
   return true;
 }
 

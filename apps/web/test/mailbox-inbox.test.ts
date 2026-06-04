@@ -3,9 +3,9 @@
 // load-bearing seams the rewire depends on, driven against the REAL store:
 //   1. applyEnvelope keys the message fact and the delivery frame on DISTINCT
 //      store slots (writer fix) so they don't mis-dedup against each other.
-//   2. the signature for `mailbox-message` / `pending-interaction` flips once
-//      per genuine in-scope change and never on an unrelated entity — for both
-//      project scope and the project-less (global) inbox.
+//   2. the signature for `mailbox-message` flips once per genuine in-scope
+//      change and never on an unrelated entity — for both project scope and
+//      the project-less (global) inbox.
 //
 // The signature selector body is replicated verbatim (it lives inside a React
 // hook in live-store.ts and can't be called outside a render); production wires
@@ -88,12 +88,12 @@ test('project signature flips once per genuine change, not on an unrelated entit
   const s2 = entitySignature(useLiveStore.getState().byKey, 'mailbox-message', 'p1');
   assert.notEqual(s1, s2);
 
-  // A pending-interaction frame must NOT change the mailbox-message signature.
-  store.applyEnvelope(frame({ id: 'pi', entity: 'pending-interaction', entityId: 'i1', version: 1, type: 'pending-interaction.changed' }));
+  // An unrelated entity's frame must NOT change the mailbox-message signature.
+  store.applyEnvelope(frame({ id: 'wr', entity: 'workflow-review', entityId: 'rv1', version: 1, type: 'workflow.review.changed' }));
   const s3 = entitySignature(useLiveStore.getState().byKey, 'mailbox-message', 'p1');
   assert.equal(s2, s3);
-  // …but it DOES change the pending-interaction signature.
-  assert.notEqual(entitySignature(useLiveStore.getState().byKey, 'pending-interaction', 'p1'), '');
+  // …but it DOES change that entity's own signature.
+  assert.notEqual(entitySignature(useLiveStore.getState().byKey, 'workflow-review', 'p1'), '');
 });
 
 test('a frame for another project does not move this project signature', () => {

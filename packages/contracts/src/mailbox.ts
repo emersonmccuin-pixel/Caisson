@@ -60,6 +60,14 @@ export const MAILBOX_MESSAGE_KINDS = [
 ] as const;
 export type MailboxMessageKind = (typeof MAILBOX_MESSAGE_KINDS)[number];
 
+/** M8 (FD-7) — kinds that ask the human for a DECISION (approve/reject/answer),
+ *  not just attention. Drives the inbox `actionable` count + the actionableOnly
+ *  filter. Slice B adds `verification-review`. */
+export const ACTIONABLE_MAILBOX_KINDS = ['workflow-review'] as const;
+export function isActionableMailboxKind(kind: string): boolean {
+  return (ACTIONABLE_MAILBOX_KINDS as readonly string[]).includes(kind);
+}
+
 export const MAILBOX_DELIVERY_CHANNELS = [
   'ui-inbox',
   'orchestrator-turn',
@@ -101,7 +109,6 @@ export interface MailboxMessageDto {
   body: string;
   payload: Record<string, unknown>;
   source: MailboxMessageSource;
-  interactionId: ULID | null;
   idempotencyKey: string;
   createdAt: number;
   updatedAt: number;
@@ -143,7 +150,6 @@ export interface EnqueueMailboxMessageRequest {
   subject?: string | null;
   payload?: Record<string, unknown>;
   source?: MailboxMessageSource;
-  interactionId?: ULID | null;
   idempotencyKey: string;
   recipients: EnqueueMailboxRecipientInput[];
 }
@@ -258,7 +264,6 @@ export function isMailboxMessageDto(value: unknown): value is MailboxMessageDto 
     isRecord(value.payload) &&
     typeof value.source.kind === 'string' &&
     (value.source.id === null || typeof value.source.id === 'string') &&
-    (value.interactionId === null || typeof value.interactionId === 'string') &&
     typeof value.idempotencyKey === 'string' &&
     typeof value.createdAt === 'number' &&
     typeof value.updatedAt === 'number'
@@ -341,10 +346,6 @@ export function parseEnqueueMailboxMessageRequest(
     }
     request.source = { kind: input.source.kind, id: (input.source.id as string | null) ?? null };
   }
-  if (input.interactionId !== undefined && input.interactionId !== null) {
-    if (typeof input.interactionId !== 'string') return parseErr('interactionId must be a string');
-    request.interactionId = input.interactionId;
-  }
 
   return parseOk(request);
 }
@@ -384,7 +385,6 @@ export interface MailboxMessageChangedLivePayload {
   messageId: ULID;
   kind: MailboxMessageKind;
   recipientSummary: MailboxRecipientSummary;
-  interactionId?: ULID | null;
 }
 
 export interface MailboxDeliveryChangedLivePayload {
@@ -430,13 +430,6 @@ export function isMailboxMessageChangedLivePayload(
   if (typeof value.messageId !== 'string') return false;
   if (!isMailboxMessageKind(value.kind)) return false;
   if (!isMailboxRecipientSummary(value.recipientSummary)) return false;
-  if (
-    value.interactionId !== undefined &&
-    value.interactionId !== null &&
-    typeof value.interactionId !== 'string'
-  ) {
-    return false;
-  }
   return true;
 }
 

@@ -1,9 +1,9 @@
-// Slice 007 — mailbox + pending-interaction repo behavior.
+// Slice 007 — mailbox repo behavior. (☠ M8/FD-7: the pending-interaction repo
+// section is gone with the shadow table.)
 //
 // Covers transactional enqueue (+ rollback writes nothing), idempotency,
-// exclusive lease acquire + expiry reclaim, retry backoff, dead-letter,
-// recipient read/action/dismiss (separate from delivery status), and the
-// pending-interaction lifecycle (answer/cancel/expire bumps version).
+// exclusive lease acquire + expiry reclaim, retry backoff, dead-letter, and
+// recipient read/action/dismiss (separate from delivery status).
 
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,16 +18,10 @@ process.env.PC_DATA_DIR = tmpDir;
 const db = await import('../src/index.ts');
 const {
   acquireDeliveryLease,
-  answerPendingInteraction,
-  cancelPendingInteraction,
   closeDb,
-  createPendingInteraction,
   enqueueMailboxMessage,
-  expireOpenPendingInteractions,
-  expirePendingInteraction,
   getDb,
   getMailboxMessage,
-  getPendingInteraction,
   insertLiveEvent,
   listDeadLettersForMessage,
   listDeliveriesForMessage,
@@ -252,55 +246,5 @@ test('listRecipientsForInbox scopes by project and the global inbox by null', ()
   assert.ok(global.every((r) => r.message.projectId === null));
 });
 
-// ── pending interactions ──────────────────────────────────────────────────────
-
-test('pending interaction answer/cancel/expire bumps version, and is atomic', () => {
-  const i1 = createPendingInteraction({
-    id: id(),
-    projectId: P_MBX,
-    kind: 'runtime-hook-ask',
-    sourceKind: 'runtime-hook',
-    sourceId: 'tool-1',
-    prompt: 'pick',
-    now: Date.now(),
-  });
-  assert.equal(i1.status, 'open');
-  assert.equal(i1.version, 1);
-
-  const answered = answerPendingInteraction({ id: i1.id, answer: 'yes', answeredBy: 'user', now: Date.now() });
-  assert.ok(answered);
-  assert.equal(answered!.status, 'answered');
-  assert.equal(answered!.version, 2);
-
-  // A second answer is a no-op (already terminal).
-  const replay = answerPendingInteraction({ id: i1.id, answer: 'no', answeredBy: 'user', now: Date.now() });
-  assert.equal(replay, null);
-  assert.equal(getPendingInteraction(i1.id)!.answerBody, 'yes');
-
-  const i2 = createPendingInteraction({
-    id: id(),
-    projectId: P_MBX,
-    kind: 'runtime-hook-ask',
-    sourceKind: 'runtime-hook',
-    sourceId: 'tool-2',
-    prompt: 'pick',
-    now: Date.now(),
-  });
-  assert.equal(cancelPendingInteraction(i2.id, Date.now())!.status, 'cancelled');
-  assert.equal(expirePendingInteraction(i2.id, Date.now()), null); // already terminal
-});
-
-test('boot-sweep expires every orphaned open interaction', () => {
-  const i3 = createPendingInteraction({
-    id: id(),
-    projectId: 'p-sweep' as ULID,
-    kind: 'runtime-hook-ask',
-    sourceKind: 'runtime-hook',
-    sourceId: 'tool-sweep',
-    prompt: 'pick',
-    now: Date.now(),
-  });
-  const swept = expireOpenPendingInteractions(Date.now());
-  assert.ok(swept.includes(i3.id));
-  assert.equal(getPendingInteraction(i3.id)!.status, 'expired');
-});
+// ☠ M8/FD-7: the pending-interaction repo tests are gone with the shadow table
+// (archived in migration 0045; see mailbox-migration.test.ts for the guard).
