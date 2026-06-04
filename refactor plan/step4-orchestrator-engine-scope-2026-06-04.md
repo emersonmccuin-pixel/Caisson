@@ -78,13 +78,22 @@ needs a token.
 
 ## Slices (each shippable + live-verified before the next)
 
-**Slice 0 — shared-HTTP tools (FD-2 adoption).**
-`/api/mcp` StreamableHTTP endpoint in apps/server · per-request toolContext from validated
-headers+token (replaces env-at-spawn) · same handler chain as stdio (routes/audit/two-tier door
-unchanged) · flip `renderPcMcpBaseline` to `{type:'http',url,headers}` · delete the stdio baseline
-entry · re-run the FD-2 spike harness · live: orchestrator turn + modal + dispatched agent all
-green on HTTP tools.
-*Guard:* ONE-TOOL-TRANSPORT (no `command:'node'` pc-rig entry anywhere) + token-validation tests.
+**Slice 0 — shared-HTTP tools (FD-2 adoption). ✅ SHIPPED + LIVE-VERIFIED 2026-06-04 (06097bf4).**
+`/api/mcp` StreamableHTTP endpoint (impl in `@pc/mcp/http-endpoint`, mounted via raw-socket
+bridge + `RESPONSE_ALREADY_SENT`) · identity = X-PC-* claim headers + HMAC token
+(`mcp-http-auth.ts`, secret persisted under data/ so tokens survive API restarts; verified per
+request) · JSON-RPC `initialized` routes through `createMcpHandshakeRouter` (one impl behind the
+new door AND the legacy POST) · baseline flipped, identity threaded from all five spawn owners ·
+☠ stdio transport in `@pc/mcp` server.ts (data exports stay) + `applyNodeLauncher`/
+`mcp-config-rewrite.ts` + stdio bundle staging + heartbeat-file mcp-status (route answers live).
+*Live:* dispatched agent fire→handshake→`pc_submit_deliverable` over HTTP→gate→approve→completed ·
+fresh orchestrator spawn→handshake-gated ready→`pc_list_work_items` over HTTP→clean turn-end
+(throwaway project, FD-16 recipe — note: first WS `send` is the spawn trigger, don't wait for
+ready). Modals not separately live-fired (same one writer + weaker gate; covered by transport
+tests). *Guards:* ONE-TOOL-TRANSPORT gate (HTTP entry asserted, stdio rejected, static
+StdioServerTransport check) · auth round-trip/tamper tests · real HTTP boot smoke
+(initialize→initialized→tools/list registry order · 401 forged token · -32001 unknown session).
+Suites: server 240 · mcp 75 · workspace green.
 
 **Slice 1 — Engine persistent-interactive policy.**
 Policy flags on AgentRunInput + start-run · timer exemptions · cap-exempt lane ·

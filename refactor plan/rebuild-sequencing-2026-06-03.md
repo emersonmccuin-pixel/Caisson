@@ -80,8 +80,10 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 
 ## The near-term picture (what actually happens next)
 
-Running now: nothing in flight. Next up: **P6 Step 4 orchestrator→Engine** (P4 ✅ + P5 ✅ unblocked
-it; FD-2 shared-HTTP adoption rides along) · FD-20 Patterns design · FD-21/S2 handoffs.
+Running now: **P6 Step 4 orchestrator→Engine — Slice 0 (FD-2 shared-HTTP tools) ✅ SHIPPED +
+live-verified 2026-06-04**; next = Slice 1 (Engine persistent-interactive policy). Scope:
+`step4-orchestrator-engine-scope-2026-06-04.md`. Also open: FD-20 Patterns design · FD-21/S2
+handoffs.
 
 Next up, parallel-safe, in value order:
 
