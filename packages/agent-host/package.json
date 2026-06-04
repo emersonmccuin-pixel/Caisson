@@ -15,7 +15,8 @@
   },
   "dependencies": {
     "@pc/domain": "workspace:*",
-    "@pc/runtime": "workspace:*"
+    "@pc/runtime": "workspace:*",
+    "node-pty": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

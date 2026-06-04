@@ -2,7 +2,7 @@
 //
 // Wraps a per-host-id `HttpAgentHostClient` behind a SINGLE conduit whose source
 // of host identity is the lock file ONLY. `sendCommand` re-discovers + reconnects
-// on a dead baseUrl (kills T1-A: dev-supervisor respawns the host on a NEW port →
+// on a dead baseUrl (kills T1-A: the supervisor respawns the host on a NEW port →
 // the next dispatch succeeds with no API restart). A persistent multiplexed
 // emitter keeps external `onEvent` listeners alive across reconnects. A slow,
 // backoff-gated heartbeat publishes `HostHealth` for the UI pill / Theme-2 watchdog.

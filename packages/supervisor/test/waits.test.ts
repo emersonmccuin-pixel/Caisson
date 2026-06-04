@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { waitForFreshFile, waitForPortsFree } from '../src/waits.ts';
+import { waitForFreshFile, waitForPortsBound, waitForPortsFree } from '../src/waits.ts';
 
 /** Manual clock: now() reads a counter; delay() advances it. */
 function fakeClock(stepMs = 100) {
@@ -49,6 +49,29 @@ test('waitForPortsFree aborts early on shouldAbort', async () => {
   });
   assert.equal(ok, false, 'abort = not-free (caller decides)');
   assert.ok(probes <= 3, 'stopped probing after abort');
+});
+
+test('waitForPortsBound resolves once the port answers', async () => {
+  const deps = fakeClock();
+  let probes = 0;
+  const ok = await waitForPortsBound([4040], {
+    timeoutMs: 5_000,
+    probeIntervalMs: 100,
+    deps,
+    portInUseImpl: () => Promise.resolve(++probes >= 3), // dead twice, then up
+  });
+  assert.equal(ok, true);
+});
+
+test('waitForPortsBound times out against a dead port', async () => {
+  const deps = fakeClock();
+  const ok = await waitForPortsBound([4040], {
+    timeoutMs: 1_000,
+    probeIntervalMs: 100,
+    deps,
+    portInUseImpl: () => Promise.resolve(false),
+  });
+  assert.equal(ok, false);
 });
 
 test('waitForFreshFile rejects a stale file and accepts a fresh one', async () => {

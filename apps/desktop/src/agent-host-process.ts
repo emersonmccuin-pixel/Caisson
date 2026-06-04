@@ -1,3 +1,11 @@
+// Agent-host lock-file helpers for the Electron supervisor.
+//
+// ☠ Step 7: the one-shot spawn machinery that lived here
+// (spawnPackagedAgentHostProcess / waitForPackagedAgentHostLock /
+// waitForChildExit) is DELETED — @pc/supervisor owns spawn/watch/respawn and
+// readiness waits now. What remains is the lock-file contract and the polite
+// HTTP shutdown the supervisor's requestStop hook uses.
+//
 // DRIFT TWIN: PackagedAgentHostLockFile, packagedAgentHostLockFilePath, and
 // protocolVersion 1 below are a hand-copy of packages/runtime/src/agent-host-lock-file.ts
 // (AgentHostLockFile / agentHostLockFilePath / AGENT_HOST_PROTOCOL_VERSION). They
@@ -5,8 +13,8 @@
 // the desktop main bundle. Any change to the lock-file shape, the
 // 'agent-host'/'host.lock.json' path, or protocolVersion MUST be mirrored in that
 // file by hand, or host discovery breaks.
-import { spawn, type ChildProcess } from 'node:child_process';
-import { readFileSync, rmSync, statSync } from 'node:fs';
+
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface PackagedAgentHostLockFile {
@@ -15,38 +23,6 @@ export interface PackagedAgentHostLockFile {
   port: number;
   startedAt: number;
   protocolVersion: 1;
-}
-
-export interface PackagedAgentHostSpawnSpec {
-  command: string;
-  args: string[];
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  stdio: ['ignore', 'pipe', 'pipe'];
-  shell: false;
-  lockFilePath: string;
-}
-
-export interface BuildPackagedAgentHostSpawnSpecOptions {
-  pcRoot: string;
-  dataDir: string;
-  execPath: string;
-  env?: NodeJS.ProcessEnv;
-}
-
-export interface SpawnPackagedAgentHostProcessOptions
-  extends BuildPackagedAgentHostSpawnSpecOptions {
-  spawnImpl?: typeof spawn;
-}
-
-export interface WaitForPackagedAgentHostLockOptions {
-  lockFilePath: string;
-  startedAt: number;
-  timeoutMs?: number;
-  pollIntervalMs?: number;
-  statFile?: (path: string) => { mtimeMs: number };
-  sleep?: (ms: number) => Promise<void>;
-  now?: () => number;
 }
 
 export interface RequestPackagedAgentHostShutdownOptions {
@@ -59,70 +35,8 @@ export function packagedAgentHostLockFilePath(dataDir: string): string {
   return join(dataDir, 'agent-host', 'host.lock.json');
 }
 
-export function buildPackagedAgentHostSpawnSpec(
-  options: BuildPackagedAgentHostSpawnSpecOptions,
-): PackagedAgentHostSpawnSpec {
-  const lockFilePath = packagedAgentHostLockFilePath(options.dataDir);
-  return {
-    command: options.execPath,
-    args: [
-      join(options.pcRoot, 'agent-host.mjs'),
-      '--http-lock-file',
-      lockFilePath,
-    ],
-    cwd: options.pcRoot,
-    env: {
-      ...(options.env ?? process.env),
-      ELECTRON_RUN_AS_NODE: '1',
-      PC_ROOT: options.pcRoot,
-      PC_DATA_DIR: options.dataDir,
-      PC_AGENT_HOST_LOCK_FILE: lockFilePath,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: false,
-    lockFilePath,
-  };
-}
-
-export function spawnPackagedAgentHostProcess(
-  options: SpawnPackagedAgentHostProcessOptions,
-): { child: ChildProcess; spec: PackagedAgentHostSpawnSpec } {
-  const spec = buildPackagedAgentHostSpawnSpec(options);
-  const spawnImpl = options.spawnImpl ?? spawn;
-  const child = spawnImpl(spec.command, spec.args, {
-    cwd: spec.cwd,
-    env: spec.env,
-    stdio: spec.stdio,
-    shell: spec.shell,
-  });
-  return { child, spec };
-}
-
 export function removePackagedAgentHostLockFile(lockFilePath: string): void {
   rmSync(lockFilePath, { force: true });
-}
-
-export async function waitForPackagedAgentHostLock(
-  options: WaitForPackagedAgentHostLockOptions,
-): Promise<boolean> {
-  const timeoutMs = options.timeoutMs ?? 5_000;
-  const pollIntervalMs = options.pollIntervalMs ?? 100;
-  const statFile = options.statFile ?? ((path) => statSync(path));
-  const sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const now = options.now ?? Date.now;
-  const deadline = now() + timeoutMs;
-
-  while (now() < deadline) {
-    try {
-      if (statFile(options.lockFilePath).mtimeMs >= options.startedAt) {
-        return true;
-      }
-    } catch {
-      /* lock file not written yet */
-    }
-    await sleep(pollIntervalMs);
-  }
-  return false;
 }
 
 export function readPackagedAgentHostLockFile(
@@ -138,6 +52,8 @@ export function readPackagedAgentHostLockFile(
   return parsed;
 }
 
+/** Ask the host to shut itself down (HTTP `shutdown host-exit`) so it can tear
+ *  down its PTY children instead of orphaning them on a hard kill. */
 export async function requestPackagedAgentHostShutdown(
   options: RequestPackagedAgentHostShutdownOptions,
 ): Promise<boolean> {
@@ -162,21 +78,6 @@ export async function requestPackagedAgentHostShutdown(
   } finally {
     clearTimeout(timeout);
   }
-}
-
-export function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      child.off('exit', onExit);
-      resolve(false);
-    }, timeoutMs);
-    const onExit = () => {
-      clearTimeout(timeout);
-      resolve(true);
-    };
-    child.once('exit', onExit);
-  });
 }
 
 function isPackagedAgentHostLockFile(value: unknown): value is PackagedAgentHostLockFile {

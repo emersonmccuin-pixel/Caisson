@@ -4,9 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node scripts/dev-supervisor.mjs",
-    "start": "tsx src/index.ts",
-    "agent-host": "tsx ../../packages/agent-host/src/cli.ts",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"test/*.test.ts\""
@@ -21,8 +18,10 @@
     "@pc/runtime": "workspace:*",
     "@pc/utils": "workspace:*",
     "@pc/workflows": "workspace:*",
+    "better-sqlite3": "^11.7.0",
     "hono": "^4.6.14",
     "ignore": "^7.0.5",
+    "node-pty": "^1.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

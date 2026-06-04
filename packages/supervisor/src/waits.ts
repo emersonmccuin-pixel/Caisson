@@ -70,6 +70,31 @@ export async function waitForPortsFree(
   return false;
 }
 
+export interface WaitForPortsBoundOptions extends PortProbeOptions {
+  timeoutMs?: number;
+  probeIntervalMs?: number;
+  deps?: WaitDeps;
+  shouldAbort?: () => boolean;
+  portInUseImpl?: typeof portInUse;
+}
+
+/** Wait until every port accepts a connection — the API child's readiness
+ *  gate (don't load the window against a dead port). False = timed out. */
+export async function waitForPortsBound(
+  ports: number[],
+  options?: WaitForPortsBoundOptions,
+): Promise<boolean> {
+  const { now, delay } = resolveDeps(options?.deps);
+  const probe = options?.portInUseImpl ?? portInUse;
+  const deadline = now() + (options?.timeoutMs ?? 30_000);
+  while (now() < deadline && !options?.shouldAbort?.()) {
+    const bound = (await Promise.all(ports.map((p) => probe(p, options)))).every(Boolean);
+    if (bound) return true;
+    await delay(options?.probeIntervalMs ?? 300);
+  }
+  return false;
+}
+
 export interface WaitForFreshFileOptions {
   /** The file counts only if its mtime is at/after this timestamp. */
   notBefore: number;

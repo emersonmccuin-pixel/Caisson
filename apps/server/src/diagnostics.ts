@@ -56,11 +56,10 @@ process.on('uncaughtException', (err) => {
   } catch {
     /* report best-effort */
   }
-  // Exit non-75 (a crash, not the 75 intentional-restart sentinel). The dev
-  // supervisor auto-recovers a crash after a healthy boot (uptime >=
-  // CRASH_HEALTHY_UPTIME_MS) up to MAX_CRASH_RESTARTS; rapid boot-time crashes
-  // accumulate toward that cap and then the supervisor gives up
-  // (apps/server/scripts/dev-supervisor.mjs).
+  // Exit non-75 (a crash, not the 75 intentional-restart sentinel). The
+  // supervisor (Electron main, @pc/supervisor) auto-recovers a crash after a
+  // healthy boot (uptime >= healthyUptimeMs) up to maxCrashRestarts; rapid
+  // boot-time crashes accumulate toward that cap and then it gives up.
   process.exit(1);
 });
 

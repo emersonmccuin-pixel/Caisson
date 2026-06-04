@@ -7,8 +7,8 @@
   Encodes the correct, reliable restart procedure (discovered the hard way) so it
   doesn't have to be re-derived each time:
     1. Kill the dev:app COORDINATOR tree first (scripts/dev-app.mjs) via taskkill /T,
-       so the server's manual-restart supervisor can't respawn the server mid-kill.
-       The coordinator tree is: pnpm dev -> supervisor -> server -> agent host; Vite; Electron.
+       so the Electron supervisor can't respawn the server mid-kill.
+       The coordinator tree is: dev-app -> bundle watchers; Vite; Electron -> API + agent host.
     2. Defensively free ports 4040 (server) / 5173 (Vite).
     3. Kill repo Electron + the agent host (host re-spawns fresh under the new dev:app,
        so the new server discovers its new port — avoids the stale-host-endpoint bug).

@@ -11,9 +11,11 @@ export { Supervisor, type SupervisorDeps } from './supervisor.ts';
 export {
   portInUse,
   waitForPortsFree,
+  waitForPortsBound,
   waitForFreshFile,
   type WaitDeps,
   type PortProbeOptions,
   type WaitForPortsFreeOptions,
+  type WaitForPortsBoundOptions,
   type WaitForFreshFileOptions,
 } from './waits.ts';

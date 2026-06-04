@@ -11,8 +11,8 @@
 //   - NEVER kill anything named claude.exe (orchestrator / other CC sessions)
 //     or the editor's TypeScript servers.
 //   - Only kill processes whose command line carries a Caisson signature.
-//   - Walk up to the dev-supervisor / dev-app coordinator and tree-kill THAT,
-//     otherwise the supervisor respawns the server the instant we kill it.
+//   - Walk up to the dev-app coordinator / packaged app root and tree-kill
+//     THAT, otherwise its supervisor respawns the server the instant we kill it.
 //
 // Windows-only owner lookup + kill (the only packaged target today). On other
 // platforms we can still detect "port in use" but not identify/kill the owner.
@@ -23,7 +23,9 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-const CAISSON_SIG = /PC-PTY-Chat|dev-supervisor\.mjs|dev-app\.mjs/i;
+// Step 7: dev children run repo dist bundles (path carries PC-PTY-Chat);
+// packaged children run <resources>\pcserver\server.mjs / agent-host.mjs.
+const CAISSON_SIG = /PC-PTY-Chat|dev-app\.mjs|pcserver[\\/](server|agent-host)\.mjs|Caisson\.exe/i;
 const NEVER_KILL = /claude\.exe|tsserver|typingsInstaller/i;
 
 export interface PortConflict {
@@ -128,7 +130,7 @@ async function fallbackDetect(ports: number[]): Promise<PortConflict[]> {
 
 /**
  * Free the given ports by tree-killing the Caisson process holding each one —
- * walking up to the dev-supervisor / dev-app coordinator first so the kill
+ * walking up to the dev-app coordinator / packaged app root first so the kill
  * sticks instead of being respawned. Never touches claude.exe or TS servers.
  */
 export async function freeCaissonPorts(ports: number[]): Promise<FreeResult> {
@@ -144,18 +146,20 @@ foreach ($p in $ports) {
   if (-not $conn) { continue }
   $owner = Get-Proc $conn.OwningProcess
   if (-not $owner) { continue }
-  # Walk up to the respawning coordinator if there is one; else target the owner.
+  # Walk up to the respawning coordinator if there is one; else target the
+  # owner. (Step 7: the respawner is the Electron app under dev-app.mjs, or a
+  # packaged Caisson.exe — kill the tree's root or the child just respawns.)
   $target = $owner
   $cur = $owner
   for ($i = 0; $i -lt 8 -and $cur; $i++) {
-    if ("$($cur.CommandLine)" -match 'dev-supervisor\\.mjs|dev-app\\.mjs') { $target = $cur; break }
+    if ("$($cur.CommandLine)" -match 'dev-app\\.mjs' -or "$($cur.Name)" -match '^Caisson(\\s|\\.exe)') { $target = $cur; break }
     $cur = Get-Proc $cur.ParentProcessId
   }
   $cmd = "$($target.CommandLine)"
   $nm = "$($target.Name)"
   if ($nm -match 'claude\\.exe' -or $cmd -match 'tsserver|typingsInstaller') {
     $skip += [pscustomobject]@{ pid = [int]$target.ProcessId; name = $nm; cmd = $cmd; reason = 'protected' }
-  } elseif ($cmd -match 'PC-PTY-Chat|dev-supervisor\\.mjs|dev-app\\.mjs') {
+  } elseif ($cmd -match 'PC-PTY-Chat|dev-app\\.mjs|pcserver[\\\\/](server|agent-host)\\.mjs|Caisson\\.exe') {
     $kill[[string]$target.ProcessId] = [pscustomobject]@{ pid = [int]$target.ProcessId; name = $nm; cmd = $cmd }
   } else {
     $skip += [pscustomobject]@{ pid = [int]$target.ProcessId; name = $nm; cmd = $cmd; reason = 'not-recognized-as-caisson' }

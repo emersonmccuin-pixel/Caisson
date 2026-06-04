@@ -17,6 +17,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@pc/supervisor':
+        specifier: workspace:*
+        version: link:../../packages/supervisor
       electron-updater:
         specifier: ^6.6.2
         version: 6.8.3
@@ -75,12 +78,18 @@ importers:
       '@pc/workflows':
         specifier: workspace:*
         version: link:../../packages/workflows
+      better-sqlite3:
+        specifier: ^11.7.0
+        version: 11.10.0
       hono:
         specifier: ^4.6.14
         version: 4.12.18
       ignore:
         specifier: ^7.0.5
         version: 7.0.5
+      node-pty:
+        specifier: ^1.0.0
+        version: 1.1.0
       ws:
         specifier: ^8.18.0
         version: 8.20.1
@@ -215,6 +224,9 @@ importers:
       '@pc/runtime':
         specifier: workspace:*
         version: link:../runtime
+      node-pty:
+        specifier: ^1.0.0
+        version: 1.1.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.2

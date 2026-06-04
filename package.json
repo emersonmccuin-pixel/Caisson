@@ -10,9 +10,8 @@
     "pnpm": ">=10.33.0"
   },
   "scripts": {
-    "dev": "pnpm --filter @pc/server --filter @pc/mcp --parallel dev",
+    "dev": "node scripts/dev-app.mjs",
     "dev:app": "node scripts/dev-app.mjs",
-    "start": "pnpm --filter @pc/server start",
     "build": "pnpm --filter @pc/web build",
     "typecheck": "pnpm -r typecheck",
     "desktop:dev": "pnpm --filter @pc/desktop dev",

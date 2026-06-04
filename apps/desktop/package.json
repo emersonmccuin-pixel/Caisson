@@ -74,6 +74,7 @@
     }
   },
   "dependencies": {
+    "@pc/supervisor": "workspace:*",
     "electron-updater": "^6.6.2"
   },
   "devDependencies": {

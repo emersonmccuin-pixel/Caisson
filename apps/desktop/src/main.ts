@@ -1,71 +1,312 @@
-// Electron main process — Caisson desktop shell (Section 10 Phase 1).
+// Electron main process — Caisson desktop shell.
 //
-// Two run modes, deliberately kept apart so the dev stack's native-module ABI
-// (Node) is never disturbed by Electron's ABI:
+// ONE RUNTIME (Step 7, supervisor-build-scope-2026-06-03): the app boots
+// exactly one way, always — Electron main is THE supervisor. It spawns the
+// API and the agent host as supervised child processes (respawn-with-backoff,
+// crash budget, sentinel-75 restart) and loads the window from one configured
+// URL. There is no dev/packaged fork of this tree — anything that could
+// differ (entry paths, the node binary, data dir, ports, window URL) is an
+// INPUT resolved once in resolveStackConfig(), never a code branch. Dev
+// tooling (scripts/dev-app.mjs) feeds different inputs; it cannot change the
+// shape of the boot.
 //
-//   DEV-RUN  (PC_DESKTOP_DEV=1)  — the window points at the already-running
-//     tsx server / Vite dev server. Electron does NOT host the server, so it
-//     never loads better-sqlite3 / node-pty → no @electron/rebuild needed, and
-//     `pnpm dev` keeps working untouched. This is the iteration mode for the
-//     shell itself.
-//
-//   PACKAGED (app.isPackaged)    — Electron starts the agent host as a sibling
-//     process, hosts the bundled API server in-process, and loads the server's
-//     static bundle on 127.0.0.1:PORT.
+// ☠ Step 7 demolition: `startInProcessServer` (the packaged in-process API
+// import) and the packaged one-shot host spawn are DELETED — an API crash no
+// longer takes the window with it, and a dead host respawns instead of
+// logging.
 
 import { app, BrowserWindow, dialog, Menu, shell, ipcMain } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import type { ChildProcess } from 'node:child_process';
+import {
+  Supervisor,
+  SupervisedChild,
+  waitForFreshFile,
+  waitForPortsBound,
+  waitForPortsFree,
+  type ExitInfo,
+} from '@pc/supervisor';
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
   packagedAgentHostLockFilePath,
   removePackagedAgentHostLockFile,
   requestPackagedAgentHostShutdown,
-  spawnPackagedAgentHostProcess,
-  waitForChildExit,
-  waitForPackagedAgentHostLock,
 } from './agent-host-process';
 import { findPortConflicts, freeCaissonPorts, type PortConflict } from './port-conflict';
 
-const DEV = process.env.PC_DESKTOP_DEV === '1';
-const APP_NAME = DEV ? 'Caisson Dev' : 'Caisson';
-const APP_ID = DEV ? 'com.projectcompanion.app.dev' : 'com.projectcompanion.app';
-const PORT = Number(process.env.PORT ?? 4040);
-// Packaged resource root (electron-builder `extraResources` → `pcserver/`).
-// Mirrors the repo's sub-paths so the server's ROOT-relative resolution
-// (apps/web/dist, templates, packages/mcp/dist) just works.
-const PC_ROOT = join(process.resourcesPath, 'pcserver');
-// Section 10 — the pinned Claude Code CLI shipped with the app (electron-builder
-// `extraResources` → `<resources>/claude/`). The server pushes this into the
-// runtime resolver so the app runs its pinned CLI by default, isolated from any
-// global `claude` install. Staged from `staging/claude` at package time.
-const PC_BUNDLED_CLAUDE_EXE = join(
-  process.resourcesPath,
-  'claude',
-  process.platform === 'win32' ? 'claude.exe' : 'claude',
-);
-// Dev-run target: default to Vite (:5173 — the live UI the user develops
-// against; it proxies /api + /ws to :4040). Override with PC_DESKTOP_URL to
-// hit the server's own static fallback on :4040 directly.
-const DEV_URL = process.env.PC_DESKTOP_URL ?? 'http://127.0.0.1:5173';
-
-let mainWindow: BrowserWindow | null = null;
-let agentHostProcess: ChildProcess | null = null;
-let agentHostLockFile: string | null = null;
-let allowingQuitAfterHostShutdown = false;
-let stoppingAgentHost = false;
+// Cosmetic-only dev labeling (window title / icon / app id) so a dev instance
+// is visually distinct from the packaged app. It gates NOTHING about boot.
+const DEV_LABEL = process.env.PC_DESKTOP_DEV === '1';
+const APP_NAME = DEV_LABEL ? 'Caisson Dev' : 'Caisson';
+const APP_ID = DEV_LABEL ? 'com.projectcompanion.app.dev' : 'com.projectcompanion.app';
 
 app.setName(APP_NAME);
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
 
+// ── Stack config — the ONLY place launch inputs are read ────────────────────
+// Defaults are the packaged layout (electron-builder `extraResources`); dev
+// tooling overrides via env. One value → one code path.
+
+interface StackConfig {
+  port: number;
+  dataDir: string;
+  /** API server bundle the api child runs (`node <apiEntry>`). */
+  apiEntry: string;
+  /** Agent host bundle the host child runs. */
+  hostEntry: string;
+  /** Node binary for both children. Packaged default: this executable via
+   *  ELECTRON_RUN_AS_NODE (natives staged for Electron's ABI); dev passes the
+   *  system node (repo natives are Node-ABI). */
+  childNode: string;
+  /** PC_ROOT for the children — anchors the server's resource layout
+   *  (apps/web/dist, templates, packages/mcp/dist). null = unset: the dev
+   *  bundle derives the trunk from its own location, which also keeps the
+   *  server's /api/dev/* controls enabled (their dev heuristic is "no
+   *  PC_ROOT"). */
+  childPcRoot: string | null;
+  /** The pinned, app-bundled Claude CLI — only if it exists on disk. */
+  bundledClaudeExe: string | null;
+  windowUrl: string;
+}
+
+function resolveStackConfig(): StackConfig {
+  const port = Number(process.env.PORT ?? 4040);
+  const envDataDir = process.env.PC_DATA_DIR;
+  const dataDir = envDataDir && envDataDir !== 'undefined' ? envDataDir : app.getPath('userData');
+  const packagedRoot = join(process.resourcesPath, 'pcserver');
+  const apiEntry = process.env.PC_API_ENTRY ?? join(packagedRoot, 'server.mjs');
+  const hostEntry = process.env.PC_HOST_ENTRY ?? join(packagedRoot, 'agent-host.mjs');
+  const childPcRoot =
+    process.env.PC_ROOT ?? (process.env.PC_API_ENTRY ? null : packagedRoot);
+  const claudeCandidate =
+    process.env.PC_BUNDLED_CLAUDE_EXE ??
+    join(process.resourcesPath, 'claude', process.platform === 'win32' ? 'claude.exe' : 'claude');
+  return {
+    port,
+    dataDir,
+    apiEntry,
+    hostEntry,
+    childNode: process.env.PC_CHILD_NODE ?? process.execPath,
+    childPcRoot,
+    bundledClaudeExe: existsSync(claudeCandidate) ? claudeCandidate : null,
+    windowUrl: process.env.PC_DESKTOP_URL ?? `http://127.0.0.1:${port}`,
+  };
+}
+
+let mainWindow: BrowserWindow | null = null;
+let supervisor: Supervisor | null = null;
+let quitting = false;
+let windowUrl = '';
+
+// ── Supervisor wiring ────────────────────────────────────────────────────────
+
+let childrenLogPath: string | null = null;
+
+function initChildrenLog(dataDir: string): void {
+  try {
+    const dir = join(dataDir, 'diagnostics');
+    mkdirSync(dir, { recursive: true });
+    childrenLogPath = join(dir, 'children.log');
+    writeFileSync(childrenLogPath, `# supervised children — ${APP_NAME} — session ${new Date().toISOString()}\n`);
+  } catch {
+    childrenLogPath = null; // best-effort; never blocks boot
+  }
+}
+
+function supervisorLog(msg: string): void {
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  console.log(line);
+  if (childrenLogPath) {
+    try {
+      appendFileSync(childrenLogPath, `${line}\n`);
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+function teeChildOutput(name: string) {
+  return (_stream: 'stdout' | 'stderr', chunk: Buffer): void => {
+    process.stdout.write(chunk);
+    if (childrenLogPath) {
+      try {
+        appendFileSync(childrenLogPath, chunk);
+      } catch {
+        /* best-effort */
+      }
+    }
+    void name;
+  };
+}
+
+function onChildGiveUp(info: ExitInfo): void {
+  // Crash budget exhausted — the app can't run without either child. Be loud,
+  // point at the log, and close. Never a silent dead service.
+  dialog.showErrorBox(
+    'Caisson keeps crashing',
+    `Caisson's background service ("${info.name}") crashed repeatedly and could not be recovered ` +
+      `(last exit code ${info.code ?? 'none'}).\n\n` +
+      (childrenLogPath ? `Details: ${childrenLogPath}\n\n` : '') +
+      `Caisson will close. If this keeps happening, restart your computer or reinstall Caisson.`,
+  );
+  supervisor?.stopAll();
+  quitting = true;
+  app.quit();
+}
+
+function buildSupervisor(config: StackConfig): Supervisor {
+  const lockFilePath = packagedAgentHostLockFilePath(config.dataDir);
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ELECTRON_RUN_AS_NODE: '1', // harmless under plain node; required under the app exe
+    PC_DATA_DIR: config.dataDir,
+    PORT: String(config.port),
+    PC_AGENT_HOST_LOCK_FILE: lockFilePath,
+  };
+  if (config.childPcRoot) childEnv.PC_ROOT = config.childPcRoot;
+  else delete childEnv.PC_ROOT;
+  if (config.bundledClaudeExe) childEnv.PC_BUNDLED_CLAUDE_EXE = config.bundledClaudeExe;
+
+  let hostSpawnedAt = 0;
+  const host = new SupervisedChild({
+    spec: {
+      name: 'agent-host',
+      command: config.childNode,
+      args: ['--report-on-fatalerror', config.hostEntry, '--http-lock-file', lockFilePath],
+      cwd: dirname(config.hostEntry),
+      env: childEnv,
+    },
+    deps: { log: supervisorLog },
+    hooks: {
+      // A stale lock from a dead host must never count as ready.
+      preSpawn: async () => {
+        removePackagedAgentHostLockFile(lockFilePath);
+        hostSpawnedAt = Date.now();
+      },
+      onReady: () =>
+        waitForFreshFile(lockFilePath, { notBefore: hostSpawnedAt, timeoutMs: 10_000 }),
+      onOutput: teeChildOutput('agent-host'),
+      onGiveUp: onChildGiveUp,
+      // Polite stop: HTTP `shutdown host-exit` lets the host tear down its PTY
+      // children instead of orphaning them; a failed ask falls back to the
+      // signal, and stopAndWait's deadline escalates to SIGKILL.
+      requestStop: () => requestPackagedAgentHostShutdown({ lockFilePath }),
+    },
+  });
+
+  const api = new SupervisedChild({
+    spec: {
+      name: 'api',
+      command: config.childNode,
+      args: ['--report-on-fatalerror', config.apiEntry],
+      cwd: dirname(config.apiEntry),
+      env: childEnv,
+    },
+    // exit 75 = intentional restart (POST /api/dev/restart) — never a crash.
+    policy: { sentinelRestartCode: 75 },
+    deps: { log: supervisorLog },
+    hooks: {
+      // Don't bind until the previous process has released the port.
+      preSpawn: async () => {
+        await waitForPortsFree([config.port], { timeoutMs: 12_000 });
+      },
+      onOutput: teeChildOutput('api'),
+      onGiveUp: onChildGiveUp,
+    },
+  });
+
+  // Host first: its lock file is on disk before the API boots and connects.
+  return new Supervisor({ children: [host, api], deps: { log: supervisorLog } });
+}
+
+// ── Port-conflict guard (one path — runs before every boot) ─────────────────
+
+function describeConflict(c: PortConflict): string {
+  if (c.isCaisson) {
+    return `  • port ${c.port} — another Caisson/dev process (PID ${c.pid})`;
+  }
+  const who = c.pid ? `${c.name} (PID ${c.pid})` : 'an unknown process';
+  return `  • port ${c.port} — ${who}`;
+}
+
+/** Detect port conflicts, offer to free Caisson-owned offenders, then start
+ *  the supervised stack and wait for the API to answer. False = user quit. */
+async function bootSupervisedStack(config: StackConfig): Promise<boolean> {
+  const ports = [config.port];
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const conflicts = await findPortConflicts(ports);
+    if (conflicts.length === 0) break;
+
+    const freeable = conflicts.some((c) => c.isCaisson);
+    const buttons = freeable ? ['Free ports & retry', 'Quit'] : ['Retry', 'Quit'];
+    const detail =
+      `Caisson needs port ${ports.join(' and ')}, but it's already in use:\n\n` +
+      conflicts.map(describeConflict).join('\n') +
+      (freeable
+        ? `\n\nThis is usually another Caisson window or a running dev stack. ` +
+          `"Free ports & retry" will close those Caisson processes and start up.`
+        : `\n\nClose whatever is using these ports, then click Retry.`);
+
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'Caisson can’t start',
+      message: 'Another program is using Caisson’s ports.',
+      detail,
+      buttons,
+      defaultId: 0,
+      cancelId: buttons.length - 1,
+      noLink: true,
+    });
+
+    if (response === buttons.length - 1) return false; // Quit
+    if (freeable && response === 0) {
+      const result = await freeCaissonPorts(ports);
+      console.log(
+        `[boot] freed ${result.killed.length} process(es): ${result.killed.map((k) => k.pid).join(', ')}`,
+      );
+      await new Promise((r) => setTimeout(r, 1500)); // let the OS release the sockets
+    }
+  }
+
+  const remaining = await findPortConflicts(ports);
+  if (remaining.length > 0) {
+    dialog.showErrorBox(
+      'Caisson can’t start',
+      `These ports are still in use:\n\n` +
+        remaining.map(describeConflict).join('\n') +
+        `\n\nClose the program using them and launch Caisson again.`,
+    );
+    return false;
+  }
+
+  supervisor = buildSupervisor(config);
+  await supervisor.start();
+
+  // Positive receipt: the window is only worth opening once the API answers.
+  // (First boot runs migrations/seeds — give it a generous deadline.)
+  const apiUp = await waitForPortsBound([config.port], {
+    timeoutMs: 60_000,
+    shouldAbort: () => quitting,
+  });
+  if (!apiUp && !quitting) {
+    dialog.showErrorBox(
+      'Caisson failed to start',
+      `The background service did not come up within 60 seconds.\n\n` +
+        (childrenLogPath ? `Details: ${childrenLogPath}\n\n` : '') +
+        `If this keeps happening, restart your computer or reinstall Caisson.`,
+    );
+    return false;
+  }
+  return true;
+}
+
 // ── Auto-update (electron-updater → public GitHub Releases feed) ───────────
 // The renderer is PC's web bundle and can't touch `autoUpdater` directly, so
 // the main process owns the update lifecycle and mirrors a single state object
-// to the UI over IPC (`pc:update-state`). Only meaningful in a packaged build:
-// in DEV the feed/signing don't exist, so the status stays `unsupported` and
-// every IPC verb short-circuits.
+// to the UI over IPC (`pc:update-state`). Only meaningful in a packaged build
+// (feed/signing exist); otherwise the status stays `unsupported` and every IPC
+// verb short-circuits.
 
 type UpdateStatus =
   | 'unsupported'
@@ -87,7 +328,7 @@ interface UpdateState {
 }
 
 let updateState: UpdateState = {
-  status: DEV ? 'unsupported' : 'idle',
+  status: app.isPackaged ? 'idle' : 'unsupported',
   currentVersion: app.getVersion(),
   availableVersion: null,
   percent: null,
@@ -101,7 +342,7 @@ function pushUpdateState(patch: Partial<UpdateState>): void {
 }
 
 function updaterEnabled(): boolean {
-  return !DEV && app.isPackaged;
+  return app.isPackaged;
 }
 
 function initAutoUpdater(): void {
@@ -166,151 +407,10 @@ ipcMain.handle('pc:update:install', () => {
   return true;
 });
 
-/**
- * Boot the Hono server inside this process. Packaged-mode only —
- * loads the esbuild server bundle (1.5) by file path so there's no dependency
- * on tsx at runtime. Env (PC_DATA_DIR, ports) is set by the caller first.
- */
-async function startInProcessServer(): Promise<void> {
-  // The server reads all its paths from env + ROOT (PC_ROOT). Set them before
-  // importing the bundle — index.ts captures them at module-eval time.
-  process.env.PC_ROOT = PC_ROOT;
-  process.env.PC_BUNDLED_CLAUDE_EXE = PC_BUNDLED_CLAUDE_EXE; // Section 10 — pinned CLI
-  process.env.PC_DATA_DIR ??= app.getPath('userData'); // 1.3 — per-user data dir
-  process.env.PORT ??= String(PORT);
-  await startPackagedAgentHost();
-  // Importing the bundle runs the full boot sequence (migrations, seeds, the
-  // Hono `serve()`) inside this process. The bundle has top-level await, so
-  // this resolves once the server is listening.
-  const serverEntry = join(PC_ROOT, 'server.mjs');
-  await import(pathToFileURL(serverEntry).href);
-}
-
-function describeConflict(c: PortConflict): string {
-  if (c.isCaisson) {
-    return `  • port ${c.port} — another Caisson/dev process (PID ${c.pid})`;
-  }
-  const who = c.pid ? `${c.name} (PID ${c.pid})` : 'an unknown process';
-  return `  • port ${c.port} — ${who}`;
-}
-
-/**
- * Packaged boot with a port-conflict guard. Detects whether the API port is
- * taken, and — on explicit user action — frees the Caisson processes
- * holding them and retries. Returns true once the in-process server has booted;
- * false means the user chose to quit (caller should exit).
- */
-async function bootPackagedServerWithGuard(): Promise<boolean> {
-  const ports = [PORT];
-
-  // Up to two free-and-retry rounds, then give up with a clear message.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const conflicts = await findPortConflicts(ports);
-    if (conflicts.length === 0) break;
-
-    const freeable = conflicts.some((c) => c.isCaisson);
-    const buttons = freeable ? ['Free ports & retry', 'Quit'] : ['Retry', 'Quit'];
-    const detail =
-      `Caisson needs ports ${ports.join(' and ')}, but they're already in use:\n\n` +
-      conflicts.map(describeConflict).join('\n') +
-      (freeable
-        ? `\n\nThis is usually another Caisson window or a running dev stack. ` +
-          `"Free ports & retry" will close those Caisson processes and start up.`
-        : `\n\nClose whatever is using these ports, then click Retry.`);
-
-    const { response } = await dialog.showMessageBox({
-      type: 'warning',
-      title: 'Caisson can’t start',
-      message: 'Another program is using Caisson’s ports.',
-      detail,
-      buttons,
-      defaultId: 0,
-      cancelId: buttons.length - 1,
-      noLink: true,
-    });
-
-    if (response === buttons.length - 1) return false; // Quit
-    if (freeable && response === 0) {
-      const result = await freeCaissonPorts(ports);
-      console.log(`[boot] freed ${result.killed.length} process(es): ${result.killed.map((k) => k.pid).join(', ')}`);
-      await new Promise((r) => setTimeout(r, 1500)); // let the OS release the sockets
-    }
-    // loop re-checks
-  }
-
-  const remaining = await findPortConflicts(ports);
-  if (remaining.length > 0) {
-    dialog.showErrorBox(
-      'Caisson can’t start',
-      `These ports are still in use:\n\n` +
-        remaining.map(describeConflict).join('\n') +
-        `\n\nClose the program using them and launch Caisson again.`,
-    );
-    return false;
-  }
-
-  await startInProcessServer();
-  return true;
-}
-
-async function startPackagedAgentHost(): Promise<void> {
-  const dataDir = process.env.PC_DATA_DIR ?? app.getPath('userData');
-  const lockFilePath = packagedAgentHostLockFilePath(dataDir);
-  removePackagedAgentHostLockFile(lockFilePath);
-  const startedAt = Date.now();
-  const { child, spec } = spawnPackagedAgentHostProcess({
-    pcRoot: PC_ROOT,
-    dataDir,
-    execPath: process.execPath,
-    env: process.env,
-  });
-  agentHostProcess = child;
-  agentHostLockFile = spec.lockFilePath;
-
-  child.stdout?.on('data', (chunk) => {
-    process.stdout.write(chunk);
-  });
-  child.stderr?.on('data', (chunk) => {
-    process.stderr.write(chunk);
-  });
-  child.once('exit', (code, signal) => {
-    agentHostProcess = null;
-    if (stoppingAgentHost || allowingQuitAfterHostShutdown) return;
-    console.error(
-      `[agent-host] packaged host exited unexpectedly: code=${code ?? 'null'} signal=${signal ?? 'none'}`,
-    );
-  });
-
-  const ready = await waitForPackagedAgentHostLock({
-    lockFilePath: agentHostLockFile,
-    startedAt,
-  });
-  if (!ready) {
-    stoppingAgentHost = true;
-    child.kill();
-    throw new Error('packaged agent host did not publish its lock file before server boot');
-  }
-}
-
-async function stopPackagedAgentHost(): Promise<void> {
-  const child = agentHostProcess;
-  if (!child) return;
-  stoppingAgentHost = true;
-
-  if (agentHostLockFile) {
-    await requestPackagedAgentHostShutdown({ lockFilePath: agentHostLockFile });
-  }
-  if (await waitForChildExit(child, 2_000)) return;
-  child.kill();
-  await waitForChildExit(child, 2_000);
-}
-
 // ── Renderer diagnostics ───────────────────────────────────────────────────
 // Mirror the renderer's console + crash/freeze signals to a file so they can be
 // read outside DevTools (e.g. to debug a UI freeze where the page stops
 // responding to clicks). Best-effort; never throws into the boot path.
-//   DEV      → <workspace-root>/data/diagnostics/renderer-console.log
-//   PACKAGED → <PC_DATA_DIR>/diagnostics/… (falls back to Electron's logs dir)
 // Fresh per window launch (truncated on createWindow).
 
 function resolveDiagnosticsDir(): string {
@@ -362,9 +462,8 @@ function setupRendererDiagnostics(win: BrowserWindow): void {
   });
 }
 
-async function createWindow(): Promise<void> {
-  const url = DEV ? DEV_URL : `http://127.0.0.1:${PORT}`;
-  const windowIcon = join(__dirname, '..', 'build', DEV ? 'icon-dev.png' : 'icon.png');
+async function createWindow(url: string): Promise<void> {
+  const windowIcon = join(__dirname, '..', 'build', DEV_LABEL ? 'icon-dev.png' : 'icon.png');
 
   // No native File/Edit/View/Window menu — PC's chrome is the web UI. Removing
   // the application menu also drops its default accelerators; copy/paste/etc.
@@ -435,29 +534,32 @@ async function createWindow(): Promise<void> {
 }
 
 void app.whenReady().then(async () => {
-  if (!DEV) {
-    // PC_DATA_DIR is set in packaged mode (1.3) before the server boots.
-    // The guard surfaces a dialog on port conflicts (and any other boot
-    // failure) instead of dying silently with no window.
-    try {
-      const booted = await bootPackagedServerWithGuard();
-      if (!booted) {
-        app.quit();
-        return;
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      dialog.showErrorBox(
-        'Caisson failed to start',
-        `Something went wrong while starting up:\n\n${message}\n\n` +
-          `If this keeps happening, restart your computer or reinstall Caisson.`,
-      );
+  const config = resolveStackConfig();
+  windowUrl = config.windowUrl;
+  initChildrenLog(config.dataDir);
+
+  try {
+    const booted = await bootSupervisedStack(config);
+    if (!booted) {
+      quitting = true;
+      supervisor?.stopAll();
       app.quit();
       return;
     }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    dialog.showErrorBox(
+      'Caisson failed to start',
+      `Something went wrong while starting up:\n\n${message}\n\n` +
+        `If this keeps happening, restart your computer or reinstall Caisson.`,
+    );
+    quitting = true;
+    supervisor?.stopAll();
+    app.quit();
+    return;
   }
   initAutoUpdater();
-  await createWindow();
+  await createWindow(windowUrl);
 
   // Background check on launch so the "update ready" banner can appear without
   // the user opening settings. Errors (offline, no release yet) are non-fatal.
@@ -468,7 +570,7 @@ void app.whenReady().then(async () => {
   }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow(windowUrl);
   });
 });
 
@@ -476,12 +578,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// ONE quit path: ask the supervisor to stop everything (host gets its polite
+// HTTP shutdown; stragglers are SIGKILLed at the deadline), then really quit.
 app.on('before-quit', (event) => {
-  if (DEV || allowingQuitAfterHostShutdown || !agentHostProcess) return;
+  if (quitting || !supervisor) return;
   event.preventDefault();
-  if (stoppingAgentHost) return;
-  void stopPackagedAgentHost().finally(() => {
-    allowingQuitAfterHostShutdown = true;
-    app.quit();
-  });
+  quitting = true;
+  void supervisor.stopAndWait('SIGINT', 5_000).finally(() => app.quit());
 });

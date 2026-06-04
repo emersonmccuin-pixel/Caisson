@@ -108,6 +108,48 @@ test('stopAndWait resolves true when children exit before the deadline', async (
   assert.equal(await done, true, 'all children exited gracefully');
 });
 
+test('stop() prefers the requestStop hook; a failed ask falls back to the signal', async () => {
+  const spawned: FakeChild[] = [];
+  let asks = 0;
+  const makeChild = (requestStop: () => Promise<unknown>): SupervisedChild =>
+    new SupervisedChild({
+      spec: spec('host'),
+      deps: {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        spawn: (() => {
+          const c = new FakeChild();
+          spawned.push(c);
+          return c;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any,
+        now: () => 0,
+        delay: () => Promise.resolve(),
+      },
+      hooks: { requestStop },
+    });
+
+  // Polite ask succeeds → no signal sent.
+  const polite = makeChild(() => {
+    asks += 1;
+    return Promise.resolve(true);
+  });
+  await polite.start();
+  polite.stop('SIGINT');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(asks, 1, 'asked over the hook');
+  assert.equal(spawned[0].killed, false, 'no signal when the ask succeeds');
+  spawned[0].exit(0);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(spawned.length, 1, 'no respawn after hook-stop');
+
+  // Polite ask rejects → falls back to the signal.
+  const fallback = makeChild(() => Promise.reject(new Error('host http down')));
+  await fallback.start();
+  fallback.stop('SIGINT');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(spawned[1].killed, true, 'fell back to the signal');
+});
+
 test('stopAndWait escalates to SIGKILL on a child that misses the deadline', async () => {
   const h = harness();
   await h.supervisor.start();

@@ -1,22 +1,37 @@
-// One-command dev launcher for the Caisson Dev desktop app.
+// One-command dev launcher — ONE RUNTIME edition (Step 7).
 //
-//   pnpm dev:app
+//   pnpm dev:app   (alias: pnpm dev)
 //
-// Boots the three dev processes in the right order and tears them all down
-// together on Ctrl+C, so dogfooding the live app is a single command:
+// There is no "dev mode" of the app. The Electron app boots exactly one way —
+// Electron main supervises the API child + agent-host child, both running the
+// shipped BUNDLES (`node server.mjs` / `node host.mjs`). What this script adds
+// is the tooling AROUND that one app:
 //
-//   1. backend + MCP   — `pnpm dev` (server runs under the manual-restart
-//                         supervisor; MCP builds/watches)
-//   2. web UI          — `pnpm --filter @pc/web dev` (Vite, HMR on :5173)
-//   3. desktop shell   — `pnpm desktop:dev` (Electron "Caisson Dev" window),
-//                         launched only AFTER Vite answers on :5173 so the
-//                         window never opens to a blank/failed load.
+//   1. one-shot bundle builds (server · agent-host · mcp) so the app's
+//      children exist before first spawn
+//   2. watchers — the same builds with esbuild --watch, so every save lands in
+//      dist/ immediately. Loading the new code:
+//        · server: POST http://127.0.0.1:4040/api/dev/restart  (exit 75 → the
+//          supervisor respawns the API child; 409s while agents are live)
+//        · host:   kill the host pid from data/agent-host/host.lock.json (the
+//          supervisor respawns it with backoff)
+//   3. Vite dev server (:5173, HMR) — the window loads it via PC_DESKTOP_URL
+//   4. the Electron app itself — THE supervisor; this script supervises
+//      nothing (☠ dev-supervisor.mjs is retired)
+//
+// The app can't tell this tooling apart from a packaged launch: only the
+// INPUT values differ (entry paths → repo dist bundles, node binary → the
+// system node so repo Node-ABI natives load, window URL → Vite, data dir →
+// repo data/).
 //
 // Zero extra dependencies — just Node's child_process + fetch. Cross-platform
 // via shell:true (resolves pnpm / pnpm.cmd on Windows).
 
 import { spawn } from 'node:child_process';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const VITE_URL = 'http://127.0.0.1:5173';
 const VITE_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 500;
@@ -25,11 +40,12 @@ const children = [];
 let shuttingDown = false;
 
 /** Spawn a labelled child, inheriting stdio so logs interleave in this terminal. */
-function run(label, command) {
+function run(label, command, options = {}) {
   const child = spawn(command, {
     shell: true,
     stdio: 'inherit',
-    cwd: process.cwd(),
+    cwd: options.cwd ?? REPO,
+    env: options.env ?? process.env,
   });
   child.on('exit', (code, signal) => {
     if (shuttingDown) return;
@@ -40,6 +56,18 @@ function run(label, command) {
   });
   children.push({ label, child });
   return child;
+}
+
+/** Run a one-shot command to completion; reject on a non-zero exit. */
+function runToExit(label, command) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, { shell: true, stdio: 'inherit', cwd: REPO });
+    child.on('exit', (code) => {
+      if (code === 0) resolvePromise();
+      else reject(new Error(`[dev:app] "${label}" failed (exit ${code})`));
+    });
+    child.on('error', reject);
+  });
 }
 
 /** Poll Vite until it answers (or time out). */
@@ -69,7 +97,7 @@ function shutdown(code = 0) {
   console.error('[dev:app] stopping all dev processes…');
   for (const { child } of children) {
     if (child.exitCode === null && !child.killed) {
-      // SIGINT lets the server supervisor + Electron tear down cleanly.
+      // SIGINT lets Electron's before-quit stop its supervised children.
       child.kill('SIGINT');
     }
   }
@@ -81,8 +109,26 @@ process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
 async function main() {
-  console.error('[dev:app] starting backend + MCP and web UI…');
-  run('backend+mcp', 'pnpm dev');
+  // The host/server CLAUDE_CONFIG_DIR split: a shell launched by a Claude Code
+  // session points CLAUDE_CONFIG_DIR at .claude-work; the agent host would
+  // tail the wrong transcript folder and every run would false-fail. Scrub it
+  // for the whole stack (same safety net as restart-stack.ps1).
+  if (process.env.CLAUDE_CONFIG_DIR) {
+    console.error(`[dev:app] clearing inherited CLAUDE_CONFIG_DIR (${process.env.CLAUDE_CONFIG_DIR})`);
+    delete process.env.CLAUDE_CONFIG_DIR;
+  }
+
+  console.error('[dev:app] building bundles (server · agent-host · mcp)…');
+  await Promise.all([
+    runToExit('build:server', 'pnpm --filter @pc/server build'),
+    runToExit('build:agent-host', 'pnpm --filter @pc/agent-host build'),
+    runToExit('build:mcp', 'pnpm --filter @pc/mcp build'),
+  ]);
+
+  console.error('[dev:app] starting bundle watchers + web UI…');
+  run('watch:server', `node "${join(REPO, 'apps', 'server', 'scripts', 'build.mjs')}" --watch`);
+  run('watch:agent-host', `node "${join(REPO, 'packages', 'agent-host', 'scripts', 'build.mjs')}" --watch`);
+  run('watch:mcp', `node "${join(REPO, 'packages', 'mcp', 'scripts', 'build.mjs')}" --watch`);
   run('web', 'pnpm --filter @pc/web dev');
 
   const ready = await waitForVite();
@@ -91,8 +137,18 @@ async function main() {
     console.error('[dev:app] Vite did not come up within 60s — opening the window anyway (it will retry on reload).');
   }
 
-  console.error('[dev:app] launching Caisson Dev window…');
-  run('desktop', 'pnpm desktop:dev');
+  console.error('[dev:app] launching the Caisson app (Electron supervises API + host)…');
+  run('app', 'pnpm desktop:dev', {
+    env: {
+      ...process.env,
+      // The inputs that point the ONE runtime at the repo's dev artifacts.
+      PC_DESKTOP_URL: VITE_URL,
+      PC_API_ENTRY: join(REPO, 'apps', 'server', 'dist', 'server.mjs'),
+      PC_HOST_ENTRY: join(REPO, 'packages', 'agent-host', 'dist', 'host.mjs'),
+      PC_CHILD_NODE: process.execPath, // system node — repo natives are Node-ABI
+      PC_DATA_DIR: join(REPO, 'data'),
+    },
+  });
 }
 
 main().catch((err) => {

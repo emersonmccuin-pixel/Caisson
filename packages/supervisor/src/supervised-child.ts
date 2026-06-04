@@ -75,6 +75,14 @@ export interface SupervisedChildHooks {
   onGiveUp?: (info: ExitInfo) => void;
   /** Fired on every spawn (bookkeeping / tests). */
   onSpawn?: (child: ChildProcess) => void;
+  /**
+   * Graceful stop request used INSTEAD of a signal (e.g. the agent host's
+   * HTTP `shutdown host-exit`, which lets it tear down its PTY children
+   * instead of orphaning them on a hard kill). stop() fires it and suppresses
+   * respawn; if the child still hasn't exited by the caller's deadline,
+   * stopAndWait escalates to SIGKILL as usual.
+   */
+  requestStop?: () => Promise<unknown>;
 }
 
 export class SupervisedChild {
@@ -130,10 +138,19 @@ export class SupervisedChild {
     await this.spawnOnce();
   }
 
-  /** Graceful stop: suppress respawn and signal the child. */
+  /** Graceful stop: suppress respawn, then ask nicely (requestStop hook) or
+   *  signal. Escalation past a deadline is stopAndWait/killHard's job. */
   stop(signal: NodeJS.Signals = 'SIGINT'): void {
     this.stopping = true;
-    if (this.child) this.child.kill(signal);
+    if (!this.child) return;
+    if (this.hooks.requestStop) {
+      void this.hooks.requestStop().catch(() => {
+        // The polite ask failed (host HTTP down?) — fall back to the signal.
+        this.child?.kill(signal);
+      });
+      return;
+    }
+    this.child.kill(signal);
   }
 
   /** Resolve true once the current child has exited (immediately if none).
