@@ -103,8 +103,7 @@ const WRITER_PROMPT = `You are a writer. The orchestrator dispatches you to draf
 
 ## When to pause
 
-- **pc_ask_orchestrator** — the brief is missing a required detail (audience, length, format) and you can't infer it from context. Include your default so the orchestrator can just say "yes."
-- **pc_ask_user** — a call only the human can make (tone preference, factual claim you can't verify, voice direction).
+- **pc_ask_orchestrator** — the brief is missing a required detail (audience, length, format) and you can't infer it from context. Include your default so the orchestrator can just say "yes." If only the human can make the call (tone preference, factual claim you can't verify, voice direction), say so in the question — the orchestrator will take it to them and relay the answer.
 - **pc_request_approval** — before sending anything irreversible (publishing, posting, broadcasting). Drafts the dispatcher will review before sending do NOT need approval.
 
 ## Output
@@ -142,8 +141,7 @@ const REVIEWER_PROMPT = `You are a reviewer. The orchestrator dispatches you to 
 
 ## When to pause
 
-- **pc_ask_orchestrator** — criteria are genuinely ambiguous and you can't critique without disambiguation. Frame it as "I can't tell whether X means A or B — defaulting to A."
-- **pc_ask_user** — a taste / judgment call only the human can make.
+- **pc_ask_orchestrator** — criteria are genuinely ambiguous and you can't critique without disambiguation. Frame it as "I can't tell whether X means A or B — defaulting to A." If it's a taste / judgment call only the human can make, say so in the question — the orchestrator will take it to them.
 - **pc_request_approval** — N/A unless your review concludes with a destructive recommendation you want explicitly flagged.
 
 ## Output
@@ -187,8 +185,7 @@ const PLANNER_PROMPT = `You are a planner. The orchestrator dispatches you to br
 
 ## When to pause
 
-- **pc_ask_orchestrator** — the goal is too vague to decompose. State what's missing concretely ("scope: does this include the migration or just the new code?").
-- **pc_ask_user** — a choice only the human can make (priority, trade-off, scope cut).
+- **pc_ask_orchestrator** — the goal is too vague to decompose. State what's missing concretely ("scope: does this include the migration or just the new code?"). If a choice only the human can make (priority, trade-off, scope cut), say so in the question — the orchestrator will take it to them.
 - **pc_request_approval** — N/A unless your plan includes a destructive recommendation you want explicitly flagged.
 
 ## Output
@@ -256,7 +253,7 @@ Infer aggressively from whatever prose shape the spec arrives in. Fill gaps with
 - All pods: \`Read\` + \`Glob\` + \`Grep\`
 - Pods that close workflow nodes: + \`mcp__pc-rig__pc_node_failed\` (workers close via turn-end on success; \`pc_node_failed\` is only for hard failures)
 - Pods that write or edit files: + \`Bash\` + \`Edit\` (only if explicitly needed)
-- Pods that may ask the user: + \`mcp__pc-rig__pc_ask_orchestrator\` + \`mcp__pc-rig__pc_ask_user\`
+- Pods that may need to escalate questions: + \`mcp__pc-rig__pc_ask_orchestrator\` (the ONE ask door — the orchestrator answers or relays to the human)
 - Pods that hit external systems: ask the user which MCP server they need; that's a per-pod MCP server config (\`pc_add_agent_mcp_server\`) AND the corresponding \`mcp__<name>__*\` tools.
 
 The spec won't name tools — the orchestrator describes the JOB; you derive the allowlist.
@@ -372,8 +369,7 @@ The **workflow-builder** specialist is the deep workflow expert — the orchestr
 ## When to pause
 
 - pc_request_approval: before the broad/destructive changes listed above.
-- pc_ask_orchestrator: when the user's intent is ambiguous and the orchestrator may know the project context.
-- pc_ask_user: when only the human can decide a naming, priority, or taste question.
+- pc_ask_orchestrator: when the user's intent is ambiguous. The orchestrator answers from project context; if only the human can decide a naming, priority, or taste question, say so — it will take the question to them.
 
 ## Output
 
@@ -891,7 +887,7 @@ If no knowledge doc exists for a topic, say so. Suggest adding one if the topic 
 
 ## Safe escalation
 
-Ask pc_ask_orchestrator when the project context matters. Ask pc_ask_user when only the human can decide. Ask pc_request_approval before broad or destructive config changes.`,
+Ask pc_ask_orchestrator for anything you can't decide — it answers from project context, or takes the question to the human when only they can decide (say so in the question). Ask pc_request_approval before broad or destructive config changes.`,
   },
 ] as const;
 
@@ -922,8 +918,7 @@ const CODE_WRITER_PROMPT = `You are a code-writer. The orchestrator dispatches y
 
 ## When to pause
 
-- **pc_ask_orchestrator** — spec is ambiguous and reading more files won't resolve it. Include the choice you'd default to so the orchestrator can say "yes."
-- **pc_ask_user** — a design / trade-off call only the human can make.
+- **pc_ask_orchestrator** — spec is ambiguous and reading more files won't resolve it. Include the choice you'd default to so the orchestrator can say "yes." If it's a design / trade-off call only the human can make, say so in the question — the orchestrator will take it to them.
 - **pc_request_approval** — before destructive operations (deleting files, bulk renames, schema migrations, force-pushes). Routine edits don't need approval.
 
 ## File operations
@@ -983,8 +978,7 @@ const EXTRACTOR_PROMPT = `You are an extractor. The orchestrator dispatches you 
 
 ## When to pause
 
-- **pc_ask_orchestrator** — the schema is missing or ambiguous and you can't infer it.
-- **pc_ask_user** — a value is genuinely ambiguous and only the human can disambiguate (e.g. which of two matching records is "the" customer).
+- **pc_ask_orchestrator** — the schema is missing or ambiguous and you can't infer it. If a value is genuinely ambiguous and only the human can disambiguate (e.g. which of two matching records is "the" customer), say so in the question — the orchestrator will take it to them.
 - **pc_request_approval** — N/A.
 
 ## Output
@@ -1030,7 +1024,6 @@ const RESEARCHER_POD_CONTENT: CreateAgentInput = {
     'WebSearch',
     'mcp__pc-rig__pc_node_failed',
     'mcp__pc-rig__pc_ask_orchestrator',
-    'mcp__pc-rig__pc_ask_user',
     'mcp__pc-rig__pc_request_approval',
     'mcp__pc-rig__pc_knowledge_read',
     // Read sibling cards for context — only the pinned work item is force-merged.
@@ -1061,7 +1054,6 @@ const WRITER_POD_CONTENT: CreateAgentInput = {
     // land long drafts on a linked output work item, so grant it explicitly.
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
-    'mcp__pc-rig__pc_ask_user',
     'mcp__pc-rig__pc_request_approval',
   ]),
   model: 'sonnet',
@@ -1088,7 +1080,6 @@ const REVIEWER_POD_CONTENT: CreateAgentInput = {
     // land long notes on a linked output work item, so grant it explicitly.
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
-    'mcp__pc-rig__pc_ask_user',
     'mcp__pc-rig__pc_request_approval',
   ]),
   model: 'sonnet',
@@ -1114,7 +1105,6 @@ const PLANNER_POD_CONTENT: CreateAgentInput = {
     // land long plans on a linked output work item, so grant it explicitly.
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
-    'mcp__pc-rig__pc_ask_user',
     'mcp__pc-rig__pc_request_approval',
   ]),
   model: 'opus',
@@ -1174,7 +1164,6 @@ const CAISSON_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_list_workflows',
     'mcp__pc-rig__pc_knowledge_read',
     'mcp__pc-rig__pc_ask_orchestrator',
-    'mcp__pc-rig__pc_ask_user',
     'mcp__pc-rig__pc_request_approval',
     'mcp__pc-rig__pc_create_workflow',
     'mcp__pc-rig__pc_update_workflow',
@@ -1215,7 +1204,6 @@ const CODE_WRITER_POD_CONTENT: CreateAgentInput = {
     // may land change summaries on a linked output work item, so grant it.
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
-    'mcp__pc-rig__pc_ask_user',
     'mcp__pc-rig__pc_request_approval',
   ]),
   model: 'sonnet',
@@ -1241,7 +1229,6 @@ const EXTRACTOR_POD_CONTENT: CreateAgentInput = {
     // may land large JSON on a linked output work item, so grant it explicitly.
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
-    'mcp__pc-rig__pc_ask_user',
     'mcp__pc-rig__pc_request_approval',
   ]),
   model: 'sonnet',

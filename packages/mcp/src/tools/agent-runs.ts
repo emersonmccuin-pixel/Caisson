@@ -278,12 +278,11 @@ export async function handleAgentRunTool(
       }
     }
 
+    // ☠ M7 (FD-6, 2026-06-04) — `pc_ask_user` case deleted: ONE ask door.
     case 'pc_ask_orchestrator':
-    case 'pc_ask_user':
     case 'pc_request_approval': {
       const toolName = name;
       const isApproval = toolName === 'pc_request_approval';
-      const isAskUser = toolName === 'pc_ask_user';
       const promptField = isApproval ? 'decision' : 'question';
       const promptValue =
         typeof args[promptField] === 'string' ? (args[promptField] as string).trim() : '';
@@ -318,11 +317,7 @@ export async function handleAgentRunTool(
           isError: true,
         };
       }
-      const kind: 'orchestrator' | 'user' | 'approval' = isApproval
-        ? 'approval'
-        : isAskUser
-          ? 'user'
-          : 'orchestrator';
+      const kind: 'orchestrator' | 'approval' = isApproval ? 'approval' : 'orchestrator';
       const payload: Record<string, unknown> = {
         agentRunId: ctx.agentRunId,
         kind,

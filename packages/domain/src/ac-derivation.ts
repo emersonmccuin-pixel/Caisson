@@ -133,10 +133,11 @@ function deriveActionV2(
   const preds: AcceptancePredicateV2[] = [
     { kind: 'tool_called', name: spec.tool, ...(spec.min_count ? { min_count: spec.min_count } : {}) },
   ];
-  // pc_ask_user leaves a durable pending-ask row — assert that too, so an
+  // The ask tools leave a durable pending-ask row — assert that too, so an
   // agent that merely emits the tool_use frame without the side-effect landing
-  // still fails.
-  if (/ask_user/.test(spec.tool)) {
+  // still fails. M7 (FD-6): ☠ pc_ask_user; the surviving ask doors
+  // (pc_ask_orchestrator · pc_request_approval) both write pending_asks.
+  if (/ask_orchestrator|request_approval/.test(spec.tool)) {
     preds.push({ kind: 'pending_ask_created' });
   }
   return preds;

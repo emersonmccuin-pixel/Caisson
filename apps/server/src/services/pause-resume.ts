@@ -2,7 +2,7 @@
 //
 // Three primitives the v2 MCP tool surface (Session 9) calls into:
 //
-//   recordExplicitPause   — pc_ask_orchestrator / pc_ask_user /
+//   recordExplicitPause   — pc_ask_orchestrator /
 //                              pc_request_approval tool fires. Writes
 //                              pending_asks_v2 + flips AgentRun → paused +
 //                              persists `paused` to agent_runs_v2 + delivers
@@ -200,7 +200,6 @@ export async function recordExplicitPause(
   // Deliver the agent-asks-* event to the dispatcher session.
   const kindMap: Record<PendingAskKind, AgentInboxEventKind> = {
     orchestrator: 'agent-asks-orchestrator',
-    user: 'agent-asks-user',
     approval: 'agent-approval-request',
   };
   const eventKind = kindMap[input.kind];
@@ -684,10 +683,6 @@ function buildPauseEventBody(args: PauseEventBodyArgs): string {
   switch (args.eventKind) {
     case 'agent-asks-orchestrator':
       lines.push('Question:');
-      lines.push(args.promptBody);
-      break;
-    case 'agent-asks-user':
-      lines.push('Question for the user:');
       lines.push(args.promptBody);
       break;
     case 'agent-approval-request':

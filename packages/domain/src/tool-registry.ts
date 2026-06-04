@@ -1448,45 +1448,22 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_ask_orchestrator",
     "family": "agent-run",
     "label": "Ask the orchestrator",
-    "description": "Pause your run and ask the dispatcher a question. Returns `{ ok, pendingAskId, status: 'waiting' }` immediately; the answer arrives as the next user message when your session resumes via --resume. After calling, do not call any other tools and end your turn naturally. Requires `PC_AGENT_RUN_ID` + `PC_DISPATCHER_SESSION_ID` in env (set by the spawn path).",
-    "catalogDescription": "Pause and ask the project orchestrator a question.",
+    "description": "THE ask door (FD-6): pause your run and ask the orchestrator a question. Returns `{ ok, pendingAskId, status: 'waiting' }` immediately; the answer arrives as the next user message when your session resumes via --resume. After calling, do not call any other tools and end your turn naturally. The orchestrator answers from project context, or takes the question to the human and relays — if only the human can decide (taste, priority, factual call you can't verify), SAY SO in the question. Multi-choice `options` array supported. Requires `PC_AGENT_RUN_ID` + `PC_DISPATCHER_SESSION_ID` in env (set by the spawn path).",
+    "catalogDescription": "Pause and ask the orchestrator a question (it answers or relays to the human).",
     "inputSchema": {
       "type": "object",
       "properties": {
         "question": {
           "type": "string",
-          "description": "the question to ask the orchestrator"
+          "description": "the question to ask. If only the human can decide, say so explicitly."
         },
         "context": {
           "type": "string",
           "description": "optional context — recent transcript snippet, files inspected, candidate options"
-        }
-      },
-      "required": [
-        "question"
-      ]
-    }
-  },
-  {
-    "name": "pc_ask_user",
-    "family": "agent-run",
-    "label": "Ask the user",
-    "description": "Pause your run and route a question to the user via the orchestrator-as-proxy. Returns `{ ok, pendingAskId, status: 'waiting' }` immediately; the answer arrives as the next user message when your session resumes. After calling, do not call any other tools and end your turn naturally. Use this when the question genuinely needs the human; use `pc_ask_orchestrator` first if the orchestrator might know from project context. Multi-choice `options` array supported.",
-    "catalogDescription": "Pause and ask the human user a question (via orchestrator).",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "question": {
-          "type": "string",
-          "description": "the question to surface to the user"
-        },
-        "context": {
-          "type": "string",
-          "description": "optional context — what you tried, why you need the user"
         },
         "options": {
           "type": "array",
-          "description": "optional multi-choice options ([{value, label}, ...]). When supplied, the orchestrator renders them as a numbered list; the user reply will be one of the option values.",
+          "description": "optional multi-choice options ([{value, label}, ...]). When supplied, the answerer sees them as a numbered list; the reply will be one of the option values.",
           "items": {
             "type": "object",
             "properties": {
@@ -1786,7 +1763,8 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_write_claude_md: 'on-demand',
   // Worker-side — these flow INTO the orchestrator from dispatched agents.
   pc_ask_orchestrator: 'worker',
-  pc_ask_user: 'worker',
+  // ☠ M7 (FD-6, 2026-06-04) — `pc_ask_user` deleted: ONE ask door. Agents ask
+  // the orchestrator; it answers from context or takes it to the human in chat.
   pc_request_approval: 'worker',
   pc_node_failed: 'worker',
   pc_submit_deliverable: 'worker',

@@ -98,7 +98,7 @@ export function hasOpenPendingAskForRun(agentRunId: ULID): boolean {
 
 /** Slice 014b — true iff this run EVER created a pending-ask (any status).
  *  Powers the `pending_ask_created` verification predicate: a contract whose
- *  acceptance requires "your first action MUST be pc_ask_user" is satisfied by
+ *  acceptance requires "your first action MUST be pc_ask_orchestrator" is satisfied by
  *  a durable pending-ask row, even after it's been answered (status flips to
  *  `answered` on resume). Unlike `hasOpenPendingAskForRun` this does NOT filter
  *  on `status='open'`. */

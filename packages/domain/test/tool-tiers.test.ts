@@ -33,7 +33,6 @@ test('the door tools are first-order and never reach themselves', () => {
 test('worker-side comms tools are never on-demand', () => {
   for (const name of [
     'pc_ask_orchestrator',
-    'pc_ask_user',
     'pc_request_approval',
     'pc_node_failed',
     'pc_submit_deliverable',

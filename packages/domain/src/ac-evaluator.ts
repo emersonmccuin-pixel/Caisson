@@ -36,8 +36,8 @@ export interface EvaluationContext {
   /** Tool-call names from the producing run's transcript. Powers `tool_called`.
    *  Default []. */
   toolCalls?: ReadonlyArray<{ name: string }>;
-  /** True when the run created a durable pending-ask (pc_ask_user). Powers
-   *  `pending_ask_created`. Default false. */
+  /** True when the run created a durable pending-ask (pc_ask_orchestrator /
+   *  pc_request_approval). Powers `pending_ask_created`. Default false. */
   pendingAskCreated?: boolean;
   /** The captured payload deliverable's data. Validated by `schema_valid`. */
   payload?: unknown;
@@ -273,7 +273,7 @@ function evalToolCalled(
 
 function evalPendingAskCreated(ctx: EvaluationContext): { pass: boolean; reason?: string } {
   if (ctx.pendingAskCreated === true) return { pass: true };
-  return { pass: false, reason: 'no pending ask (pc_ask_user) was created' };
+  return { pass: false, reason: 'no pending ask was created' };
 }
 
 function evalExternalHandlePresent(ctx: EvaluationContext): { pass: boolean; reason?: string } {

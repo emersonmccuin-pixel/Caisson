@@ -130,13 +130,13 @@ export interface AgentRunRow {
   rev: number;
 }
 
-/** Pending-ask kind. Matches the agent-system glossary (`orchestrator` / `user`
- *  / `approval`). */
-export type PendingAskKind = 'orchestrator' | 'user' | 'approval';
+/** Pending-ask kind. ☠ M7 (FD-6, 2026-06-04) — `'user'` deleted with
+ *  `pc_ask_user`: ONE ask door, agents only ask the orchestrator. Historical
+ *  rows with `kind='user'` may exist in old DBs; reads stay tolerant. */
+export type PendingAskKind = 'orchestrator' | 'approval';
 
 export const PENDING_ASK_KINDS: readonly PendingAskKind[] = [
   'orchestrator',
-  'user',
   'approval',
 ];
 
@@ -158,7 +158,8 @@ export interface PendingAskRow {
   kind: PendingAskKind;
   promptBody: string;
   context: string | null;
-  /** Multi-choice for `approval` (always populated) and optional for `user`. */
+  /** Multi-choice for `approval` (always populated) and optional for
+   *  `orchestrator` asks. */
   options: PendingAskOption[] | null;
   status: PendingAskStatus;
   answerBody: string | null;
@@ -170,10 +171,9 @@ export interface PendingAskRow {
 
 /** Inbox event-kind set. Superset of the wire `AgentChannelEventKind` —
  *  adds `agent-run-changed` + `agent-jsonl-event` for Activity Panel
- *  consumers + splits `agent-asks-orchestrator` + `agent-asks-user`. */
+ *  consumers. ☠ M7 (FD-6) — `agent-asks-user` deleted with `pc_ask_user`. */
 export type AgentInboxEventKind =
   | 'agent-asks-orchestrator'
-  | 'agent-asks-user'
   | 'agent-approval-request'
   | 'agent-completed'
   | 'agent-failed'
@@ -183,7 +183,6 @@ export type AgentInboxEventKind =
 
 export const AGENT_INBOX_EVENT_KINDS: readonly AgentInboxEventKind[] = [
   'agent-asks-orchestrator',
-  'agent-asks-user',
   'agent-approval-request',
   'agent-completed',
   'agent-failed',

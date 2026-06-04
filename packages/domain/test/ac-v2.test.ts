@@ -43,14 +43,14 @@ test('report_contains reads the report, not the body', async () => {
 });
 
 test('tool_called passes only when the tool appears enough times', async () => {
-  const crit: AcceptanceCriteria = [{ kind: 'tool_called', name: 'pc_ask_user', min_count: 2 }];
+  const crit: AcceptanceCriteria = [{ kind: 'tool_called', name: 'pc_ask_orchestrator', min_count: 2 }];
   const enough = await evaluateAcceptance(
     crit,
-    ctx({ toolCalls: [{ name: 'pc_ask_user' }, { name: 'x' }, { name: 'pc_ask_user' }] }),
+    ctx({ toolCalls: [{ name: 'pc_ask_orchestrator' }, { name: 'x' }, { name: 'pc_ask_orchestrator' }] }),
     noExec,
   );
   assert.equal(enough.pass, true);
-  const notEnough = await evaluateAcceptance(crit, ctx({ toolCalls: [{ name: 'pc_ask_user' }] }), noExec);
+  const notEnough = await evaluateAcceptance(crit, ctx({ toolCalls: [{ name: 'pc_ask_orchestrator' }] }), noExec);
   assert.equal(notEnough.pass, false);
 });
 
@@ -130,9 +130,12 @@ test('v1 predicates still evaluate identically', async () => {
 
 // ── v2 derivation ───────────────────────────────────────────────────────────
 
-test('action derives tool_called (+ pending_ask_created for ask_user)', () => {
-  const ask = deriveAcceptanceCriteriaV2({ kind: 'action', tool: 'pc_ask_user' });
-  assert.deepEqual(ask, [{ kind: 'tool_called', name: 'pc_ask_user' }, { kind: 'pending_ask_created' }]);
+test('action derives tool_called (+ pending_ask_created for the ask tools)', () => {
+  // M7 (FD-6): pc_ask_user ☠ — the surviving ask doors both leave a durable row.
+  const ask = deriveAcceptanceCriteriaV2({ kind: 'action', tool: 'pc_ask_orchestrator' });
+  assert.deepEqual(ask, [{ kind: 'tool_called', name: 'pc_ask_orchestrator' }, { kind: 'pending_ask_created' }]);
+  const approval = deriveAcceptanceCriteriaV2({ kind: 'action', tool: 'pc_request_approval' });
+  assert.deepEqual(approval, [{ kind: 'tool_called', name: 'pc_request_approval' }, { kind: 'pending_ask_created' }]);
   const other = deriveAcceptanceCriteriaV2({ kind: 'action', tool: 'pc_create_work_item', min_count: 3 });
   assert.deepEqual(other, [{ kind: 'tool_called', name: 'pc_create_work_item', min_count: 3 }]);
 });
@@ -204,13 +207,13 @@ test('KINDS_REQUIRING_EVIDENCE is the side-effect set for fail-closed', () => {
 // ── the verification-defect proof case (unit level) ─────────────────────────
 
 test('PROOF CASE: an action contract whose tool was never called FAILS', async () => {
-  // "your FIRST action MUST be pc_ask_user" → derive the evidence predicates.
-  const crit = deriveAcceptanceCriteriaV2({ kind: 'action', tool: 'pc_ask_user' });
+  // "your FIRST action MUST be pc_ask_orchestrator" → derive the evidence predicates.
+  const crit = deriveAcceptanceCriteriaV2({ kind: 'action', tool: 'pc_ask_orchestrator' });
   // The agent echoed the instruction into the body but never called the tool
   // and no pending-ask landed.
   const result = await evaluateAcceptance(
     crit,
-    ctx({ body: 'your FIRST action MUST be pc_ask_user', toolCalls: [], pendingAskCreated: false }),
+    ctx({ body: 'your FIRST action MUST be pc_ask_orchestrator', toolCalls: [], pendingAskCreated: false }),
     noExec,
   );
   assert.equal(result.pass, false);

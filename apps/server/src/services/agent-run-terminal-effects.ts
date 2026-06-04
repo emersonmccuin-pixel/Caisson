@@ -265,10 +265,10 @@ function captureDeliverable(
   return result;
 }
 
-/** Slice 014b — strip the MCP server prefix (`mcp__pc-rig__pc_ask_user` →
- *  `pc_ask_user`) so the `tool_called` predicate can match on the bare tool
- *  name the orchestrator authored. Non-MCP tool names (Read/Bash/...) pass
- *  through unchanged. */
+/** Slice 014b — strip the MCP server prefix (`mcp__pc-rig__pc_ask_orchestrator`
+ *  → `pc_ask_orchestrator`) so the `tool_called` predicate can match on the
+ *  bare tool name the orchestrator authored. Non-MCP tool names (Read/Bash/...)
+ *  pass through unchanged. */
 function bareToolName(name: string): string {
   if (!name.startsWith('mcp__')) return name;
   const parts = name.split('__');
@@ -278,8 +278,8 @@ function bareToolName(name: string): string {
 /** Slice 014b — production verification evidence loaders. `loadToolCalls` reads
  *  the producing run's CC transcript (the same `AgentRunJsonlTailer` the events
  *  route uses) and surfaces both prefixed + bare tool names so a `tool_called`
- *  predicate matches whether the orchestrator wrote `pc_ask_user` or the full
- *  `mcp__pc-rig__pc_ask_user`. `loadPendingAskCreated` reads the DB (any-status
+ *  predicate matches whether the orchestrator wrote `pc_ask_orchestrator` or
+ *  the full `mcp__pc-rig__pc_ask_orchestrator`. `loadPendingAskCreated` reads the DB (any-status
  *  pending-ask for the run). Injected in production; tests pass their own. */
 function buildProductionVerificationDeps(projectFolderPath: string): VerificationDeps {
   return {

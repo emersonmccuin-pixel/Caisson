@@ -123,9 +123,9 @@ const BY_SLUG = new Map(TOOL_CATALOG.map((e) => [e.slug, e]));
  *  turn" model). The WI-WRITE tools (`pc_update_work_item` /
  *  `pc_attach_to_work_item`) are NO LONGER forced — landing output on a work
  *  item is optional, only when the dispatch has an output-home work item, so a
- *  pod opts into those per its job. `pc_ask_user` stays required: any agent
- *  that hits ambiguity must be able to escalate to the human (and the
- *  host-resume path depends on it).
+ *  pod opts into those per its job. `pc_ask_orchestrator` stays required: any
+ *  agent that hits ambiguity must be able to escalate (one door — the
+ *  orchestrator answers or relays to the human; FD-6).
  *
  *  Enforcement is layered:
  *    1. `createAgent` + `updateAgent` repos union-merge these into the row's
@@ -138,14 +138,14 @@ const BY_SLUG = new Map(TOOL_CATALOG.map((e) => [e.slug, e]));
 export const REQUIRED_AGENT_TOOLS: readonly string[] = [
   'mcp__pc-rig__pc_get_work_item',
   'mcp__pc-rig__pc_submit_deliverable',
-  // Both escalation tools are required so ANY dispatched worker that hits
-  // trouble can reach out: pc_ask_user to the human (host-resume also depends on
-  // it); pc_ask_orchestrator to the orchestrator's project context. A custom pod
-  // can no longer silently lose the ability to ask for help. Conversational /
-  // passthrough pods receive these via the force-merge too, but their prompts
-  // forbid use and the tools hard-error there (no PC_AGENT_* env); exempting
-  // those pods from the merge stays a noted future item.
-  'mcp__pc-rig__pc_ask_user',
+  // THE one escalation door (FD-6, M7): any dispatched worker that hits trouble
+  // asks the orchestrator, which answers from project context or takes the
+  // question to the human in chat and relays. ☠ pc_ask_user deleted — agents
+  // never ask the human directly. A custom pod can no longer silently lose the
+  // ability to ask for help. Conversational / passthrough pods receive this via
+  // the force-merge too, but their prompts forbid use and the tool hard-errors
+  // there (no PC_AGENT_* env); exempting those pods from the merge stays a
+  // noted future item.
   'mcp__pc-rig__pc_ask_orchestrator',
   // M5 (FD-5 addendum + dispatch-payload audit) — the agent can READ ITS JOB:
   // its own contract incl. the acceptance criteria it's verified against, and

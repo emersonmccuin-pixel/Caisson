@@ -48,7 +48,6 @@ export interface WorkItemHistoryEntry {
     | 'update'
     | 'agent-invoke'
     | 'agent-ask-orchestrator'
-    | 'agent-ask-user'
     | 'agent-approval-request'
     | 'agent-answer'
     | 'agent-completed'

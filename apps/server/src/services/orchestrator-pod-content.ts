@@ -87,7 +87,7 @@ pc_invoke_agent({ name, input: "<the task>", expected_output? })
   - \`{ kind: "repo", isolation: "worktree"|"in_place", paths_touched?, checks?, require_diff? }\` — a code change (needs a work item).
   - \`{ kind: "external", system, action, confirm, idempotency_key }\` — an external side-effect (email, ticket).
   - \`{ kind: "binary", artifact_type?, mime?, min_size_bytes? }\` — a generated file (diagram, export).
-  - \`{ kind: "action", tool, min_count?, before_end_turn? }\` — a required tool call (e.g. the agent MUST call \`pc_ask_user\`).
+  - \`{ kind: "action", tool, min_count?, before_end_turn? }\` — a required tool call (e.g. the agent MUST call \`pc_ask_orchestrator\`).
 
 Most of the time, omit \`expected_output\` and let the pod default apply.
 
@@ -214,8 +214,7 @@ When a turn starts with one of these, it is NOT the user — it is the runtime r
 
 Carry \`[pendingAskId: ...]\`, \`[sessionId: ...]\`, \`[agentName: ...]\`, plus optional \`[runId: ...]\` / \`[parentWorkItemId: ...]\`. **Use \`pendingAskId\` when answering** — it pins both the run and the specific question.
 
-- \`agent-asks-orchestrator\` — paused agent asking you. If you can answer from project context, \`pc_answer_pending({ pendingAskId, answer, answeredBy: "orchestrator" })\`. If not, surface to the user; on their reply, \`pc_answer_pending({ ..., answeredBy: "user" })\`.
-- \`agent-asks-user\` — paused agent asking the user, with you as proxy. Surface in plain English (render any \`Options:\` block as labeled choices). When the user replies, \`pc_answer_pending({ ..., answeredBy: "user" })\`. **Don't answer on the user's behalf — the agent specifically wants the human.**
+- \`agent-asks-orchestrator\` — paused agent asking you (THE one ask door — agents cannot ask the human directly). Triage: if you can answer from project context, \`pc_answer_pending({ pendingAskId, answer, answeredBy: "orchestrator" })\`. If the agent flags the question as one only the human can decide — or it's a taste / priority / judgment call — take it to the user in plain English (render any \`Options:\` block as labeled choices) and on their reply \`pc_answer_pending({ ..., answeredBy: "user" })\`. **Don't answer human-flagged questions on the user's behalf.**
 - \`agent-approval-request\` — paused agent requesting human approval (typically destructive / irreversible / expensive). Surface the decision + trade-offs. On the user's reply, \`pc_answer_pending({ ..., answeredBy: "user" })\`. **Don't approve on their behalf, even when the answer seems obvious.**
 - \`agent-completed\` — background dispatch finished. Start a new turn surfacing the result with enough context that the user remembers what was asked ("Earlier you asked me to look into X — researcher came back: …"). No tool call **unless** the envelope carries a verification tag — see "Verifying agent work" below.
 - \`agent-failed\` — background dispatch failed (\`cause: timeout\` / \`cancelled\` / \`unknown-agent\` / \`spawn-failed\` / \`error\`). Surface the failure summary + suggested next step (retry / drop / hand-write). No tool call.
@@ -335,7 +334,7 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
   // Workflows tab), agent create/edit/delete + knowledge management (→
   // agent-designer + Agents tab), secrets / MCP-server config / audit (→
   // Agents tab), worktrees (workflow runtime context), and the worker-side
-  // comms tools (`pc_ask_orchestrator` / `pc_ask_user` /
+  // comms tools (`pc_ask_orchestrator` /
   // `pc_request_approval` / `pc_node_failed` — those flow
   // INTO the orchestrator from agents; it answers via `pc_answer_pending`).
   //

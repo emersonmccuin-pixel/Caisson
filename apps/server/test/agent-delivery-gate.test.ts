@@ -63,7 +63,6 @@ test('enqueues an orchestrator-session + orchestrator-turn message with the stab
 test('message-kind mapping: asks ⟹ agent-question, approval ⟹ agent-approval, terminal ⟹ agent-terminal', () => {
   const cases: Array<[DeliverAgentEnvelopeInput['kind'], string]> = [
     ['agent-asks-orchestrator', 'agent-question'],
-    ['agent-asks-user', 'agent-question'],
     ['agent-approval-request', 'agent-approval'],
     ['agent-completed', 'agent-terminal'],
     ['agent-failed', 'agent-terminal'],
@@ -103,7 +102,6 @@ test('idempotency key is stable per event (re-fire enqueues with the SAME key)',
 test('M4a: an ASK from a synthetic dispatcher falls back to active-orchestrator', () => {
   for (const kind of [
     'agent-asks-orchestrator',
-    'agent-asks-user',
     'agent-approval-request',
   ] as const) {
     const mb = fakeMailbox();

@@ -199,7 +199,6 @@ export {
 export type {
   AgentApprovalRequestPayload,
   AgentAsksOrchestratorPayload,
-  AgentAsksUserPayload,
   AgentChannelEventKind,
   AgentChannelEventPayload,
   AgentCompletedPayload,
@@ -210,8 +209,6 @@ export type {
   PcAnswerPendingResultOk,
   PcAskOrchestratorInput,
   PcAskOrchestratorResult,
-  PcAskUserInput,
-  PcAskUserResult,
   PcInvokeAgentInput,
   PcInvokeAgentResult,
   PcInvokeAgentResultAsync,

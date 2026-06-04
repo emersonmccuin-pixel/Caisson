@@ -70,8 +70,10 @@ export interface WorkItemHistoryEntry {
     | 'move'
     | 'update'
     | 'agent-invoke'
+    // ☠ M7 (FD-6) — 'agent-ask-user' deleted with pc_ask_user. NOTE: only
+    // 'agent-invoke' has a live writer today (agent-audit.ts); the other
+    // agent-* kinds are read-side tolerance for historical rows.
     | 'agent-ask-orchestrator'
-    | 'agent-ask-user'
     | 'agent-approval-request'
     | 'agent-answer'
     | 'agent-completed'

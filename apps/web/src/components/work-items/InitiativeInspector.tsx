@@ -875,12 +875,6 @@ function renderHistoryEntry(
         actorLabel: entry.agentName ?? 'agent',
         text: entry.note ?? 'Asked orchestrator',
       };
-    case 'agent-ask-user':
-      return {
-        actor: 'agent',
-        actorLabel: entry.agentName ?? 'agent',
-        text: entry.note ?? 'Asked you',
-      };
     case 'agent-approval-request':
       return {
         actor: 'agent',

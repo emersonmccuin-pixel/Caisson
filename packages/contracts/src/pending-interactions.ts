@@ -17,9 +17,10 @@ import {
 } from './live-events.ts';
 import { parseErr, parseOk, type ParseResult, type ULID } from './shared.ts';
 
+// ☠ M7 (FD-6, 2026-06-04) — 'agent-asks-user' deleted with pc_ask_user (never
+// written here: the only live writer is the runtime-hook-ask shadow).
 export const PENDING_INTERACTION_KINDS = [
   'agent-asks-orchestrator',
-  'agent-asks-user',
   'agent-approval-request',
   'workflow-orchestrator-review',
   'workflow-human-review',

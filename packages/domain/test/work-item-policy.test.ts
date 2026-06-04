@@ -10,7 +10,7 @@ test('contract-home kinds require no work item', () => {
   const noHome: ExpectedOutput[] = [
     { kind: 'answer' },
     { kind: 'payload', schema: { type: 'object' } },
-    { kind: 'action', tool: 'pc_ask_user' },
+    { kind: 'action', tool: 'pc_ask_orchestrator' },
     { kind: 'external', system: 'email', action: 'send', confirm: 'always', idempotency_key: 'k' },
     { kind: 'binary' },
   ];

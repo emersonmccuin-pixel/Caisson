@@ -145,6 +145,14 @@ const BANNED_RESURRECTION = [
   'RejectEdge',
   'RetryPolicy',
   'holdForHuman',
+  // M7 (FD-6): ☠ pc_ask_user — ONE ask door. Agents ask the orchestrator
+  // (pc_ask_orchestrator); it answers from project context or takes the
+  // question to the human in chat and relays. The tool, its wire types, and
+  // the agent-asks-user event kind are dead names.
+  'pc_ask_user',
+  'AgentAsksUserPayload',
+  'PcAskUserInput',
+  'PcAskUserResult',
 ];
 const BANNED_RE = new RegExp(String.raw`\b(${BANNED_RESURRECTION.join('|')})\b`, 'g');
 

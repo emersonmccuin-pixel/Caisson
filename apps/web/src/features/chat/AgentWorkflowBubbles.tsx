@@ -150,8 +150,6 @@ function deriveAgentStatus(events: AgentEventEntry[]):
     }
     case 'agent-asks-orchestrator':
       return { text: 'awaiting orchestrator', tone: 'warning' };
-    case 'agent-asks-user':
-      return { text: 'awaiting user', tone: 'warning' };
     case 'agent-approval-request':
       return { text: 'awaiting approval', tone: 'warning' };
     case 'agent-queued-started':
@@ -225,7 +223,6 @@ export function AgentDispatchGroupBubble({
     if (events.length === 0) return null;
     const last = events[events.length - 1]!;
     if (
-      last.kind === 'agent-asks-user' ||
       last.kind === 'agent-asks-orchestrator' ||
       last.kind === 'agent-approval-request'
     ) {
@@ -251,9 +248,7 @@ export function AgentDispatchGroupBubble({
           <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning">
             {promptBlock.kind === 'agent-approval-request'
               ? 'approval requested'
-              : promptBlock.kind === 'agent-asks-user'
-                ? 'awaiting user'
-                : 'awaiting orchestrator'}
+              : 'awaiting orchestrator'}
           </div>
           <div className="whitespace-pre-wrap text-xs text-foreground">
             {promptBlock.text}

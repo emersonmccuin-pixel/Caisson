@@ -218,7 +218,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
 
   // OBJ-2A — on-demand host level-read for the pause gate. Refreshes the host's
   // run cache (the same `list-runs` primitive the reconcile sweep uses) then
-  // re-reads THIS run, so an immediate `pc_ask_user` decides from authority
+  // re-reads THIS run, so an immediate `pc_ask_orchestrator` decides from authority
   // instead of waiting up to 15s for the next sweep tick. Only meaningful when
   // a host client exists; the pause call wires it conditionally.
   const hostRunStateReader = async (id: ULID): Promise<AgentRunState | null> => {
@@ -783,7 +783,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
   });
 
   /** Single pending-ask creation endpoint for `pc_ask_orchestrator` /
-   *  `pc_ask_user` / `pc_request_approval`. */
+   *  `pc_request_approval`. ☠ M7 (FD-6) — `kind:'user'` rejected: ONE ask
+   *  door, agents only ask the orchestrator. */
   app.post('/api/projects/:projectId/agent-pending-asks', async (c) => {
     const projectId = c.req.param('projectId') as ULID;
     const project = getProjectById(projectId);
@@ -802,9 +803,9 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     if (!agentRunId) return c.json({ ok: false, error: 'agentRunId required' }, 400);
 
     const kind = body.kind;
-    if (kind !== 'orchestrator' && kind !== 'user' && kind !== 'approval') {
+    if (kind !== 'orchestrator' && kind !== 'approval') {
       return c.json(
-        { ok: false, error: 'kind must be orchestrator | user | approval' },
+        { ok: false, error: 'kind must be orchestrator | approval' },
         400,
       );
     }

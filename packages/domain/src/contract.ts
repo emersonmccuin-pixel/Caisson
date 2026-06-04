@@ -143,7 +143,7 @@ export type AcceptancePredicate =
   | { kind: 'git_diff_nonempty'; cwd?: 'worktree' | 'project' } // repo
   | { kind: 'external_handle_present' } // external
   | { kind: 'tool_called'; name: string; min_count?: number } // action — reads the run transcript
-  | { kind: 'pending_ask_created' } // action — durable side-effect of pc_ask_user
+  | { kind: 'pending_ask_created' } // action — durable side-effect of the ask tools
   | { kind: 'report_contains'; pattern: string; regex?: boolean }; // answer (report text, not WI body)
 
 export const ACCEPTANCE_PREDICATE_KINDS = [

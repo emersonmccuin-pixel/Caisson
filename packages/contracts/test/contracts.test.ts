@@ -78,7 +78,7 @@ const expectedOutputs: ExpectedOutput[] = [
     verify_handle: true,
   },
   { kind: 'binary', artifact_type: 'diagram', mime: 'image/png', min_size_bytes: 100 },
-  { kind: 'action', tool: 'pc_ask_user', min_count: 1, before_end_turn: true },
+  { kind: 'action', tool: 'pc_ask_orchestrator', min_count: 1, before_end_turn: true },
 ];
 
 test('every ExpectedOutput kind round-trips on the Contract DTO', () => {
@@ -97,7 +97,7 @@ const deliverables: Deliverable[] = [
   { kind: 'repo', branch: 'feat/x', commit: 'abc', diffStat: { files: 1, insertions: 2, deletions: 0 }, prUrl: 'http://pr' },
   { kind: 'external', system: 'email', handle: 'msg-1', idempotencyKey: 'k1', url: 'http://m' },
   { kind: 'binary', attachmentId: 'a2', mime: 'image/png', bytes: 1024 },
-  { kind: 'action', tool: 'pc_ask_user', count: 1 },
+  { kind: 'action', tool: 'pc_ask_orchestrator', count: 1 },
 ];
 
 test('every Deliverable kind round-trips on the Contract DTO', () => {

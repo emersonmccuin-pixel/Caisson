@@ -355,7 +355,6 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
 // Human label for each agent-event kind, shown on the collapsed pill.
 const AGENT_EVENT_LABELS: Record<string, string> = {
   'agent-asks-orchestrator': 'asks a question',
-  'agent-asks-user': 'asks you',
   'agent-approval-request': 'requests approval',
   'agent-completed': 'finished',
   'agent-failed': 'failed',

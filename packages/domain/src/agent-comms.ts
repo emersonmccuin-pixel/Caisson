@@ -1,20 +1,23 @@
 // Section 16b — Agent comms primitives (contract layer).
 //
-// Five MCP tools (`pc_invoke_agent`, `pc_ask_orchestrator`, `pc_ask_user`,
-// `pc_request_approval`, `pc_answer_pending`) + six channel-event kinds
-// (`agent-asks-orchestrator`, `agent-asks-user`, `agent-approval-request`,
-// `agent-completed`, `agent-failed`, `agent-queued-started`). Persisted
-// pause-state shapes live in `agent-system.ts` (the `agent_runs` /
-// `pending_asks` / `agent_inbox` / `agent_delivery_audit` rows).
+// Four MCP tools (`pc_invoke_agent`, `pc_ask_orchestrator`,
+// `pc_request_approval`, `pc_answer_pending`) + five channel-event kinds
+// (`agent-asks-orchestrator`, `agent-approval-request`, `agent-completed`,
+// `agent-failed`, `agent-queued-started`). Persisted pause-state shapes live
+// in `agent-system.ts` (the `agent_runs` / `pending_asks` rows).
+//
+// ☠ M7 (FD-6, 2026-06-04) — `pc_ask_user` + `agent-asks-user` deleted: ONE ask
+// door. Agents ask the orchestrator; it answers from project context or takes
+// the question to the human in chat and relays (`answeredBy: 'user'`).
 //
 // Pause semantics (locked in Planning 2026-05-20; M5 sync-invoke DELETE):
 // - `pc_invoke_agent` is NOT a pause kind. The call returns immediately and an
 //   `agent-completed` / `agent-failed` event lands on the caller's stream when
 //   the child finishes. (☠ the never-wired `wait: true` blocking mode.)
-// - `pc_ask_orchestrator` / `pc_ask_user` / `pc_request_approval` ARE pause
-//   kinds. Tool returns a pending-ask handle; the agent's process exits
-//   cleanly at turn end; runtime re-spawns with `--resume <sessionId>` once
-//   the answer lands and writes the answer as the next user message.
+// - `pc_ask_orchestrator` / `pc_request_approval` ARE pause kinds. Tool
+//   returns a pending-ask handle; the agent's process exits cleanly at turn
+//   end; runtime re-spawns with `--resume <sessionId>` once the answer lands
+//   and writes the answer as the next user message.
 // - `pc_answer_pending` is the orchestrator's tool to resume a paused agent.
 
 import type { ULID } from './ulid.ts';
@@ -28,16 +31,12 @@ export interface PendingAskOption {
 
 // ─── Channel-event kinds (`agent-*` envelope on `<channel ...>` blocks) ───
 
-/** Event kinds the orchestrator parses out of `<channel ...>` blocks. Five
- *  originate from a child agent (the asks / approval / terminal trio plus
- *  the two terminal events); `agent-queued-started` originates from PC
- *  itself (Section 18.7) when a previously-queued dispatch finally fires.
- *  All ride the existing channel-server forwarder — agent processes register
- *  against `/channel-register` exactly like the per-project orchestrator does;
- *  PC-originated events emit directly through `enqueueAndPush`. */
+/** Event kinds the orchestrator parses out of `<channel ...>` blocks. Four
+ *  originate from a child agent (ask / approval + the two terminal events);
+ *  `agent-queued-started` originates from PC itself (Section 18.7) when a
+ *  previously-queued dispatch finally fires. */
 export type AgentChannelEventKind =
   | 'agent-asks-orchestrator'
-  | 'agent-asks-user'
   | 'agent-approval-request'
   | 'agent-completed'
   | 'agent-failed'
@@ -45,7 +44,6 @@ export type AgentChannelEventKind =
 
 export const AGENT_CHANNEL_EVENT_KINDS: readonly AgentChannelEventKind[] = [
   'agent-asks-orchestrator',
-  'agent-asks-user',
   'agent-approval-request',
   'agent-completed',
   'agent-failed',
@@ -63,21 +61,12 @@ interface AgentEventCommon {
   at: number;
 }
 
-/** A paused agent asking the orchestrator. Orchestrator's handler protocol
- *  entry #1: read question + context, answer via `pc_answer_pending` if
- *  context-known, else escalate via `pc_ask_user`. */
+/** A paused agent asking the orchestrator — THE ask door (FD-6).
+ *  Orchestrator's handler protocol: read question + context, answer via
+ *  `pc_answer_pending` if context-known; if only the human can decide, ask
+ *  the human in chat and relay (`answeredBy: 'user'`). */
 export interface AgentAsksOrchestratorPayload extends AgentEventCommon {
   kind: 'agent-asks-orchestrator';
-  pendingAskId: ULID;
-  question: string;
-  context: string | null;
-}
-
-/** A paused agent asking the user (delivered via orchestrator-as-proxy).
- *  Orchestrator's handler protocol entry #2: render via chat surfaces;
- *  forward the user's reply via `pc_answer_pending`. */
-export interface AgentAsksUserPayload extends AgentEventCommon {
-  kind: 'agent-asks-user';
   pendingAskId: ULID;
   question: string;
   context: string | null;
@@ -130,7 +119,6 @@ export interface AgentFailedPayload extends AgentEventCommon {
 
 export type AgentChannelEventPayload =
   | AgentAsksOrchestratorPayload
-  | AgentAsksUserPayload
   | AgentApprovalRequestPayload
   | AgentCompletedPayload
   | AgentFailedPayload;
@@ -176,33 +164,18 @@ export interface PcInvokeAgentResultError {
 
 // pc_ask_orchestrator ─────────────────────────────────────────────────────
 
-/** `pc_ask_orchestrator` — pause-and-ask. Tool returns a pending-ask
- *  handle; the agent ends its turn naturally; runtime resumes via
+/** `pc_ask_orchestrator` — THE pause-and-ask door (FD-6). Tool returns a
+ *  pending-ask handle; the agent ends its turn naturally; runtime resumes via
  *  `--resume <sessionId>` once `pc_answer_pending` lands the answer, and
- *  writes the answer as the next user message. */
+ *  writes the answer as the next user message. `options` (inherited from the
+ *  deleted `pc_ask_user`) renders as a numbered list for the answerer. */
 export interface PcAskOrchestratorInput {
-  question: string;
-  context?: string;
-}
-
-export interface PcAskOrchestratorResult {
-  ok: true;
-  pendingAskId: ULID;
-  status: 'waiting';
-}
-
-// pc_ask_user ─────────────────────────────────────────────────────────────
-
-/** `pc_ask_user` — pause-and-ask routed through orchestrator-as-proxy.
- *  Same pause semantics as `pc_ask_orchestrator`; the orchestrator renders
- *  the question via the existing chat surfaces. */
-export interface PcAskUserInput {
   question: string;
   context?: string;
   options?: PendingAskOption[];
 }
 
-export interface PcAskUserResult {
+export interface PcAskOrchestratorResult {
   ok: true;
   pendingAskId: ULID;
   status: 'waiting';

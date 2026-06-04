@@ -135,11 +135,11 @@ test('contract with no expected output kind accepts any deliverable kind', async
   const res = await app.request(`/api/projects/${p.id}/agent-runs/${runId}/deliverable`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ deliverable: { kind: 'action', tool: 'pc_ask_user', count: 1 } }),
+    body: JSON.stringify({ deliverable: { kind: 'action', tool: 'pc_ask_orchestrator', count: 1 } }),
   });
   assert.equal(res.status, 200);
   const updated = getContract(contract.id as ULID);
-  assert.deepEqual(updated!.deliverable, { kind: 'action', tool: 'pc_ask_user', count: 1 });
+  assert.deepEqual(updated!.deliverable, { kind: 'action', tool: 'pc_ask_orchestrator', count: 1 });
 });
 
 test('submission-gated capture: a submitted deliverable is NOT overwritten by wi.body', () => {
@@ -268,7 +268,7 @@ test('hasPendingAskForRun is any-status (open AND answered), unlike hasOpenPendi
     agentRunId: runId,
     ccSessionId: 'cc-pending',
     projectId: p.id as ULID,
-    kind: 'user',
+    kind: 'orchestrator',
     promptBody: 'need input',
     now: Date.now(),
   });

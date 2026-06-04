@@ -76,19 +76,30 @@ test('pc_ask_orchestrator success: emits raw body; posts pending-ask', async () 
   });
 });
 
-test('pc_ask_user with options: kind=user, options forwarded', async () => {
+// M7 (FD-6): ☠ pc_ask_user — options now ride the ONE ask door.
+test('pc_ask_orchestrator with options: options forwarded', async () => {
   const { ctx, calls } = makeFakeContext({ ...BASE, responder: () => ok('{}') });
   await handleAgentRunTool(
-    'pc_ask_user',
+    'pc_ask_orchestrator',
     { question: 'pick', options: [{ value: 'a', label: 'A' }] },
     ctx,
   );
   assert.deepEqual(calls[0].body, {
     agentRunId: 'AR1',
-    kind: 'user',
+    kind: 'orchestrator',
     promptBody: 'pick',
     options: [{ value: 'a', label: 'A' }],
   });
+});
+
+test('pc_ask_user is gone (M7 FD-6): unknown tool returns null', async () => {
+  const { ctx } = makeFakeContext({ ...BASE, responder: () => ok('{}') });
+  const res = await handleAgentRunTool(
+    'pc_ask_user',
+    { question: 'pick' },
+    ctx,
+  );
+  assert.equal(res, null);
 });
 
 test('pc_request_approval success: kind=approval', async () => {

@@ -47,8 +47,7 @@ function mailboxSubjectFor(kind: AgentInboxEventKind, slug: string): string | nu
     case 'agent-completed':       return `Agent ${agent} completed`;
     case 'agent-failed':          return `Agent ${agent} failed`;
     case 'agent-queued-started':  return `Agent ${agent} started`;
-    case 'agent-asks-orchestrator':
-    case 'agent-asks-user':       return `Agent ${agent} is asking a question`;
+    case 'agent-asks-orchestrator': return `Agent ${agent} is asking a question`;
     case 'agent-approval-request': return `Agent ${agent} needs approval`;
     default:                      return `Agent ${agent}`;
   }
@@ -57,7 +56,6 @@ function mailboxSubjectFor(kind: AgentInboxEventKind, slug: string): string | nu
 function mailboxMessageKindFor(kind: AgentInboxEventKind): MailboxMessageKind {
   switch (kind) {
     case 'agent-asks-orchestrator':
-    case 'agent-asks-user':
       return 'agent-question';
     case 'agent-approval-request':
       return 'agent-approval';
@@ -90,7 +88,6 @@ export interface DeliverAgentEnvelopeDeps {
  *  orchestrator IS (or next becomes) active for the project. */
 const ASK_KINDS: ReadonlySet<AgentInboxEventKind> = new Set([
   'agent-asks-orchestrator',
-  'agent-asks-user',
   'agent-approval-request',
 ]);
 
