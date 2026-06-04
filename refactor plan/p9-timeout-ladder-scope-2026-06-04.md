@@ -91,13 +91,29 @@ still `running` with no submitted deliverable and no pending ask**:
 - **C — nudge:** turn-end-without-deliverable detector in the host-event apply path; strike
   state; tests (nudge once, second-strike notify, ask-in-flight suppresses).
 
-## Verification (live)
+## Verification — RESULTS (live, 2026-06-04, all on the dev stack)
 
-1. Marco-class degenerate task → expect nudge in transcript → deliverable → completed (was: 300s death).
-2. Ask roundtrip (workflow-builder style) → answer → no 90s kill; if resume stalls, expect badge+notify, not failure.
-3. Forced quiet (long task) → badge at 3min → ONE `agent-stalled` envelope at 5min → run finishes normally afterward.
-4. Kill claude.exe mid-run → `unexpected-exit` still immediate (no regression from idle-kill deletion).
-5. Suites + typecheck + no-bypass/banned-resurrection gates green.
+1. ✅ **Acceptance workflow** (file-then-review fire→deliver→gate→approve→completed) green on the
+   new code, ~60s e2e.
+2. ✅ **Marco class:** verbatim degenerate task → turn ended bare → `[pc:system
+   kind=deliverable-nudge]` landed (transcript L10) → agent called `pc_submit_deliverable` (L12)
+   → **completed in ~10s** (was: silent death at 300s).
+3. ✅ **The full escalation chain, unscripted:** the 6-min-silence test agent backgrounded its
+   sleep and ended its turn → strike-1 nudge → it checked the job, then did EXACTLY what the
+   nudge says — `pc_ask_orchestrator` → paused (FD-14; ladder skips paused) → strike-2
+   `agent-stalled` escalation row durable in the mailbox (`agent-no-deliverable:<runId>`) →
+   answered the ask → **resume survived** (the S2 killer — twice-fatal at 90s — is gone) →
+   quiet past the 3-min badge window (idle 187s+ observed, run untouched) → delivered →
+   **completed at 365s with `delivered_at` set**. One run exercised nudge + ask + pause + resume
+   + badge-window survival end-to-end.
+4. ✅ **Confirmed-dead still instant:** killed the run's claude.exe mid-essay → `failed /
+   unexpected-exit` within ~2s. Deleting the idle-kill cost nothing here.
+5. ✅ Suites: runtime 41 · server 251 · agent-host 12 · domain 20 · workspace typecheck ·
+   no-bypass + banned-resurrection + ONE-RECONCILER gates green.
+6. ⚪ Rung-2 *silence* notify (5-min quiet → `agent-stalled` w/ last-activity-floor key) not
+   live-fired — no test run stayed quiet that long while running; covered by 8 unit tests
+   (emit-once, episode reset, restart-stable key, paused-skip). Same mailbox door as the
+   live-verified strike-2 row.
 
 ## Out of scope (breadcrumbs)
 
