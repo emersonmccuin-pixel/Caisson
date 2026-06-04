@@ -42,7 +42,7 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 | P6 ✅ | **Step 4 — orchestrator → Engine. DONE 2026-06-04.** Slices 0–3 live-verified incl. packaged: FD-2 shared-HTTP adopted (Slice 0) · persistent-interactive policy (Slice 1) · THE SWAP, ☠ interactive-session.ts (Slice 2) · interrupt/alongside/sessions/packaged gauntlet + interrupt-wedge fix (Slice 3). Scope: `step4-orchestrator-engine-scope-2026-06-04.md`. | Needs P4. | FD-2, FD-18 |
 | P7 ✅ | **Modals DELETE. DONE 2026-06-04** (with S2 same day — handoffs live-verified FIRST: workflow/agent/setup all green through chat). Deleted: 3 modal paths web+server, transient routes, ProjectRuntime transient block, draft store + `pc_save/read_workflow_draft` (53→51 tools), setup-wizard scaffold+template. Banned-resurrection set grew the names. Scope: `s2-authoring-handoffs-scope-2026-06-04.md`. | Deletion, not migration. | FD-21 |
 | P8 ✅ | **Step 6 — converge the primitive. DONE 2026-06-04.** ☠ pty-session.ts whole (PtySession · `terminalBufferLooksReady` banner-regex · stop-marker/events `watchFile` pair · stripAnsi · SessionState) + `TimedBracketedPasteQueue` + dead `AgentRun.reattach` field/lifecycle + `registry.reattach()`. `JsonlReplayMeta`/`Source` rehomed to jsonl-tailer. ONE primitive: LowLevelSpawn+AgentRun · ReadyGate · JsonlTailer · echo-ack. Banned-resurrection grew the names. Live: chat e2e + worker dispatch completed on the converged code. (Bisect note: a smoke "stall" turned out to be the model skipping `pc_submit_deliverable` on a degenerate one-word task — pre-existing compliance edge, logged in FD backlog, NOT a regression.) | Needs P6 + P7 ✅. | FD-12 |
-| P9 | **Step 8 — retire inference; FD-17 timeout ladder.** Idle-kill dies; silence escalates (badge → verify-alive → notify orchestrator → kill only on wall-clock/confirmed-dead). | Needs the one lifecycle (P8) so the ladder is built once. | FD-17 |
+| P9 ✅ | **Step 8 — FD-17 timeout ladder. DONE 2026-06-04.** Silence escalates, never executes: ☠ AgentRun idle-kill (5min) + firstTurn resume watchdog (90s, the S2 ask-killer) + the dead in-process liveness sweep (10min kill; dead code since P2). Ladder in THE reconciler: badge 3min (existed) → verify-alive + ONE `agent-stalled` orchestrator notify 5min (restart-proof idempotency). Event-driven deliverable-skip nudge: turn-end w/o deliverable → marked reminder into the run → 2nd strike ONE escalation (the marco class). Kills only wall-clock (workflow node `timeout` remapped idle→wallClock) or confirmed-dead (`unexpected-exit` ~2s, host-lost). Live: marco nudged→delivered ~10s · nudge steered a waiting agent into a clean `pc_ask_orchestrator` · answer→resume survived (no 90s kill) · mid-run claude.exe kill typed-failed instantly. Scope: `p9-timeout-ladder-scope-2026-06-04.md`. | Needs the one lifecycle (P8) so the ladder is built once. | FD-17 |
 
 ---
 
@@ -80,12 +80,12 @@ Product surface work (Track S) hangs off whichever track unblocks it.
 
 ## The near-term picture (what actually happens next)
 
-**P6 ✅ + S2 ✅ + P7 ✅ + P8 ✅ all closed 2026-06-04.** Authoring flows through the orchestrator
-chat; the modal subsystem is gone; the session primitive is ONE (LowLevelSpawn+AgentRun /
-ReadyGate / JsonlTailer / echo-ack). **Track P remainder: P9 only** (Step 8 — FD-17 timeout
-ladder; the ask-trips-watchdog + deliverable-skip findings both land there). Next candidates,
-parallel-safe: M3 diary-as-truth · M4 mailbox/agent_inbox drop · sync-invoke DELETE · FD-20
-Patterns design pass · P9.
+**TRACK P COMPLETE — Steps 1–8 ALL CLOSED (P9 shipped 2026-06-04).** Authoring flows through
+the orchestrator chat; the modal subsystem is gone; the session primitive is ONE
+(LowLevelSpawn+AgentRun / ReadyGate / JsonlTailer / echo-ack); silence escalates instead of
+executing (FD-17 ladder; the ask-trips-watchdog + deliverable-skip findings both closed).
+Next candidates, parallel-safe: M3 diary-as-truth · M4 mailbox/agent_inbox drop · sync-invoke
+DELETE + wi.body re-scope · FD-20 Patterns design pass.
 
 Next up, parallel-safe, in value order:
 

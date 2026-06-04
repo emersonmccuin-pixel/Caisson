@@ -1,12 +1,12 @@
 # Agent Run Lifecycle & Reconciler
 
 > **Role:** Engine · Brain (cross-cutting today; target = Engine owns processes, Brain owns reconciler)
-> **Status:** as-built snapshot — 2026-06-03
+> **Status:** as-built snapshot — 2026-06-04 (P9 ✅: FD-17 ladder; idle-kill dead)
 > **Code anchors:**
 > `packages/runtime/src/agent-run.ts` · `agent-run-registry.ts`
 > `apps/server/src/services/agent-run-factory.ts` · `agent-active-runs.ts` · `agent-run-terminal-effects.ts`
-> `agent-run-reconciler.ts` · `agent-host-reattach.ts` (☠ Step 2 2026-06-03: `agent-run-boot-reconcile.ts` + `agent-run-server-boot.ts` deleted — boot is the loop's first tick)
-> `agent-run-liveness-sweep.ts` · `agent-run-idle.ts` · `agent-run-settle.ts`
+> `agent-run-reconciler.ts` · `agent-host-reattach.ts` (☠ Step 2 2026-06-03: `agent-run-boot-reconcile.ts` + `agent-run-server-boot.ts` deleted — boot is the loop's first tick; ☠ P9 2026-06-04: `agent-run-liveness-sweep.ts` deleted — dead since P2)
+> `agent-run-idle.ts` · `agent-run-settle.ts` · `agent-run-deliverable-nudge.ts`
 > `agent-run-stall-warn.ts` · `agent-run-control.ts` · `agent-run-writer.ts`
 > `host-connection.ts` · `agent-host-client.ts` · `process-control.ts`
 
@@ -14,7 +14,7 @@
 
 ## What it is (plain English)
 
-Think of this subsystem as **air-traffic control for agent jobs.** When the orchestrator sends an agent to do a task, this machinery takes over: it gives the job a tracking number, queues it if the runway is busy, clears it for takeoff, watches the flight, and closes the record when it lands — whether cleanly (agent delivered its work), by timeout (nothing heard for too long), by crash (process exited unexpectedly), or by cancellation. It is also the system that answers, at any moment: "is that flight still in the air, and has it landed yet?"
+Think of this subsystem as **air-traffic control for agent jobs.** When the orchestrator sends an agent to do a task, this machinery takes over: it gives the job a tracking number, queues it if the runway is busy, clears it for takeoff, watches the flight, and closes the record when it lands — whether cleanly (agent delivered its work), by crash (process exited unexpectedly), by hitting the hard time ceiling, or by cancellation. **Radio silence alone never downs a flight (FD-17, P9):** a quiet agent gets a badge, then the orchestrator gets told — the kill switch only exists for the 2-hour ceiling and confirmed-dead processes. It is also the system that answers, at any moment: "is that flight still in the air, and has it landed yet?"
 
 Today the answer to "alive/done?" comes from **several independent checks** running in parallel, rather than one. That was the root of the stall bug. Step 1 fixed the race so they all write the same answer, even if multiple checks fire. Step 2 (remaining work) consolidates them into one loop.
 
@@ -96,21 +96,25 @@ This is the **Step-1 fix**. Before Step 1, two competing listeners could race. N
 
 `ActiveRunRegistry.onSettled` / `settle` (`agent-active-runs.ts:305,312`) are the wake-up mechanism. The waiter is registered before `start()` (step 3 of dispatch). It fires at most once per run ID. This is what resolves the `done` promise the workflow engine is awaiting. The old per-call `onSettled` callback and the `resolveDone` race are gone.
 
-### 7. Per-run timers — the timeouts that catch stuck jobs
+### 7. Per-run timers — what's left after FD-17 (P9 ✅ 2026-06-04)
 
-Built into each `AgentRun`, these are the typed-failure backstops. They are not sweeps — they are guards on the run's own process:
+**Silence never executes a run anymore.** ☠ The `idle` timer (5 min kill) and the `firstTurn`
+resume watchdog (90 s kill — the S2 ask-roundtrip killer) are DELETED from `AgentRun`
+(banned-resurrection: `armIdleTimer` / `resetIdleTimer` / `armFirstTurnWatchdog`). Quiet runs are
+the reconciler ladder's business (§11). What remains, all positive-receipt or sanctioned:
 
 | Timer | What triggers it | Default |
 |---|---|---|
 | `spawnStuck` | Process didn't finish starting | 2 min |
-| `idle` | No JSONL output for this long | 5 min (resettable per event) |
-| `wallClock` | Total run time | 2 h |
-| `firstTurn` | No first turn on resume | 90 s |
+| `wallClock` | Total run time (the ONE sanctioned timer kill; a workflow node's `timeout` maps here now — "this step may not run longer than X") | 2 h |
 | `cancelGrace` | Cancel requested; process hasn't exited | 5 s |
 
-All fire through `toTerminal()` with their typed cause. These are correct and survive into the target architecture.
+All fire through `toTerminal()` with their typed cause. (`idle-timeout` survives in the
+failure-cause union for pre-P9 rows only — no live writer.)
 
-The **spawn-exit handler** (`onSpawnExit`, agent-run.ts:555) is the sibling to these timers: if the process exits without the run being terminal (and not cancelling/paused), it fires `toTerminal('failed', 'unexpected-exit')`.
+The **spawn-exit handler** (`onSpawnExit`) is the reason deleting the idle-kill was safe: a
+process that DIES is typed `unexpected-exit` immediately, timers or not (live-verified ~2 s).
+Only alive-but-quiet remained, and that's the ladder's job.
 
 ### 8. THE one reconciler — `agent-run-reconciler.ts` (Step 2 ✅ 2026-06-03)
 
@@ -128,22 +132,41 @@ them). Per tick (15 s, the ONLY liveness interval — guard-tested):
   withholds the absence signal, the counters, AND handle registration — nothing can finalize on
   no-information, boot included. Verified live 2026-06-03: a dead host held three seeded rows
   untouched for 5+ minutes; reconnect converged them correctly.
-- **In-process mode** (legacy, P2 deletes): pid-dead → `unexpected-exit`; idle → `idle-timeout`;
-  queued row with no registry entry → `server-restart` after 2 ticks (replaces the bulk-fail);
-  paused never touched.
+- ☠ **In-process mode DELETED (P9 2026-06-04):** it had been dead code since P2 removed the
+  in-process spawn path (index.ts only ever constructed `'host'`). `agent-run-liveness-sweep.ts`
+  (pid-check + 10 min idle-kill + queued-orphan) deleted whole; host mode's spawn-lost counter
+  (8 ticks) already owns the queued-orphan case. One path.
 
-Guards in `apps/server/test/agent-run-reconciler.test.ts`: ONE-RECONCILER (deleted path stays
-deleted, index.ts can't import raw sweeps, one interval owner) · HOLD · PAUSED-SURVIVES ·
-queued-orphan. Spawn-threshold + self-heal cases in `agent-host-reattach.test.ts`.
+Guards in `apps/server/test/agent-run-reconciler.test.ts`: ONE-RECONCILER (deleted paths stay
+deleted — boot-reconcile AND liveness-sweep; index.ts can't import raw sweeps; one interval
+owner) · HOLD. PAUSED-SURVIVES + spawn-threshold + self-heal cases in
+`agent-host-reattach.test.ts`.
 
 ### 9–10. The sweeps — subroutines of the loop, not processes
 
-`sweepAgentRunLiveness` and `reconcileAgentRunsAgainstHost` still exist as functions but are
-callable ONLY from the reconciler (guard-tested). They have no intervals of their own.
+`reconcileAgentRunsAgainstHost` and `sweepStallWarn` still exist as functions but are callable
+ONLY from the reconciler (guard-tested). They have no intervals of their own.
 
-### 11. Stall-warn sweep — the "something looks slow" badge
+### 11. The stall ladder — FD-17 (P9 ✅ 2026-06-04): silence escalates, never executes
 
-`sweepStallWarn` (`agent-run-stall-warn.ts:55`) runs independently and emits a `stalled` badge in the UI when a run passes the warn threshold (default 3 min) without completing. It **never kills** a run — it only feeds the UI. Mode-agnostic.
+`sweepStallWarn` (`agent-run-stall-warn.ts`) is the ladder, run every reconciler tick:
+
+- **Rung 1 (3 min quiet, `PC_AGENT_STALL_WARN_MS`):** `stalled` badge in the UI. Emit-once per
+  episode; clears on any sign of life.
+- **Rung 2 (5 min quiet, `PC_AGENT_STALL_NOTIFY_MS` — the old kill moment):** verify-alive read
+  (last transcript action via the shared `lastJsonlAction`) + ONE durable `agent-stalled` mailbox
+  to the active orchestrator (wait / `pc_inspect_agent_run` / `pc_kill_agent_run`). Idempotency
+  key embeds the episode's last-activity floor — an API restart can't double-notify; new activity
+  starts a fresh episode that may notify again.
+- **No rung kills.** Paused runs (waiting on an ask) are excluded — legitimately idle.
+
+**Sibling, event-driven: the deliverable-skip nudge** (`agent-run-deliverable-nudge.ts`, wired in
+the reconciler's host-event subscription). A live `jsonl-turn-end` on a contract-first run still
+`running` with nothing delivered → strike 1 injects a marked reminder
+(`[pc:system kind=deliverable-nudge] … call pc_submit_deliverable now / pc_ask_orchestrator if
+blocked`); strike 2 → ONE `agent-stalled` escalation; then the orchestrator owns it. Live-proof
+(2026-06-04): the "marco" degenerate task nudged → delivered in ~10 s (was: silent 300 s death);
+a waiting-on-background-job agent was nudged into a clean `pc_ask_orchestrator` pause.
 
 ### 12. The persistent host event listener — live terminal signals
 
@@ -202,13 +225,18 @@ Per `refactor plan/unified-process-supervision-2026-06-02.md` §5–6 and the co
 
 **The stall bug — root cause, fixed in Step 1.** An agent on the host would deliver its work but the workflow `done` promise never resolved, so the card never moved. Root cause: two listeners both subscribed to the host's terminal event for the same run — the per-run factory listener (called `resolveDone` directly, a per-call callback) AND the persistent boot listener. Whichever fired second found no waiter and silently dropped the settlement. The workflow step waited forever. Fix: deleted the per-run listener entirely (~108 lines); settlement moved to `ActiveRunRegistry.settle(runId)`, a run-keyed fire-exactly-once mechanism registered before `start()`. Lesson: *any* "done" handling added outside the one terminal authority will strand runs again.
 
-**Idle timeout fires on legitimate long jobs.** The in-process timer default is 5 min (`agent-run.ts:169`); the liveness sweep uses 10 min (`agent-run-idle.ts:23`). A deep-thinking agent can hit the per-run timer as a false failure. The two thresholds are independent and unsynchronised. Per-dispatch `idleMs` override exists but isn't always set.
+~~**Idle timeout fires on legitimate long jobs.**~~ ✅ **RESOLVED — P9 2026-06-04 (FD-17).** There
+is no idle kill anywhere anymore. The 5 min per-run timer, the 90 s resume watchdog, and the
+10 min in-process sweep kill are all deleted; quiet runs badge at 3 min and notify the
+orchestrator once at 5 min (§11). A workflow node's `timeout` now means a wall-clock ceiling.
+Live-proof: a worker silent for 6+ minutes on a background job survived to a clean pause/resume.
 
 **Sweeps don't structurally hold on unreachable host.** The "only finalize `host-lost` when the host was reachable AND returned an empty list" discipline lives entirely in the caller (`index.ts`), not in the sweep itself. A caller bug could kill fine-but-invisible runs. Step 2 bakes this as a structural invariant.
 
 **Legacy boot path fails paused runs incorrectly.** Legacy mode (no host client) bulk-fails ALL non-terminal rows on restart, including paused runs with a valid open human question. The host-mode path has the paused-run exception; legacy does not. Closes in the Step-2 one-loop merge.
 
-**In-process dispatch branch is dead in production but alive in tests.** `startDispatchedRun` has an `else` branch (`constructAndStart`, no-host-client) that is never reached in a real server but IS reached by unit tests. Both paths must stay in sync until tests move to a host-fake. (Ledger: DELETE in-process branch.)
+~~**In-process dispatch branch is dead in production but alive in tests.**~~ ✅ deleted in P2
+(2026-06-03); the reconciler's in-process MODE + liveness sweep followed in P9 (2026-06-04).
 
 **JSONL path divergence — the historical root of the stall class.** If the server and the host compute the JSONL file path differently, the server-side watcher reads a file the agent never writes, gets no events, and fires the idle timer at 5 min as a false failure. Fixed for host dispatches in `factory.ts:855`: the server computes the authoritative path and sends it to the host; the host must not recompute it.
 

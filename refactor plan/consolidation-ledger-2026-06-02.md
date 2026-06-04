@@ -107,8 +107,8 @@ live/foundational. The genuinely-dead in-process branch is gated behind a test r
 ### Reconcilers / sweeps / registries (target: ONE control loop, all states) — **STEP 2 ✅ DONE (2026-06-03) — `agent-run-reconciler.ts`, live acceptance green**
 | boot reconcile (agent-run-boot-reconcile.ts) | **✅ DELETED** (+ `agent-run-server-boot.ts` + db bulk-fail fns) | HIGH | Boot IS the loop's first tick. The bulk-fail killed paused rows (FD-14) + bypassed the terminal authority — gone. |
 | reconcile-against-host sweep (agent-host-reattach.ts) | **✅ MERGED — loop subroutine** | HIGH | Only the reconciler may call it (guard). HOLD structural; self-healing handle registration any tick; queued/spawning host-lost after 8 ticks (stuck-forever gap closed); paused NEVER. |
-| in-process liveness sweep (agent-run-liveness-sweep.ts) | **✅ MERGED — loop subroutine** | HIGH | Paused never touched (was: paused-without-ask idle-killed). Queued-orphan → `server-restart` after 2 registry-missing ticks. |
-| per-run timers (agent-run.ts) | **KEEP** | HIGH | Local timeout enforcement feeding typed-failure; not a sweep. |
+| in-process liveness sweep (agent-run-liveness-sweep.ts) | **☠ DELETED (P9 2026-06-04)** | HIGH | Was dead code since P2 (only `'host'` mode ever constructed). Host-mode spawn-lost counter owns queued-orphans; the 10min idle-kill died with FD-17. |
+| per-run timers (agent-run.ts) | **✅ CUT DOWN (P9/FD-17 2026-06-04)** | HIGH | ☠ idle-kill (5min) + firstTurn resume watchdog (90s). KEEP: spawn-stuck · wall-clock (node `timeout` maps here now) · cancel-grace · onSpawnExit. Silence = reconciler stall ladder (badge → verify-alive → ONE `agent-stalled` notify), never a kill. |
 | envelope replay (agent-run-terminal-effects.ts:replay…) | **KEEP-as-subroutine** | HIGH | Idempotent notify safety net; rides every tick. |
 | workflow boot reconcile | **✅ CONFIRMED exists** (index.ts; paused skipped) | HIGH | Fail-closed for running/pending stays until M3/S5 (resumable runs). |
 | `ActiveRunRegistry` (agent-active-runs.ts) | **KEEP** | HIGH | Live-run lookup + the run-keyed waiter's home. |
@@ -199,5 +199,7 @@ Each row independently shippable. Risky moves after prereqs. `✅` = code alread
 | 11 | wi.body re-scope | KEEP; document dual purpose | — | $root.output round-trip | low |
 | 12 | workflow events = truth | route `appendEvent` through gateway/live_outbox | slice 3 | EVENTS-ARE-TRUTH | high |
 
-**Ready now (no prereq):** sync-invoke DELETE · wi.body re-scope. (Rows 1–8 ✅ — the whole
-process track Steps 1–7 is closed; Step 8/P9 timeout-ladder is the remaining north-star step.)
+**Ready now (no prereq):** sync-invoke DELETE · wi.body re-scope. (Rows 1–8 ✅ AND Step 8/P9
+timeout-ladder ✅ 2026-06-04 — **the whole north-star process track, Steps 1–8, is CLOSED**.
+P9: ☠ idle-kill + firstTurn watchdog + liveness-sweep; ladder in the reconciler; deliverable
+nudge; live gauntlet green incl. marco-nudge + ask-resume + instant unexpected-exit.)
