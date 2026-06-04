@@ -16,6 +16,8 @@ export interface HttpAgentHostServerOptions {
   host?: string;
   port?: number;
   lockFilePath?: string;
+  /** Graceful-close deadline; past it the close resolves anyway (never hangs). */
+  closeDeadlineMs?: number;
 }
 
 export interface HttpAgentHostServer {
@@ -23,6 +25,28 @@ export interface HttpAgentHostServer {
   server: Server;
   port: number;
   close(): Promise<void>;
+  /** Resolves once the server has shut down — by close() OR a `shutdown
+   *  host-exit` command. The CLI awaits this, then exits the process. */
+  closed: Promise<void>;
+}
+
+// The host's graceful stop was a silent no-op (found live 2026-06-03, FD-15
+// work): `server.close()` waits for open connections, but the API holds a
+// PERSISTENT `/events` stream, so close never completed — the process stayed
+// alive and the lock file stayed. A graceful stop must destroy live sockets
+// and, past a deadline, resolve anyway — it escalates, it never hangs.
+const DEFAULT_CLOSE_DEADLINE_MS = 2_000;
+
+function closeDestroyingStreams(server: Server, deadlineMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const deadline = setTimeout(resolve, deadlineMs);
+    deadline.unref?.();
+    server.close(() => {
+      clearTimeout(deadline);
+      resolve();
+    });
+    server.closeAllConnections();
+  });
 }
 
 export async function startHttpAgentHostServer(
@@ -30,8 +54,25 @@ export async function startHttpAgentHostServer(
 ): Promise<HttpAgentHostServer> {
   const service = options.service ?? new AgentHostService();
   const server = createServer();
+
+  let closeStarted = false;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
+  const requestClose = (): Promise<void> => {
+    if (!closeStarted) {
+      closeStarted = true;
+      void closeDestroyingStreams(
+        server,
+        options.closeDeadlineMs ?? DEFAULT_CLOSE_DEADLINE_MS,
+      ).then(resolveClosed);
+    }
+    return closed;
+  };
+
   server.on('request', (req, res) => {
-    void handleRequest(service, server, req, res);
+    void handleRequest(service, requestClose, req, res);
   });
   if (options.lockFilePath) {
     server.once('close', () => {
@@ -61,19 +102,14 @@ export async function startHttpAgentHostServer(
     service,
     server,
     port: address.port,
-    close: () =>
-      new Promise((resolve, reject) => {
-        server.close((err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      }),
+    close: requestClose,
+    closed,
   };
 }
 
 async function handleRequest(
   service: AgentHostService,
-  server: Server,
+  requestClose: () => Promise<void>,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
@@ -109,9 +145,15 @@ async function handleRequest(
       command.type === 'shutdown' &&
       command.mode === 'host-exit'
     ) {
-      setImmediate(() => {
-        server.close();
-      });
+      // Close destroys live sockets — let THIS response flush to the kernel
+      // first so the caller receives its ok before the teardown.
+      const begin = (): void => {
+        setImmediate(() => {
+          void requestClose();
+        });
+      };
+      if (res.writableFinished) begin();
+      else res.once('finish', begin);
     }
     return;
   }

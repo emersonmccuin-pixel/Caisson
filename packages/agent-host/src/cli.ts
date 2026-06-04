@@ -36,7 +36,10 @@ if (httpLockFile) {
   process.once('SIGTERM', () => {
     void close();
   });
-  await new Promise<void>((resolve) => host.server.once('close', resolve));
+  // `closed` resolves on close() OR a `shutdown host-exit` command, and its
+  // close path destroys live /events sockets with a deadline — so this await
+  // cannot hang on a persistent stream (the shutdown-never-exits bug).
+  await host.closed;
   process.exit(0);
 }
 
