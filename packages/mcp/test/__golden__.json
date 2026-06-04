@@ -1424,6 +1424,46 @@
           "name"
         ]
       }
+    },
+    {
+      "name": "pc_get_contract",
+      "description": "Read YOUR OWN contract mid-run: the expected output spec, the ACCEPTANCE CRITERIA your deliverable will be verified against (so you can self-check BEFORE submitting), the verification tier, your contract status, and the linked work item id. Call this whenever you need to re-check what 'done' means — the dispatch prompt inlines the spec once, but this is the live source. Requires PC_AGENT_RUN_ID (set on every dispatched agent); takes no arguments. Returns { ok, contract: { id, status, workItemId, expectedOutput, acceptanceCriteria, verificationTier, attempt, deliverable, report } }.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "pc_list_attachments",
+      "description": "List the attachments on a work item (name, kind, content type, size, id — NOT the content; fetch one with pc_get_attachment). Use when your dispatch points you at a card whose attachments carry source material. Requires { workItemId }.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workItemId": {
+            "type": "string",
+            "description": "the work item whose attachments to list"
+          }
+        },
+        "required": [
+          "workItemId"
+        ]
+      }
+    },
+    {
+      "name": "pc_get_attachment",
+      "description": "Fetch one attachment's full content by id (ids come from pc_list_attachments or a work item's attachment list). Returns the attachment row including its content. Requires { attachmentId }.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "attachmentId": {
+            "type": "string",
+            "description": "the attachment id to fetch"
+          }
+        },
+        "required": [
+          "attachmentId"
+        ]
+      }
     }
   ],
   "pcRigToolNames": [
@@ -1478,7 +1518,10 @@
     "mcp__pc-rig__pc_answer_pending",
     "mcp__pc-rig__pc_submit_deliverable",
     "mcp__pc-rig__pc_find_tool",
-    "mcp__pc-rig__pc_call_tool"
+    "mcp__pc-rig__pc_call_tool",
+    "mcp__pc-rig__pc_get_contract",
+    "mcp__pc-rig__pc_list_attachments",
+    "mcp__pc-rig__pc_get_attachment"
   ],
   "toolCatalog": [
     {
@@ -1851,6 +1894,24 @@
       "slug": "mcp__pc-rig__pc_call_tool",
       "label": "Call an on-demand tool",
       "description": "Run a catalog tool found with Find a tool (on-demand tier only; audited).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_get_contract",
+      "label": "Read your contract",
+      "description": "Worker-side: a dispatched agent reads its own contract + acceptance criteria.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_list_attachments",
+      "label": "List a card's attachments",
+      "description": "List a work item's attachments (names + ids; content via Get attachment).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_get_attachment",
+      "label": "Read an attachment",
+      "description": "Fetch one attachment's content by id.",
       "source": "pc-rig"
     }
   ],

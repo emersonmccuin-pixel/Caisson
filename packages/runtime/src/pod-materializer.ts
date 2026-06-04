@@ -303,7 +303,7 @@ export function renderAssignment(workItem: PodWorkItemContext): string {
     `pc_get_work_item({ id: "${workItem.workItemId}" })`,
     '```',
     '',
-    "Use its `body`, `attachments`, and `parent` for context. The expected output + what \"done\" means live on the CONTRACT, shown below — not on the work item.",
+    "Use its `body`, `attachments`, and `parent` for context (attachments: `pc_list_attachments({ workItemId })` → `pc_get_attachment({ attachmentId })`). The expected output + what \"done\" means live on the CONTRACT, shown below — not on the work item.",
     '',
     '### Expected output',
     '',
@@ -312,6 +312,8 @@ export function renderAssignment(workItem: PodWorkItemContext): string {
     '```json',
     expected,
     '```',
+    '',
+    'Your contract also carries the ACCEPTANCE CRITERIA your deliverable is verified against — read them with `pc_get_contract` (no arguments) and self-check before you submit.',
     '',
     'When the work is done, submit your typed deliverable with `pc_submit_deliverable` (kind matching the expected output above) as your final action. That submission — not your end-of-turn — is what gets verified.',
   ].join('\n');

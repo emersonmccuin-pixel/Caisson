@@ -147,6 +147,13 @@ export const REQUIRED_AGENT_TOOLS: readonly string[] = [
   // those pods from the merge stays a noted future item.
   'mcp__pc-rig__pc_ask_user',
   'mcp__pc-rig__pc_ask_orchestrator',
+  // M5 (FD-5 addendum + dispatch-payload audit) — the agent can READ ITS JOB:
+  // its own contract incl. the acceptance criteria it's verified against, and
+  // the work-item attachments the dispatch prompt points it at (the audit's
+  // 🔴: agents were DIRECTED to use attachments no tool could fetch).
+  'mcp__pc-rig__pc_get_contract',
+  'mcp__pc-rig__pc_list_attachments',
+  'mcp__pc-rig__pc_get_attachment',
 ] as const;
 
 /** Union the required WI tools into an arbitrary tools list. Preserves order

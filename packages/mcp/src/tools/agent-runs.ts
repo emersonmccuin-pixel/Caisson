@@ -394,6 +394,46 @@ export async function handleAgentRunTool(
       }
     }
 
+    case 'pc_get_contract': {
+      // M5 (FD-5 addendum) — the agent reads its OWN contract mid-run,
+      // including the acceptance criteria it will be verified against.
+      // Resolved server-side from PC_AGENT_RUN_ID; no arguments.
+      if (!ctx.agentRunId) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'pc_get_contract: PC_AGENT_RUN_ID not set — only dispatched agents have a contract to read',
+            },
+          ],
+          isError: true,
+        };
+      }
+      if (!ctx.projectId) {
+        return {
+          content: [{ type: 'text', text: 'pc_get_contract: PC_PROJECT_ID not set' }],
+          isError: true,
+        };
+      }
+      try {
+        const res = await ctx.getServer(
+          ctx.projectPath(`agent-runs/${encodeURIComponent(ctx.agentRunId)}/contract`),
+        );
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `pc_get_contract failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_get_contract failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
     case 'pc_submit_deliverable': {
       // Slice 014b — the agent submits its typed deliverable against its
       // contract. This BECOMES the verified output source (replacing the

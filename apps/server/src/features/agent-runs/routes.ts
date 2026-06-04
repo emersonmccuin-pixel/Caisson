@@ -605,6 +605,46 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
    *  to the latest contract produced by the run). Validates the deliverable
    *  shape + (when the contract carries an `expectedOutput`) the kind match,
    *  then writes it via ContractService (status → `submitted`). */
+  /** M5 (FD-5 addendum) — `pc_get_contract`: a dispatched agent reads its OWN
+   *  contract mid-run, INCLUDING the acceptance criteria it will be verified
+   *  against (previously invisible — only the expected-output spec was inlined
+   *  once at dispatch). Same contract resolution as the deliverable POST. */
+  app.get('/api/projects/:projectId/agent-runs/:runId/contract', (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const project = getProjectById(projectId);
+    if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+
+    const runId = c.req.param('runId') as ULID;
+    const row = getAgentRunRow(runId);
+    if (!row) return c.json({ ok: false, error: `unknown run: ${runId}` }, 404);
+    if (row.projectId !== projectId) {
+      return c.json({ ok: false, error: `run ${runId} not in project ${projectId}` }, 400);
+    }
+
+    const contractId = row.contractId ?? listContractsForRun(runId)[0]?.id ?? null;
+    const contract = contractId ? getContract(contractId) : null;
+    if (!contract) {
+      return c.json(
+        { ok: false, error: `run ${runId} has no contract`, cause: 'no-contract' },
+        409,
+      );
+    }
+    return c.json({
+      ok: true,
+      contract: {
+        id: contract.id,
+        status: contract.status,
+        workItemId: contract.workItemId,
+        expectedOutput: contract.expectedOutput,
+        acceptanceCriteria: contract.acceptanceCriteria,
+        verificationTier: contract.verificationTier,
+        attempt: contract.attempt,
+        deliverable: contract.deliverable,
+        report: contract.report,
+      },
+    });
+  });
+
   app.post('/api/projects/:projectId/agent-runs/:runId/deliverable', async (c) => {
     const projectId = c.req.param('projectId') as ULID;
     const project = getProjectById(projectId);

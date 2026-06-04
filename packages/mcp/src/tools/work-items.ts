@@ -577,6 +577,70 @@ export async function handleWorkItemTool(
       }
     }
 
+    case 'pc_list_attachments': {
+      // M5 (dispatch-payload audit 🔴) — the READ half of attachments. The
+      // dispatch prompt has always pointed agents at a card's attachments;
+      // this is the first tool that can actually fetch the list.
+      const ref = typeof args.workItemId === 'string' ? args.workItemId.trim() : '';
+      if (!ref) {
+        return {
+          content: [{ type: 'text', text: 'pc_list_attachments: workItemId required' }],
+          isError: true,
+        };
+      }
+      const workItemId = await ctx.resolveWorkItemIdViaServer(ref);
+      if (!workItemId) {
+        return {
+          content: [{ type: 'text', text: `pc_list_attachments: unknown work item: ${ref}` }],
+          isError: true,
+        };
+      }
+      try {
+        const res = await ctx.getServer(
+          ctx.projectPath(`work-items/${encodeURIComponent(workItemId)}/attachments`),
+        );
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `pc_list_attachments failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_list_attachments failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
+    case 'pc_get_attachment': {
+      const attachmentId = typeof args.attachmentId === 'string' ? args.attachmentId.trim() : '';
+      if (!attachmentId) {
+        return {
+          content: [{ type: 'text', text: 'pc_get_attachment: attachmentId required' }],
+          isError: true,
+        };
+      }
+      try {
+        const res = await ctx.getServer(
+          ctx.projectPath(`attachments/${encodeURIComponent(attachmentId)}`),
+        );
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `pc_get_attachment failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_get_attachment failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
     default:
       return null;
   }

@@ -1630,6 +1630,55 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "name"
       ]
     }
+  },
+  {
+    "name": "pc_get_contract",
+    "family": "agent-run",
+    "label": "Read your contract",
+    "description": "Read YOUR OWN contract mid-run: the expected output spec, the ACCEPTANCE CRITERIA your deliverable will be verified against (so you can self-check BEFORE submitting), the verification tier, your contract status, and the linked work item id. Call this whenever you need to re-check what 'done' means — the dispatch prompt inlines the spec once, but this is the live source. Requires PC_AGENT_RUN_ID (set on every dispatched agent); takes no arguments. Returns { ok, contract: { id, status, workItemId, expectedOutput, acceptanceCriteria, verificationTier, attempt, deliverable, report } }.",
+    "catalogDescription": "Worker-side: a dispatched agent reads its own contract + acceptance criteria.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "pc_list_attachments",
+    "family": "work-item",
+    "label": "List a card's attachments",
+    "description": "List the attachments on a work item (name, kind, content type, size, id — NOT the content; fetch one with pc_get_attachment). Use when your dispatch points you at a card whose attachments carry source material. Requires { workItemId }.",
+    "catalogDescription": "List a work item's attachments (names + ids; content via Get attachment).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workItemId": {
+          "type": "string",
+          "description": "the work item whose attachments to list"
+        }
+      },
+      "required": [
+        "workItemId"
+      ]
+    }
+  },
+  {
+    "name": "pc_get_attachment",
+    "family": "work-item",
+    "label": "Read an attachment",
+    "description": "Fetch one attachment's full content by id (ids come from pc_list_attachments or a work item's attachment list). Returns the attachment row including its content. Requires { attachmentId }.",
+    "catalogDescription": "Fetch one attachment's content by id.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "attachmentId": {
+          "type": "string",
+          "description": "the attachment id to fetch"
+        }
+      },
+      "required": [
+        "attachmentId"
+      ]
+    }
   }
 ];
 
@@ -1701,6 +1750,13 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_node_failed: 'worker',
   pc_submit_deliverable: 'worker',
   pc_attach_to_work_item: 'worker',
+  // M5 (FD-5 addendum + dispatch-payload audit) — the agent can READ ITS JOB:
+  // its own contract (incl. acceptance criteria) + the attachments the
+  // dispatch prompt points it at (previously directed to use what no tool
+  // could fetch).
+  pc_get_contract: 'worker',
+  pc_list_attachments: 'worker',
+  pc_get_attachment: 'worker',
 };
 
 /** Bare tool names in registry (= ListTools) order. */
