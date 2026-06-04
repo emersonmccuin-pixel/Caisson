@@ -10,20 +10,43 @@
 //                   "[worktree: <abs-path>]" token; write a binding to
 //                   <project-data-dir>/current-task-binding.json keyed by tool_use_id.
 //   unbind        — PostToolUse on Agent|Task: drop that binding.
-//   enforce       — PreToolUse on Read|Write|Edit|Bash|Glob|Grep|NotebookEdit:
-//                   if the call is inside a subagent turn (payload.agent_type set)
-//                   and the latest binding has a worktreePath, deny any tool call
-//                   that touches paths outside the worktree. Exception:
-//                   READ_ANYWHERE_PODS (currently `researcher`) can call
-//                   Read/Glob/Grep against any path; edits stay bound.
+//   enforce       — PreToolUse on Read|Write|Edit|Bash|Glob|Grep|NotebookEdit.
+//                   TWO protections (2026-06-03 incident — an agent destroyed
+//                   uncommitted human work with git reset/checkout/clean in the
+//                   MAIN repo):
+//                   1. WORKTREE CONFINEMENT (workflow agents + bound subagents):
+//                      every tool call must stay inside the bound worktree.
+//                   2. GIT WRITE FENCE (EVERY PC session, orchestrator included):
+//                      a git command that WRITES (anything beyond status/log/
+//                      diff/show/…) aimed at a directory outside the session's
+//                      fence root is denied. Fence root = the bound worktree,
+//                      else the session cwd (the orchestrator's project folder).
 //
-// Bash enforcement is best-effort: a regex scan for absolute-looking paths in
-// the command string. Not a true sandbox.
+// ⚠ CC ≥2.1 reports `agent_type` for the MAIN thread of --agent sessions, so
+// payload.agent_type does NOT mean "inside a Task() subagent". Caught live
+// 2026-06-03: every workflow agent took the subagent branch, found no binding,
+// and SILENTLY SKIPPED enforcement. Workflow env is now checked FIRST; the
+// binding branch only applies when a binding actually exists.
+//
+// Bash path scanning is best-effort string analysis, not a sandbox. It catches
+// honest mistakes (the only observed failure class), not adversaries. Handles
+// both Windows (`E:/…`, `E:\…`) and Git-Bash (`/e/…`) absolute path forms.
 
 const { readFileSync, writeFileSync, mkdirSync } = require('node:fs');
 const { dirname, resolve } = require('node:path');
 
 const BINDING_FILE = '{{PROJECT_DATA_DIR}}/current-task-binding.json';
+
+/** git subcommands that cannot destroy or rewrite work. Everything NOT in this
+ *  set counts as a WRITE and is fenced. Deliberately conservative: `branch`,
+ *  `config`, `worktree`, `fetch` all have writing forms, so they fence too —
+ *  a PC session has no business running them outside its own fence root.
+ *  (Declared before the mode dispatch below — consts don't hoist.) */
+const GIT_READONLY = new Set([
+  'status', 'log', 'show', 'diff', 'rev-parse', 'describe', 'blame', 'grep',
+  'ls-files', 'ls-tree', 'ls-remote', 'cat-file', 'shortlog', 'reflog',
+  'rev-list', 'show-ref', 'symbolic-ref', 'remote', 'version', 'help',
+]);
 
 const mode = process.argv[2] ?? '';
 const raw = readStdinSync();
@@ -51,20 +74,49 @@ function writeBindings(b) {
   } catch { /* best-effort */ }
 }
 
-function norm(p) {
-  return resolve(p).replace(/\\/g, '/').toLowerCase();
+/** Git-Bash drive form → Windows form: `/e/foo` → `e:/foo`. */
+function toWinPath(p) {
+  const m = /^\/([A-Za-z])(\/|$)/.exec(p);
+  return m ? `${m[1]}:/${p.slice(3)}` : p;
 }
 
-function isInside(p, wt) {
+function norm(p) {
+  return resolve(toWinPath(p)).replace(/\\/g, '/').toLowerCase();
+}
+
+function isInside(p, root) {
   const pN = norm(p);
-  const wtN = norm(wt);
-  return pN === wtN || pN.startsWith(wtN + '/');
+  const rootN = norm(root);
+  return pN === rootN || pN.startsWith(rootN + '/');
+}
+
+/** Absolute path in either Windows or Git-Bash drive form? */
+function isAbsoluteish(p) {
+  return /^[A-Za-z]:[\\/]/.test(p) || /^\/[A-Za-z](\/|$)/.test(p) || p.startsWith('\\\\') || p.startsWith('/');
+}
+
+function resolveAgainst(cwd, p) {
+  const w = toWinPath(p);
+  return isAbsoluteish(w) ? resolve(w) : resolve(cwd, w);
 }
 
 function extractWorktree(prompt) {
   if (typeof prompt !== 'string') return null;
   const m = prompt.match(/\[worktree:\s*([^\]]+)\]/);
   return m ? resolve(m[1].trim()) : null;
+}
+
+function deny(reason) {
+  const out = {
+    decision: 'block',
+    reason,
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  };
+  process.stdout.write(JSON.stringify(out));
 }
 
 function gateWorkflow() {
@@ -82,20 +134,11 @@ function gateWorkflow() {
 
   const prompt = payload.tool_input && payload.tool_input.prompt;
   if (typeof prompt === 'string' && prompt.includes('[workflowRunId:')) return;
-  const reason =
+  deny(
     'Direct Task() blocked. Subagents are workflow-only — author a workflow ' +
     'that dispatches the agent (via the conversational New Workflow modal), ' +
-    'then call `pc_run_workflow` with its id.';
-  const out = {
-    decision: 'block',
-    reason,
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: reason,
-    },
-  };
-  process.stdout.write(JSON.stringify(out));
+    'then call `pc_run_workflow` with its id.',
+  );
 }
 
 function bind() {
@@ -117,51 +160,104 @@ function unbind() {
   }
 }
 
-function enforce() {
-  // Enforce for two cases:
-  //   (A) CC-tagged subagent turns (payload.agent_type is set — Task() spawns).
-  //   (B) Top-level workflow agent spawns: no agent_type in PreToolUse payload
-  //       (the hook fires in the agent's own turn, not inside a Task() call),
-  //       but PC_WORKFLOW_RUN_ID env var is set by dag-run-service.ts at spawn.
-  const isSubagent = !!payload.agent_type;
-  const isWorkflowAgent = !!process.env.PC_WORKFLOW_RUN_ID;
-  if (!isSubagent && !isWorkflowAgent) return;
+// ── git write fence ───────────────────────────────────────────────────────────
 
-  // Resolve the bound worktree:
-  //   - Subagents: most-recently-written binding in current-task-binding.json
-  //     (written by path-guard 'bind' mode when the Task() prompt carries
-  //     a [worktree:] token).
-  //   - Workflow agents: from PC_WORKFLOW_WORKTREE env var (set at spawn time
-  //     by dag-run-service.ts). If not set (worktree:none workflow), skip.
-  let wt;
-  if (isSubagent) {
+function unquote(m2, m3, m4, m5) {
+  return m2 || m3 || m4 || m5 || '';
+}
+
+/** Scan a shell command for git WRITE invocations whose effective directory
+ *  sits outside `fence`. Tracks `cd` across `&&`/`;`/`|` segments and honors
+ *  `git -C <path>`. Returns { sub, dir } for the first violation, else null. */
+function gitWriteFenceViolation(cmd, fence, sessionCwd) {
+  if (!/\bgit\b/.test(cmd)) return null;
+  let cwd = sessionCwd ? resolve(toWinPath(sessionCwd)) : resolve(fence);
+  const segments = cmd.split(/&&|\|\||;|\|/);
+  for (const seg of segments) {
+    const cdm = /(?:^|\s)cd\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\s&|;]+))/.exec(seg);
+    if (cdm) {
+      const target = unquote(cdm[1], cdm[2], cdm[3], cdm[4]);
+      if (target && target !== '-') cwd = resolveAgainst(cwd, target);
+    }
+    const gm = /(?:^|\s|\()git\s+(.*)$/.exec(seg);
+    if (!gm) continue;
+    let rest = gm[1].trim();
+    let gitDir = cwd;
+    // Consume leading global flags that affect the target dir or precede the
+    // subcommand: -C <path>, -c k=v, --git-dir[= ]<path>, --work-tree[= ]<path>.
+    for (;;) {
+      let m = /^-C\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\s&|;]+))\s+/.exec(rest);
+      if (m) { gitDir = resolveAgainst(gitDir, unquote(m[1], m[2], m[3], m[4])); rest = rest.slice(m[0].length); continue; }
+      m = /^-c\s+\S+\s+/.exec(rest);
+      if (m) { rest = rest.slice(m[0].length); continue; }
+      m = /^(?:--git-dir|--work-tree)(?:=|\s+)(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\s&|;]+))\s*/.exec(rest);
+      if (m) { gitDir = resolveAgainst(gitDir, unquote(m[1], m[2], m[3], m[4])); rest = rest.slice(m[0].length); continue; }
+      break;
+    }
+    const subm = /^([a-z][a-z-]*)/.exec(rest);
+    const sub = subm ? subm[1] : '';
+    if (!sub || GIT_READONLY.has(sub)) continue;
+    if (!isInside(gitDir, fence)) return { sub, dir: gitDir };
+  }
+  return null;
+}
+
+// ── enforce ───────────────────────────────────────────────────────────────────
+
+function enforce() {
+  // Resolve the bound worktree (FULL confinement scope):
+  //   1. Workflow agents — PC_WORKFLOW_WORKTREE env (set at spawn by
+  //      dag-run-service). Checked FIRST: payload.agent_type is set on the
+  //      MAIN thread of --agent sessions in CC ≥2.1, so it cannot be used to
+  //      detect subagents (the 2026-06-03 silent-skip regression).
+  //   2. Task() subagents — most-recent binding written by 'bind' mode. Only
+  //      applies when a binding actually exists.
+  let wt = null;
+  if (process.env.PC_WORKFLOW_RUN_ID && process.env.PC_WORKFLOW_WORKTREE) {
+    wt = resolve(process.env.PC_WORKFLOW_WORKTREE);
+  } else if (payload.agent_type) {
     const all = readBindings();
     const ids = Object.keys(all);
-    if (!ids.length) return;
-    // Sequential subagents in the rig → most-recently-written binding wins.
-    const latest = all[ids[ids.length - 1]];
-    wt = latest && latest.worktreePath;
-    if (!wt) return;
-  } else {
-    // isWorkflowAgent path
-    if (!process.env.PC_WORKFLOW_WORKTREE) return; // worktree:none workflow = no enforcement
-    wt = resolve(process.env.PC_WORKFLOW_WORKTREE);
+    const latest = ids.length ? all[ids[ids.length - 1]] : null;
+    if (latest && latest.worktreePath) wt = resolve(latest.worktreePath);
   }
 
   const tool = payload.tool_name || '';
+  const inp = payload.tool_input || {};
+
+  // ── GIT WRITE FENCE — every PC session (orchestrator included). Fence root
+  // = the bound worktree when one exists, else the session cwd (the
+  // orchestrator runs in its project folder). Outer/dev sessions (no
+  // PC_PROJECT_ID) are exempt.
+  if (tool === 'Bash' && process.env.PC_PROJECT_ID) {
+    const fence = wt || (payload.cwd ? resolve(payload.cwd) : null);
+    if (fence) {
+      const v = gitWriteFenceViolation(String(inp.command || ''), fence, payload.cwd);
+      if (v) {
+        deny(
+          `Blocked: \`git ${v.sub}\` would write to a repository outside your fence ` +
+          `(${v.dir}). Your fence root: ${fence}. Writing git commands (add/commit/` +
+          `reset/checkout/clean/…) are only allowed inside it. If you created files ` +
+          `in the wrong place, STOP and report it in your deliverable — do NOT try ` +
+          `to clean up directories outside your fence.`,
+        );
+        return;
+      }
+    }
+  }
+
+  // ── FULL WORKTREE CONFINEMENT — only for sessions with a bound worktree.
+  if (!wt) return;
 
   // Pods with cross-worktree read permission: Read/Glob/Grep exempt from
   // worktree binding. Edit/Write/Bash/NotebookEdit stay bound. Add pod names
   // here as they earn the exemption.
-  // For subagents: agent type comes from payload.agent_type.
-  // For workflow agents: agent name comes from PC_AGENT_NAME env var.
-  const agentName = payload.agent_type || process.env.PC_AGENT_NAME || '';
+  const agentName = process.env.PC_AGENT_NAME || payload.agent_type || '';
   const READ_ANYWHERE_PODS = new Set(['researcher']);
   if (READ_ANYWHERE_PODS.has(agentName) && (tool === 'Read' || tool === 'Glob' || tool === 'Grep')) {
     return;
   }
 
-  const inp = payload.tool_input || {};
   const violations = [];
 
   function checkPath(p) {
@@ -174,11 +270,10 @@ function enforce() {
   if ((tool === 'Glob' || tool === 'Grep') && inp.path) checkPath(inp.path);
   if (tool === 'Bash') {
     const cmd = String(inp.command || '');
-    // Best-effort: scan for Windows-style absolute paths (drive letter prefix).
-    // Try quoted forms first so Windows paths containing spaces aren't truncated
-    // at the first whitespace. Order: single-quoted, double-quoted, backtick,
-    // then bare/unquoted up to whitespace or shell delimiter.
-    const re = /'([A-Za-z]:[\\/][^']+)'|"([A-Za-z]:[\\/][^"]+)"|`([A-Za-z]:[\\/][^`]+)`|([A-Za-z]:[\\/][^\s'"`)]+)/g;
+    // Best-effort: scan for absolute paths in BOTH Windows drive-letter form
+    // (E:/… / E:\…) and Git-Bash form (/e/…). Quoted forms first so paths
+    // containing spaces aren't truncated at the first whitespace.
+    const re = /'([A-Za-z]:[\\/][^']+|\/[A-Za-z]\/[^']+)'|"([A-Za-z]:[\\/][^"]+|\/[A-Za-z]\/[^"]+)"|`([A-Za-z]:[\\/][^`]+|\/[A-Za-z]\/[^`]+)`|([A-Za-z]:[\\/][^\s'"`)]+|\/[A-Za-z]\/[^\s'"`):]+)/g;
     let m;
     while ((m = re.exec(cmd)) !== null) {
       const path = m[1] || m[2] || m[3] || m[4];
@@ -187,18 +282,9 @@ function enforce() {
   }
 
   if (violations.length) {
-    const reason =
+    deny(
       `Out-of-worktree call blocked. Bound worktree: ${wt}. ` +
-      `Violating path(s): ${violations.join(', ')}`;
-    const out = {
-      decision: 'block',
-      reason,
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: reason,
-      },
-    };
-    process.stdout.write(JSON.stringify(out));
+      `Violating path(s): ${violations.join(', ')}`,
+    );
   }
 }
