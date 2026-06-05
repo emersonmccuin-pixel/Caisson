@@ -93,6 +93,9 @@ Pics/
 /labs/**/reports/
 /labs/**/sandbox/
 
+# Archived planning / scratch (local-only; kept out of the repo)
+archive/
+
 # OS / editor noise
 .DS_Store
 .AppleDouble

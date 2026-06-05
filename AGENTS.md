@@ -11,18 +11,17 @@ work is Claude Code (`claude.exe`) processes.
 
 ## The architecture (north star)
 
-The canonical design lives in `refactor plan/`:
+The durable architecture reference lives in **`Sub-Systems/`** — one folder per role (Store ·
+Engine · Brain · Product · UI · Supervisor-Ops), each documenting the as-built design. Start at
+`Sub-Systems/README.md` and `Sub-Systems/_Foundation-Decisions.md`.
 
-- **`unified-process-supervision-2026-06-02.md`** — the target: five roles, one home each —
-  **Supervisor** (dumb, durable; keeps service processes alive) · **Engine/host** (the single owner
-  of every `claude.exe`) · **Brain** (stateless control plane; owns the truth; ONE reconciler) ·
-  **Store** (append-only event log = truth) · **UI shell** (pure view). One lifecycle, one
-  "done" signal, one thing waking whoever's waiting.
-- **`consolidation-ledger-2026-06-02.md`** — as-built → unified verdicts (keep/merge/delete per
-  subsystem) + the verification queue. Trust this over older notes.
-- **`architecture-map.html`** — interactive visual of the target, color-coded by verdict.
-- **`workflow-engine-first-principles-redesign-2026-06-02.md`** — the workflow-engine model
-  (step → transition → run log; completion = deliverable; review steps pause in an inbox).
+The target in one line: five roles, one home each — **Supervisor** (dumb, durable; keeps service
+processes alive) · **Engine/host** (the single owner of every `claude.exe`) · **Brain** (stateless
+control plane; owns the truth; ONE reconciler) · **Store** (append-only event log = truth) · **UI
+shell** (pure view). One lifecycle, one "done" signal, one thing waking whoever's waiting.
+
+> The detailed rebuild-sequencing and milestone-scope planning was archived out of the repo
+> (local-only `archive/`, gitignored). `Sub-Systems/` is the source of architectural truth now.
 
 ## Core principles (non-negotiable)
 
@@ -49,7 +48,7 @@ The canonical design lives in `refactor plan/`:
 
 **Step 1 — one terminal authority + run-keyed waiter:** make a finished agent run *advance its
 workflow* (today a second listener wins the terminal race and the workflow's `done` never resolves,
-so cards don't move). See `consolidation-ledger-2026-06-02.md` §4 and the design doc's migration §9.
+so cards don't move).
 
 ## Build & verify
 
