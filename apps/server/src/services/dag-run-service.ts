@@ -47,8 +47,10 @@ import type { WorktreeService } from './worktree.ts';
 const workItemGateway = new WorkItemMutationGateway();
 
 /** Workflow-review delivery seam. The DAG executor calls this to enqueue a
- *  durable `workflow-review` mailbox message (active-orchestrator +
- *  orchestrator-turn). Injected from index.ts where the mailboxService lives —
+ *  durable `workflow-review` mailbox message — orchestrator flavor →
+ *  active-orchestrator (orchestrator-turn); human flavor (incl. M6-C ceiling
+ *  escalation) → the human user-inbox (M8/FD-7: a human gate is never
+ *  invisible). Injected from index.ts where the mailboxService lives —
  *  ProjectRuntime never gains a mailbox ref. The slice-004
  *  workflow.review.changed fact fires regardless (it is state, not delivery). */
 export type WorkflowReviewDelivery = (input: {
@@ -57,6 +59,11 @@ export type WorkflowReviewDelivery = (input: {
   nodeId: string;
   flavor: WorkflowReviewFlavor;
   body: string;
+  subject: string;
+  /** Review package for the inbox decision card (slice C renders it). */
+  payload: Record<string, unknown>;
+  /** Iteration-keyed so a loop kick-back's re-review delivers AGAIN (FD-8). */
+  idempotencyKey: string;
 }) => boolean;
 
 /** Workflow-engine redesign — failed-run notification seam. Enqueues a durable
@@ -124,6 +131,19 @@ export interface DagRunServiceOptions {
   /** Mailbox failed-run delivery seam — a failed run notifies the human inbox +
    *  the project orchestrator. Injected from index.ts. */
   deliverRunFailed?: WorkflowRunFailedDelivery;
+  /** M8 (FD-7) — decided-elsewhere inbox resolution seam (MailboxService
+   *  collect/action pair). A review decided through ANY door (inbox card,
+   *  orchestrator pc_complete_node, raw HTTP) actions the open inbox cards for
+   *  that gate, so they never linger. Snapshot-before-decide: a card the
+   *  decision itself mints (ceiling escalation, same source) stays open. */
+  reviewInbox?: ReviewInboxResolution;
+}
+
+/** M8 (FD-7) — the MailboxService collect/action pair, structural so runtime
+ *  layers thread it without an app-services value import. */
+export interface ReviewInboxResolution {
+  collectUnactionedRecipients(sourceKind: string, sourceId: string): ULID[];
+  actionRecipients(ids: readonly ULID[], now: number): number;
 }
 
 /** awaiting-review maps to the persisted `paused` status. */
@@ -379,7 +399,8 @@ export function makeExecutorDeps(
   const requestReview = async (
     node: WorkflowV2.ReviewNode,
     ctx: DagNodeContext,
-    bundle: { nodeId: string; output: string }[]
+    bundle: { nodeId: string; output: string }[],
+    reviewOpts: { iteration: number; escalated: boolean }
   ): Promise<void> => {
     const flavor = node.reviewer;
     const summary = bundle.map((b) => `### ${b.nodeId}\n${b.output}`).join('\n\n');
@@ -388,17 +409,36 @@ export function makeExecutorDeps(
       `[pc:workflow-review run=${run.id} node=${node.id} flavor=${flavor}]\n` +
       `${prompt}\n\n${summary}\n\n` +
       `Approve: pc_complete_node-equivalent (v2 review endpoint) · Reject sends it back.`;
-    if (node.reviewer === 'orchestrator') {
-      // 017 Phase C — the review prompt is enqueued as a durable mailbox message
-      // (active-orchestrator + orchestrator-turn) via the wired seam. No Channel.
-      opts.deliverReview?.({
-        projectId: opts.projectId,
+    // M8 (FD-7) — EVERY review flavor delivers (pre-M8 only the orchestrator
+    // flavor did; a human gate paused the run invisibly). The seam routes:
+    // orchestrator → active-orchestrator turn · human → user-inbox card.
+    // Iteration-keyed idempotency: a loop kick-back's re-review is a NEW
+    // message, not a dedupe no-op (FD-8 — pre-M8 the second prompt for the
+    // same gate silently never delivered).
+    opts.deliverReview?.({
+      projectId: opts.projectId,
+      runId: run.id,
+      nodeId: node.id,
+      flavor,
+      body,
+      subject: reviewOpts.escalated
+        ? `Review needed (agent loop exhausted): ${workflow.name}`
+        : `Review needed: ${workflow.name}`,
+      payload: {
         runId: run.id,
         nodeId: node.id,
         flavor,
-        body,
-      });
-    }
+        workflowName: workflow.name,
+        workItemId: run.workItemId,
+        prompt,
+        summary,
+        escalated: reviewOpts.escalated,
+        iteration: reviewOpts.iteration,
+      },
+      idempotencyKey:
+        `workflow-review:${run.id}:${node.id}:i${String(reviewOpts.iteration)}` +
+        (reviewOpts.escalated ? ':escalated' : ''),
+    });
     // Slice 015b — durable workflow.review.changed (pending) fact via the
     // gateway's in-txn live_outbox row. The 015a relay drains + delivers it;
     // the web `scanWorkflowLiveEvents` consumer reads the canonical frame. The
@@ -577,7 +617,15 @@ export async function applyV2ReviewDecision(
     rootWorkItemId: run.workItemId,
     worktreePath: run.worktreePath,
   });
+  // M8 (FD-7) — snapshot the gate's open inbox cards BEFORE deciding: a card
+  // the decision itself mints (ceiling escalation, same `${runId}:${nodeId}`
+  // source) must stay open. After a successful decision, action the snapshot
+  // so a gate decided through ANY door clears everywhere.
+  const reviewSourceId = `${run.id}:${reviewNodeId}`;
+  const openCards =
+    opts.reviewInbox?.collectUnactionedRecipients('workflow-run-node', reviewSourceId) ?? [];
   const result = await exec.onReviewDecision(reviewNodeId, decision);
+  if (openCards.length > 0) opts.reviewInbox?.actionRecipients(openCards, Date.now());
   // Slice 004 — durable workflow.review.changed (approved/rejected) fact +
   // canonical frame. The run-state transition itself already fanned out a
   // workflow.run.changed via the writer during resume.

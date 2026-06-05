@@ -7,7 +7,11 @@ import { getProjectById, listProjects } from '@pc/db';
 
 import { ProjectRuntime, type BroadcastFn } from './project-runtime.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
-import type { WorkflowReviewDelivery, WorkflowRunFailedDelivery } from './dag-run-service.ts';
+import type {
+  ReviewInboxResolution,
+  WorkflowReviewDelivery,
+  WorkflowRunFailedDelivery,
+} from './dag-run-service.ts';
 
 export interface ProjectRegistryDeps {
   dataDir: string;
@@ -25,6 +29,9 @@ export interface ProjectRegistryDeps {
   /** Workflow-engine redesign — failed-run notification seam, forwarded to every
    *  ProjectRuntime. Absent ⟹ no notice (back-compat). */
   deliverWorkflowRunFailed?: WorkflowRunFailedDelivery;
+  /** M8 (FD-7) — decided-elsewhere inbox resolution, forwarded to every
+   *  ProjectRuntime. */
+  reviewInbox?: ReviewInboxResolution;
 }
 
 export class ProjectRegistry {

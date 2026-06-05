@@ -29,6 +29,7 @@ import {
   VerificationReviewError,
 } from '../../services/agent-verification-review.ts';
 import type { AgentHostReattachClient } from '../../services/agent-host-reattach.ts';
+import type { ReviewInboxResolution } from '../../services/dag-run-service.ts';
 import {
   FieldValidationError,
   looksLikeUlid,
@@ -67,6 +68,8 @@ export interface WorkItemRoutesDeps {
   /** T1.1 — resolve the live HostConnection PER REQUEST (not by-value at
    *  register time) so a host respawn on a new port is picked up with no API restart. */
   getHostConnection?: () => AgentHostReattachClient | null;
+  /** M8 (FD-7) — decided-elsewhere inbox resolution for verification holds. */
+  reviewInbox?: ReviewInboxResolution | null;
 }
 
 function verificationReviewStatus(err: VerificationReviewError): 400 | 404 | 409 {
@@ -357,12 +360,15 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     );
     try {
       const project = getProjectById(id as ULID);
-      const workItem = approveAgentWorkItem({
-        workItemId: wiId,
-        notes: typeof body.notes === 'string' ? body.notes : null,
-        ...(body.actor === 'orchestrator' || body.actor === 'user' ? { actor: body.actor } : {}),
-        ...(project ? { project } : {}),
-      });
+      const workItem = approveAgentWorkItem(
+        {
+          workItemId: wiId,
+          notes: typeof body.notes === 'string' ? body.notes : null,
+          ...(body.actor === 'orchestrator' || body.actor === 'user' ? { actor: body.actor } : {}),
+          ...(project ? { project } : {}),
+        },
+        { ...(deps.reviewInbox ? { reviewInbox: deps.reviewInbox } : {}) },
+      );
       if (workItem && workItem.projectId !== id) {
         return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
       }
@@ -410,6 +416,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
           ...(deps.mailboxEnqueue ? { mailboxEnqueue: deps.mailboxEnqueue } : {}),
           broadcast: (env) => deps.broadcastTo(projectId, env),
           ...(host ? { hostClient: host } : {}),
+          ...(deps.reviewInbox ? { reviewInbox: deps.reviewInbox } : {}),
         },
       );
       if (result.workItem && result.workItem.projectId !== projectId) {

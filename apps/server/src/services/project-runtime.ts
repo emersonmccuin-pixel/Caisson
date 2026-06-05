@@ -36,6 +36,7 @@ import {
   resumeFailedDagRun,
   type ResumeFailedRunResult,
   type DagRunServiceOptions,
+  type ReviewInboxResolution,
   type WorkflowReviewDelivery,
   type WorkflowRunFailedDelivery,
 } from './dag-run-service.ts';
@@ -88,6 +89,9 @@ export interface ProjectRuntimeOptions {
   /** Workflow-engine redesign — failed-run notification seam (human inbox +
    *  project orchestrator). Composed in index.ts; absent ⟹ no notice. */
   deliverWorkflowRunFailed?: WorkflowRunFailedDelivery;
+  /** M8 (FD-7) — decided-elsewhere inbox resolution (MailboxService pair),
+   *  forwarded into DagRunServiceOptions. Composed in index.ts. */
+  reviewInbox?: ReviewInboxResolution;
 }
 
 export class ProjectRuntime {
@@ -266,6 +270,7 @@ export class ProjectRuntime {
       ...(this.opts.deliverWorkflowRunFailed
         ? { deliverRunFailed: this.opts.deliverWorkflowRunFailed }
         : {}),
+      ...(this.opts.reviewInbox ? { reviewInbox: this.opts.reviewInbox } : {}),
     };
   }
 

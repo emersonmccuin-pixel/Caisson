@@ -344,6 +344,13 @@ const projectRegistry = new ProjectRegistry({
   // Failed-run notification seam (workflow-engine redesign). Notifies the human
   // inbox + the project orchestrator when a run fails.
   deliverWorkflowRunFailed: deliverWorkflowRunFailed,
+  // M8 (FD-7) — decided-elsewhere inbox resolution. Closures evaluate at
+  // decision time (post-boot), so the later mailboxService binding is safe.
+  reviewInbox: {
+    collectUnactionedRecipients: (sourceKind, sourceId) =>
+      mailboxService.collectUnactionedRecipients(sourceKind, sourceId),
+    actionRecipients: (ids, now) => mailboxService.actionRecipients(ids, now),
+  },
 });
 projectRegistry.loadAll();
 
@@ -579,33 +586,50 @@ registerMailboxRoutes(app, {
 // Workflow-review delivery. Hoisted so the ProjectRegistry built at boot can
 // reference it; the body runs at workflow-fire time so the const bindings above
 // are initialised by then. Enqueues the review prompt as a durable mailbox
-// message (active-orchestrator + orchestrator-turn).
+// message, routed by flavor (M8/FD-7 — a human gate is never invisible):
+//   orchestrator → active-orchestrator (orchestrator-turn)
+//   human (incl. ceiling escalation) → the human user-inbox (ui-inbox)
+// The idempotency key arrives iteration-keyed from the dag-run-service, so a
+// loop kick-back's re-review delivers AGAIN instead of dedup-vanishing (FD-8).
 function deliverWorkflowReview(input: {
   projectId: ULID;
   runId: ULID;
   nodeId: string;
   flavor: 'human' | 'orchestrator';
   body: string;
+  subject: string;
+  payload: Record<string, unknown>;
+  idempotencyKey: string;
 }): boolean {
+  const recipient =
+    input.flavor === 'human'
+      ? {
+          id: newId(),
+          addressKind: 'user-inbox',
+          addressJson: { kind: 'user-inbox', userId: 'local-user', projectId: input.projectId },
+          channel: 'ui-inbox' as const,
+          deliveryId: newId(),
+        }
+      : {
+          id: newId(),
+          addressKind: 'active-orchestrator',
+          addressJson: { kind: 'active-orchestrator', projectId: input.projectId },
+          channel: 'orchestrator-turn' as const,
+          deliveryId: newId(),
+        };
   enqueueMailboxAndFanout({
     message: {
       id: newId(),
       projectId: input.projectId,
       kind: 'workflow-review',
+      subject: input.subject,
       body: input.body,
+      payload: input.payload,
       sourceKind: 'workflow-run-node',
       sourceId: `${input.runId}:${input.nodeId}`,
-      idempotencyKey: `workflow-review:${input.runId}:${input.nodeId}`,
+      idempotencyKey: input.idempotencyKey,
     },
-    recipients: [
-      {
-        id: newId(),
-        addressKind: 'active-orchestrator',
-        addressJson: { kind: 'active-orchestrator', projectId: input.projectId },
-        channel: 'orchestrator-turn',
-        deliveryId: newId(),
-      },
-    ],
+    recipients: [recipient],
     now: Date.now(),
   });
   return true;
@@ -990,6 +1014,12 @@ registerWorkItemRoutes(app, {
   refreshProject: (project) => projectRegistry.refresh(project),
   mailboxEnqueue: enqueueMailboxAndFanout,
   getHostConnection: () => hostConnection,
+  // M8 (FD-7) — verification decisions action the contract's open inbox cards.
+  reviewInbox: {
+    collectUnactionedRecipients: (sourceKind, sourceId) =>
+      mailboxService.collectUnactionedRecipients(sourceKind, sourceId),
+    actionRecipients: (ids, now) => mailboxService.actionRecipients(ids, now),
+  },
 });
 
 registerAreaRoutes(app, { resolveProject });

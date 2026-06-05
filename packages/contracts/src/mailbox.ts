@@ -50,6 +50,10 @@ export const MAILBOX_MESSAGE_KINDS = [
    *  wait / inspect / kill. Never accompanies a kill — silence doesn't execute. */
   'agent-stalled',
   'workflow-review',
+  /** M8 (FD-7) — a contract parked at the human-review verification tier.
+   *  Delivered to the human user-inbox; approve/reject ride the existing
+   *  work-item verification doors. */
+  'verification-review',
   /** Workflow-engine redesign — a run failed. Delivered to BOTH the human
    *  user-inbox AND the project orchestrator (active-orchestrator); when no
    *  orchestrator is live the delivery persists and drains on its next pass. */
@@ -62,8 +66,8 @@ export type MailboxMessageKind = (typeof MAILBOX_MESSAGE_KINDS)[number];
 
 /** M8 (FD-7) — kinds that ask the human for a DECISION (approve/reject/answer),
  *  not just attention. Drives the inbox `actionable` count + the actionableOnly
- *  filter. Slice B adds `verification-review`. */
-export const ACTIONABLE_MAILBOX_KINDS = ['workflow-review'] as const;
+ *  filter. */
+export const ACTIONABLE_MAILBOX_KINDS = ['workflow-review', 'verification-review'] as const;
 export function isActionableMailboxKind(kind: string): boolean {
   return (ACTIONABLE_MAILBOX_KINDS as readonly string[]).includes(kind);
 }

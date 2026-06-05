@@ -349,6 +349,7 @@ export {
   listDeliveriesForMessage,
   listDeliveriesForProject,
   listDueDeliveries,
+  listMailboxMessagesBySource,
   listRecipientsForInbox,
   listRecipientsForMessage,
   markDeliveryAccepted,

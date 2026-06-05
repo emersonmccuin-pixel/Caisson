@@ -172,6 +172,21 @@ export function getMailboxMessageByIdempotencyKey(
   );
 }
 
+/** M8 (FD-7) — every message minted for one source (e.g. all review prompts
+ *  for `workflow-run-node` `${runId}:${nodeId}` across loop iterations).
+ *  Powers decided-elsewhere inbox resolution. */
+export function listMailboxMessagesBySource(
+  sourceKind: string,
+  sourceId: string,
+  db: DbExecutor = getDb(),
+): MailboxMessageRow[] {
+  return db
+    .select()
+    .from(mailboxMessages)
+    .where(and(eq(mailboxMessages.sourceKind, sourceKind), eq(mailboxMessages.sourceId, sourceId)))
+    .all();
+}
+
 export function getMailboxRecipient(
   id: ULID,
   db: DbExecutor = getDb(),

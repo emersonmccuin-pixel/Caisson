@@ -37,9 +37,27 @@ import {
   type DispatchAgentResult,
 } from './agent-run-factory.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
+import type { ReviewInboxResolution } from './dag-run-service.ts';
 
 /** FD-12 — the one write door (repo write + outbox receipt in one txn). */
 const gateway = new WorkItemMutationGateway();
+
+/** M8 (FD-7) — a verification hold decided through ANY door (inbox card,
+ *  orchestrator pc_resolve_work_item, raw HTTP) actions the contract's open
+ *  `verification-review` inbox cards so they never linger. Best-effort: the
+ *  decision itself never fails on inbox bookkeeping. */
+function resolveVerificationInbox(
+  reviewInbox: ReviewInboxResolution | null | undefined,
+  contractId: string,
+): void {
+  if (!reviewInbox) return;
+  try {
+    const open = reviewInbox.collectUnactionedRecipients('agent-contract', contractId);
+    if (open.length > 0) reviewInbox.actionRecipients(open, Date.now());
+  } catch {
+    /* inbox bookkeeping must never fail the decision */
+  }
+}
 
 /** Error class for v1 422 surfaces (precondition / not-found that the route
  *  maps to a clean HTTP status). Carrying the cause through lets the route
@@ -72,6 +90,8 @@ export interface ApproveAgentWorkItemInput {
 
 export interface ApproveAgentWorkItemDeps {
   contractService?: ContractService;
+  /** M8 (FD-7) — decided-elsewhere inbox resolution (MailboxService pair). */
+  reviewInbox?: ReviewInboxResolution | null;
 }
 
 /** Approve a tier-2/3 verification hold on the contract. Rolls up the linked
@@ -89,6 +109,7 @@ export function approveAgentWorkItem(
     verificationStatus: 'passed',
     verificationNotes: note || null,
   });
+  resolveVerificationInbox(deps.reviewInbox, contract.id);
 
   // Roll-up: advance the linked work item, if one exists.
   if (!contract.workItemId) return null;
@@ -165,6 +186,8 @@ export interface RejectAgentWorkItemDeps {
    *  the full spawn pipeline. */
   dispatch?: typeof dispatchContinueAgent;
   contractService?: ContractService;
+  /** M8 (FD-7) — decided-elsewhere inbox resolution (MailboxService pair). */
+  reviewInbox?: ReviewInboxResolution | null;
 }
 
 /** Reject a tier-2/3 verification hold on the contract + wake the producer run
@@ -194,6 +217,7 @@ export async function rejectAgentWorkItem(
     verificationStatus: 'failed',
     verificationNotes: feedback,
   });
+  resolveVerificationInbox(deps.reviewInbox, contract.id);
 
   // Roll the WI back to in-progress, if one is linked. FD-12 — the flip + its
   // receipt land in one gateway transaction; row gone → nothing emitted.

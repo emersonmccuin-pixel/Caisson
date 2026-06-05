@@ -25,6 +25,7 @@ import {
   getDb,
   getMailboxMessage as defaultGetMailboxMessage,
   insertLiveEvent,
+  listMailboxMessagesBySource as defaultListMailboxMessagesBySource,
   listRecipientsForMessage as defaultListRecipientsForMessage,
   markDeliveryAccepted as defaultMarkDeliveryAccepted,
   markDeliveryDeadLettered as defaultMarkDeliveryDeadLettered,
@@ -66,6 +67,7 @@ export interface MailboxServiceDeps {
   insertLiveEvent?: typeof insertLiveEvent;
   enqueueMailboxMessage?: typeof defaultEnqueueMailboxMessage;
   getMailboxMessage?: typeof defaultGetMailboxMessage;
+  listMailboxMessagesBySource?: typeof defaultListMailboxMessagesBySource;
   listRecipientsForMessage?: typeof defaultListRecipientsForMessage;
   acquireDeliveryLease?: typeof defaultAcquireDeliveryLease;
   markDeliveryAccepted?: typeof defaultMarkDeliveryAccepted;
@@ -83,6 +85,7 @@ export class MailboxService {
   private readonly insert: typeof insertLiveEvent;
   private readonly enqueueRepo: typeof defaultEnqueueMailboxMessage;
   private readonly getMessage: typeof defaultGetMailboxMessage;
+  private readonly listBySource: typeof defaultListMailboxMessagesBySource;
   private readonly listRecipients: typeof defaultListRecipientsForMessage;
   private readonly acquireLease: typeof defaultAcquireDeliveryLease;
   private readonly accept: typeof defaultMarkDeliveryAccepted;
@@ -99,6 +102,7 @@ export class MailboxService {
     this.insert = deps.insertLiveEvent ?? insertLiveEvent;
     this.enqueueRepo = deps.enqueueMailboxMessage ?? defaultEnqueueMailboxMessage;
     this.getMessage = deps.getMailboxMessage ?? defaultGetMailboxMessage;
+    this.listBySource = deps.listMailboxMessagesBySource ?? defaultListMailboxMessagesBySource;
     this.listRecipients = deps.listRecipientsForMessage ?? defaultListRecipientsForMessage;
     this.acquireLease = deps.acquireDeliveryLease ?? defaultAcquireDeliveryLease;
     this.accept = deps.markDeliveryAccepted ?? defaultMarkDeliveryAccepted;
@@ -134,6 +138,31 @@ export class MailboxService {
   /** Acquire an exclusive lease (no fact — leasing is internal worker state). */
   lease(input: { deliveryId: ULID; owner: string; now: number; leaseMs: number }): MailboxDeliveryRow | null {
     return this.acquireLease(input);
+  }
+
+  /** M8 (FD-7) — decided-elsewhere resolution, phase 1: every UNACTIONED,
+   *  undismissed recipient of every message minted for this source (e.g. all
+   *  open review cards for one workflow gate, across loop iterations). The
+   *  caller snapshots these BEFORE applying the decision so a card the decision
+   *  itself mints (ceiling escalation re-post on the same source) stays open. */
+  collectUnactionedRecipients(sourceKind: string, sourceId: string): ULID[] {
+    const ids: ULID[] = [];
+    for (const message of this.listBySource(sourceKind, sourceId)) {
+      for (const r of this.listRecipients(message.id)) {
+        if (r.actionedAt === null && r.dismissedAt === null) ids.push(r.id);
+      }
+    }
+    return ids;
+  }
+
+  /** M8 (FD-7) — decided-elsewhere resolution, phase 2: action the snapshot.
+   *  Each flip re-emits the message fact (live inbox refresh). */
+  actionRecipients(ids: readonly ULID[], now: number): number {
+    let actioned = 0;
+    for (const id of ids) {
+      if (this.markActioned(id, now)) actioned += 1;
+    }
+    return actioned;
   }
 
   acceptDelivery(input: {

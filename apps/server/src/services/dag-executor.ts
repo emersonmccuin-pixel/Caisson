@@ -58,11 +58,16 @@ export interface DagExecutorDeps {
   /** Move the run-root card to `stage` — the body of a `move` STEP (FD-9: a
    *  drawn step, not a hidden property). A failed move fails the step. */
   moveCard(stage: string): Promise<{ ok: boolean; error?: string }>;
-  /** Post the review gate (orchestrator channel event / Human Review inbox). */
+  /** Post the review gate (orchestrator mailbox turn / Human Inbox card).
+   *  `opts.iteration` = the owning loop's reject count (keys the delivery's
+   *  idempotency so a re-review after a loop kick-back delivers AGAIN — FD-8);
+   *  `opts.escalated` = the M6-C ceiling re-post (a human gate regardless of
+   *  the authored reviewer). */
   requestReview(
     node: WorkflowV2.ReviewNode,
     ctx: DagNodeContext,
-    bundle: { nodeId: string; output: string }[]
+    bundle: { nodeId: string; output: string }[],
+    opts: { iteration: number; escalated: boolean }
   ): Promise<void>;
   /** Persist DAG state + run status (+ broadcast). */
   persist(state: State, status: RunStatus, opts?: { lastReason?: string }): void;
@@ -125,6 +130,12 @@ export class DagExecutor {
     return { ...this.ctxBase, carry, resolve };
   }
 
+  /** The reject count of the loop this review's `reject` names (0 on the first
+   *  pass / when the review has no loop). Keys re-review delivery idempotency. */
+  private reviewIteration(node: WorkflowV2.ReviewNode): number {
+    return node.reject ? (this.state.rejectIterations?.[node.reject] ?? 0) : 0;
+  }
+
   /** Default Review Bundle = the review node's immediate upstreams' outputs. */
   private resolveBundle(
     node: WorkflowV2.ReviewNode,
@@ -185,7 +196,10 @@ export class DagExecutor {
         this.state = markRunning(this.state, id);
         this.state = markAwaitingReview(this.state, id);
         const bundle = this.resolveBundle(node, resolve);
-        await this.deps.requestReview(node, this.ctx(resolve), bundle);
+        await this.deps.requestReview(node, this.ctx(resolve), bundle, {
+          iteration: this.reviewIteration(node),
+          escalated: false,
+        });
         // Persist the assembled bundle into the audit log so the review surface
         // is durable + replayable without re-resolving upstream WIs (19.5).
         this.deps.event({ type: 'review_requested', nodeId: id, data: { bundle } });
@@ -319,7 +333,10 @@ export class DagExecutor {
             `REJECT to keep it held here, or cancel the run.\n\n` +
             (reviewNode.prompt ?? ''),
         };
-        await this.deps.requestReview(escalated, this.ctx(resolve), bundle);
+        await this.deps.requestReview(escalated, this.ctx(resolve), bundle, {
+          iteration: count,
+          escalated: true,
+        });
         this.deps.event({
           type: 'review_requested',
           nodeId: reviewNodeId,

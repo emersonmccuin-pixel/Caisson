@@ -13,6 +13,7 @@ import {
   getProjectById as defaultGetProjectById,
   hasPendingAskForRun,
   listRecentTerminalAgentRuns as defaultListRecentTerminalAgentRuns,
+  newId,
   type MarkAgentRunTerminalInput,
 } from '@pc/db';
 import { AgentRunJsonlTailer, jsonlPathFor, type AgentRunJsonlEvent } from '@pc/runtime';
@@ -390,6 +391,52 @@ async function finishTerminalEffects(args: {
     result,
     verification,
   });
+
+  // M8 (FD-7) — a contract parked at the HUMAN-review tier gets a durable
+  // user-inbox card (the "Human Review inbox" the orchestrator prompt promised
+  // — pre-M8 it didn't exist). Approve/reject ride the existing work-item
+  // verification doors; the decision actions this card via resolve-by-source.
+  // orchestrator-review stays envelope-only (the orchestrator's to handle).
+  if (
+    deps.mailboxEnqueue &&
+    contractId &&
+    outcome &&
+    outcome.verificationStatus === 'pending' &&
+    outcome.verificationTier === 'human-review'
+  ) {
+    const agentName = input.slug ?? input.podName ?? 'agent';
+    deps.mailboxEnqueue({
+      message: {
+        id: newId(),
+        projectId: input.projectId,
+        kind: 'verification-review',
+        subject: `Review needed: ${agentName} finished its work`,
+        body:
+          `Agent ${agentName} handed in its work; the contract is waiting on YOUR review.\n` +
+          (outcome.workItemId ? `Card: ${outcome.workItemId}\n` : '') +
+          `Approve to accept the work (the card advances); reject with feedback to send it back.`,
+        payload: {
+          contractId,
+          workItemId: outcome.workItemId,
+          runId: input.runId,
+          agent: agentName,
+        },
+        sourceKind: 'agent-contract',
+        sourceId: contractId,
+        idempotencyKey: `verification-review:${contractId}`,
+      },
+      recipients: [
+        {
+          id: newId(),
+          addressKind: 'user-inbox',
+          addressJson: { kind: 'user-inbox', userId: 'local-user', projectId: input.projectId },
+          channel: 'ui-inbox',
+          deliveryId: newId(),
+        },
+      ],
+      now: Date.now(),
+    });
+  }
 
   // Slice 005 — the rail broadcast (durable agent.run.changed) is emitted
   // SYNCHRONOUSLY by applyAgentRunTerminalEffects through the gateway; this
