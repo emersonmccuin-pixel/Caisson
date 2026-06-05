@@ -18,6 +18,15 @@ export function InboxBell({ projectNames }: { projectNames: Record<string, strin
   const [open, setOpen] = useState(false);
   const { items } = useMailboxInbox({ all: true });
 
+  // The badge tracks UNREAD (anything you haven't opened or dismissed). The
+  // count of those that also need a decision rides the tooltip.
+  const unread = useMemo(
+    () =>
+      items.filter(
+        (i) => i.recipient.readAt === null && i.recipient.dismissedAt === null,
+      ).length,
+    [items],
+  );
   const actionable = useMemo(
     () =>
       items.filter(
@@ -29,22 +38,28 @@ export function InboxBell({ projectNames }: { projectNames: Record<string, strin
     [items],
   );
 
+  const title =
+    unread > 0
+      ? `${String(unread)} unread message${unread === 1 ? '' : 's'}` +
+        (actionable > 0 ? ` · ${String(actionable)} need a decision` : '')
+      : 'Inbox';
+
   return (
     <div className="relative flex h-full items-center">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        title={actionable > 0 ? `${String(actionable)} decision(s) waiting on you` : 'Inbox'}
-        aria-label="Inbox"
+        title={title}
+        aria-label={unread > 0 ? `Inbox, ${String(unread)} unread` : 'Inbox'}
         aria-expanded={open}
         className={`relative flex h-full items-center px-2 hover:bg-muted ${
           open ? 'bg-muted text-foreground' : 'text-muted-foreground'
         }`}
       >
         <Bell className="h-3.5 w-3.5" />
-        {actionable > 0 && (
+        {unread > 0 && (
           <span className="absolute right-0 top-1 min-w-[14px] rounded-full bg-destructive px-1 text-center text-[9px] font-bold leading-[14px] text-destructive-foreground">
-            {actionable}
+            {unread > 9 ? '9+' : unread}
           </span>
         )}
       </button>
