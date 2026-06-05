@@ -15,7 +15,8 @@ import type { WorkItemStatus, WorkItemType } from '@/features/work-items/client'
 
 // FD-19 — the first sub-tab is labelled "Areas" in the UI (Area cards);
 // the internal key stays 'dashboard' so persisted view state migrates cleanly.
-export type WorkItemsSubTab = 'dashboard' | 'kanban' | 'table';
+// FD-20 — 'patterns' is a coming-soon placeholder until the design pass lands.
+export type WorkItemsSubTab = 'dashboard' | 'kanban' | 'table' | 'patterns';
 
 // Slice 010 — left-rail Area filter applied to Kanban + Table. `null` = All
 // (no filter), 'uncaptured' = items with areaId == null, otherwise an Area id.

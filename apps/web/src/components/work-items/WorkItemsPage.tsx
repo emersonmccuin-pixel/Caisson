@@ -17,6 +17,7 @@ import { useWorkItemsView, type WorkItemsSubTab } from '@/store/work-items-view'
 import { KanbanBoard } from '../KanbanBoard';
 import { AreasTab } from './AreasTab';
 import { InitiativeInspector } from './InitiativeInspector';
+import { PatternsTab } from './PatternsTab';
 import { WorkItemsSubTabs } from './WorkItemsSubTabs';
 import { WorkItemsTable } from './WorkItemsTable';
 
@@ -78,6 +79,8 @@ export function WorkItemsPage({ project, events }: WorkItemsPageProps) {
             events={events}
             onOpenInspector={(item) => openInspector(item, 'table')}
           />
+        ) : tab === 'patterns' ? (
+          <PatternsTab />
         ) : (
           <AreasTab project={project} events={events} />
         )}
@@ -94,5 +97,7 @@ function labelForSubTab(t: WorkItemsSubTab): string {
       return 'Kanban';
     case 'table':
       return 'Table';
+    case 'patterns':
+      return 'Patterns';
   }
 }

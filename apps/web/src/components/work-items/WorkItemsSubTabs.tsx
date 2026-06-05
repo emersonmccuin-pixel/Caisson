@@ -5,13 +5,15 @@
 
 import { useWorkItemsView, type WorkItemsSubTab } from '@/store/work-items-view';
 
-const ORDER: readonly WorkItemsSubTab[] = ['dashboard', 'kanban', 'table'] as const;
+const ORDER: readonly WorkItemsSubTab[] = ['dashboard', 'kanban', 'table', 'patterns'] as const;
 // FD-19 — the first sub-tab is "Areas" (Area cards; was Slice 010's "Focus").
 // Internal key stays 'dashboard' for persisted-state compatibility.
+// FD-20 — 'patterns' is a coming-soon placeholder (PatternsTab).
 const LABEL: Record<WorkItemsSubTab, string> = {
   dashboard: 'Areas',
   kanban: 'Kanban',
   table: 'Table',
+  patterns: 'Patterns',
 };
 
 interface Props {
