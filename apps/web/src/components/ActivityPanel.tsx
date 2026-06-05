@@ -364,6 +364,7 @@ function MailboxRegion({
         <MailboxInbox
           scope={{ projectId: project.id }}
           onVisibleCount={setCount}
+          projectNames={{ [project.id]: project.name }}
         />
       </div>
     </section>

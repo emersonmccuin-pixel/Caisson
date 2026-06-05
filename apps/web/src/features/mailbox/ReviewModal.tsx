@@ -13,6 +13,7 @@ import {
   summarizeExpectedOutput,
 } from '@/features/contracts/work-log';
 import type { Contract } from '@/features/contracts/client';
+import { workItemsApi, type WorkItem } from '@/features/work-items/client';
 import type { AcceptanceCriteria, AcceptancePredicate } from '@pc/contracts';
 import { mailboxApi } from './client';
 import type { MailboxInboxItem } from './types';
@@ -276,7 +277,12 @@ function VerificationReviewModal({
         </div>
       )}
       {contract && (
-        <VerificationReviewBody payload={payload} contract={contract} message={message} />
+        <VerificationReviewBody
+          payload={payload}
+          contract={contract}
+          message={message}
+          projectId={projectId}
+        />
       )}
     </ModalShell>
   );
@@ -298,14 +304,33 @@ function AlreadyDecidedBanner({ status }: { status: string | null }) {
 function VerificationReviewBody({
   payload,
   contract,
+  projectId,
 }: {
   payload: VerificationPayload;
   contract: Contract;
   message: MailboxInboxItem['message'];
+  projectId: string;
 }) {
   const deliverable = describeDeliverable(contract.deliverable);
   const asked = summarizeExpectedOutput(contract.expectedOutput);
   const finishedAt = new Date(contract.updatedAt).toLocaleString();
+
+  // Fetch the linked work item to render its body brief in "What was asked".
+  // Best-effort — degrade gracefully on error.
+  const wiId = contract.workItemId;
+  const [workItem, setWorkItem] = useState<WorkItem | null>(null);
+  const [wiError, setWiError] = useState(false);
+  useEffect(() => {
+    if (!wiId) return;
+    let cancelled = false;
+    workItemsApi.getWorkItem(projectId, wiId)
+      .then((wi) => { if (!cancelled) setWorkItem(wi); })
+      .catch(() => { if (!cancelled) setWiError(true); });
+    return () => { cancelled = true; };
+  }, [projectId, wiId]);
+
+  // Human-readable card label: prefer payload title (already stamped) or fetched title.
+  const cardTitle = payload.workItemTitle ?? workItem?.title ?? null;
 
   return (
     <div className="divide-y divide-border/40">
@@ -322,8 +347,13 @@ function VerificationReviewBody({
         {payload.workItemId && (
           <>
             <span className="text-muted-foreground">Card</span>
-            <span className="font-mono text-[11px] text-muted-foreground/80">
-              {payload.workItemId}
+            <span className="flex flex-col gap-0.5">
+              {cardTitle && (
+                <span className="font-medium text-foreground">{cardTitle}</span>
+              )}
+              <span className="font-mono text-[10px] text-muted-foreground/70">
+                {payload.workItemId}
+              </span>
             </span>
           </>
         )}
@@ -335,6 +365,20 @@ function VerificationReviewBody({
         <div className="mb-2 text-xs text-muted-foreground">
           Expected output: <span className="text-foreground">{asked}</span>
         </div>
+        {/* Work item brief — the human description of what the agent was working on */}
+        {workItem?.body && (
+          <div className="mb-3 border-l-2 border-border/50 pl-3">
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+              Work item
+            </div>
+            <Markdown text={workItem.body} className="text-sm" />
+          </div>
+        )}
+        {wiError && (
+          <div className="mb-2 text-[11px] text-muted-foreground/60">
+            (Work item body unavailable)
+          </div>
+        )}
         {contract.acceptanceCriteria && contract.acceptanceCriteria.length > 0 && (
           <AcceptanceCriteriaList criteria={contract.acceptanceCriteria} />
         )}
