@@ -277,3 +277,38 @@ test('a completed run does NOT fire notifyRunFailed', async () => {
   assert.equal(status, 'completed');
   assert.equal(calls.length, 0, 'no failure notice on a successful run');
 });
+
+test('a completed run fires notifyRunCompleted once (first-run nudge hook)', async () => {
+  let completed = 0;
+  const failed: string[] = [];
+  const deps = baseDeps({
+    dispatchAgent: async () => ({ state: 'completed' }),
+    notifyRunCompleted: () => {
+      completed += 1;
+    },
+    notifyRunFailed: (reason) => failed.push(reason),
+  });
+
+  const exec = DagExecutor.start(oneAgentWorkflow(), deps, ctxBase);
+  const status = await exec.advance();
+
+  assert.equal(status, 'completed');
+  assert.equal(completed, 1, 'notifyRunCompleted fires exactly once on a completed run');
+  assert.equal(failed.length, 0, 'no failure notice on a successful run');
+});
+
+test('a failed run does NOT fire notifyRunCompleted', async () => {
+  let completed = 0;
+  const deps = baseDeps({
+    dispatchAgent: async () => ({ state: 'failed', error: 'boom' }),
+    notifyRunCompleted: () => {
+      completed += 1;
+    },
+  });
+
+  const exec = DagExecutor.start(oneAgentWorkflow(), deps, ctxBase);
+  const status = await exec.advance();
+
+  assert.equal(status, 'failed');
+  assert.equal(completed, 0, 'no completion nudge on a failed run');
+});

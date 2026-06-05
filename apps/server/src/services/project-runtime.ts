@@ -39,6 +39,7 @@ import {
   type ReviewInboxResolution,
   type WorkflowReviewDelivery,
   type WorkflowRunFailedDelivery,
+  type WorkflowRunCompletedDelivery,
 } from './dag-run-service.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import {
@@ -89,6 +90,10 @@ export interface ProjectRuntimeOptions {
   /** Workflow-engine redesign — failed-run notification seam (human inbox +
    *  project orchestrator). Composed in index.ts; absent ⟹ no notice. */
   deliverWorkflowRunFailed?: WorkflowRunFailedDelivery;
+  /** Completed-run notification seam — nudges the orchestrator to run the
+   *  workflow-doctor on a workflow's first completion. Composed in index.ts;
+   *  absent ⟹ no nudge. */
+  deliverWorkflowRunCompleted?: WorkflowRunCompletedDelivery;
   /** M8 (FD-7) — decided-elsewhere inbox resolution (MailboxService pair),
    *  forwarded into DagRunServiceOptions. Composed in index.ts. */
   reviewInbox?: ReviewInboxResolution;
@@ -268,6 +273,9 @@ export class ProjectRuntime {
       ...(this.opts.deliverWorkflowReview ? { deliverReview: this.opts.deliverWorkflowReview } : {}),
       ...(this.opts.deliverWorkflowRunFailed
         ? { deliverRunFailed: this.opts.deliverWorkflowRunFailed }
+        : {}),
+      ...(this.opts.deliverWorkflowRunCompleted
+        ? { deliverRunCompleted: this.opts.deliverWorkflowRunCompleted }
         : {}),
       ...(this.opts.reviewInbox ? { reviewInbox: this.opts.reviewInbox } : {}),
     };

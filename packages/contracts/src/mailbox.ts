@@ -58,6 +58,11 @@ export const MAILBOX_MESSAGE_KINDS = [
    *  user-inbox AND the project orchestrator (active-orchestrator); when no
    *  orchestrator is live the delivery persists and drains on its next pass. */
   'workflow-run-failed',
+  /** A workflow finished its FIRST run. Delivered to the project orchestrator
+   *  (active-orchestrator, orchestrator-turn) recommending a workflow-doctor
+   *  review. Idempotency `workflow-first-run-review:<workflowId>` makes it fire
+   *  exactly once per workflow ever. Not human-actionable — it's a nudge. */
+  'workflow-first-run-review',
   'external-webhook',
   'runtime-hook-ask',
   'system-notice',

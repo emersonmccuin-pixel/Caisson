@@ -85,6 +85,19 @@ export type WorkflowRunFailedDelivery = (input: {
   incident: number;
 }) => void;
 
+/** Completed-run notification seam — a run finalizing `completed` nudges the
+ *  project orchestrator to run the workflow-doctor. The delivery
+ *  (deliverWorkflowFirstRunReview in index.ts) keys its mailbox message
+ *  `workflow-first-run-review:<workflowId>`, so the nudge fires exactly once per
+ *  workflow (on its first completion). Injected from index.ts. */
+export type WorkflowRunCompletedDelivery = (input: {
+  projectId: ULID;
+  runId: ULID;
+  workflowId: string;
+  workflowName: string;
+  workItemId: ULID | null;
+}) => void;
+
 // Slice 015b — durable workflow.review.changed facts via the run gateway. The
 // gateway writes the in-txn `live_outbox` row; the 015a relay drains + delivers
 // it. The run-row state still flows through workflow-run-writer; this is the
@@ -137,6 +150,10 @@ export interface DagRunServiceOptions {
   /** Mailbox failed-run delivery seam — a failed run notifies the human inbox +
    *  the project orchestrator. Injected from index.ts. */
   deliverRunFailed?: WorkflowRunFailedDelivery;
+  /** Completed-run notification seam — nudges the orchestrator to run the
+   *  workflow-doctor (once per workflow, deduped at the mailbox). Injected from
+   *  index.ts; absent ⟹ no nudge. */
+  deliverRunCompleted?: WorkflowRunCompletedDelivery;
   /** M8 (FD-7) — decided-elsewhere inbox resolution seam (MailboxService
    *  collect/action pair). A review decided through ANY door (inbox card,
    *  orchestrator pc_complete_node, raw HTTP) actions the open inbox cards for
@@ -508,6 +525,14 @@ export function makeExecutorDeps(
         incident: workflowRunsV2Repo
           .listEvents(run.id)
           .filter((e) => e.type === 'run_resumed').length,
+      }),
+    notifyRunCompleted: () =>
+      opts.deliverRunCompleted?.({
+        projectId: opts.projectId,
+        runId: run.id,
+        workflowId: workflow.id,
+        workflowName: workflow.name,
+        workItemId: run.workItemId ?? null,
       }),
     // ☠ holdForHuman (M6 slice C / FD-11): the ceiling now PAUSES the run as an
     // escalated HUMAN review gate (executor re-posts via requestReview) instead

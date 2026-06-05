@@ -354,6 +354,9 @@ const projectRegistry = new ProjectRegistry({
   // Failed-run notification seam (workflow-engine redesign). Notifies the human
   // inbox + the project orchestrator when a run fails.
   deliverWorkflowRunFailed: deliverWorkflowRunFailed,
+  // First-run nudge — on a workflow's first completion, recommend the
+  // workflow-doctor to the orchestrator (deduped once-per-workflow).
+  deliverWorkflowRunCompleted: deliverWorkflowFirstRunReview,
   // M8 (FD-7) — decided-elsewhere inbox resolution. Closures evaluate at
   // decision time (post-boot), so the later mailboxService binding is safe.
   reviewInbox: {
@@ -696,6 +699,54 @@ function deliverWorkflowRunFailed(input: {
       sourceKind: 'workflow-run',
       sourceId: input.runId,
       idempotencyKey: `workflow-run-failed:${input.runId}:${input.incident}`,
+    },
+    recipients: [
+      {
+        id: newId(),
+        addressKind: 'active-orchestrator',
+        addressJson: { kind: 'active-orchestrator', projectId: input.projectId },
+        channel: 'orchestrator-turn',
+        deliveryId: newId(),
+      },
+    ],
+    now: Date.now(),
+  });
+}
+
+// First-run nudge: when a workflow finishes its FIRST run, recommend a
+// workflow-doctor review to the orchestrator. The idempotency key is keyed on
+// the workflow id (not the run), so the nudge lands exactly once per workflow —
+// the first completion wins, every later completion dedupes to a no-op.
+function deliverWorkflowFirstRunReview(input: {
+  projectId: ULID;
+  runId: ULID;
+  workflowId: string;
+  workflowName: string;
+  workItemId: ULID | null;
+}): void {
+  const body =
+    `Workflow "${input.workflowName}" just finished its first run.\n\n` +
+    `First runs are when a workflow is least tuned — this is the moment to catch ` +
+    `wasted steps, a specialist making excessive tool calls, the wrong model, or bad wiring.\n\n` +
+    `Consider offering the user a review: dispatch the workflow-doctor on this run — ` +
+    `pc_invoke_agent({ agent: "workflow-doctor", input: "Review run ${input.runId} of workflow \\"${input.workflowName}\\" (${input.workflowId}) for inefficiencies and propose fixes." }). ` +
+    `It reads the run + the agents' transcripts, finds problems, and applies approval-gated fixes.`;
+  enqueueMailboxAndFanout({
+    message: {
+      id: newId(),
+      projectId: input.projectId,
+      kind: 'workflow-first-run-review',
+      subject: `First run done: ${input.workflowName}`,
+      body,
+      payload: {
+        runId: input.runId,
+        workflowId: input.workflowId,
+        workflowName: input.workflowName,
+        workItemId: input.workItemId,
+      },
+      sourceKind: 'workflow-run',
+      sourceId: input.runId,
+      idempotencyKey: `workflow-first-run-review:${input.workflowId}`,
     },
     recipients: [
       {

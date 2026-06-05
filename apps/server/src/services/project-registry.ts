@@ -11,6 +11,7 @@ import type {
   ReviewInboxResolution,
   WorkflowReviewDelivery,
   WorkflowRunFailedDelivery,
+  WorkflowRunCompletedDelivery,
 } from './dag-run-service.ts';
 
 export interface ProjectRegistryDeps {
@@ -29,6 +30,9 @@ export interface ProjectRegistryDeps {
   /** Workflow-engine redesign — failed-run notification seam, forwarded to every
    *  ProjectRuntime. Absent ⟹ no notice (back-compat). */
   deliverWorkflowRunFailed?: WorkflowRunFailedDelivery;
+  /** First-run nudge seam — forwarded to every ProjectRuntime. Absent ⟹ no
+   *  nudge (back-compat). */
+  deliverWorkflowRunCompleted?: WorkflowRunCompletedDelivery;
   /** M8 (FD-7) — decided-elsewhere inbox resolution, forwarded to every
    *  ProjectRuntime. */
   reviewInbox?: ReviewInboxResolution;
@@ -112,6 +116,9 @@ export class ProjectRegistry {
         : {}),
       ...(this.deps.deliverWorkflowRunFailed
         ? { deliverWorkflowRunFailed: this.deps.deliverWorkflowRunFailed }
+        : {}),
+      ...(this.deps.deliverWorkflowRunCompleted
+        ? { deliverWorkflowRunCompleted: this.deps.deliverWorkflowRunCompleted }
         : {}),
       ...(this.deps.reviewInbox ? { reviewInbox: this.deps.reviewInbox } : {}),
     });

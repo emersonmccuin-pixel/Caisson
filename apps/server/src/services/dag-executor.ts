@@ -80,6 +80,12 @@ export interface DagExecutorDeps {
    *  the project orchestrator (offline → persists, drains next pass). Optional so
    *  tests + the review/cancel paths don't have to wire it. */
   notifyRunFailed?(reason: string): void;
+  /** Fired once each time a run finalizes as `completed`. The delivery
+   *  (deliverWorkflowFirstRunReview in index.ts) keys its mailbox message
+   *  `workflow-first-run-review:<workflowId>`, so the orchestrator is nudged to
+   *  run the workflow-doctor exactly once per workflow — on its first
+   *  completion. Optional so tests + the review/cancel paths needn't wire it. */
+  notifyRunCompleted?(): void;
 }
 
 const DEFAULT_MAX_CONCURRENCY = 4;
@@ -365,6 +371,10 @@ export class DagExecutor {
     // project orchestrator (durable; survives an offline orchestrator). Fired
     // after persist so the run row is already terminal when the notice lands.
     if (status === 'failed') this.deps.notifyRunFailed?.(this.deriveFailureReason());
+    // A successful completion nudges the orchestrator to run the workflow-doctor
+    // (deduped to once-per-workflow at the mailbox layer). Fired after persist so
+    // the run row is already terminal when the notice lands.
+    if (status === 'completed') this.deps.notifyRunCompleted?.();
     return status;
   }
 
