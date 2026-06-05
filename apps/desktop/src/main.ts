@@ -400,10 +400,18 @@ ipcMain.handle('pc:update:download', async () => {
   return updateState;
 });
 
-ipcMain.handle('pc:update:install', () => {
+ipcMain.handle('pc:update:install', async () => {
   if (!updaterEnabled() || updateState.status !== 'downloaded') return false;
-  // Reply to this IPC call first, then quit-and-install on the next tick.
-  setImmediate(() => autoUpdater.quitAndInstall());
+  // The supervised api + agent-host run AS Caisson.exe (ELECTRON_RUN_AS_NODE),
+  // so while they're alive the NSIS installer's "is the app running?" check
+  // finds them and shows "Caisson cannot be closed." quitAndInstall fires the
+  // installer immediately and only then quits us, racing our async teardown —
+  // the installer wins and sees live children. Fix: tear the whole stack down
+  // and WAIT for every child to exit BEFORE the handoff, so the installer's
+  // check finds nothing. teardownChildren sets `quitting`, so the subsequent
+  // app.quit() inside quitAndInstall passes straight through before-quit.
+  await teardownChildren();
+  autoUpdater.quitAndInstall();
   return true;
 });
 
@@ -578,11 +586,25 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// ONE quit path: ask the supervisor to stop everything (host gets its polite
-// HTTP shutdown; stragglers are SIGKILLed at the deadline), then really quit.
+// ONE teardown, awaited everywhere. Stops every supervised child (host gets its
+// polite HTTP shutdown so its claude.exe PTYs go down with it; stragglers are
+// SIGKILLed at the deadline) and resolves only once they've actually exited.
+// Idempotent: concurrent callers (before-quit + the update-install handoff)
+// share the same promise, and `quitting` makes the eventual app.quit() a no-op
+// in before-quit. The await matters for updates — the NSIS installer must not
+// run its "app still running" check while a Caisson.exe child is alive.
+let teardownPromise: Promise<void> | null = null;
+function teardownChildren(): Promise<void> {
+  if (teardownPromise) return teardownPromise;
+  quitting = true;
+  teardownPromise = supervisor
+    ? supervisor.stopAndWait('SIGINT', 5_000).then(() => undefined)
+    : Promise.resolve();
+  return teardownPromise;
+}
+
 app.on('before-quit', (event) => {
   if (quitting || !supervisor) return;
   event.preventDefault();
-  quitting = true;
-  void supervisor.stopAndWait('SIGINT', 5_000).finally(() => app.quit());
+  void teardownChildren().finally(() => app.quit());
 });
