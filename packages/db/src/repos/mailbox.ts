@@ -99,7 +99,6 @@ export function enqueueMailboxMessage(
       idempotencyKey: input.message.idempotencyKey,
       createdAt: input.now,
       updatedAt: input.now,
-      expiresAt: null,
     })
     .run();
 

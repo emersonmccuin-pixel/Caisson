@@ -879,7 +879,9 @@ export const mailboxMessages = sqliteTable(
     idempotencyKey: text('idempotency_key').notNull(),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
-    expiresAt: integer('expires_at'),
+    // ☠ M4b (FD-8 amendment, 2026-06-04): `expires_at` — dead since 0036 (one
+    // NULL-writing site, zero readers). Dropped in 0046; expiry contradicts
+    // "no message silently dies."
   },
   (t) => [
     uniqueIndex('mailbox_messages_idempotency_idx').on(t.idempotencyKey),

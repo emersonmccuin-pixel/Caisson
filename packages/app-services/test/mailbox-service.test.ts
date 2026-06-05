@@ -48,7 +48,6 @@ function message(over: Partial<MailboxMessageRow> = {}): MailboxMessageRow {
     idempotencyKey: 'k1',
     createdAt: 1,
     updatedAt: 1,
-    expiresAt: null,
     ...over,
   };
 }

@@ -38,7 +38,6 @@ const EXPECTED_COLUMNS: Record<string, string[]> = {
     'idempotency_key',
     'created_at',
     'updated_at',
-    'expires_at',
   ],
   mailbox_recipients: [
     'id',
@@ -104,6 +103,14 @@ test('M8/FD-7 (0045): pending_interactions archived; interaction_id dropped', ()
     (raw.pragma(`table_info("mailbox_messages")`) as { name: string }[]).map((c) => c.name),
   );
   assert.ok(!msgCols.has('interaction_id'), 'mailbox_messages.interaction_id must be dropped');
+});
+
+test('M4b/FD-8 (0046): mailbox_messages.expires_at stays deleted', () => {
+  const raw = getRawDb();
+  const msgCols = new Set(
+    (raw.pragma(`table_info("mailbox_messages")`) as { name: string }[]).map((c) => c.name),
+  );
+  assert.ok(!msgCols.has('expires_at'), 'mailbox_messages.expires_at must be dropped (dead knob)');
 });
 
 test('assertSchemaIntact does not throw after a fresh migrate', () => {
