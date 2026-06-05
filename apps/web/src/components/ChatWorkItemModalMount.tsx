@@ -6,6 +6,7 @@
 // once but the user has to actively click in both places to trigger it.
 
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { Project } from '@/features/projects/client';
 import { workItemsApi, type WorkItem } from '@/features/work-items/client';
@@ -58,8 +59,11 @@ export function ChatWorkItemModalMount({ project }: ChatWorkItemModalMountProps)
 
   if (!workItemId) return null;
 
+  // createPortal renders to document.body, outside the Panel/Group stacking
+  // context in Shell, so z-[60] on WorkItemDetailModal reliably beats any
+  // z-50 modal (e.g. AreaDetailModal) regardless of ancestor transforms.
   if (error) {
-    return (
+    return createPortal(
       <div className="fixed inset-0 z-[70] flex items-center justify-center bg-background/80">
         <div className="border border-destructive bg-card px-4 py-3 text-xs">
           <div className="mb-2 text-destructive">Failed to load work item</div>
@@ -72,15 +76,17 @@ export function ChatWorkItemModalMount({ project }: ChatWorkItemModalMountProps)
             Close
           </button>
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 
   if (!items) {
-    return (
+    return createPortal(
       <div className="fixed inset-0 z-[70] flex items-center justify-center bg-background/80">
         <div className="text-xs italic text-muted-foreground">Loading…</div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 
@@ -89,7 +95,7 @@ export function ChatWorkItemModalMount({ project }: ChatWorkItemModalMountProps)
   // local list so callsign clicks land on the right row.
   const item = items.find((i) => i.id === workItemId || i.callsign === workItemId);
   if (!item) {
-    return (
+    return createPortal(
       <div className="fixed inset-0 z-[70] flex items-center justify-center bg-background/80">
         <div className="border border-border bg-card px-4 py-3 text-xs">
           <div className="mb-2 text-muted-foreground">Work item not found</div>
@@ -101,11 +107,12 @@ export function ChatWorkItemModalMount({ project }: ChatWorkItemModalMountProps)
             Close
           </button>
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 
-  return (
+  return createPortal(
     <WorkItemDetailModal
       workItem={item}
       project={project}
@@ -122,6 +129,7 @@ export function ChatWorkItemModalMount({ project }: ChatWorkItemModalMountProps)
           prev && !prev.some((p) => p.id === wi.id) ? [...prev, wi] : prev,
         )
       }
-    />
+    />,
+    document.body,
   );
 }
