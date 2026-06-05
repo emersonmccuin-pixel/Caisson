@@ -1,18 +1,19 @@
 # Built-in Agents (the stock roster)
 
 > **Role:** Brain (these are the agents the system ships with)
-> **Status:** as-built snapshot — 2026-06-03
+> **Status:** as-built snapshot — 2026-06-05
 > **Companion doc:** [agents-pods.md](agents-pods.md) explains the *system* (how agents are defined,
 > stored, seeded, kept from drifting). This doc is the *catalog* — who the built-in agents are.
 > **Code anchors (the real source of truth):**
-> - `apps/server/src/services/stock-pod-seed.ts` — the nine stock specialists (`STOCK_POD_CONTENT`)
+> - `apps/server/src/services/stock-pod-seed.ts` — the ten stock specialists (`STOCK_POD_CONTENT`)
 > - `apps/server/src/services/workflow-builder-pod-content.ts` — the workflow-builder
+> - `apps/server/src/services/workflow-doctor-pod-content.ts` — the workflow-doctor
 > - `apps/server/src/services/orchestrator-pod-content.ts` — the orchestrator
 
 ## What this is (plain English)
 
-Caisson ships with **ten built-in agents**. One is the **orchestrator** — the assistant you chat
-with. The other nine are **specialists** the orchestrator can hand work to (or, for two of them, that
+Caisson ships with **eleven built-in agents**. One is the **orchestrator** — the assistant you chat
+with. The other ten are **specialists** the orchestrator can hand work to (or, for two of them, that
 you open from a button in the UI). They're seeded into the database automatically every time the
 server boots. You can customize them or add your own, but these are always there out of the box.
 
@@ -38,6 +39,7 @@ A quick vocabulary note for the table below:
 | **reviewer** | Critiques a draft/code/plan against criteria; returns pass / fail / revise | sonnet (high) | chat | 20 | Dispatched |
 | **extractor** | Pulls structured data (JSON to a schema) out of messy input | sonnet (med) | chat | 15 | Dispatched |
 | **caisson** | In-app expert: explains how Caisson works *and* changes its config | sonnet (high) | chat | 25 | Dispatched |
+| **workflow-doctor** | Diagnoses a workflow run (slow/looping/mis-set-up pod) + approval-gated fixes | opus (high) | chat | — | Dispatched |
 | **agent-designer** | Builds a *new agent* with you through a short conversation | sonnet (med) | passthrough | 30 | UI button only |
 | **workflow-builder** | Builds a *new workflow* with you through an interview | sonnet (high) | passthrough | — | UI button only |
 
@@ -75,9 +77,19 @@ you give it per job. Flags ambiguous fields as `null` instead of guessing. Read-
 
 **caisson** — the in-app product specialist. Two jobs: (1) explains how Caisson works (stages, work
 items, agents, workflows), and (2) actually *changes* configuration — project settings, stages,
-custom fields, `CLAUDE.md`, global app settings — and routes workflow authoring to the
-workflow-builder. **Always asks for approval before destructive changes.** It doesn't write source
-code.
+custom fields, `CLAUDE.md`, global app settings — plus authors/edits workflows directly with its
+typed tools. **Always asks for approval before destructive changes.** It doesn't write source code.
+Its prompt carries a live `{{AGENT_ROSTER}}` variable (rendered at spawn from DB state via
+`pod-variable-renderers.ts`) so it describes the *real* current roster — built-in, project, and the
+user's global pods — instead of a hardcoded list that drifts.
+
+**workflow-doctor** — diagnoses a workflow that ran badly. Given a run (or a slug whose latest run it
+finds, or a slug to test-fire), it reads the run record (`pc_get_workflow_run` — timing, iterations,
+ceiling hits) *and* the agents' raw JSONL transcripts (path from `pc_inspect_agent_run`) to find
+wild/looping tool calls, the wrong model, prompt thrash, redundant steps, bad wiring, or loops that
+keep hitting their ceiling. With approval it fixes the project's pods (`pc_update_agent`; clones a
+built-in into the project first so stock pods stay untouched) and/or the workflow definition. Runs on
+opus. The orchestrator recommends it on a workflow's first completion.
 
 ### Conversational builders (you open these from the UI — not dispatched)
 
@@ -87,12 +99,12 @@ invoke this itself — if you ask for a new agent in chat, it points you to that
 
 **workflow-builder** — designs a new workflow through a conversational interview, then publishes it
 to the database. Opened from **Workflows tab → + New workflow**. Knows the v2 workflow model (agent +
-review nodes, card-move on completion/approve, declared input ports wiring one step's output into the
-next, the unified review gate, reject-only kick-back). Same rule: not orchestrator-dispatched.
+review nodes, the explicit move step, declared input ports wiring one step's output into the
+next, the unified review gate, reject-only kick-back via a loop step). Same rule: not orchestrator-dispatched.
 
 ## How it works (seeding & drift)
 
-- All nine specialists live in `STOCK_POD_CONTENT` (`stock-pod-seed.ts:1288`); the orchestrator is
+- All ten specialists live in `STOCK_POD_CONTENT` (`stock-pod-seed.ts`); the orchestrator is
   seeded separately. Their prompts are written inline as constants in those files.
 - On every server boot, `seedStockPods()` inserts any missing ones. If a stock agent's definition in
   the code has changed since last boot, a non-user-edited row is **auto-updated** to match; a row
@@ -121,7 +133,7 @@ not an architecture one.
 
 ## Open questions
 
-- Is "ten built-in agents" the right roster for the rebuild, or do some merge/split? (e.g. is
+- Is "eleven built-in agents" the right roster for the rebuild, or do some merge/split? (e.g. is
   `caisson` doing two jobs — explainer *and* config-mutator — that should be separate?)
 - Should the two conversational builders (agent-designer, workflow-builder) be modeled as the same
   kind of thing, given they share the "open from a button, interview, then create" pattern?

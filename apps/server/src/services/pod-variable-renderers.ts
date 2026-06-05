@@ -7,22 +7,30 @@
 // values from live DB state and returns plain strings the materializer
 // substitutes verbatim.
 //
-// Two canonical variables ship in 36.3:
+// Canonical variables:
 //
-//   - `AVAILABLE_AGENTS` — the dispatching pod's view of every live agent it
+//   - `AVAILABLE_AGENTS` — the DISPATCHING pod's view of every live agent it
 //     could dispatch to. Stock first, then user-created; alphabetical within
 //     each section. Each entry carries name + origin tag + description + the
-//     orchestrator-facing `dispatch_guidance` hint (when non-null).
+//     orchestrator-facing `dispatch_guidance` hint (when non-null). Excludes
+//     the orchestrator itself and global user-created pods (not dispatchable
+//     in-project). Consumed by the orchestrator prompt (36.4).
+//
+//   - `AGENT_ROSTER` — the EXPLAINER's view (consumed by the caisson pod). The
+//     full picture grouped by where each agent lives: built-in (stock), this
+//     project's customs, and the user's global customs. Unlike AVAILABLE_AGENTS
+//     it KEEPS the orchestrator and global customs, because caisson explains the
+//     roster rather than dispatches it. Live from DB at spawn — never hardcode
+//     the roster in caisson's prompt or knowledge.
 //
 //   - `AVAILABLE_TOOLS` — materializer-owned in @pc/runtime so it can render
 //     from the final expanded tool list (post-wildcard,
 //     post-mergeRequiredAgentTools).
 //
-// AVAILABLE_AGENTS exists for the orchestrator prompt (36.4). Add new
-// DB-backed variables here as the need arises — one variable per use case,
-// no general-purpose templating.
+// Add new DB-backed variables here as the need arises — one variable per use
+// case, no general-purpose templating.
 
-import { listProjectVisibleAgents } from '@pc/db';
+import { listAgents, listProjectVisibleAgents } from '@pc/db';
 import type { ULID } from '@pc/domain';
 
 /** Format the full agent roster the orchestrator (or any other pod opting in
@@ -55,4 +63,53 @@ export function renderAvailableAgents(projectId: ULID | null | undefined): strin
     blocks.push(lines.join('\n'));
   }
   return blocks.join('\n\n');
+}
+
+type RosterRow = ReturnType<typeof listAgents>[number];
+
+function formatRosterRow(r: RosterRow): string {
+  const desc = r.description.trim() || '_(no description)_';
+  const lines = [`- **${r.name}** — ${desc}`];
+  if (r.dispatchGuidance && r.dispatchGuidance.trim() !== '') {
+    lines.push(`  - _Dispatch for:_ ${r.dispatchGuidance.trim()}`);
+  }
+  return lines.join('\n');
+}
+
+/** Format the EXPLAINER's full agent roster (caisson's `{{AGENT_ROSTER}}`).
+ *  Grouped by where each agent lives so caisson can answer from the right
+ *  standpoint: built-in (stock, ships with Caisson — includes the orchestrator
+ *  itself and the conversational builders), this project's custom pods, and the
+ *  user's global custom pods (which must be copied into a project before they
+ *  can be dispatched there). All groups alphabetical (DB orders by name). When
+ *  no rows come back (seed hasn't run) we say so rather than emit a blank. */
+export function renderAgentRosterForCaisson(projectId: ULID | null | undefined): string {
+  const rows = projectId
+    ? listAgents({ projectId, includeGlobals: true })
+    : listAgents({ scope: 'global' });
+  if (rows.length === 0) {
+    return '_No agents found — the stock seed may not have run. Call `pc_list_agents` to re-check before answering._';
+  }
+
+  const builtIn = rows.filter((r) => r.origin === 'stock');
+  const projectPods = rows.filter((r) => r.origin === 'user-created' && r.scope === 'project');
+  const globalCustom = rows.filter((r) => r.origin === 'user-created' && r.scope === 'global');
+
+  const sections: string[] = [];
+  if (builtIn.length > 0) {
+    sections.push(
+      `**Built-in agents** (ship with Caisson, available in every project — \`orchestrator\` is the chat the user talks to):\n${builtIn.map(formatRosterRow).join('\n')}`,
+    );
+  }
+  if (projectPods.length > 0) {
+    sections.push(
+      `**This project's agents** (custom, scoped to this project):\n${projectPods.map(formatRosterRow).join('\n')}`,
+    );
+  }
+  if (globalCustom.length > 0) {
+    sections.push(
+      `**The user's global agents** (custom, global scope — copy one into a project with "Add agent" before it can be dispatched there):\n${globalCustom.map(formatRosterRow).join('\n')}`,
+    );
+  }
+  return sections.join('\n\n');
 }

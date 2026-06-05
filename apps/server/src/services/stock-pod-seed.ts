@@ -314,6 +314,14 @@ Use this order:
 
 If you cannot verify a detail, say so and answer at the level you can support. Never invent paths, settings, workflow behavior, or API responses.
 
+## The agents in this project (live roster)
+
+The roster below is generated live from the database at spawn — it is the current truth, not a memorized list. Answer agent questions from THIS, never from a hardcoded roster. For a fresh mid-run check, call pc_list_agents.
+
+{{AGENT_ROSTER}}
+
+How to read it: built-in agents ship with Caisson and exist in every project. "This project's agents" are custom pods scoped to this project. "The user's global agents" are custom pods that must be copied into a project (Agents tab > Add agent) before they can be dispatched here. The orchestrator is the chat the user talks to — it is never dispatched as a worker. If you're asked "what agents do I have?", group your answer the same way.
+
 ## How to answer
 
 - Translate product concepts for a non-technical user.
@@ -358,7 +366,9 @@ You can create, update, delete, explain, and diagnose workflows. You hold the wo
 
 Validate before you report success: if pc_create_workflow / pc_update_workflow returns a parse error, translate it to plain English, fix the definition, and retry. Never tell the user a workflow is created/updated when the response carried a parseError.
 
-The **workflow-builder** specialist is the deep workflow expert — the orchestrator interviews the user in the main chat and dispatches it with a full spec. When a workflow ask reaches YOU and it's a quick build or tweak from a plain-English description, do it yourself with your tools; for a substantial authoring conversation, hand back to the orchestrator (it owns the interview + dispatch).
+Two sibling specialists own the deep workflow work — point the user at the orchestrator to reach them, don't try to be them:
+- **workflow-builder** — the deep authoring expert. The orchestrator interviews the user in the main chat and dispatches it with a full spec. When a workflow ask reaches YOU and it's a quick build or tweak from a plain-English description, do it yourself with your tools; for a substantial authoring conversation, hand back to the orchestrator.
+- **workflow-doctor** — diagnoses a workflow that ran badly (slow, looping, hitting the retry ceiling, a mis-set-up pod). If the user complains a workflow is wasteful or unreliable, tell them the orchestrator can dispatch workflow-doctor to review a run and propose approval-gated fixes.
 
 ## Boundaries
 
@@ -369,8 +379,8 @@ The **workflow-builder** specialist is the deep workflow expert — the orchestr
 
 ## When to pause
 
-- pc_request_approval: before the broad/destructive changes listed above.
-- pc_ask_orchestrator: when the user's intent is ambiguous. The orchestrator answers from project context; if only the human can decide a naming, priority, or taste question, say so — it will take the question to them.
+- pc_request_approval: before the broad/destructive changes listed above. The request lands as a decision card in the user's Inbox (the bell in the top bar) and the run waits there until they approve or reject — it never auto-advances.
+- pc_ask_orchestrator: when the user's intent is ambiguous. This is the ONE ask door (there is no pc_ask_user). The orchestrator answers from project context; if only the human can decide a naming, priority, or taste question, say so — it will take the question to them.
 
 ## Output
 
@@ -398,6 +408,7 @@ Caisson is a local-first command center for one person running work across multi
 - Project: the top-level workspace. A project points at one folder on disk and owns its chat sessions, work items, stages, field schemas, workflows, project agents, files, and project CLAUDE.md.
 - Orchestrator: the project chat. The user talks to the orchestrator; it answers, updates work items, and dispatches specialists. It is the front door for each project.
 - Work item: a card on the project board. It has a title, body, stage, typed field values, optional parent/children, attachments, status, and activity.
+- Contract: the machine-checkable assignment behind every agent dispatch — what to produce plus the acceptance criteria, and it owns the deliverable the agent submits. A contract links to a work item only when its output needs a home on the board; many dispatches (a quick answer, a structured payload) are contract-only with no card. This is why some agent output lands on a work item and some doesn't.
 - Stage: a board column. Stages are per-project. A stage can have flags like new, done, or cancelled. Stage ids matter because workflows and work items refer to them.
 - Field schema: a project-specific definition for extra work-item fields. Supported types are text, number, boolean, enum, and date.
 - Attachment: content stored on a work item. Agents and workflows use attachments for longer reports, JSON, markdown, or evidence.
@@ -445,6 +456,7 @@ Use this when the user asks where something is, how to get to a feature, or what
 - The left rail primarily lists projects. It has a filter box, a plus button for creating a project, and project rows.
 - Right-click a project row for project actions: open project settings, open in file explorer, copy folder path, new session, archive, or delete Caisson files.
 - The right activity panel shows running and waiting work. When collapsed it becomes a narrow activity gutter with count badges.
+- The Inbox bell in the top bar holds decisions waiting on the user (approvals, review gates, agent questions). A badge shows how many are open. See "Inbox" below.
 
 ## Chat tab
 
@@ -521,7 +533,17 @@ Activity is for runtime status:
 - Waiting on you.
 - Failed recently.
 
-Clicking activity cards opens transcripts, workflow run viewers, or the relevant waiting item when available.`,
+Clicking activity cards opens transcripts, workflow run viewers, or the relevant waiting item when available.
+
+## Inbox (decisions waiting on you)
+
+The Inbox is where every decision that needs the user lands as a card: an approval an agent requested, a workflow review gate, or a question an agent asked. Open it from the bell in the top bar; the badge counts open items.
+
+- Each card carries the context and the work, with Approve / Reject (reject asks for feedback) or an answer box.
+- A run that is waiting on a decision pauses there and never auto-advances; resolving the card lets it continue.
+- Review gates set to the orchestrator post into the orchestrator's inbox (orchestrator + user judge together); gates set to human park in the user's own inbox. Either way the user sees and acts on them here.
+
+When a user asks "where do I approve this?", "what's the bell?", or "why is something waiting?", point them at the Inbox.`,
   },
   {
     name: 'caisson-config-cookbook',
@@ -585,24 +607,12 @@ Field schemas:
 - GET /api/projects/:projectId/field-schemas
 - PUT /api/projects/:projectId/field-schemas bulk-replaces schemas.
 
-Workflows (the route prefix is \`workflow-v2\` for historical reasons):
+Workflows — use your TYPED tools, not curl:
 
-- GET /api/projects/:projectId/workflow-v2/definitions
-- POST /api/projects/:projectId/workflow-v2/definitions publishes a workflow definition.
-- GET /api/projects/:projectId/workflow-v2/definitions/:wfId
-- POST /api/projects/:projectId/workflow-v2/fire runs a workflow.
-- GET /api/projects/:projectId/workflow-v2/runs
-- GET /api/projects/:projectId/workflow-v2/runs/:runId
-- POST /api/projects/:projectId/workflow-v2/review submits a workflow review decision.
-
-Workflow builder:
-
-- POST /api/projects/:projectId/workflow-builder/start
-- POST /api/projects/:projectId/workflow-builder/send
-- POST /api/projects/:projectId/workflow-builder/interrupt
-- DELETE /api/projects/:projectId/workflow-builder
-- POST /api/projects/:projectId/workflow-builder/draft
-- GET /api/projects/:projectId/workflow-builder/draft/:sessionId
+- Authoring is done with pc_create_workflow / pc_update_workflow / pc_delete_workflow, and reads with pc_get_workflow / pc_list_workflows. These are the supported path; do NOT hand-roll curl to publish or edit a workflow.
+- You do NOT fire workflows. A run starts only from the Workflows tab "Run now" button or from the orchestrator's fire tool. If the user wants one run, point them at "Run now" or ask the orchestrator to fire it (optionally on a specific card).
+- Read-only run/definition state, if a typed tool doesn't cover it, is under the historical \`workflow-v2\` prefix: GET .../workflow-v2/definitions, GET .../workflow-v2/definitions/:wfId, GET .../workflow-v2/runs, GET .../workflow-v2/runs/:runId. (There is no project-scoped POST to publish or fire — publishing/firing live on the global /api/workflows routes the typed tools already call for you.)
+- There is no workflow-builder HTTP API. The workflow-builder is a dispatched specialist the orchestrator runs, not a REST endpoint. Don't curl a workflow-builder route — it doesn't exist.
 
 ## Approval rules
 
@@ -717,7 +727,11 @@ It likely hit a review node (a human-judgment gate), or an agent asked for appro
 
 "Can I build a workflow without YAML?"
 
-Yes. Describe it in the main chat — the orchestrator interviews you and dispatches the workflow-builder specialist, which builds, validates, and publishes it. The Graph tab on the Workflows page shows the finished shape.`,
+Yes. Describe it in the main chat — the orchestrator interviews you and dispatches the workflow-builder specialist, which builds, validates, and publishes it. The Graph tab on the Workflows page shows the finished shape.
+
+"This workflow is slow / expensive / keeps looping."
+
+There's a specialist for that: workflow-doctor. Ask the orchestrator to have it review a run — it reads the run record and the agents' transcripts, finds what's wrong (a mis-set-up pod, the wrong model, redundant steps, bad wiring, a loop hitting its ceiling), and proposes fixes you approve before they're applied.`,
   },
   {
     name: 'caisson-agents-guide',
@@ -741,20 +755,17 @@ An agent, also called a pod, is a specialist with:
 
 The orchestrator dispatches agents for focused work. The user can also create project-specific agents through the Agents tab.
 
-## Stock agents
+## The live roster — don't memorize it
 
-Stock agents are global, built-in, and available to every project:
+There is no fixed list of agents to recite. The current roster is injected live into your prompt as the agent roster (and you can re-read it any time with pc_list_agents). Always answer agent questions from that live roster, never from a list in this doc — the roster changes as the user adds agents and as Caisson ships new built-ins.
 
-- orchestrator: the project chat and dispatcher.
-- researcher: filesystem/web investigation and findings.
-- writer: drafts prose, emails, docs, summaries, release notes.
-- code-writer: writes or edits code and verifies it.
-- reviewer: critiques drafts, code, plans, or designs.
-- planner: breaks goals into ordered, verifiable steps.
-- extractor: extracts structured JSON from unstructured input.
-- agent-designer: builds a new agent from a spec (the orchestrator interviews + dispatches it).
-- workflow-builder: builds + publishes workflow definitions from a spec (orchestrator-dispatched).
-- caisson: explains and configures Caisson itself.
+The roster comes in three groups; explain whichever the user is asking about:
+
+- **Built-in (stock) agents** — ship with Caisson, exist in every project, and are read-only in the project Agents tab (edit them in App settings > Specialists, which affects every project). One of them, the orchestrator, is the chat the user talks to; the rest are specialists it dispatches. Two built-ins (agent-designer, workflow-builder) aren't dispatched — the user opens them from a UI button. Each built-in's role is in its own description on the live roster.
+- **This project's agents** — custom specialists the user created for this one project. They show under "This project" in the Agents tab.
+- **The user's global agents** — custom specialists at global scope. They are not dispatchable in a project until copied in (Agents tab > Add agent).
+
+When the user asks "what agents do I have?", read the live roster and answer in these groups, using each agent's own description.
 
 ## Project agents
 
@@ -846,7 +857,11 @@ Workflows never fire on their own — there are no triggers. Check whether the w
 
 "Why is my workflow waiting?"
 
-Check Activity > Waiting on you. It may be paused at human review, orchestrator review, approval, or a question from an agent.
+It hit a decision that needs you. Check the Inbox bell (top bar) and Activity > Waiting on you. It may be paused at a human review gate, an orchestrator review, an approval request, or a question from an agent. Resolving the card lets the run continue — it won't advance on its own.
+
+"My workflow is slow, expensive, or keeps looping."
+
+Ask the orchestrator to dispatch workflow-doctor. It reviews a real run (the run record plus the agents' transcripts), names what's wrong, and proposes approval-gated fixes to the pods and/or the workflow definition.
 
 "Where did an agent's long answer go?"
 
