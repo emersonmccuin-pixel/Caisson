@@ -710,9 +710,10 @@ lives in per-session scratch dirs outside the repo).
   `pc_get_work_item` · `pc_submit_deliverable` · `pc_ask_orchestrator` (the ONE escalation door) ·
   `pc_get_contract` · `pc_list_attachments` · `pc_get_attachment` (`REQUIRED_AGENT_TOOLS`,
   tool-catalog.ts). Still open: the full agent roster audit (tools, descriptions, dispatch
-  guidance) — deliberately *after* the rebuild's bigger pieces settle. M7 finding for it:
-  `agent-ask-*` work-item history kinds have NO live writer (only `agent-invoke` does;
-  agent-audit.ts) — dead union members kept for read-tolerance, candidates for that audit.
+  guidance) — deliberately *after* the rebuild's bigger pieces settle. ~~M7 finding: `agent-ask-*`
+  history kinds have no writer~~ ✅ cleanup sweep 2026-06-04 — the writerless kinds (and their
+  dead fields + web render branches) DELETED; zero rows carried them. Same pass: contracts
+  `PENDING_ASK_KINDS` 'user' leftover narrowed (domain had it since M7).
 - **Dispatch-payload audit — ✅ DONE 2026-06-03.** Verdict: the context-pod goal is **partially met,
   broken for attachments.**
   - **Body / fields / parent / live-read:** OK — body referenced in the prompt, everything readable

@@ -869,36 +869,8 @@ function renderHistoryEntry(
         actorLabel: entry.agentName ?? 'agent',
         text: entry.note ?? 'Invoked',
       };
-    case 'agent-ask-orchestrator':
-      return {
-        actor: 'agent',
-        actorLabel: entry.agentName ?? 'agent',
-        text: entry.note ?? 'Asked orchestrator',
-      };
-    case 'agent-approval-request':
-      return {
-        actor: 'agent',
-        actorLabel: entry.agentName ?? 'agent',
-        text: entry.note ?? 'Requested approval',
-      };
-    case 'agent-answer':
-      return {
-        actor: entry.answeredBy === 'user' ? 'human' : 'orchestrator',
-        actorLabel: entry.answeredBy ?? 'answer',
-        text: entry.note ?? 'Answered',
-      };
-    case 'agent-completed':
-      return {
-        actor: 'agent',
-        actorLabel: entry.agentName ?? 'agent',
-        text: entry.note ?? 'Completed',
-      };
-    case 'agent-failed':
-      return {
-        actor: 'agent',
-        actorLabel: entry.agentName ?? 'agent',
-        text: entry.cause ? `Failed: ${entry.cause}` : 'Failed',
-      };
+    // ☠ Cleanup sweep (2026-06-04) — render branches for the writerless
+    // agent-* history kinds deleted with the kinds themselves (types.ts).
     default:
       return null;
   }

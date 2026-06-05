@@ -8,7 +8,10 @@
 
 import { parseErr, parseOk, type ParseResult, type ULID } from './shared.ts';
 
-export const PENDING_ASK_KINDS = ['orchestrator', 'user', 'approval'] as const;
+// ☠ M7 (FD-6) / cleanup sweep 2026-06-04 — `'user'` deleted here too (the
+// domain enum narrowed in M7; this wire copy lagged). ONE ask door: agents ask
+// the orchestrator. Zero `kind='user'` rows exist (verified against the dev DB).
+export const PENDING_ASK_KINDS = ['orchestrator', 'approval'] as const;
 export type PendingAskKind = (typeof PENDING_ASK_KINDS)[number];
 
 export const PENDING_ASK_STATUSES = ['open', 'answered', 'cancelled'] as const;

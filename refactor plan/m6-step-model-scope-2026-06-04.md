@@ -145,6 +145,10 @@ failed, ZERO in-flight.
   ref grammars (refs.ts + when.ts atoms) + 3 prompt surfaces + registry descriptions + ANOTHER
   live-defs migration, for a purely cosmetic gain — the SEMANTIC fix (body=brief, guaranteed)
   shipped in M5. Standalone pass if wanted; not rot-bearing.
+  **Cleanup sweep 2026-06-04: closed as WON'T-DO unless Emerson asks** — same cost/benefit, and
+  it would churn the freshly-migrated AHEAD def + golden for zero behavior. (Same verdict for the
+  builder-UI input-port pickers follow-up: superseded by FD-21 chat-driven authoring — the builder
+  pod wires input ports; the YAML tab is the power path.)
 - ✅ **FD-13 projection guard:** `deriveDagStateFromDiary` (dag/replay.ts) replays
   `workflow_run_events` through the SAME pure transitions; guard tests assert derived states ≡
   executor dagState across a reject-loop story AND a ceiling-escalation story. dagState stays the

@@ -43,15 +43,9 @@ export type WorkItemType = (typeof WORK_ITEM_TYPES)[number];
 
 export interface WorkItemHistoryEntry {
   ts: string;
-  kind:
-    | 'move'
-    | 'update'
-    | 'agent-invoke'
-    | 'agent-ask-orchestrator'
-    | 'agent-approval-request'
-    | 'agent-answer'
-    | 'agent-completed'
-    | 'agent-failed';
+  // ☠ Cleanup sweep (2026-06-04) — writerless agent-* kinds deleted (mirrors
+  // @pc/domain WorkItemHistoryEntry; only agent-audit.ts writes agent-invoke).
+  kind: 'move' | 'update' | 'agent-invoke';
   from?: string;
   to?: string;
   fields?: Record<string, unknown>;
@@ -59,10 +53,7 @@ export interface WorkItemHistoryEntry {
   agentName?: string;
   sessionId?: string;
   runId?: string;
-  pendingAskId?: string;
   invokeMode?: 'sync' | 'async';
-  answeredBy?: 'orchestrator' | 'user';
-  cause?: string;
 }
 
 export interface WorkItem {

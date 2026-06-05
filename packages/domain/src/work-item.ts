@@ -66,18 +66,13 @@ export interface WorkItem {
  *  rows carry the agent-context fields. */
 export interface WorkItemHistoryEntry {
   ts: string;
-  kind:
-    | 'move'
-    | 'update'
-    | 'agent-invoke'
-    // ☠ M7 (FD-6) — 'agent-ask-user' deleted with pc_ask_user. NOTE: only
-    // 'agent-invoke' has a live writer today (agent-audit.ts); the other
-    // agent-* kinds are read-side tolerance for historical rows.
-    | 'agent-ask-orchestrator'
-    | 'agent-approval-request'
-    | 'agent-answer'
-    | 'agent-completed'
-    | 'agent-failed';
+  // ☠ Cleanup sweep (2026-06-04) — the writerless agent-* kinds
+  // ('agent-ask-orchestrator' · 'agent-approval-request' · 'agent-answer' ·
+  // 'agent-completed' · 'agent-failed', and M7's 'agent-ask-user' before them)
+  // are DELETED: zero live rows carried them (verified against the dev DB) and
+  // only agent-audit.ts writes history ('agent-invoke'). The agent lifecycle
+  // story lives in agent_runs + the contract + the run diary, not here.
+  kind: 'move' | 'update' | 'agent-invoke';
   /** `move` from-stage. */
   from?: string;
   /** `move` to-stage. */
@@ -87,21 +82,14 @@ export interface WorkItemHistoryEntry {
   /** Free-form display note. `applyRunOutcome` + agent-comms summaries use
    *  this for the human-readable line in the Activity tab. */
   note?: string;
-  // ── agent-* context ──
-  /** Agent name for any `agent-*` entry. */
+  // ── agent-invoke context ──
+  /** Agent name for an `agent-invoke` entry. */
   agentName?: string;
-  /** CC session-id for any `agent-*` entry. Same across pause/resume of one run. */
+  /** CC session-id. Same across pause/resume of one run. */
   sessionId?: string;
-  /** PC-minted run-id (only present for entries that originate from
-   *  `pc_invoke_agent`-tracked runs). */
+  /** PC-minted run-id (`pc_invoke_agent`-tracked runs). */
   runId?: string;
-  /** PC-minted pending-ask id (present on `agent-ask-*` /
-   *  `agent-approval-request` and the matching `agent-answer`). */
-  pendingAskId?: string;
-  /** For `agent-invoke` entries: whether the caller blocked on the result. */
+  /** Pinned 'async' since M5 (sync-invoke DELETE); historical rows may carry 'sync'. */
   invokeMode?: 'sync' | 'async';
-  /** For `agent-answer` entries: who supplied the answer (orchestrator vs user). */
-  answeredBy?: 'orchestrator' | 'user';
-  /** For `agent-failed` entries: narrow cause for the orchestrator handler protocol. */
-  cause?: string;
+  // ☠ pendingAskId / answeredBy / cause — fields of the deleted agent-* kinds.
 }
