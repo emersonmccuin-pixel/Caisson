@@ -2,17 +2,12 @@
 // with per-project tokens substituted. P8's create-project flow calls into
 // this after `git init` to produce the durable PC scaffold:
 //
-//   <folder>/.project-companion/workflows/*.yaml (plain copy)
-//   <folder>/README.md                           (rendered)
+//   <folder>/README.md (rendered) — non-attach modes only
 //
-// `setup-wizard-prompt.md` left the scaffold with FD-21 (the wizard modal is
-// deleted; the orchestrator interviews + writes CLAUDE.md in the one chat).
-//
-// The orchestrator's identity used to land here as
-// `.project-companion/orchestrator-prompt.md` (rendered + appended at spawn
-// via `--append-system-prompt-file`). Section 16a moved it into the
-// `agents` DB table (pod-resident); the scaffold no longer writes a per-
-// project file. See `apps/server/src/services/orchestrator-pod-content.ts`.
+// `.project-companion/` left the scaffold entirely: workflow YAML seeds died
+// with the DB promotion (bbb55166 / 19.13 importer); setup-wizard-prompt.md
+// left with FD-21; orchestrator-prompt.md moved to the `agents` DB table in
+// Section 16a. attach-to-git writes nothing into the user's repo.
 //
 // Agents and Claude runtime config are DB/session-resident. The scaffold
 // writes no `.mcp.json` or `.claude/*` files; pods materialize at spawn time
@@ -22,7 +17,7 @@
 // pass through so a malformed template is visible on inspection rather than
 // silently emptied.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 export interface ProjectScaffoldDeps {
@@ -50,33 +45,9 @@ export interface ProjectScaffoldTarget {
 export class ProjectScaffold {
   constructor(private readonly deps: ProjectScaffoldDeps) {}
 
-  /** Full scaffold pass: workflow seeds + README. */
+  /** Full scaffold pass: README only. */
   writeAll(target: ProjectScaffoldTarget): void {
-    this.writeProjectCompanionFiles(target);
     this.writeReadme(target);
-  }
-
-  /** Like writeAll but skips README.md — used by attach-to-git so the user's
-   *  existing project README isn't clobbered. */
-  writeWithoutReadme(target: ProjectScaffoldTarget): void {
-    this.writeProjectCompanionFiles(target);
-  }
-
-  /** Project-visible PC files that should be part of the scaffold commit. */
-  writeProjectCompanionFiles(target: ProjectScaffoldTarget): void {
-    this.writeWorkflowSeeds(target);
-  }
-
-  /** Copy seed workflow YAMLs verbatim (no token substitution). */
-  writeWorkflowSeeds(target: ProjectScaffoldTarget): void {
-    const srcDir = resolve(this.deps.templatesDir, '.project-companion', 'workflows');
-    const destDir = resolve(target.folderPath, '.project-companion', 'workflows');
-    if (!existsSync(srcDir)) return;
-    mkdirSync(destDir, { recursive: true });
-    for (const f of readdirSync(srcDir)) {
-      if (!f.endsWith('.yaml')) continue;
-      copyFileSync(resolve(srcDir, f), resolve(destDir, f));
-    }
   }
 
   /** Render `<folder>/README.md` from template. */

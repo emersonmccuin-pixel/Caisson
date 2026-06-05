@@ -108,20 +108,18 @@ The setup wizard is a transient `PtySession`-owned modal (confirmed: `project-ru
 |---|---|---|
 | `init-empty` | Folder exists but is empty | `git init -b main`, scaffold, commit `Initial commit` |
 | `init-in-place` | Folder has files but no `.git` | `git init`, commit existing as `Initial import`, scaffold, commit `Add Caisson scaffold` |
-| `attach-to-git` | Folder is already a git repo | Skip `git init`; scaffold (no README); stage only `.project-companion/`; commit `Add Caisson scaffold` |
+| `attach-to-git` | Folder is already a git repo | Skip `git init`; write + commit **nothing** — adoption is purely a DB-side registration |
 
 Steps in order:
 1. Validate name + mode + folder.
 2. Create the folder if it doesn't exist.
 3. Mint a ULID for the project ID.
 4. Derive a slug — kebab-case the name; append `-2`, `-3`, … to avoid DB collisions.
-5. For `attach-to-git`: if `.project-companion/` already exists and `replaceExisting` is set, delete it first.
-6. `git init -b main` (non-attach modes).
-7. Commit pre-existing files (init-in-place only).
-8. Write scaffold files (see below).
-9. `git add` + `git commit`.
-10. Insert the DB row + emit a live event.
-11. Register the project in the in-memory registry so it's live immediately without a restart.
+5. `git init -b main` (non-attach modes).
+6. Commit pre-existing files (init-in-place only).
+7. Write scaffold + `git add` + `git commit` (non-attach modes only).
+8. Insert the DB row + emit a live event.
+9. Register the project in the in-memory registry so it's live immediately without a restart.
 
 Default stages created: `Draft (isNew) → Review → Done (isDone) → Cancelled (isCancelled)` (`project-create.ts:61–65`).
 
@@ -131,15 +129,13 @@ Default stages created: `Draft (isNew) → Review → Done (isDone) → Cancelle
 
 ### 7. What gets scaffolded into the project folder
 
-`project-scaffold.ts` writes exactly these files — no more (`project-scaffold.ts`):
+`project-scaffold.ts` writes exactly one file — no more (`project-scaffold.ts`):
 
 | Path | Source | Template tokens? |
 |---|---|---|
-| `.project-companion/setup-wizard-prompt.md` | `templates/.project-companion/setup-wizard-prompt.md` | `{{PROJECT_NAME}}`, `{{PROJECT_SLUG}}` |
-| `.project-companion/workflows/*.yaml` | `templates/.project-companion/workflows/` | No — plain copy |
 | `README.md` | `templates/README.template.md` | `{{PROJECT_NAME}}`, `{{PC_TRUNK_PATH}}` |
 
-`README.md` is skipped in `attach-to-git` mode to preserve the existing repo's readme.
+`attach-to-git` mode skips the scaffold entirely — nothing is written into the user's repo. `.project-companion/` left the scaffold whole: workflow YAML seeds died with the DB promotion (19.13 importer remains as the legacy migration door at project boot), `setup-wizard-prompt.md` left with FD-21.
 
 Token map (`project-scaffold.ts:110–122`): `PC_TRUNK_PATH`, `PC_SERVER_PORT`, `PC_CHANNEL_PORT` *(☠ FD-3 — goes away with the port-consolidation Foundation Decision)*, `PC_DB_PATH`, `PROJECT_ID`, `PROJECT_SLUG`, `PROJECT_FOLDER`, `PROJECT_NAME`, `PROJECT_DATA_DIR`.
 

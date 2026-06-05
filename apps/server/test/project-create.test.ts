@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,24 +25,16 @@ after(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('attach-to-git writes a tracked Caisson scaffold file before committing', async () => {
+test('attach-to-git adopts the repo without writing or committing anything', async () => {
   const repoDir = join(tmpDir, 'existing-repo');
   mkdirSync(repoDir, { recursive: true });
   git(['init', '-b', 'main'], repoDir);
   writeFileSync(join(repoDir, 'README.md'), '# Existing repo\n', 'utf-8');
   git(['add', 'README.md'], repoDir);
   git(['commit', '-m', 'Initial project'], repoDir);
-  mkdirSync(join(repoDir, '.project-companion', 'workflows'), { recursive: true });
 
   const templatesDir = join(tmpDir, 'templates');
-  mkdirSync(join(templatesDir, '.project-companion', 'workflows'), { recursive: true });
-  // FD-21: setup-wizard-prompt.md left the scaffold; workflow seeds are the
-  // remaining project-companion scaffold artifact.
-  writeFileSync(
-    join(templatesDir, '.project-companion', 'workflows', 'seed.yaml'),
-    'id: seed\n',
-    'utf-8',
-  );
+  mkdirSync(templatesDir, { recursive: true });
   writeFileSync(join(templatesDir, 'README.template.md'), '# {{PROJECT_NAME}}\n', 'utf-8');
 
   const registered: Project[] = [];
@@ -65,10 +57,6 @@ test('attach-to-git writes a tracked Caisson scaffold file before committing', a
   });
 
   assert.equal(registered[0]?.id, created.project.id);
-  assert.equal(
-    readFileSync(join(repoDir, '.project-companion', 'workflows', 'seed.yaml'), 'utf-8'),
-    'id: seed\n',
-  );
   assert.equal(created.legacyEvent.reason, 'created');
   assert.equal(created.liveEvent.type, 'project.changed');
   assert.equal(
@@ -77,13 +65,10 @@ test('attach-to-git writes a tracked Caisson scaffold file before committing', a
     ),
     true,
   );
-  assert.equal(gitOutput(['log', '-1', '--pretty=%s'], repoDir).trim(), 'Add Caisson scaffold');
-  assert.deepEqual(
-    gitOutput(['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'], repoDir)
-      .trim()
-      .split(/\r?\n/),
-    ['.project-companion/workflows/seed.yaml'],
-  );
+  // Adoption is DB-side only: no new commit, no scaffold files, clean tree.
+  assert.equal(gitOutput(['log', '-1', '--pretty=%s'], repoDir).trim(), 'Initial project');
+  assert.equal(gitOutput(['status', '--porcelain'], repoDir).trim(), '');
+  assert.equal(existsSync(join(repoDir, '.project-companion')), false);
 });
 
 function git(args: string[], cwd: string): void {

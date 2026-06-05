@@ -18,7 +18,6 @@ export interface FolderProbe {
   hasFiles: boolean;
   fileCount: number;
   isGitRepo: boolean;
-  hasPcScaffold: boolean;
   hasMcpJson: boolean;
 }
 

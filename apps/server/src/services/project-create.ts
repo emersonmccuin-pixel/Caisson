@@ -10,14 +10,13 @@
 //   5. If `init-in-place` AND the folder had pre-existing files: commit them
 //      first as `Initial import` so the user can `git diff` the next commit
 //      to see exactly what PC added.
-//   6. Scaffold (templates rendered into the folder). attach-to-git skips
-//      README to preserve the user's existing one.
-//   7. Commit the scaffold as `Initial commit` (fresh folder) or
-//      `Add Caisson scaffold` (in-place w/ pre-existing files or
-//      attach-to-git — only the PC paths get staged, not the user's other
-//      uncommitted changes).
-//   8. Insert the DB row with the pre-minted id.
-//   9. Register the runtime in the ProjectRegistry.
+//   6. Scaffold (README rendered into the folder) + commit — non-attach modes
+//      only. attach-to-git writes and commits NOTHING in the user's repo:
+//      workflows are DB-resident (19.13+), so adoption is purely a DB-side
+//      registration. (The old `.project-companion/` seed-and-commit path died
+//      with the workflow YAML seeds — bbb55166.)
+//   7. Insert the DB row with the pre-minted id.
+//   8. Register the runtime in the ProjectRegistry.
 //
 // Per Section 3 D2 (revised 17e.2, 2026-05-21): the 5 stock specialist pods
 // live in the DB `agents` table at global scope, seeded at boot from
@@ -31,7 +30,7 @@
 // retry. Atomic-rollback is a followup once the create flow has tests.
 
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -51,8 +50,6 @@ export interface CreateProjectFlowInput {
   folderPath: string;
   mode: CreateProjectMode;
   gitRemote?: string | null;
-  /** attach-to-git only: delete a pre-existing `.project-companion/` and re-adopt. */
-  replaceExisting?: boolean;
 }
 
 // Section 27 — default stages carry the three flag slots. User can rename /
@@ -63,12 +60,6 @@ const DEFAULT_STAGES: Stage[] = [
   { id: 'done', name: 'Done', order: 2, isDone: true },
   { id: 'cancelled', name: 'Cancelled', order: 3, isCancelled: true },
 ];
-
-/** Paths the scaffold writes; used to stage only PC's own files in
- *  attach-to-git so the user's other uncommitted changes are left alone.
- *  README.md is intentionally absent — attach-to-git skips it to preserve
- *  the existing repo's README. */
-const SCAFFOLD_PATHS_FOR_COMMIT = ['.project-companion'];
 
 export class ProjectCreate {
   constructor(
@@ -102,22 +93,6 @@ export class ProjectCreate {
       );
     }
 
-    if (input.mode === 'attach-to-git') {
-      const pcDir = resolve(folderPath, '.project-companion');
-      if (existsSync(pcDir) && directoryContainsFiles(pcDir)) {
-        if (input.replaceExisting) {
-          // Re-adopt: wipe the prior scaffold so the fresh one (+ new project
-          // id) can be written. The git history is untouched; this only removes
-          // the working-tree folder, committed below as part of the scaffold.
-          rmSync(pcDir, { recursive: true, force: true });
-        } else {
-          throw new Error(
-            `${folderPath}/.project-companion already exists — remove it first to re-adopt this repo`,
-          );
-        }
-      }
-    }
-
     const filesBefore = readdirSync(folderPath).filter((f) => f !== '.git');
     if (input.mode === 'init-empty' && filesBefore.length > 0) {
       throw new Error(
@@ -138,30 +113,18 @@ export class ProjectCreate {
       await exec('git', ['commit', '-m', 'Initial import'], { cwd: folderPath });
     }
 
-    const target: ProjectScaffoldTarget = {
-      folderPath,
-      projectId: id,
-      projectSlug: slug,
-      projectName: name,
-    };
-    if (input.mode === 'attach-to-git') {
-      this.scaffold.writeWithoutReadme(target);
-    } else {
+    if (input.mode !== 'attach-to-git') {
+      const target: ProjectScaffoldTarget = {
+        folderPath,
+        projectId: id,
+        projectSlug: slug,
+        projectName: name,
+      };
       this.scaffold.writeAll(target);
-    }
-
-    if (input.mode === 'attach-to-git') {
-      // Stage ONLY PC's paths so the user's other uncommitted changes don't
-      // get swept into our commit.
-      await exec('git', ['add', '--', ...SCAFFOLD_PATHS_FOR_COMMIT], { cwd: folderPath });
-    } else {
       await exec('git', ['add', '.'], { cwd: folderPath });
+      const scaffoldMsg = hadExistingFiles ? 'Add Caisson scaffold' : 'Initial commit';
+      await exec('git', ['commit', '-m', scaffoldMsg], { cwd: folderPath });
     }
-    const scaffoldMsg =
-      input.mode === 'attach-to-git' || hadExistingFiles
-        ? 'Add Caisson scaffold'
-        : 'Initial commit';
-    await exec('git', ['commit', '-m', scaffoldMsg], { cwd: folderPath });
 
     const result = persistCreatedProjectWithLiveEvent({
       id,
@@ -194,12 +157,4 @@ function slugify(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-}
-
-function directoryContainsFiles(dir: string): boolean {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isFile()) return true;
-    if (entry.isDirectory() && directoryContainsFiles(resolve(dir, entry.name))) return true;
-  }
-  return false;
 }

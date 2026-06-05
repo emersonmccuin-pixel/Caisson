@@ -7,7 +7,7 @@
 // claude.exe processes — each waits for a UI subscriber.
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import type { OrchestratorSession, Project, ULID, WorkflowRow, WorkflowV2, WorkItem } from '@pc/domain';
@@ -111,7 +111,6 @@ export class ProjectRuntime {
   private workItemSvc: WorkItemService | null = null;
   private attachmentSvc: AttachmentService | null = null;
   private fieldSchemaSvc: FieldSchemaService | null = null;
-  private hooksRefreshed = false;
 
   constructor(public project: Project, private readonly opts: ProjectRuntimeOptions) {}
 
@@ -411,7 +410,6 @@ export class ProjectRuntime {
    */
   ensurePty(): OrchestratorHostSession {
     if (this.pty && !['exited', 'failed'].includes(this.pty.getState())) return this.pty;
-    this.refreshProjectCompanionFilesIfStale();
     const session = this.resolveSessionForSpawn();
     const sessionDir = this.sessionDataPath(session.row.id);
     mkdirSync(sessionDir, { recursive: true });
@@ -753,54 +751,4 @@ export class ProjectRuntime {
     };
   }
 
-  /**
-   * Backfill project-visible PC files that are intentionally part of the repo
-   * scaffold (`.project-companion/*`). Claude runtime files (`.mcp.json`,
-   * `.claude/settings.json`, hooks, and agents) are now session-local and must
-   * never be refreshed into the user's project root.
-   */
-  private refreshProjectCompanionFilesIfStale(): void {
-    if (this.hooksRefreshed) return;
-    this.hooksRefreshed = true;
-    // (Token-rendered backfills are all gone — orchestrator-prompt 16a.4,
-    // workflow-creator-prompt 19.12, setup-wizard-prompt FD-21. Only the
-    // verbatim workflow-seed copy remains.)
-    try {
-      // Section 16a.4 — orchestrator-prompt.md backfill removed. The
-      // orchestrator's identity now lives in the `agents` DB table as a
-      // pod row (seeded at boot per 16a.2; materialised into a session-local
-      // plugin at spawn). Existing per-project copies of the legacy
-      // `.project-companion/orchestrator-prompt.md` are unused post-16a;
-      // safe to leave on disk (no reader) or manually delete.
-
-      // 19.12 — workflow-creator-prompt.md backfill removed. The v1
-      // workflow-creator session (which `appendSystemPromptPath`-ed this file
-      // onto CC's default identity) is gone; v2 uses the workflow-builder
-      // stock pod via `preparePodSpawn`. Existing per-project copies are
-      // unused; safe to leave on disk or manually delete.
-
-      // FD-21 — setup-wizard-prompt.md backfill removed with the wizard modal.
-      // The orchestrator interviews + writes CLAUDE.md in the one chat.
-      // Existing per-project copies are unused; safe to leave or delete.
-
-      // Section 3 phase 3i: backfill any workflow YAMLs from templates that
-      // don't yet exist in the project. Write-if-missing — user-edited copies
-      // of seed workflows (bash-loop.yaml, approval-demo.yaml, etc.) survive.
-      // New built-in workflows land in existing projects on next boot.
-      const workflowsSrc = resolve(this.opts.templatesDir, '.project-companion', 'workflows');
-      const workflowsDest = resolve(this.project.folderPath, '.project-companion', 'workflows');
-      if (existsSync(workflowsSrc)) {
-        mkdirSync(workflowsDest, { recursive: true });
-        for (const f of readdirSync(workflowsSrc)) {
-          if (!f.endsWith('.yaml')) continue;
-          const destFile = resolve(workflowsDest, f);
-          if (existsSync(destFile)) continue;
-          const raw = readFileSync(resolve(workflowsSrc, f), 'utf-8');
-          writeFileSync(destFile, raw, 'utf-8');
-        }
-      }
-    } catch (err) {
-      console.error(`[pc] project companion refresh failed for ${this.project.slug}:`, (err as Error).message);
-    }
-  }
 }

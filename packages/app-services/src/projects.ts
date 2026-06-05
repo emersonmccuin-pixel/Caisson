@@ -47,7 +47,6 @@ export interface ProjectCreateFlowInput {
   folderPath: string;
   mode: CreateProjectMode;
   gitRemote?: string | null;
-  replaceExisting?: boolean;
 }
 
 export interface ProjectChangedPublication {
@@ -101,7 +100,6 @@ export class ProjectService {
       folderPath: request.folder_path,
       mode: request.mode,
       gitRemote: request.git_remote ?? null,
-      ...(request.replace_existing === true ? { replaceExisting: true } : {}),
     });
     const project = toProjectDto(created.project);
     return {

@@ -46,8 +46,6 @@ export interface CreateProjectRequest {
   folder_path: string;
   mode: CreateProjectMode;
   git_remote?: string | null;
-  /** attach-to-git only: delete a pre-existing `.project-companion/` and re-adopt. */
-  replace_existing?: boolean;
 }
 
 export type CreateProjectResponse = ApiResult<{ project: ProjectDto }>;
@@ -123,7 +121,6 @@ export function parseCreateProjectRequest(input: unknown): ParseResult<CreatePro
     if (!gitRemote.ok) return gitRemote;
     request.git_remote = gitRemote.value;
   }
-  if (input.replace_existing === true) request.replace_existing = true;
   return parseOk(request);
 }
 
