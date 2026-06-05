@@ -177,6 +177,77 @@ test('applyReviewDecision on ceiling escalated gate: old instance reject blocked
   assert.ok(replay.rejected === 'not-awaiting', 'replayed reject blocked by state guard');
 });
 
+// ── Instance-token guard (reviewer feedback required fix) ─────────────────────
+// A decision carrying a stale pre-ceiling token must be rejected with
+// 'instance-mismatch' even though the escalated gate is also awaiting-review.
+
+test('applyReviewDecision: instance-mismatch when expectedToken does not match openReviewInstance', () => {
+  const wf = loopWorkflow(1); // max_iterations 1 → ceiling on first reject
+  let state = initDagState(wf);
+  state = markRunning(state, 'r');
+  state = markAwaitingReview(state, 'r', 'i0');
+
+  // Ceiling hit: gate re-arms with 'i1:escalated'
+  const ceiling = applyReviewDecision(wf, state, 'r', { kind: 'reject' });
+  assert.ok(!ceiling.rejected && ceiling.heldForHuman);
+  assert.equal(ceiling.state.nodes['r']?.openReviewInstance, 'i1:escalated');
+
+  // Stale pre-ceiling decision (token 'i0') against escalated gate ('i1:escalated')
+  const stale = applyReviewDecision(wf, ceiling.state, 'r', { kind: 'approve' }, undefined, 'i0');
+  assert.ok(stale.rejected === 'instance-mismatch', 'stale token → instance-mismatch');
+  assert.deepStrictEqual(stale.state, ceiling.state, 'state unchanged on mismatch');
+});
+
+test('applyReviewDecision: matching token passes the instance guard', () => {
+  const wf = loopWorkflow(1);
+  let state = initDagState(wf);
+  state = markRunning(state, 'r');
+  state = markAwaitingReview(state, 'r', 'i0');
+
+  // Ceiling hit
+  const ceiling = applyReviewDecision(wf, state, 'r', { kind: 'reject' });
+  assert.ok(!ceiling.rejected && ceiling.heldForHuman);
+
+  // Correct escalated token
+  const good = applyReviewDecision(wf, ceiling.state, 'r', { kind: 'approve' }, undefined, 'i1:escalated');
+  assert.ok(!good.rejected, 'matching token accepted');
+  assert.equal(good.state.nodes['r']?.state, 'completed');
+});
+
+test('applyReviewDecision: no token (backward compat) passes the instance guard', () => {
+  const wf = loopWorkflow(1);
+  let state = initDagState(wf);
+  state = markRunning(state, 'r');
+  state = markAwaitingReview(state, 'r', 'i0');
+
+  const ceiling = applyReviewDecision(wf, state, 'r', { kind: 'reject' });
+  assert.ok(!ceiling.rejected && ceiling.heldForHuman);
+
+  // No token at all — backward compat: passes through to state guard only
+  const noToken = applyReviewDecision(wf, ceiling.state, 'r', { kind: 'approve' });
+  assert.ok(!noToken.rejected, 'no token is backward-compat accepted');
+});
+
+test('commitReviewDecision passes expectedInstanceToken to applyReviewDecision', async () => {
+  const wf = loopWorkflow(1);
+  const deps = baseDeps();
+  const exec = DagExecutor.start(wf, deps, ctxBase);
+  await exec.advance(); // arms gate with 'i0'
+  assert.equal(exec.getState().nodes['r']?.openReviewInstance, 'i0');
+
+  // Ceiling hit: re-arms with 'i1:escalated'
+  await exec.commitReviewDecision('r', { kind: 'reject' });
+  assert.equal(exec.getState().nodes['r']?.openReviewInstance, 'i1:escalated');
+
+  // Stale token
+  const stale = await exec.commitReviewDecision('r', { kind: 'approve' }, 'i0');
+  assert.ok(stale.rejected === 'instance-mismatch', 'stale token surfaced as rejected');
+
+  // Correct token
+  const good = await exec.commitReviewDecision('r', { kind: 'approve' }, 'i1:escalated');
+  assert.ok(!good.rejected, 'matching token accepted');
+});
+
 // ── Part 2e: commitReviewDecision returns before advance dispatches ───────────
 
 test('commitReviewDecision returns before any agent is dispatched', async () => {

@@ -450,8 +450,13 @@ export function makeExecutorDeps(
     const flavor = node.reviewer;
     const summary = bundle.map((b) => `### ${b.nodeId}\n${b.output}`).join('\n\n');
     const prompt = node.prompt ? renderBody(node.prompt, node.input, ctx) : 'Please review the work below.';
+    // Derive the instance token — must mirror the formula in dag-executor.ts
+    // (markAwaitingReview / ceiling re-stamp) so the token in the payload
+    // matches the openReviewInstance stamped on the node record.
+    const deliveryInstanceToken =
+      `i${String(reviewOpts.iteration)}` + (reviewOpts.escalated ? ':escalated' : '');
     const body =
-      `[pc:workflow-review run=${run.id} node=${node.id} flavor=${flavor}]\n` +
+      `[pc:workflow-review run=${run.id} node=${node.id} flavor=${flavor} instance=${deliveryInstanceToken}]\n` +
       `${prompt}\n\n${summary}\n\n` +
       `Approve: pc_complete_node-equivalent (v2 review endpoint) · Reject sends it back.`;
     // M8 (FD-7) — EVERY review flavor delivers (pre-M8 only the orchestrator
@@ -480,6 +485,10 @@ export function makeExecutorDeps(
         bundle,
         escalated: reviewOpts.escalated,
         iteration: reviewOpts.iteration,
+        // Instance token: the UI / orchestrator must echo this back with the
+        // decision so a stale pre-ceiling card cannot resolve the new escalated
+        // gate (instance-mismatch guard in applyReviewDecision).
+        instanceToken: deliveryInstanceToken,
       },
       idempotencyKey:
         `workflow-review:${run.id}:${node.id}:i${String(reviewOpts.iteration)}` +
@@ -683,6 +692,7 @@ export async function applyV2ReviewDecision(
   reviewNodeId: string,
   decision: ReviewDecision,
   opts: DagRunServiceOptions,
+  instanceToken?: string,
 ): Promise<V2ReviewDecisionResult> {
   const lockOutcome = await withRunLock(runId, async (): Promise<_LockOutcome> => {
     const run = workflowRunsV2Repo.getRun(runId);
@@ -710,7 +720,7 @@ export async function applyV2ReviewDecision(
 
     // ── Commit phase (fast, synchronous-ish) ──────────────────────────────
     // Apply decision + persist state. Guard fires here if gate is not open.
-    const commit = await exec.commitReviewDecision(reviewNodeId, decision);
+    const commit = await exec.commitReviewDecision(reviewNodeId, decision, instanceToken);
 
     if (commit.rejected) {
       return {

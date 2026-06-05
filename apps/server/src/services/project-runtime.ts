@@ -356,8 +356,9 @@ export class ProjectRuntime {
     runId: ULID,
     reviewNodeId: string,
     decision: ReviewDecision,
+    instanceToken?: string,
   ): Promise<V2ReviewDecisionResult> {
-    return applyV2ReviewDecision(runId, reviewNodeId, decision, this.dagRunOptions());
+    return applyV2ReviewDecision(runId, reviewNodeId, decision, this.dagRunOptions(), instanceToken);
   }
 
   /** M6 slice C (FD-11 restart-at-step) — resume a FAILED run against the

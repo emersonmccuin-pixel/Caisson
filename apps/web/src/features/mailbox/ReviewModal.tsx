@@ -43,6 +43,9 @@ interface WorkflowPayload {
   bundle?: WorkflowBundleItem[];
   escalated: boolean;
   iteration: number;
+  /** Instance-token guard: echoed back with the decision so the server can
+   *  reject a stale pre-ceiling decision against the new escalated gate. */
+  instanceToken?: string;
 }
 
 function parseVerificationPayload(p: unknown): VerificationPayload | null {
@@ -81,6 +84,7 @@ function parseWorkflowPayload(p: unknown): WorkflowPayload | null {
     bundle,
     escalated: o.escalated === true,
     iteration: typeof o.iteration === 'number' ? o.iteration : 1,
+    instanceToken: typeof o.instanceToken === 'string' ? o.instanceToken : undefined,
   };
 }
 
@@ -674,6 +678,7 @@ function WorkflowReviewModal({
           projectId={projectId}
           runId={payload.runId}
           nodeId={payload.nodeId}
+          instanceToken={payload.instanceToken}
           onDecided={() => { onDecided(); setTimeout(onClose, 1400); }}
         />
       }
@@ -750,11 +755,13 @@ function WorkflowDecisionFooter({
   projectId,
   runId,
   nodeId,
+  instanceToken,
   onDecided,
 }: {
   projectId: string;
   runId: string;
   nodeId: string;
+  instanceToken?: string;
   onDecided: () => void;
 }) {
   const [showReject, setShowReject] = useState(false);
@@ -787,6 +794,7 @@ function WorkflowDecisionFooter({
         nodeId,
         decision,
         decision === 'reject' ? feedback.trim() : undefined,
+        instanceToken,
       );
       if (!res.ok) throw new Error(res.error ?? 'decision failed');
       setDecided(decision === 'approve' ? 'approved' : 'rejected');

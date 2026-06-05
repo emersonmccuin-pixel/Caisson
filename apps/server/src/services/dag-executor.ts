@@ -320,14 +320,26 @@ export class DagExecutor {
    * running advance async, the HTTP caller receives a response in <100ms even
    * when a reject triggers an agent dispatch.
    *
-   * Returns `{ rejected }` if the idempotency guard fires (gate not open),
-   * or `{ status }` with the committed run status otherwise.
+   * `expectedInstanceToken` (optional): when supplied, passed to
+   * applyReviewDecision's instance-token guard — a stale pre-ceiling decision
+   * against the new escalated gate returns `{ rejected: 'instance-mismatch' }`.
+   *
+   * Returns `{ rejected }` if either guard fires (gate not open / token
+   * mismatch), or `{ status }` with the committed run status otherwise.
    */
   async commitReviewDecision(
     reviewNodeId: string,
     decision: ReviewDecision,
+    expectedInstanceToken?: string,
   ): Promise<{ rejected: ReviewRejected } | { rejected?: never; status: RunStatus }> {
-    const outcome = applyReviewDecision(this.workflow, this.state, reviewNodeId, decision);
+    const outcome = applyReviewDecision(
+      this.workflow,
+      this.state,
+      reviewNodeId,
+      decision,
+      undefined,
+      expectedInstanceToken,
+    );
     if (outcome.rejected) {
       return { rejected: outcome.rejected };
     }
@@ -393,8 +405,12 @@ export class DagExecutor {
    * separately (build-plan step 8) so the response returns before dispatch.
    * This method remains for tests and any caller that needs the settled result.
    */
-  async onReviewDecision(reviewNodeId: string, decision: ReviewDecision): Promise<RunStatus> {
-    const commit = await this.commitReviewDecision(reviewNodeId, decision);
+  async onReviewDecision(
+    reviewNodeId: string,
+    decision: ReviewDecision,
+    expectedInstanceToken?: string,
+  ): Promise<RunStatus> {
+    const commit = await this.commitReviewDecision(reviewNodeId, decision, expectedInstanceToken);
     if (commit.rejected) {
       // Guard fired — gate is not open; return current computed status.
       return computeRunStatus(this.workflow, this.state);
