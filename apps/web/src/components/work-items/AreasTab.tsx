@@ -1,8 +1,9 @@
 // FD-19 — Areas tab (was Slice 010's Focus tab). The project's mental map:
 // a grid of Area cards. Cards are DISPLAY-ONLY — name, description, open/done
-// counts; click opens AreaEditModal where all editing (name, description,
-// delete) happens. Reorder stays on the card (it's about the grid, not the
-// Area). "New Area" creates inline. Members fall back to Uncaptured on delete.
+// counts; click opens AreaDetailModal (name · summary · member list). Edit is
+// a button inside the detail modal. Reorder stays on the card (it's about the
+// grid, not the Area). "New Area" creates inline. Members fall back to
+// Uncaptured on delete.
 //
 // Stop conditions (do NOT add): milestones, progress bars, auto-routing.
 
@@ -14,7 +15,7 @@ import type { WsEnvelope } from '@/features/runtime/ws-types';
 import type { WorkItemStatus } from '@/features/work-items/types';
 import { useProjectAreas } from '@/hooks/use-project-areas';
 import { useProjectWorkItems } from '@/hooks/use-project-work-items';
-import { AreaEditModal } from './AreaEditModal';
+import { AreaDetailModal } from './AreaDetailModal';
 
 interface Props {
   project: Project;
@@ -40,7 +41,7 @@ export function AreasTab({ project, events }: Props) {
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   const sortedAreas = useMemo(
     () => [...areas].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
@@ -64,7 +65,7 @@ export function AreasTab({ project, events }: Props) {
     return { byArea: m, uncaptured };
   }, [workItems]);
 
-  const editingArea = editingId ? sortedAreas.find((a) => a.id === editingId) ?? null : null;
+  const detailArea = detailId ? sortedAreas.find((a) => a.id === detailId) ?? null : null;
 
   async function createArea() {
     const name = newName.trim();
@@ -176,7 +177,7 @@ export function AreasTab({ project, events }: Props) {
               counts={countsByArea.byArea.get(area.id) ?? { open: 0, done: 0 }}
               isFirst={idx === 0}
               isLast={idx === sortedAreas.length - 1}
-              onOpen={() => setEditingId(area.id)}
+              onOpen={() => setDetailId(area.id)}
               onReorder={(dir) => void reorder(area, dir)}
             />
           ))}
@@ -188,13 +189,14 @@ export function AreasTab({ project, events }: Props) {
         {countsByArea.uncaptured.done} done — not in any Area.
       </div>
 
-      {editingArea && (
-        <AreaEditModal
+      {detailArea && (
+        <AreaDetailModal
           projectId={project.id}
-          area={editingArea}
-          openCount={countsByArea.byArea.get(editingArea.id)?.open ?? 0}
-          doneCount={countsByArea.byArea.get(editingArea.id)?.done ?? 0}
-          onClose={() => setEditingId(null)}
+          area={detailArea}
+          workItems={workItems}
+          openCount={countsByArea.byArea.get(detailArea.id)?.open ?? 0}
+          doneCount={countsByArea.byArea.get(detailArea.id)?.done ?? 0}
+          onClose={() => setDetailId(null)}
           onChanged={refetch}
         />
       )}
@@ -221,8 +223,8 @@ function AreaCard({
     <button
       type="button"
       onClick={onOpen}
-      className="flex cursor-pointer flex-col gap-2 border border-border/40 bg-card p-3 text-left hover:border-primary/60"
-      title="Click to edit this Area"
+      className="flex cursor-pointer flex-col gap-2 border border-border bg-card p-3 text-left hover:border-primary/60"
+      title="Click to view this Area"
     >
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-foreground">
