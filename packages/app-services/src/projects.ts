@@ -36,7 +36,7 @@ export interface ProjectRepositoryPort {
   getProjectById(projectId: ContractULID): Project | null;
   updateProjectMeta(
     projectId: ContractULID,
-    input: { name?: string; gitRemote?: string | null },
+    input: { name?: string; gitRemote?: string | null; settings?: Partial<ProjectSettings> },
   ): Project | null;
   reorderProjects(orderedIds: ContractULID[]): void;
   softDeleteProject(projectId: ContractULID): Project | null;
@@ -118,6 +118,7 @@ export class ProjectService {
       const updated = this.repo.updateProjectMeta(projectId, {
         ...(request.name !== undefined ? { name: request.name } : {}),
         ...(request.git_remote !== undefined ? { gitRemote: request.git_remote } : {}),
+        ...(request.settings !== undefined ? { settings: request.settings } : {}),
       });
       if (!updated) return notFound(projectId);
       const project = toProjectDto(updated);
@@ -173,6 +174,7 @@ export function updateProjectMetaWithLiveEvent(
     const updated = updateProjectMetaInDb(tx, projectId as DomainULID, {
       ...(request.name !== undefined ? { name: request.name } : {}),
       ...(request.git_remote !== undefined ? { gitRemote: request.git_remote } : {}),
+      ...(request.settings !== undefined ? { settings: request.settings } : {}),
     });
     if (!updated) return notFound(projectId);
     const project = toProjectDto(updated);
@@ -228,12 +230,17 @@ function toStageDto(stage: Stage): ProjectDto['stages'][number] {
 
 function toProjectSettingsDto(settings: ProjectSettings): ProjectDto['settings'] {
   const cancelledVisibility = settings.cancelledVisibility;
+  const remoteControl = settings.remoteControl;
   return {
     cancelledVisibility:
       cancelledVisibility === 'force-visible' ||
       cancelledVisibility === 'force-hidden' ||
       cancelledVisibility === 'use-global'
         ? cancelledVisibility
+        : 'use-global',
+    remoteControl:
+      remoteControl === 'on' || remoteControl === 'off' || remoteControl === 'use-global'
+        ? remoteControl
         : 'use-global',
   };
 }

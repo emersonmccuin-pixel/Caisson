@@ -224,6 +224,9 @@ export interface UpdateProjectMetaInput {
   name?: string;
   /** Origin URL; pass `null` to clear. Omit to leave unchanged. */
   gitRemote?: string | null;
+  /** Partial overlay merged into the project's settings JSON. Omitted keys
+   *  stay unchanged. */
+  settings?: Partial<ProjectSettings>;
 }
 
 /** Patch the mutable metadata for a project (name + git remote). Returns
@@ -237,12 +240,22 @@ export function updateProjectMetaInDb(
   id: ULID,
   input: UpdateProjectMetaInput,
 ): Project | null {
-  const patch: { name?: string; gitRemote?: string | null; updatedAt: number } = {
+  const patch: {
+    name?: string;
+    gitRemote?: string | null;
+    settings?: Record<string, unknown>;
+    updatedAt: number;
+  } = {
     updatedAt: Date.now(),
   };
   if (typeof input.name === 'string') patch.name = input.name;
   if (input.gitRemote !== undefined) patch.gitRemote = input.gitRemote;
-  if (patch.name === undefined && patch.gitRemote === undefined) {
+  if (input.settings !== undefined) {
+    const existing = getProjectByIdInDb(db, id);
+    if (!existing) return null;
+    patch.settings = { ...existing.settings, ...input.settings };
+  }
+  if (patch.name === undefined && patch.gitRemote === undefined && patch.settings === undefined) {
     return getProjectByIdInDb(db, id);
   }
   db

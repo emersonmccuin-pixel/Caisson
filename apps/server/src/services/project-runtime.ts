@@ -8,20 +8,23 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 
 import type { OrchestratorSession, Project, ULID, WorkflowRow, WorkflowV2, WorkItem } from '@pc/domain';
-import { postMoveStatusForStage } from '@pc/domain';
+import { postMoveStatusForStage, resolveRemoteControlEnabled, withSettingsDefaults } from '@pc/domain';
 import type { ReviewDecision } from '@pc/workflows';
 import {
   createOrchestratorSession,
   endOrchestratorSession,
   getActiveOrchestratorSession,
+  getGlobalSettings,
   getOrchestratorSession,
   moveWorkItemStage,
   reactivateOrchestratorSession,
   workflowsRepo,
 } from '@pc/db';
+import { getDataDir } from '@pc/utils';
 import {
   claudeConfigDirFromJsonlPath,
   jsonlPathFor,
@@ -436,6 +439,15 @@ export class ProjectRuntime {
     // <name>` REPLACES the default — PC owns the prompt + tool surface end-
     // to-end via the pod row seeded at server boot (16a.2).
     //
+    // Resolve whether this orchestrator session launches remote-ready:
+    // per-project override wins, else the global default. Dispatched agent
+    // workers never get remote control — only this orchestrator path passes it.
+    const globalSettings = withSettingsDefaults(getGlobalSettings() ?? {}, getDataDir(), homedir());
+    const remoteControl = resolveRemoteControlEnabled(
+      this.project.settings,
+      globalSettings.remoteControlEnabled,
+    );
+
     let podPrep: PodSpawnPrep;
     try {
       const prep = preparePodSpawn({
@@ -443,6 +455,7 @@ export class ProjectRuntime {
         projectId: this.project.id,
         worktreeDir: this.project.folderPath,
         scratchDir: sessionDir,
+        remoteControl,
         // FD-2 — identity for the pc-rig HTTP headers (mirrors the
         // PC_SESSION_ID / PC_AGENT_SESSION_ID env below).
         identity: {

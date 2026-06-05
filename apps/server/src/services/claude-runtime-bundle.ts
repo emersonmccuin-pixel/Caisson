@@ -52,6 +52,10 @@ export interface ClaudeRuntimeFilesInput {
   templatesDir?: string;
   trunkPath?: string;
   serverPort?: number;
+  /** Orchestrator-only: write `remoteControlAtStartup: true` into the rendered
+   *  settings.json so the session launches remote-ready. Default false — agent
+   *  worker sessions are never remote-controlled. */
+  remoteControl?: boolean;
 }
 
 export interface ClaudeRuntimeFiles {
@@ -161,6 +165,9 @@ function resolveRuntimeContext(input: ClaudeRuntimeFilesInput): RuntimeContext {
       // For PC-spawned sessions those scripts live in the session bundle, not
       // the user's repo.
       PROJECT_FOLDER: posixPath(runtimeRoot),
+      // Rendered as a bare JSON boolean — orchestrator sessions pass true to
+      // launch remote-ready; agent workers leave it false.
+      REMOTE_CONTROL_AT_STARTUP: input.remoteControl ? 'true' : 'false',
     },
   };
 }

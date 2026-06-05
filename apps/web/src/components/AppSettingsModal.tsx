@@ -181,6 +181,7 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
     draft.bugLogTargetProjectId !== settings.bugLogTargetProjectId ||
     draft.fontScale !== settings.fontScale ||
     draft.hideCancelledStage !== settings.hideCancelledStage ||
+    draft.remoteControlEnabled !== settings.remoteControlEnabled ||
     draft.defaultOrchestratorSurface !== settings.defaultOrchestratorSurface ||
     draft.claudeConfigDir !== settings.claudeConfigDir ||
     draft.agentDispatch.maxConcurrent !== settings.agentDispatch.maxConcurrent;
@@ -196,6 +197,7 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
         bugLogTargetProjectId: draft.bugLogTargetProjectId,
         fontScale: draft.fontScale,
         hideCancelledStage: draft.hideCancelledStage,
+        remoteControlEnabled: draft.remoteControlEnabled,
         defaultOrchestratorSurface: draft.defaultOrchestratorSurface,
         claudeConfigDir: draft.claudeConfigDir,
         agentDispatch: draft.agentDispatch,
@@ -525,6 +527,20 @@ function GeneralTab({
             onChange={(e) => onDraftChange({ hideCancelledStage: e.target.checked })}
           />
           <span>Hide cancelled by default</span>
+        </label>
+      </FieldRow>
+
+      <FieldRow
+        label="Remote control"
+        help="When on, new chat sessions start remote-ready so you can drive them from the Claude phone/web app. Each project can override this, and each session has a live toggle in the chat footer. Requires a paid Claude plan (not an API key)."
+      >
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={draft.remoteControlEnabled}
+            onChange={(e) => onDraftChange({ remoteControlEnabled: e.target.checked })}
+          />
+          <span>Enable remote control by default</span>
         </label>
       </FieldRow>
 

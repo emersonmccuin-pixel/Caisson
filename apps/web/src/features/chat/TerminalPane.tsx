@@ -1,7 +1,6 @@
 import {
-  Bug,
-  Cog,
   MessagesSquare,
+  Smartphone,
   Terminal as TerminalIcon,
 } from 'lucide-react';
 
@@ -101,50 +100,12 @@ export function TerminalModeToggle({
   );
 }
 
-/** FD-6 — user filter for mailbox-injected system messages (agent finished,
- *  workflow review, run failed, …). Shown by default; toggling hides the
- *  system cards from the chat. Live — no reload — and persists. */
-export function SystemMessagesToggle({
-  shown,
-  onToggle,
-}: {
-  shown: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={shown}
-      data-testid="chat-system-messages-toggle"
-      aria-label={shown ? 'System messages shown' : 'System messages hidden'}
-      title={
-        shown
-          ? 'System messages are shown (agent results, reviews, failures injected into the conversation). Click to hide them.'
-          : 'System messages are hidden. Click to show them in the chat.'
-      }
-      onClick={onToggle}
-      className={
-        'inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium shadow-sm transition-colors ' +
-        (shown
-          ? 'border-info bg-info/10 text-foreground'
-          : 'border-border bg-background text-muted-foreground hover:border-info/60')
-      }
-    >
-      <Cog className="h-3.5 w-3.5" aria-hidden="true" />
-      <span>System</span>
-      <span className={shown ? 'text-info' : 'text-muted-foreground'}>
-        {shown ? 'shown' : 'hidden'}
-      </span>
-    </button>
-  );
-}
-
-/** Diagnostic toggle: when on, the chat renders EVERY JSONL row labeled by its
- *  kind (including the kinds normally filtered out) so you can see exactly
- *  what's flowing through vs. being suppressed. Live — no reload — and persists
- *  via the same localStorage key the DevControls toggle uses. */
-export function RawModeToggle({
+/** Per-session remote-control switch. Flipping ON types `/remote-control` into
+ *  the live orchestrator session, which makes it drivable from the Claude phone
+ *  / web app (a connect URL + QR appear in the terminal view). Defaults come
+ *  from project + global settings; this is the live per-session override.
+ *  `active` is the optimistic local view — Claude owns the true state. */
+export function RemoteControlToggle({
   active,
   onToggle,
 }: {
@@ -156,12 +117,12 @@ export function RawModeToggle({
       type="button"
       role="switch"
       aria-checked={active}
-      data-testid="chat-raw-mode-toggle"
-      aria-label={active ? 'Raw mode enabled' : 'Raw mode disabled'}
+      data-testid="chat-remote-control-toggle"
+      aria-label={active ? 'Remote control enabled' : 'Remote control disabled'}
       title={
         active
-          ? 'Raw mode ON — every JSONL row is shown, labeled by kind. Click to hide diagnostic rows.'
-          : 'Raw mode OFF — click to reveal every JSONL row labeled by kind (diagnostic).'
+          ? 'Remote control ON — drive this session from the Claude phone/web app. Switch to the terminal view to see the connect QR code. Click to disconnect.'
+          : 'Remote control OFF — click to make this session drivable from the Claude phone/web app.'
       }
       onClick={onToggle}
       className={
@@ -171,11 +132,12 @@ export function RawModeToggle({
           : 'border-border bg-background text-muted-foreground hover:border-primary/60')
       }
     >
-      <Bug className="h-3.5 w-3.5" aria-hidden="true" />
-      <span>Raw</span>
+      <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />
+      <span>Remote control</span>
       <span className={active ? 'text-primary' : 'text-muted-foreground'}>
         {active ? 'on' : 'off'}
       </span>
     </button>
   );
 }
+

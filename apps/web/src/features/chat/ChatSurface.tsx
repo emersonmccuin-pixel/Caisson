@@ -10,7 +10,7 @@ import { useCallback, useState } from 'react';
 import { Composer } from '@/features/chat/ChatComposer';
 import type { ChatSurfaceProps } from '@/features/chat/ChatSurfaceProps';
 import { ChatTimeline } from '@/features/chat/ChatTimeline';
-import { RawModeToggle, SystemMessagesToggle, TerminalModeToggle, TerminalPane } from '@/features/chat/TerminalPane';
+import { RemoteControlToggle, TerminalModeToggle, TerminalPane } from '@/features/chat/TerminalPane';
 import { SendBatchTray } from '@/features/chat/SendBatchTray';
 import { ThinkingIndicator } from '@/features/chat/ThinkingIndicator';
 import { useChatComposerActions } from '@/features/chat/useChatComposerActions';
@@ -22,8 +22,6 @@ import { useChatRenderItems } from '@/features/chat/useChatRenderItems';
 import {
   isHideSystemMessages,
   isRevealHiddenChatRows,
-  setHideSystemMessages,
-  setRevealHiddenChatRows,
 } from '@/features/chat/chatRendererFlag';
 import { useChatTimelineRenderer } from '@/features/chat/useChatTimelineRenderer';
 
@@ -67,32 +65,24 @@ export function ChatSurface({
       !composerHidden,
   );
 
-  // Raw/diagnostic mode — live (no reload). Seeds from the persisted flag so it
-  // stays in sync with the DevControls `reveal` button, and writes back on every
-  // flip so a later reload restores the user's choice.
-  const [revealHidden, setRevealHidden] = useState<boolean>(() =>
-    isRevealHiddenChatRows(),
-  );
-  const toggleRawMode = useCallback(() => {
-    setRevealHidden((prev) => {
-      const next = !prev;
-      setRevealHiddenChatRows(next);
-      return next;
-    });
-  }, []);
+  // Raw/diagnostic + system-message render flags still drive the timeline, but
+  // their footer toggles were replaced by the remote-control switch. Raw stays
+  // reachable via DevControls (same persisted flag); both seed once from the
+  // persisted values.
+  const revealHidden = isRevealHiddenChatRows();
+  const hideSystem = isHideSystemMessages();
 
-  // FD-6 — system-message filter (mailbox-injected `[pc:…]` turns). Shown by
-  // default; the persisted flag hides them. Live — no reload.
-  const [hideSystem, setHideSystem] = useState<boolean>(() =>
-    isHideSystemMessages(),
-  );
-  const toggleSystemMessages = useCallback(() => {
-    setHideSystem((prev) => {
-      const next = !prev;
-      setHideSystemMessages(next);
-      return next;
-    });
-  }, []);
+  // Per-session remote control. Flipping types `/remote-control` into the live
+  // session (control plane, not a chat turn) so it can be driven from the
+  // Claude phone/web app. `remoteControlOn` is the optimistic local view —
+  // Claude owns the real state. Project/global settings decide the launch
+  // default; this is the live override.
+  const remoteControlEligible = Boolean(onTerminalInput && currentSessionId && !composerHidden);
+  const [remoteControlOn, setRemoteControlOn] = useState(false);
+  const toggleRemoteControl = useCallback(() => {
+    onTerminalInput?.('/remote-control\r');
+    setRemoteControlOn((prev) => !prev);
+  }, [onTerminalInput]);
 
   const { chatEnvelopes, renderItems } = useChatRenderItems({
     events,
@@ -227,8 +217,9 @@ export function ChatSurface({
         <div className="shrink-0 border-t border-border bg-card px-3 py-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <RawModeToggle active={revealHidden} onToggle={toggleRawMode} />
-              <SystemMessagesToggle shown={!hideSystem} onToggle={toggleSystemMessages} />
+              {remoteControlEligible && (
+                <RemoteControlToggle active={remoteControlOn} onToggle={toggleRemoteControl} />
+              )}
             </div>
             <TerminalModeToggle
               eligible={terminalEligible}

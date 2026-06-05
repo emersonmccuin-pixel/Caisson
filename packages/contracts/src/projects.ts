@@ -20,6 +20,7 @@ export interface ProjectStageDto {
 
 export interface ProjectSettingsDto {
   cancelledVisibility: 'use-global' | 'force-visible' | 'force-hidden';
+  remoteControl: 'use-global' | 'on' | 'off';
 }
 
 export interface ProjectDto {
@@ -53,6 +54,9 @@ export type CreateProjectResponse = ApiResult<{ project: ProjectDto }>;
 export interface UpdateProjectRequest {
   name?: string;
   git_remote?: string | null;
+  /** Partial overlay merged into the project's settings JSON. Omitted keys
+   *  stay unchanged. */
+  settings?: Partial<ProjectSettingsDto>;
 }
 
 export type UpdateProjectResponse = ApiResult<{ project: ProjectDto }>;
@@ -137,6 +141,25 @@ export function parseUpdateProjectRequest(input: unknown): ParseResult<UpdatePro
     if (!gitRemote.ok) return gitRemote;
     request.git_remote = gitRemote.value;
   }
+  if (input.settings !== undefined) {
+    if (!isRecord(input.settings)) return parseErr('settings must be an object');
+    const settings: Partial<ProjectSettingsDto> = {};
+    const cv = input.settings.cancelledVisibility;
+    if (cv !== undefined) {
+      if (cv !== 'use-global' && cv !== 'force-visible' && cv !== 'force-hidden') {
+        return parseErr('invalid cancelledVisibility');
+      }
+      settings.cancelledVisibility = cv;
+    }
+    const rc = input.settings.remoteControl;
+    if (rc !== undefined) {
+      if (rc !== 'use-global' && rc !== 'on' && rc !== 'off') {
+        return parseErr('invalid remoteControl');
+      }
+      settings.remoteControl = rc;
+    }
+    request.settings = settings;
+  }
   return parseOk(request);
 }
 
@@ -171,11 +194,15 @@ export function isProjectStageDto(value: unknown): value is ProjectStageDto {
 
 export function isProjectSettingsDto(value: unknown): value is ProjectSettingsDto {
   if (!isRecord(value)) return false;
-  return (
+  const cancelledOk =
     value.cancelledVisibility === 'use-global' ||
     value.cancelledVisibility === 'force-visible' ||
-    value.cancelledVisibility === 'force-hidden'
-  );
+    value.cancelledVisibility === 'force-hidden';
+  const remoteOk =
+    value.remoteControl === 'use-global' ||
+    value.remoteControl === 'on' ||
+    value.remoteControl === 'off';
+  return cancelledOk && remoteOk;
 }
 
 export function isProjectDto(value: unknown): value is ProjectDto {

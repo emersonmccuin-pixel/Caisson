@@ -79,6 +79,7 @@ export {
   defaultProjectSettings,
   postMoveStatusForStage,
   resolveCancelledHidden,
+  resolveRemoteControlEnabled,
   withProjectSettingsDefaults,
 } from './project.ts';
 // ☠ M6 slice D (2026-06-04): the v1 workflow domain modules (workflow.ts /

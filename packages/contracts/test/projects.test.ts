@@ -86,7 +86,7 @@ test('project dto guard requires the shared callsignSeq field', () => {
     stages: [{ id: 'todo', name: 'Todo', order: 0 }],
     folderPath: 'C:/work/demo',
     gitRemote: null,
-    settings: { cancelledVisibility: 'use-global' },
+    settings: { cancelledVisibility: 'use-global', remoteControl: 'use-global' },
     callsignSeq: 0,
   };
 

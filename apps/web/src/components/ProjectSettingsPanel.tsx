@@ -120,19 +120,22 @@ function ProjectInfoForm({
 }) {
   const [name, setName] = useState(project.name);
   const [gitRemote, setGitRemote] = useState(project.gitRemote ?? '');
+  const [remoteControl, setRemoteControl] = useState(project.settings.remoteControl);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     setName(project.name);
     setGitRemote(project.gitRemote ?? '');
-  }, [project.id, project.name, project.gitRemote]);
+    setRemoteControl(project.settings.remoteControl);
+  }, [project.id, project.name, project.gitRemote, project.settings.remoteControl]);
 
   const trimmedName = name.trim();
   const trimmedRemote = gitRemote.trim();
   const dirty =
     trimmedName !== project.name ||
-    (trimmedRemote || null) !== (project.gitRemote ?? null);
+    (trimmedRemote || null) !== (project.gitRemote ?? null) ||
+    remoteControl !== project.settings.remoteControl;
   const valid = trimmedName.length > 0;
 
   async function save() {
@@ -140,10 +143,17 @@ function ProjectInfoForm({
     setBusy(true);
     setErr(null);
     try {
-      const patch: { name?: string; git_remote?: string | null } = {};
+      const patch: {
+        name?: string;
+        git_remote?: string | null;
+        settings?: { remoteControl?: 'use-global' | 'on' | 'off' };
+      } = {};
       if (trimmedName !== project.name) patch.name = trimmedName;
       const nextRemote = trimmedRemote ? trimmedRemote : null;
       if (nextRemote !== (project.gitRemote ?? null)) patch.git_remote = nextRemote;
+      if (remoteControl !== project.settings.remoteControl) {
+        patch.settings = { remoteControl };
+      }
       const updated = await projectsApi.updateProject(project.id, patch);
       onSaved(updated);
     } catch (e) {
@@ -156,6 +166,7 @@ function ProjectInfoForm({
   function discard() {
     setName(project.name);
     setGitRemote(project.gitRemote ?? '');
+    setRemoteControl(project.settings.remoteControl);
     setErr(null);
   }
 
@@ -190,6 +201,22 @@ function ProjectInfoForm({
           placeholder="git@github.com:org/repo.git"
           className="w-full border border-border bg-background px-2 py-1 font-mono text-xs"
         />
+      </Field>
+      <Field
+        label="Remote control"
+        help="Whether this project's new chat sessions start remote-ready (drivable from the Claude phone/web app). Each session also has a live toggle in the chat footer."
+      >
+        <select
+          value={remoteControl}
+          onChange={(e) =>
+            setRemoteControl(e.target.value as 'use-global' | 'on' | 'off')
+          }
+          className="w-full border border-border bg-background px-2 py-1 text-sm"
+        >
+          <option value="use-global">Use global default</option>
+          <option value="on">Always on</option>
+          <option value="off">Always off</option>
+        </select>
       </Field>
       <div className="flex items-center gap-2 pt-1">
         <button

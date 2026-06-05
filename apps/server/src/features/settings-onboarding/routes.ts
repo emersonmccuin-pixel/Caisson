@@ -130,6 +130,10 @@ function mergeSettingsPatch(body: Partial<GlobalSettings>, current: GlobalSettin
         typeof body.hideCancelledStage === 'boolean'
           ? body.hideCancelledStage
           : current.hideCancelledStage,
+      remoteControlEnabled:
+        typeof body.remoteControlEnabled === 'boolean'
+          ? body.remoteControlEnabled
+          : current.remoteControlEnabled,
     },
     getDataDir(),
     homedir(),

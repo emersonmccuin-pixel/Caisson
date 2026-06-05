@@ -48,10 +48,14 @@ export interface ProjectSettings {
    *  `'force-visible'` always shows the cancelled column;
    *  `'force-hidden'` always hides it. */
   cancelledVisibility: 'use-global' | 'force-visible' | 'force-hidden';
+  /** Per-project override on the global `remoteControlEnabled` default for new
+   *  orchestrator sessions. `'use-global'` (default) inherits the global flag;
+   *  `'on'` always launches sessions remote-ready; `'off'` never does. */
+  remoteControl: 'use-global' | 'on' | 'off';
 }
 
 export function defaultProjectSettings(): ProjectSettings {
-  return { cancelledVisibility: 'use-global' };
+  return { cancelledVisibility: 'use-global', remoteControl: 'use-global' };
 }
 
 /** Backfill missing keys on a stored project-settings JSON blob. */
@@ -61,11 +65,14 @@ export function withProjectSettingsDefaults(
   const defaults = defaultProjectSettings();
   if (!stored) return defaults;
   const v = stored.cancelledVisibility;
+  const rc = stored.remoteControl;
   return {
     cancelledVisibility:
       v === 'force-visible' || v === 'force-hidden' || v === 'use-global'
         ? v
         : defaults.cancelledVisibility,
+    remoteControl:
+      rc === 'on' || rc === 'off' || rc === 'use-global' ? rc : defaults.remoteControl,
   };
 }
 
@@ -81,6 +88,19 @@ export function resolveCancelledHidden(
   if (resolved === 'force-visible') return false;
   if (resolved === 'force-hidden') return true;
   return globalHide;
+}
+
+/** Resolve whether a project's NEW orchestrator sessions should launch
+ *  remote-ready, from the per-project override + the global default.
+ *  `'on'`/`'off'` win; `'use-global'` falls back to the global flag. */
+export function resolveRemoteControlEnabled(
+  projectSettings: Partial<ProjectSettings> | undefined,
+  globalEnabled: boolean,
+): boolean {
+  const resolved = withProjectSettingsDefaults(projectSettings).remoteControl;
+  if (resolved === 'on') return true;
+  if (resolved === 'off') return false;
+  return globalEnabled;
 }
 
 export interface Project {

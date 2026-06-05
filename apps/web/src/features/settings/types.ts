@@ -29,6 +29,7 @@ export interface GlobalSettings {
   agentDispatch: AgentDispatchSettings;
   jsonl: JsonlSettings;
   hideCancelledStage: boolean;
+  remoteControlEnabled: boolean;
   onboardingCompletedAt: string | null;
 }
 

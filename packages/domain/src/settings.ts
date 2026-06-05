@@ -114,6 +114,12 @@ export interface GlobalSettings {
    *  use-global). Cards in the cancelled stage are still reachable via
    *  "Show archived" and direct links. */
   hideCancelledStage: boolean;
+  /** Remote-control default for NEW orchestrator sessions. When true, orchestrator
+   *  sessions launch remote-ready (the `remoteControlAtStartup` key is written into
+   *  the session's settings.json) so they can be driven from the Claude phone/web
+   *  app. Per-project `remoteControl` override wins (on / off / use-global).
+   *  Dispatched agent/worker sessions are never remote-controlled. Default true. */
+  remoteControlEnabled: boolean;
 }
 
 export const FONT_SCALE_MIN = 0.85;
@@ -158,6 +164,7 @@ export function defaultGlobalSettings(dataDir: string, homeDir: string): GlobalS
       retentionDays: 30,
     },
     hideCancelledStage: false,
+    remoteControlEnabled: true,
   };
 }
 
@@ -241,6 +248,7 @@ export function withSettingsDefaults(
       ),
     },
     hideCancelledStage: stored.hideCancelledStage ?? defaults.hideCancelledStage,
+    remoteControlEnabled: stored.remoteControlEnabled ?? defaults.remoteControlEnabled,
     jsonl: {
       retentionDays: normalizeJsonlRetention(
         stored.jsonl?.retentionDays ?? defaults.jsonl.retentionDays,

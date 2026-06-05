@@ -464,6 +464,16 @@ The chat tab is the project orchestrator. Use it for normal conversation, projec
 
 The session switcher lives in the breadcrumb when the chat tab is active. It lets the user browse or resume project chat sessions.
 
+### Remote control (drive a session from your phone or browser)
+
+A chat session can be made remotely accessible so the user can continue it from the Claude mobile app, a tablet, or a browser — all in sync with the desktop. The user's machine stays in control; only the conversation is mirrored to their devices.
+
+- The "Remote control" switch is in the chat footer bar (bottom of the chat tab, next to the Chat/Terminal switch). Flip it on to make the current session remotely drivable; flip it off to stop.
+- When it turns on, a connection URL and a QR code appear in the session's terminal view (use the Chat/Terminal switch to see them). Scan the QR with a phone, or open the URL in a browser.
+- To access from a phone: install the Claude mobile app, sign in with the same Claude account, and the session appears there. From a browser: open claude.ai/code signed into the same account.
+- Defaults: whether new sessions start remote-ready is set in App settings (global default) and can be overridden per project in Project settings. The footer switch is the live, per-session override.
+- Requirement: the user must be signed into Claude with a paid plan (Pro, Max, Team, or Enterprise). It does not work on an API-key login.
+
 ## Work items tab
 
 The work-items tab is the board. Columns are the project's stages. Cards are work items.
@@ -508,7 +518,7 @@ Open Project settings from the gear button in the center tab strip or from a pro
 
 Sections:
 
-- Project info: display name, slug, folder, git remote.
+- Project info: display name, slug, folder, git remote, and the remote-control default for this project's sessions (use global / always on / always off).
 - Stages: edit board columns, order, ids for new stages, and stage flags.
 - Field schemas: create typed fields for work items.
 - Danger zone: archive project or delete Caisson scaffold files from the project folder.
@@ -519,7 +529,7 @@ Open App settings from the CAISSON app menu.
 
 Sections:
 
-- General: projects folder, telemetry, hide-cancelled-stage default, bug log target, font scale.
+- General: projects folder, telemetry, hide-cancelled-stage default, remote-control default for new sessions, bug log target, font scale.
 - Storage: effective data directory. This is read-only at runtime; changing it requires restart with PC_DATA_DIR.
 - Usage: statusline-derived usage and cost estimates.
 - Specialists: stock pod editor. Edits here affect every project. Reset to default restores seeded prompt/settings but does not remove knowledge, secrets, or MCP servers.

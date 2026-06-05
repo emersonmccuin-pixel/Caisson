@@ -45,7 +45,7 @@ const projectDto = {
   stages: [{ id: 'todo', name: 'Todo', order: 0 }],
   folderPath: 'C:/work/demo',
   gitRemote: null,
-  settings: { cancelledVisibility: 'use-global' as const },
+  settings: { cancelledVisibility: 'use-global' as const, remoteControl: 'use-global' as const },
   callsignSeq: 0,
 };
 
