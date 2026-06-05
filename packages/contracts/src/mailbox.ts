@@ -77,10 +77,11 @@ export const ACTIONABLE_MAILBOX_KINDS = [
   'workflow-review',
   'verification-review',
   'agent-ask-escalated',
-  /** S5/FD-14 — a failed run's card carries a "Resume from failed step" action
-   *  (the existing resume door); resumed-through-ANY-door clears the card
-   *  (resolve-by-source on sourceKind 'workflow-run' + runId). */
-  'workflow-run-failed',
+  // ☠ 'workflow-run-failed' removed (user decision 2026-06-05): a failed run is
+  // no longer a human-inbox card. It notifies the orchestrator and lives in
+  // Workflows → Runs (filter: Failed), where the "Resume from failed step"
+  // action already exists. The kind stays in MAILBOX_MESSAGE_KINDS for the
+  // orchestrator-turn delivery; it is simply never human-actionable.
 ] as const;
 export function isActionableMailboxKind(kind: string): boolean {
   return (ACTIONABLE_MAILBOX_KINDS as readonly string[]).includes(kind);

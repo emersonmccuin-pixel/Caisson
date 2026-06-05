@@ -647,12 +647,18 @@ function deliverWorkflowReview(input: {
 
 // Workflow-engine redesign — failed-run notification. Hoisted (referenced by the
 // ProjectRegistry built at boot; the body runs at run-finalize time). Enqueues
-// ONE durable `workflow-run-failed` message with TWO recipients: the human
-// user-inbox (ui-inbox) AND the project orchestrator (active-orchestrator,
-// orchestrator-turn). If no orchestrator is live the delivery DEFERS (M4a —
-// parked without consuming attempts, rechecked every 60s) and lands when one
-// exists — the run failure is never lost. (Pre-M4a this comment lied: the
-// worker dead-lettered an orchestrator-less delivery on its FIRST pass.)
+// ONE durable `workflow-run-failed` message addressed to the project
+// orchestrator ONLY (active-orchestrator, orchestrator-turn) so the AI can
+// diagnose/repair. If no orchestrator is live the delivery DEFERS (M4a — parked
+// without consuming attempts, rechecked every 60s) and lands when one exists —
+// the run failure is never lost. (Pre-M4a this comment lied: the worker
+// dead-lettered an orchestrator-less delivery on its FIRST pass.)
+//
+// A failed run is NOT a human-inbox card (user decision 2026-06-05): failures
+// are run-history, not a decision demanding the human. The human reviews them in
+// Workflows → Runs (filter: Failed), where the same "Resume from failed step"
+// action already lives. resumeFailedDagRun still resolve-by-sources any open
+// recipients (now just the orchestrator's) so resumed cards never linger.
 function deliverWorkflowRunFailed(input: {
   projectId: ULID;
   runId: ULID;
@@ -692,13 +698,6 @@ function deliverWorkflowRunFailed(input: {
       idempotencyKey: `workflow-run-failed:${input.runId}:${input.incident}`,
     },
     recipients: [
-      {
-        id: newId(),
-        addressKind: 'user-inbox',
-        addressJson: { kind: 'user-inbox', userId: 'local-user', projectId: input.projectId },
-        channel: 'ui-inbox',
-        deliveryId: newId(),
-      },
       {
         id: newId(),
         addressKind: 'active-orchestrator',
