@@ -101,6 +101,32 @@ card → approve → card moves · cross-project badge fires from the other proj
 - Decide-from-the-card vs. jump-to-context default.
 - Loop-ceiling cards: distinct "agent failed 3 times" framing?
 
+## OUTCOME — ✅ ALL FOUR SLICES SHIPPED + LIVE-GAUNTLET GREEN (2026-06-04)
+
+Commits: scope 1b6a44fc → A 9832604a (−1559) → B f9d5ebea → C c8525adc → D (gauntlet fix + docs).
+
+**Live gauntlet (caisson, dev stack):**
+- Human gate fired → `workflow-review` card in `/api/inbox` w/ full payload (i0 key) → REJECT via
+  the door w/ notes → **i0 card actioned · loop fired · writer re-ran WITH `$carry.feedback`
+  (LOOP-PROOF marker in the 2nd deliverable) · i1 card minted non-escalated** (the FD-8 fix live)
+  → approve → completed, zero open cards.
+- Ceiling (max_iterations 1 run): first reject → `iteration_ceiling_hit` → **escalated card
+  (`:escalated` key, escalated:true)** → approve → completed, both cards actioned.
+- Verification: `create-agent-contract` (human-review tier) → invoke reused the WI's contract →
+  agent delivered → **`verification-review` card** → approve `actor:'user'` from the card door →
+  contract passed, **WI auto-advanced to done**, card actioned.
+- **Gauntlet CAUGHT a real wiring bug:** ProjectRegistry didn't forward the `reviewInbox`
+  resolution seam to ProjectRuntime (decided cards lingered) — fixed + re-verified live.
+
+**Live-fire recipes that worked:** publish def POST /api/workflows {def,scope:'project',projectId}
+→ fire POST /api/workflows/:id/fire {} → decide POST .../workflow-v2/review (the reject call runs
+the WHOLE rework loop synchronously — use a 300s timeout) · verification: POST
+.../work-items/create-agent-contract {pod, verification_tier, expected_output REQUIRED} → POST
+.../agents/:name/invoke {input, workItemId, expectedOutput REQUIRED (materialiser gate), any
+dispatcherSessionId} — dispatch REUSES the WI's existing contract (tier flows).
+
+👁 Emerson visual pending: the Inbox bell + decision cards + project chips; ActivityPanel cards.
+
 ## Known risks
 
 - Double-actor race (orchestrator answers an escalated gate the human is looking at): both

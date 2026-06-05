@@ -103,8 +103,8 @@ grouped by what they represent:
 - **`mailbox.ts`** — the notification system (the biggest file): messages, who they're addressed to,
   delivery attempts, and all the address types.
 - **`pending-asks.ts`** — when an agent asks you a question and pauses: the question, its options,
-  its status.
-- **`pending-interactions.ts`** — the durable, saved-to-database version of those asks/approvals.
+  its status. *(☠ M8/FD-7: `pending-interactions.ts` — the duplicate "durable version" died with
+  its table; the mailbox is the durable record.)*
 
 **Runtime wire shapes (how the app talks to a live Claude process)**
 - **`runtime-transcript.ts`** — the format for replaying a chat transcript.

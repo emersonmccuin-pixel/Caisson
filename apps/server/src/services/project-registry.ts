@@ -113,6 +113,7 @@ export class ProjectRegistry {
       ...(this.deps.deliverWorkflowRunFailed
         ? { deliverWorkflowRunFailed: this.deps.deliverWorkflowRunFailed }
         : {}),
+      ...(this.deps.reviewInbox ? { reviewInbox: this.deps.reviewInbox } : {}),
     });
   }
 }

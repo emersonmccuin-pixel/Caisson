@@ -103,7 +103,10 @@ When the orchestrator mentions a work item as a rich link, clicking it opens the
 
 When the orchestrator calls an ask tool, a hook script POSTs to `POST /api/ask`. The server broadcasts an `ask` frame to the browser (you see an inline prompt card) and then **blocks** on an in-memory resolver waiting for your answer or a 10-minute timeout.
 
-`AskShadow` (`ask-shadow.ts`) is a side-write for durability: it creates an `open` row in `pending_interactions` (via the live outbox, so it fans correctly), and closes it when you answer or the timeout fires. The in-memory resolver is still the authority for unblocking the orchestrator — the shadow is only for inspection. **Nothing in the UI reads the shadow rows today** — it's a write-only safety receipt. Its visible surface arrives with the Human Inbox workstream (FD-7).
+☠ **M8 (FD-7, 2026-06-04):** `AskShadow` + its `pending_interactions` side-table are deleted
+(migration 0045 archive). The write-only "safety receipt" never got a reader; the in-memory
+resolver is — and always was — the one authority for this blocking path. The Human Inbox shipped
+on the mailbox instead (decision cards + the cross-project bell).
 
 > 🟢 **Ask layering (FD-6 addendum, 2026-06-03):** the **orchestrator itself has no ask tool** —
 > verified: its toolset contains no `pc_ask_*`; it only answers agent questions via
@@ -122,9 +125,9 @@ After every completed turn, a `jsonl-post-turn-summary` event causes a row to be
 
 ## How it connects
 
-- **Depends on:** `ProjectRuntime` / `InteractiveSession` (the PTY's send surface) · the JSONL tailer in `transcript-tailers.md` (writes `jsonl-events.jsonl`) · `live_outbox` / live-relay (for title and ask-shadow state changes) · `@pc/app-services` (`ConversationReplayService`, `ConversationSendService`, `PendingInteractionService`) · `pending_interactions` table · `post_turn_summaries` table.
+- **Depends on:** `ProjectRuntime` / `OrchestratorHostSession` (the Engine-owned send surface) · the JSONL tailer in `transcript-tailers.md` (writes `jsonl-events.jsonl`) · `live_outbox` / live-relay (for title state changes) · `@pc/app-services` (`ConversationReplayService`, `ConversationSendService`) · `post_turn_summaries` table. *(☠ M8: `PendingInteractionService` + its table.)*
 - **Used by:** `Orchestrator.tsx` / `ChatSurface.tsx` (primary consumer) · `AgentDesignerChat` (transient modal sessions also render through `ChatSurface`) · agent run cards (inline JSONL transcript via `GET /api/subagent-transcript`) · WS reconnect path (`use-project-ws.ts` uses the after-seq cursor).
-- **Contracts / events crossed:** `ConversationSessionDto`, `TranscriptEventDto`, `TranscriptReplayResponse` (`contracts/conversations.ts`, `runtime-transcript.ts`) · WS envelope types: `session-replay`, `session-changed`, `ask`, `jsonl`, `event`, `send-ack`, `send-queue-snapshot` · `live_outbox` rows: `session.title.changed`, `pending-interaction.changed`.
+- **Contracts / events crossed:** `ConversationSessionDto`, `TranscriptEventDto`, `TranscriptReplayResponse` (`contracts/conversations.ts`, `runtime-transcript.ts`) · WS envelope types: `session-replay`, `session-changed`, `ask`, `jsonl`, `event`, `send-ack`, `send-queue-snapshot` · `live_outbox` rows: `session.title.changed`. *(☠ M8: `pending-interaction.changed`.)*
 
 ---
 

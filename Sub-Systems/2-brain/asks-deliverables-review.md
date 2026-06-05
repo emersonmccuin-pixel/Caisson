@@ -2,7 +2,7 @@
 
 > **Role:** Brain (control plane) — cross-cutting
 > **Status:** as-built snapshot — 2026-06-03
-> **Code anchors:** `apps/server/src/services/pause-resume.ts` · `agent-delivery.ts` · `apply-deliverable-store.ts` · `agent-verification.ts` · `agent-verification-review.ts` · `auto-advance-done.ts` · `ask-shadow.ts` · `failure-policy.ts` · `packages/db/src/repos/pending-asks.ts` · `pending-interactions.ts` · `agent-inbox.ts` · `failed-run-dismissals.ts` · `packages/contracts/src/pending-asks.ts` · `pending-interactions.ts` · `runtime-hook-ask.ts` · `packages/domain/src/subagent-failure.ts`
+> **Code anchors:** `apps/server/src/services/pause-resume.ts` · `agent-delivery.ts` · `apply-deliverable-store.ts` · `agent-verification.ts` · `agent-verification-review.ts` · `auto-advance-done.ts` · `failure-policy.ts` · `packages/db/src/repos/pending-asks.ts` · `failed-run-dismissals.ts` · `packages/contracts/src/pending-asks.ts` · `runtime-hook-ask.ts` · `packages/domain/src/subagent-failure.ts` *(☠ M8/FD-7: `ask-shadow.ts` · `pending-interactions.ts` ×2 · ☠ M4a: `agent-inbox.ts`)*
 
 ---
 
@@ -53,11 +53,13 @@ context or takes the question to the human in chat. `pc_ask_orchestrator` inheri
 
 ---
 
-### 2. The orchestrator's own questions (ask-shadow, separate path)
+### 2. The runtime's own blocking ask (`/api/ask`) — ✅ shadow DELETED (M8/FD-7, 2026-06-04)
 
-The orchestrator has its own blocking "ask" mechanism — the `/api/ask` route — that is completely separate from the agent pending-asks above. `AskShadow` (`ask-shadow.ts`) writes a mirrored record to `pending_interactions` (kind = `runtime-hook-ask`) as a durable inspection trail. The in-memory resolver remains the authority; this shadow is best-effort and never interrupts the blocking path. (`ask-shadow.ts:35–92`)
-
-On boot, any `open` interaction rows from a previous process are expired. (`ask-shadow.ts:89–91`)
+The hook-script blocking "ask" mechanism — the `/api/ask` route — is separate from the agent
+pending-asks above. The in-memory resolver is, and always was, the ONE authority (10-minute
+timeout, AskCard in chat). ☠ `AskShadow` + the `pending_interactions` side-table (migration 0045
+archive): the "durable inspection trail" was write-only — no reader, no UI, boot-expired its own
+rows. FD-7 picked the mailbox `user-inbox` channel as the one durable Human Inbox instead.
 
 ---
 
@@ -101,7 +103,13 @@ Rules:
 
 ### 5. Human / orchestrator review (tier-2 and tier-3)
 
-When the automatic check parks the contract for review, a human or the orchestrator sees it in their inbox and makes a decision.
+When the automatic check parks the contract for review, a human or the orchestrator sees it and
+makes a decision. **M8 (FD-7): the human-review tier now REALLY reaches the human** — the
+terminal-effects tail enqueues a `verification-review` user-inbox card (subject, plain-English
+body, payload with contract/WI/run ids); the Inbox decision card's Approve/Reject call the routes
+below, and a decision through ANY door auto-clears the card (resolve-by-source on
+`agent-contract:<contractId>`). Pre-M8 the orchestrator prompt promised a "Human Review inbox"
+that didn't exist. orchestrator-review stays envelope-only (the orchestrator's to handle).
 
 **Shared guard:** before approve or reject, the system reads the work item and finds the newest contract with `status='verifying'`. If it can't find one, it refuses the operation. (`agent-verification-review.ts:225–241`)
 
@@ -113,6 +121,8 @@ When the automatic check parks the contract for review, a human or the orchestra
 **Reject** (`agent-verification-review.ts:157`):
 - Requires non-empty feedback text — refuses with `feedback-required` if absent.
 - Requires the contract to have a linked agent run — refuses with `no-assigned-run` if absent.
+- M8: a reject from the Inbox card carries no PC session — the continuation inherits the PARENT
+  run's `dispatcher_session_id` (the original owner keeps getting the envelopes).
 - Flips the contract to `failed`, records the feedback.
 - Rolls the work item back to `in-progress`.
 - Builds a continuation prompt: "Reviewer rejected. Address the feedback, then re-submit via `pc_submit_deliverable`." (`agent-verification-review.ts:199`)
@@ -154,7 +164,7 @@ and dispatcher-aware addressing (workflow-worker asks fall back to the active or
 - `ActiveRunRegistry` (`agent-active-runs.ts`) — run identity lookup + the run-keyed settlement waiter that fires on deliverable submit.
 - `MailboxService` (`@pc/app-services`) — the durable delivery door for all agent→orchestrator envelopes (asks, completions, failures). No fallback.
 - `ContractService` (`@pc/app-services`) — reads and writes the contract row for verification status and notes.
-- `@pc/db` — `pending_asks_v2`, `pending_interactions`, `agent_inbox` (legacy), `agent_runs_v2`, `agent_contracts`, `work_items`, `live_outbox`.
+- `@pc/db` — `pending_asks` (TS name pending_asks_v2), `agent_runs`, `agent_contracts`, `work_items`, `mailbox_*`, `live_outbox`. *(☠ M8 `pending_interactions` · ☠ M4a `agent_inbox` — both archive-renamed.)*
 
 **Used by:**
 - MCP tool implementations (`pc_ask_orchestrator`, `pc_request_approval`, `pc_submit_deliverable`, `pc_answer_pending`, `pc_resolve_work_item` — ☠ FD-6/M7 `pc_ask_user`).
@@ -163,9 +173,11 @@ and dispatcher-aware addressing (workflow-worker asks fall back to the active or
 
 **Live events at the boundary:**
 - `agent.run.changed (reason:'paused' | 'resumed')` — written to `live_outbox` in the gateway transaction.
-- `pending-interaction.changed` — written on every status flip.
-- Mailbox messages (kinds: `agent-question`, `agent-approval`, `agent-terminal`) — durable orchestrator inbox.
-- Contracts: `PendingAskDto` / `PendingInteractionDto` / `MailboxMessageKind` from `@pc/contracts`.
+- `mailbox.message.changed` — every inbox state flip (incl. M8's decide-from-card resolution).
+- Mailbox messages: `agent-question` / `agent-approval` / `agent-terminal` (orchestrator-bound) ·
+  `workflow-review` (human flavor) / `verification-review` (human-bound decision cards, M8).
+- Contracts: `PendingAskDto` / `MailboxMessageKind` / `ACTIONABLE_MAILBOX_KINDS` from `@pc/contracts`.
+  *(☠ M8 `pending-interaction.changed` + `PendingInteractionDto`.)*
 
 ---
 
@@ -184,7 +196,10 @@ The positive-signal model here **is** the north star. The three state transition
 **Changes needed:**
 - Once the Step 2 one-reconciler keeps the DB row continuously current, the early-ask workaround (on-demand host round-trip at `pause-resume.ts:152–158`) can be retired.
 - ~~`agent_inbox` tables + `inbox-drain.cjs` hook~~ ✅ deleted in M4a (2026-06-04, ledger item 9) — no migration was needed (writer-less since 017).
-- Workflow review steps (`pending_interactions` rows of kind `workflow-orchestrator-review`, `workflow-human-review`) are the durable inbox for the new engine's review nodes. Same contract, same completion=delivery rule.
+- ~~Workflow review steps land in `pending_interactions`~~ ✅ resolved differently in M8 (FD-7):
+  the **mailbox** is the one durable inbox — review gates enqueue iteration-keyed
+  `workflow-review` messages (orchestrator-turn or user-inbox by flavor); those reserved
+  pending-interaction kinds were never written and died with the table.
 - `SubagentFailureCause` / `SubagentFailureSignal` in `packages/domain/src/subagent-failure.ts` reference old v1 vocabulary (`pc_node_failed`, `pc_complete_node`, `subagent:` node field) from before the first-principles redesign. Retire when the new executor lands.
 
 ---

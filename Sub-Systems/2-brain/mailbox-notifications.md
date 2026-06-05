@@ -1,12 +1,12 @@
 # Mailbox & Notifications
 
 > **Role:** cross-cutting (Brain writes, Engine reads, UI views)
-> **Status:** as-built snapshot — 2026-06-03
+> **Status:** as-built snapshot — 2026-06-03 · M8 (FD-7) sweep 2026-06-04
 > **Code anchors:**
 > `packages/contracts/src/mailbox.ts` · `packages/db/src/repos/mailbox.ts`
 > `packages/app-services/src/mailbox/mailbox-service.ts`
-> `packages/app-services/src/mailbox/pending-interaction-service.ts`
-> `packages/app-services/src/mailbox/adapters.ts`
+> `packages/app-services/src/mailbox/adapters.ts` *(☠ M8: `pending-interaction-service.ts`)*
+> `apps/web/src/features/mailbox/InboxBell.tsx` · `MailboxInbox.tsx`
 > `apps/server/src/services/mailbox-worker.ts`
 > `apps/server/src/services/mailbox-orchestrator-turn-adapter.ts`
 > `apps/server/src/services/agent-delivery.ts`
@@ -129,6 +129,8 @@ Two HTTP endpoints serve the inbox panels:
 
 - `GET /api/projects/:projectId/mailbox` — project inbox.
 - `GET /api/mailbox` — the global user inbox (project-less messages).
+- `GET /api/inbox` — **M8 (FD-7): THE human inbox** — every `user-inbox` recipient across ALL
+  projects (the cross-project Inbox bell's feed).
 
 Both return (recipient, message) pairs, filterable by `unreadOnly` / `actionableOnly`. State changes (`read`, `action`, `dismiss`) are `POST`ed to `.../recipients/:id/read|action|dismiss` — each re-emits the message fact through the live-event path so the unread badge updates without a page refresh.
 
@@ -136,11 +138,16 @@ Two live-event types flow to the UI via the `live_outbox` relay:
 - `mailbox.message.changed` — on enqueue and on any recipient state change; includes a `recipientSummary` (total/unread/actionable count).
 - `mailbox.delivery.changed` — on accept/retry/dead-letter; keyed by **delivery ID** (not message ID) to avoid collisions in the client live store (`mailbox-service.ts:302–309`). Consumers must read `payload.messageId` to correlate — not the frame's `entityId`.
 
-### 8. The "waiting for an answer" record (pending interactions)
+### 8. ~~Pending interactions~~ — ✅ DELETED whole (M8/FD-7, 2026-06-04)
 
-Some messages require a reply — an agent asking a question, or a workflow pausing for approval. These use a **`pending_interactions`** row (`pending-interaction-service.ts`) as the durable record of the open question. The mailbox message carries the interaction's ID as a link (`interactionId`). When someone answers, the answer is written to the DB and `pending-interaction.changed` fires via the live-event path.
-
-The HTTP answer route lives at `POST /api/projects/:projectId/pending-interactions/:id/answer`. Today this is a "durable shadow" — the in-memory resolver at `/api/ask` is still the authoritative path that actually unblocks the agent. The durable path does not yet replace it.
+The `pending_interactions` table + service + the `interactionId` message link + the answer route
+are gone (migration 0045 archive). The layer was a write-only shadow: only the `/api/ask` hook
+ever wrote it, nothing read it, and the reserved workflow kinds were never minted. FD-7's answer:
+**the mailbox IS the durable record** — decision kinds (`workflow-review`,
+`verification-review` = `ACTIONABLE_MAILBOX_KINDS`) drive the inbox `actionable` count, the
+decision happens through each source's own typed door, and resolve-by-source
+(`collectUnactionedRecipients`/`actionRecipients` on the MailboxService) clears the cards when a
+gate is decided through ANY door.
 
 ---
 
@@ -148,7 +155,7 @@ The HTTP answer route lives at `POST /api/projects/:projectId/pending-interactio
 
 - **Depends on:** `@pc/db` — five mailbox tables (`mailbox_messages`, `mailbox_recipients`, `mailbox_deliveries`, `mailbox_dead_letters`, `mailbox_audit`) + `live_outbox` (via `insertLiveEvent`); `ConversationSendService` (injected into the turn adapter; the one caller that actually puts a message into an orchestrator session); `getActiveOrchestratorSession` (resolves `active-orchestrator` to the current live session).
 - **Used by:** `agent-run-terminal-effects.ts`, `agent-run-factory.ts`, `pause-resume.ts`, workflow engine, HTTP callers.
-- **Contracts / events:** `MailboxAddress` union + `MailboxMessageKind` + `MailboxDeliveryChannel` — all in `packages/contracts/src/mailbox.ts`; `mailbox.message.changed`, `mailbox.delivery.changed`, `pending-interaction.changed` live-event frames.
+- **Contracts / events:** `MailboxAddress` union + `MailboxMessageKind` + `MailboxDeliveryChannel` + `ACTIONABLE_MAILBOX_KINDS` — all in `packages/contracts/src/mailbox.ts`; `mailbox.message.changed`, `mailbox.delivery.changed` live-event frames. *(☠ M8 `pending-interaction.changed`.)*
 
 ---
 

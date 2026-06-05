@@ -302,22 +302,37 @@ plain text and the turn ends. The full ask layering, deliberate:
 
 ## FD-7 — Human Inbox System becomes its own workstream
 
-**Status:** 🟢 Locked — 2026-06-03
+**Status:** 🟢 Locked — 2026-06-03 · **✅ EXECUTED — M8, 2026-06-04** (scope doc:
+`refactor plan/m8-human-inbox-scope-2026-06-04.md`)
 
 **The decision:** human review gets designed as a **dedicated subsystem**, not patched per-feature:
 - proper **review packages** (everything a reviewer needs, assembled),
 - a proper **review process** (consistent approve/reject/feedback flow everywhere),
 - **global notifications** when review is needed in *other* projects.
 
-**What it must resolve (currently open questions it absorbs):**
-- The two overlapping "open question" tables (`pending_asks_v2` vs `pending_interactions`) — the
-  workstream picks ONE canonical durable inbox surface. *(Note: `pending_interactions` is fed by the
-  **AskShadow** side-write — a durability copy of in-flight agent questions that today has **no UI
-  at all**, write-only. The inbox workstream gives that data its visible surface — the "floats where
-  I can't miss it" experience Emerson described.)*
-- Whether workflow review gates and contract verification holds **merge into one approval flow**
-  (they are two mechanisms today; the asks-deliverables doc flags this).
-- Where the loop-limit "agent failed 3 times, human needed" hand-offs land (FD-9).
+**What it had to resolve — all three resolved in M8:**
+- ~~The two overlapping "open question" tables~~ → **the mailbox `user-inbox` channel IS the one
+  durable Human Inbox** (no new table). `pending_asks` survives as agent ask-STATE (a different
+  job); ☠ `pending_interactions` + AskShadow deleted whole (migration 0045 archive) — the
+  "durability shadow" was write-only with no reader; the visible surface rides the real sources.
+- ~~Review gates vs verification holds merge?~~ → **two mechanisms, ONE surface + ONE decision
+  shape.** They gate different things (a planned graph step vs a contract's deliverable); both now
+  arrive as the same inbox **decision card** (context + work + Approve / Reject-with-required-
+  feedback) and resolve through their existing typed doors. A decision through ANY door
+  (card, orchestrator tool, raw HTTP) auto-clears the card (resolve-by-source).
+- ~~Where do ceiling hand-offs land?~~ → the M6-C escalated gate now delivers an **escalated
+  user-inbox card** ("agent loop exhausted").
+
+**What M8 found + fixed:** pre-M8, EVERY formal human decision was invisible — `requestReview`
+delivered only the orchestrator flavor (a `reviewer:'human'` gate paused the run silently); the
+human-review verification tier promised an inbox that didn't exist; and a loop kick-back's
+re-review **dedupe-vanished** against the first prompt's idempotency key (FD-8 violation — fixed
+with iteration-keyed delivery). Also ☠ the v1 web approval corpse (ApprovalBubble posted to a
+route that never existed).
+
+**Delivered surface:** cross-project **Inbox bell** in the app header (actionable-count badge,
+project chips, decide-from-the-card) + the per-project ActivityPanel inbox grew the same decision
+cards. `GET /api/inbox` = every user-inbox recipient across all projects.
 
 ---
 

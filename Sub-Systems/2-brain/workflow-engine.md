@@ -136,7 +136,7 @@ The first-principles spec reduces the engine to three concepts: **step → trans
 
 **✅ M6 slice D (2026-06-04):** ☠ the v1 domain modules whole (workflow.ts / workflow-run.ts / workflow-edges.ts) · ☠ contract `attempt`/`issued_by` (migration 0044) · spec-less ad-hoc dispatches consult the pod-row → stock default chain (no more NULL-spec contracts) · **FD-13 guard**: `deriveDagStateFromDiary` replays the diary through the engine's own pure transitions; guard tests prove replay ≡ dagState (the diary is provably the truth; dagState stays the resume cache). `$root.output`→`$root.brief` rename deferred (cosmetic; semantic fix shipped in M5 — see the M6 scope doc).
 
-**M6 IS CLOSED — FD-9, FD-10, FD-11 all executed.** Remaining beyond M6: re-attach instead of fail-closed on boot (the one-reconciler work; interrupted runs are at least RESUMABLE now) · M7 ask door · M8 Human Inbox (re-homes the ceiling-pause + review surfaces).
+**M6 IS CLOSED — FD-9, FD-10, FD-11 all executed.** Remaining beyond M6: re-attach instead of fail-closed on boot (the one-reconciler work; interrupted runs are at least RESUMABLE now) · ~~M7 ask door~~ ✅ · ~~M8 Human Inbox~~ ✅ (2026-06-04 — review gates now DELIVER for every flavor: orchestrator → mailbox turn; human + ceiling-escalation → user-inbox decision card, iteration-keyed so loop re-reviews deliver again; a decision through any door clears the cards).
 
 ---
 

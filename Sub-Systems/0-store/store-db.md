@@ -117,7 +117,7 @@ Four rules applied consistently across all tables:
 | `mailbox_deliveries` | Delivery lease, ack, retry, and dead-letter state per (message, recipient, channel). |
 | `mailbox_dead_letters` | Terminal dead-letter audit for exhausted deliveries. |
 | `mailbox_audit` | Append-only audit of all mailbox actions. |
-| `pending_interactions` | Cross-system ask/review/approval state. `open → answered/cancelled`. |
+| ~~`pending_interactions`~~ | ☠ M8 (FD-7, migration 0045 archive) — write-only AskShadow side-table; the mailbox `user-inbox` channel is THE durable human inbox. |
 
 #### Telemetry
 
@@ -153,7 +153,7 @@ Every table has exactly one "repo" file that owns all reads and writes for it. R
 | `orchestrator-sessions.ts` | `orchestrator_sessions` |
 | `orchestrator-send-queue.ts` | `orchestrator_send_queue` |
 | `mailbox.ts` | All five `mailbox_*` tables |
-| `pending-interactions.ts` | `pending_interactions` |
+| ~~`pending-interactions.ts`~~ | ☠ M8 (FD-7) — gone with its table |
 | `settings.ts` | `settings_global` |
 | `statusline-snapshots.ts` | `statusline_snapshots` |
 | `post-turn-summaries.ts` | `post_turn_summaries` |
