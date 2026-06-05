@@ -22,7 +22,9 @@ import { dirname, join, resolve } from 'node:path';
 
 // The version the app's boot/queue/JSONL/system-prompt parsers are verified
 // against. Bump deliberately + re-verify; do not float.
-const PINNED_VERSION = process.env.PC_CLAUDE_PIN ?? '2.1.160';
+// 2.1.163 (2026-06-04): FD-2 harness re-run 6/6 green + a full day of live
+// dev-stack verification on this version (dispatch/ask-resume/workflow/replay).
+const PINNED_VERSION = process.env.PC_CLAUDE_PIN ?? '2.1.163';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude';

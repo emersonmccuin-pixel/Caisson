@@ -3,6 +3,9 @@
 **Verdict: PASSED 6/6 (2026-06-03, claude.exe 2.1.162).** Full write-up in
 `Sub-Systems/_Foundation-Decisions.md` → FD-2. Results: `spike-results.json`.
 
+**Re-runs (FD-22 version bumps):** 2.1.163 — PASSED 6/6 (2026-06-04, pin bump for the
+packaged-app rebuild).
+
 - `server.mjs` — ONE Streamable-HTTP MCP server (`:4555/mcp`), three probe tools; every result
   echoes the per-call identity (X-PC-Probe header → `extra.requestInfo.headers`).
 - `run-spike.mjs` — fully automated driver: 3 interactive claude.exe clients, identity / isolation /
