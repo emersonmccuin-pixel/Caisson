@@ -940,7 +940,7 @@ If your change adds or modifies any UI component (any file under \`apps/web/src/
 - Run \`pnpm --filter @pc/web test:component\` (vitest + jsdom). Fix any failures before returning.
 - The test harness is vitest + jsdom + RTL. Use \`vi.mock()\` for hooks/API calls the component makes; keep mocks minimal. See existing \`test/*.spec.tsx\` files for the pattern.
 - Do NOT claim visual/layout correctness (borders, z-index, stacking, visibility) in your report based on reading class names alone — class names in source code are not proof of runtime behavior. Assert the class names **from the rendered DOM** (RTL \`container.querySelector\`) and let the test be the record.
-- Z-order specifically: if you change a modal's z-class, run \`pnpm --filter @pc/web test:component\` which includes \`test/modal-stacking.spec.tsx\`. That test will fail if the work-item modal z drops to or below the area modal z (≤50).`;
+- Z-order specifically: if you change a modal's z-class, run \`pnpm --filter @pc/web test:component\` which includes \`test/modal-stacking.spec.tsx\`. That test will fail if the work-item modal z drops to or below the area modal z (≤50).
 
 ## Tools
 
