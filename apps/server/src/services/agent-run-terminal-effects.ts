@@ -11,6 +11,7 @@ import {
   getAgentRunRow as defaultGetAgentRunRow,
   getMailboxMessageByIdempotencyKey as defaultGetMailboxMessageByIdempotencyKey,
   getProjectById as defaultGetProjectById,
+  getWorkItem,
   hasPendingAskForRun,
   listRecentTerminalAgentRuns as defaultListRecentTerminalAgentRuns,
   newId,
@@ -405,12 +406,17 @@ async function finishTerminalEffects(args: {
     outcome.verificationTier === 'human-review'
   ) {
     const agentName = input.slug ?? input.podName ?? 'agent';
+    const workItemTitle = outcome.workItemId
+      ? (getWorkItem(outcome.workItemId)?.title ?? null)
+      : null;
     deps.mailboxEnqueue({
       message: {
         id: newId(),
         projectId: input.projectId,
         kind: 'verification-review',
-        subject: `Review needed: ${agentName} finished its work`,
+        subject: workItemTitle
+          ? `Review needed: ${agentName} — ${workItemTitle}`
+          : `Review needed: ${agentName} finished its work`,
         body:
           `Agent ${agentName} handed in its work; the contract is waiting on YOUR review.\n` +
           (outcome.workItemId ? `Card: ${outcome.workItemId}\n` : '') +
@@ -418,6 +424,7 @@ async function finishTerminalEffects(args: {
         payload: {
           contractId,
           workItemId: outcome.workItemId,
+          workItemTitle,
           runId: input.runId,
           agent: agentName,
         },

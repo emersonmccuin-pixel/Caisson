@@ -455,6 +455,7 @@ export function makeExecutorDeps(
         workItemId: run.workItemId,
         prompt,
         summary,
+        bundle,
         escalated: reviewOpts.escalated,
         iteration: reviewOpts.iteration,
       },
