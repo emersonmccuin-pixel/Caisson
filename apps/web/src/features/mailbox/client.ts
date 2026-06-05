@@ -50,12 +50,14 @@ export const mailboxApi = {
     nodeId: string,
     decision: 'approve' | 'reject',
     notes?: string,
+    instanceToken?: string,
   ) =>
     postJson<{ ok: boolean; error?: string }>(`/api/projects/${projectId}/workflow-v2/review`, {
       runId,
       nodeId,
       decision,
       ...(notes ? { notes } : {}),
+      ...(instanceToken ? { instanceToken } : {}),
     }),
 
   /** Verification hold approve (contract human-review tier). */

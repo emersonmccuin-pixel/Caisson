@@ -197,9 +197,12 @@ export function loopSubtree(workflow: WorkflowV2.Workflow, from: string, to: str
 export type ReviewDecision = { kind: 'approve' } | { kind: 'reject'; notes?: string };
 
 /** Serialization guard fired — the decision is a no-op, state is UNCHANGED.
- *  `not-awaiting` = the node is not currently `state==='awaiting-review'`.
+ *  `not-awaiting`      = the node is not currently `state==='awaiting-review'`.
+ *  `instance-mismatch` = the supplied expectedInstanceToken does not match the
+ *                        node's current openReviewInstance (a stale pre-ceiling
+ *                        decision targeting the old gate is rejected).
  *  Surface as HTTP 409 / MCP non-fatal "already resolved". */
-export type ReviewRejected = 'not-awaiting';
+export type ReviewRejected = 'not-awaiting' | 'instance-mismatch';
 
 export type ReviewOutcome =
   | {
@@ -233,13 +236,21 @@ const DEFAULT_MAX_ITERATIONS = 3;
  * state mutation. The caller maps this to HTTP 409 / MCP non-fatal. Combined
  * with the per-run serialization lock in applyV2ReviewDecision, this prevents
  * double-fire (duplicate decide → concurrent agents in the same worktree).
+ *
+ * Instance-token guard (reviewer feedback): when `expectedInstanceToken` is
+ * supplied and does NOT match `rec.openReviewInstance`, return
+ * `{ rejected: 'instance-mismatch' }` — a stale pre-ceiling decision cannot
+ * consume the new escalated gate even though both are `awaiting-review`.
+ * Omitting the token bypasses this check (backward compat for callers that
+ * don't carry a token).
  */
 export function applyReviewDecision(
   workflow: WorkflowV2.Workflow,
   state: State,
   reviewNodeId: string,
   decision: ReviewDecision,
-  at = Date.now()
+  at = Date.now(),
+  expectedInstanceToken?: string,
 ): ReviewOutcome {
   // ── Idempotency guard ────────────────────────────────────────────────────────
   const rec = state.nodes[reviewNodeId];
@@ -247,6 +258,17 @@ export function applyReviewDecision(
     // The gate is not open (either never reached, already decided, or the run
     // is mid-advance after a prior decision). Surface as 409.
     return { rejected: 'not-awaiting', state };
+  }
+
+  // ── Instance-token guard ─────────────────────────────────────────────────────
+  // A decision rendered for gate instance i2 must not resolve the escalated
+  // gate i3:escalated, even though both are awaiting-review. When the caller
+  // supplies an expectedInstanceToken and it doesn't match, reject.
+  if (
+    expectedInstanceToken !== undefined &&
+    rec.openReviewInstance !== expectedInstanceToken
+  ) {
+    return { rejected: 'instance-mismatch', state };
   }
 
   const node = workflow.nodes.find((n) => n.id === reviewNodeId);

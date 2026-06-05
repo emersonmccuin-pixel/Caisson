@@ -31,6 +31,7 @@ export interface WorkflowCompatRuntime {
     runId: ULID,
     nodeId: string,
     decision: WorkflowReviewDecision,
+    instanceToken?: string,
   ): Promise<V2ReviewDecisionResult>;
   resumeV2Run(
     runId: ULID,
@@ -152,6 +153,7 @@ export function registerWorkflowCompatRoutes(app: Hono, deps: WorkflowCompatRout
       nodeId?: string;
       decision?: string;
       notes?: string;
+      instanceToken?: string;
     }>();
     if (!body.runId || !body.nodeId || (body.decision !== 'approve' && body.decision !== 'reject')) {
       return c.json({ ok: false, error: 'require { runId, nodeId, decision: approve|reject }' }, 400);
@@ -161,14 +163,21 @@ export function registerWorkflowCompatRoutes(app: Hono, deps: WorkflowCompatRout
         body.decision === 'reject'
           ? { kind: 'reject' as const, ...(body.notes ? { notes: body.notes } : {}) }
           : { kind: 'approve' as const };
-      const result = await runtime.applyV2Review(body.runId as ULID, body.nodeId, decision);
+      const instanceToken = typeof body.instanceToken === 'string' && body.instanceToken
+        ? body.instanceToken
+        : undefined;
+      const result = await runtime.applyV2Review(body.runId as ULID, body.nodeId, decision, instanceToken);
       if (!result.ok) {
         if (result.code === 'not-found') {
           return c.json({ ok: false, error: 'run not found', code: 'not-found' }, 404);
         }
-        // Gate not awaiting review — idempotent 409 (build-plan step 5).
+        // Gate not awaiting review or instance token mismatch — 409 (build-plan step 5).
         return c.json(
-          { ok: false, error: (result as { error: string }).error, code: 'already-resolved' },
+          {
+            ok: false,
+            error: (result as { error: string }).error,
+            code: result.code === 'instance-mismatch' ? 'instance-mismatch' : 'already-resolved',
+          },
           409,
         );
       }

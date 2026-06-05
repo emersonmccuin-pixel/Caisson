@@ -1050,7 +1050,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_complete_node",
     "family": "workflow",
     "label": "Complete review node (orchestrator)",
-    "description": "Submit an orchestrator-review decision for a workflow run paused at a review node. Use when a `kind=orchestrator-review` envelope lands in chat with `{ workflowRunId, nodeId }` and you have judged the artifact. `decision: \"approve\"` resumes the run; `decision: \"reject\"` kicks back upstream (the reject loop re-fires the prior agent with your `notes` as feedback, up to `max_iterations`). Returns { ok: true, status: <new run status> } or 404 if the run / node is unknown / no longer paused. PC_PROJECT_ID env is the implicit project scope.",
+    "description": "Submit an orchestrator-review decision for a workflow run paused at a review node. Use when a `kind=orchestrator-review` envelope lands in chat with `{ workflowRunId, nodeId, instanceToken }` and you have judged the artifact. `decision: \"approve\"` resumes the run; `decision: \"reject\"` kicks back upstream (the reject loop re-fires the prior agent with your `notes` as feedback, up to `max_iterations`). Pass `instance_token` from the envelope — this prevents a stale/duplicate decision from consuming the wrong gate (e.g. after a loop ceiling escalation). Returns { ok: true, status: <new run status> } or 404 if the run / node is unknown / no longer paused. PC_PROJECT_ID env is the implicit project scope.",
     "catalogDescription": "Submit an approve or reject decision for a workflow run paused at an orchestrator-review node.",
     "inputSchema": {
       "type": "object",
@@ -1074,6 +1074,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "notes": {
           "type": "string",
           "description": "optional — required in practice for reject so the upstream agent has feedback"
+        },
+        "instance_token": {
+          "type": "string",
+          "description": "optional — the instanceToken from the review envelope. Pass it to prevent a stale pre-ceiling decision from consuming the new escalated gate."
         }
       },
       "required": [
