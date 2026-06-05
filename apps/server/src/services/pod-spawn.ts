@@ -59,11 +59,6 @@ export interface PreparePodSpawnInput {
   serverPort?: number;
   projectSlug?: string | null;
   projectName?: string | null;
-  /** Orchestrator-only: launch the session remote-ready (writes
-   *  `remoteControlAtStartup: true` into the session settings.json so it can be
-   *  driven from the Claude phone/web app). Dispatched agent workers omit this
-   *  → false. */
-  remoteControl?: boolean;
 }
 
 export interface PodSpawnPrep {
@@ -110,7 +105,6 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
     templatesDir: input.templatesDir,
     trunkPath: input.trunkPath,
     serverPort: input.serverPort,
-    remoteControl: input.remoteControl,
   });
 
   // Section 36 — pod-prompt variable substitution. Compute the DB-backed

@@ -1,5 +1,4 @@
 {
-  "remoteControlAtStartup": {{REMOTE_CONTROL_AT_STARTUP}},
   "permissions": {
     "allow": [
       "Read",

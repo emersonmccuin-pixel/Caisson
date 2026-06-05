@@ -456,7 +456,6 @@ export class ProjectRuntime {
         projectId: this.project.id,
         worktreeDir: this.project.folderPath,
         scratchDir: sessionDir,
-        remoteControl,
         // FD-2 — identity for the pc-rig HTTP headers (mirrors the
         // PC_SESSION_ID / PC_AGENT_SESSION_ID env below).
         identity: {
@@ -522,6 +521,7 @@ export class ProjectRuntime {
         model: 'opus',
         requireReadySignal: true,
         requireMcpHandshake: !session.resume,
+        remoteControl,
         cols: this.orchestratorCols,
         rows: this.orchestratorRows,
         // The Engine holds the ccSessionId until the previous run settles —

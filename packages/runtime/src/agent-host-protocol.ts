@@ -80,6 +80,9 @@ export interface AgentHostStartRunRequest {
   /** Gate readiness on the MCP handshake. The orchestrator disables this on
    *  resume (historical sessions may predate the current MCP config). */
   requireMcpHandshake?: boolean;
+  /** Launch the session remote-ready (`--remote-control`). Orchestrator-only;
+   *  dispatched agent workers omit it. */
+  remoteControl?: boolean;
   /** Initial PTY geometry (the user's current chat panel size). */
   cols?: number;
   rows?: number;

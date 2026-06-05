@@ -162,6 +162,9 @@ export interface AgentRunInput {
   requireReadySignal?: boolean;
   /** Gate readiness on the MCP handshake (orchestrator disables on resume). */
   requireMcpHandshake?: boolean;
+  /** Launch the session remote-ready (`--remote-control`) so it can be driven
+   *  from the Claude phone/web app, dialog-free. Orchestrator-only. */
+  remoteControl?: boolean;
   /** Initial PTY geometry. */
   cols?: number;
   rows?: number;
@@ -697,6 +700,7 @@ export class AgentRun extends EventEmitter {
       model: this.input.model,
       requireReadySignal: this.input.requireReadySignal,
       requireMcpHandshake: this.input.requireMcpHandshake,
+      remoteControl: this.input.remoteControl,
       cols: this.input.cols,
       rows: this.input.rows,
       handshakeTimeoutMs: this.timeouts.handshakeTimeoutMs,
