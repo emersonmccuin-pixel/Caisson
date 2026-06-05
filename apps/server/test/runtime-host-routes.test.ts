@@ -1,6 +1,6 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,9 +9,8 @@ import { Hono } from 'hono';
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-runtime-host-routes-'));
 process.env.PC_DATA_DIR = tmpDir;
 
-const { closeDb, runMigrations } = await import('@pc/db');
+const { appendConversationEvent, closeDb, runMigrations } = await import('@pc/db');
 const { registerRuntimeHostRoutes } = await import('../src/features/runtime-host/routes.ts');
-const { loadSessionReplayCheckpoint } = await import('../src/services/session-replay.ts');
 
 before(() => runMigrations());
 after(() => {
@@ -21,18 +20,29 @@ after(() => {
 
 const projectId = 'p-routes';
 const sessionId = 's-routes';
-const sessionDataDir = join(tmpDir, 'session-data', sessionId);
 
-function writeJsonlEvents(): void {
-  mkdirSync(sessionDataDir, { recursive: true });
+// M3b — replay reads come from conversation_events; seed rows, not files.
+let seeded = false;
+function seedConversationEvents(): void {
+  if (seeded) return;
+  seeded = true;
   const rows = [
-    { type: 'jsonl', id: `${sessionId}:1`, sessionId, seq: 1, kind: 'jsonl-user', event: { kind: 'jsonl-user', text: 'one' } },
-    'this is not json',
-    { type: 'jsonl', id: `${sessionId}:2`, sessionId, seq: 2, kind: 'jsonl-assistant', event: { kind: 'jsonl-assistant', text: 'two' } },
-    { type: 'jsonl', id: `${sessionId}:3`, sessionId, seq: 3, kind: 'jsonl-user', event: { kind: 'jsonl-user', text: 'three' } },
+    { seq: 1, kind: 'jsonl-user', text: 'one' },
+    { seq: 2, kind: 'jsonl-assistant', text: 'two' },
+    { seq: 3, kind: 'jsonl-user', text: 'three' },
   ];
-  const text = rows.map((r) => (typeof r === 'string' ? r : JSON.stringify(r))).join('\n');
-  writeFileSync(join(sessionDataDir, 'jsonl-events.jsonl'), text, 'utf-8');
+  for (const r of rows) {
+    appendConversationEvent({
+      sessionId,
+      seq: r.seq,
+      type: 'jsonl',
+      kind: r.kind,
+      event: { kind: r.kind, text: r.text },
+      sourceKind: 'claude-jsonl',
+      sourceCursor: r.seq,
+      now: 1000 + r.seq,
+    });
+  }
 }
 
 function mkApp(): Hono {
@@ -57,27 +67,26 @@ interface EventsBody {
   ok: true;
   sessionId: string;
   highWaterSeq: number;
-  events: Array<{ id: string; seq: number }>;
+  events: Array<{ id: string; seq: number; source: { kind: string; cursor: number | null } }>;
 }
 
-test('GET /sessions/:id/events returns the byte-identical full checkpoint', async () => {
-  writeJsonlEvents();
+test('GET /sessions/:id/events returns the full checkpoint from the DB', async () => {
+  seedConversationEvents();
   const app = mkApp();
   const res = await app.request(`/api/projects/${projectId}/sessions/${sessionId}/events`);
   assert.equal(res.status, 200);
   const body = (await res.json()) as EventsBody;
-  // identical to loadSessionReplayCheckpoint over the same dir
-  const direct = loadSessionReplayCheckpoint(sessionDataDir, sessionId);
   assert.equal(body.ok, true);
-  assert.equal(body.sessionId, direct.sessionId);
-  assert.equal(body.highWaterSeq, direct.highWaterSeq);
-  assert.deepEqual(body.events, direct.events);
-  // malformed row skipped -> 3 valid events
+  assert.equal(body.sessionId, sessionId);
+  assert.equal(body.highWaterSeq, 3);
   assert.deepEqual(body.events.map((e) => e.seq), [1, 2, 3]);
+  // Envelope shape preserved: id + source {kind, cursor}.
+  assert.equal(body.events[0]!.id, `${sessionId}:1`);
+  assert.deepEqual(body.events[0]!.source, { kind: 'claude-jsonl', cursor: 1 });
 });
 
 test('GET /sessions/:id/events?afterSeq= trims to seq > afterSeq, same envelope', async () => {
-  writeJsonlEvents();
+  seedConversationEvents();
   const app = mkApp();
   const res = await app.request(
     `/api/projects/${projectId}/sessions/${sessionId}/events?afterSeq=1`,
@@ -89,7 +98,7 @@ test('GET /sessions/:id/events?afterSeq= trims to seq > afterSeq, same envelope'
 });
 
 test('afterSeq=0 equals the full checkpoint; afterSeq>=highWater is empty', async () => {
-  writeJsonlEvents();
+  seedConversationEvents();
   const app = mkApp();
   const full = (await (await app.request(`/api/projects/${projectId}/sessions/${sessionId}/events`)).json()) as EventsBody;
   const zero = (await (await app.request(`/api/projects/${projectId}/sessions/${sessionId}/events?afterSeq=0`)).json()) as EventsBody;
@@ -101,7 +110,7 @@ test('afterSeq=0 equals the full checkpoint; afterSeq>=highWater is empty', asyn
 });
 
 test('afterSeq with limit caps oldest-first', async () => {
-  writeJsonlEvents();
+  seedConversationEvents();
   const app = mkApp();
   const res = await app.request(
     `/api/projects/${projectId}/sessions/${sessionId}/events?afterSeq=0&limit=2`,

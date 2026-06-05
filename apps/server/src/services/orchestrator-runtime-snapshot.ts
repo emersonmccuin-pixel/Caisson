@@ -1,8 +1,11 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
 
 import type { ULID } from '@pc/domain';
-import { getActiveOrchestratorSession } from '@pc/db';
+import {
+  countConversationEvents,
+  getActiveOrchestratorSession,
+  getConversationHighWaterSeq,
+} from '@pc/db';
 import { jsonlPathFor } from '@pc/runtime';
 
 import {
@@ -16,7 +19,6 @@ import {
   sendQueueSnapshotPayload,
   type PublicSendQueueItem,
 } from './orchestrator-send-queue-delivery.ts';
-import { loadSessionReplayCheckpoint } from './session-replay.ts';
 
 interface RuntimeFailureState {
   health: 'failed_resume' | 'provider_missing';
@@ -79,14 +81,6 @@ function classifyRuntimeFailure(message: string): RuntimeFailureState['health'] 
   return /no transcript|conversation found|provider session|jsonl|transcript/i.test(message)
     ? 'provider_missing'
     : 'failed_resume';
-}
-
-function countJsonlLines(filePath: string): number {
-  try {
-    return readFileSync(filePath, 'utf-8').split('\n').filter(Boolean).length;
-  } catch {
-    return 0;
-  }
 }
 
 function fileMtimeMs(filePath: string | null): number | null {
@@ -157,12 +151,11 @@ export class OrchestratorRuntimeSnapshots {
     });
     const rawJsonlPath = active?.jsonlPath
       ?? (active?.providerSessionId ? jsonlPathFor(runtime.folderPath, active.providerSessionId) : null);
-    const replayPath = active ? resolve(runtime.sessionDataPath(active.id), 'jsonl-events.jsonl') : null;
     const rawJsonlExists = rawJsonlPath ? existsSync(rawJsonlPath) : false;
-    const replayExists = replayPath ? existsSync(replayPath) : false;
-    const replay = active
-      ? loadSessionReplayCheckpoint(runtime.sessionDataPath(active.id), active.id)
-      : null;
+    // M3b — the replay store is the conversation_events table, not a path.
+    // The diagnostic fields survive the wire shape; counts come from the DB.
+    const replayLineCount = active ? countConversationEvents(active.id) : 0;
+    const replayHighWaterSeq = active ? getConversationHighWaterSeq(active.id) : 0;
     const queue = active ? sendQueueSnapshotPayload(active.id).items : [];
     const queueDepth = queue.filter((item) => item.status !== 'failed').length;
     const rawJsonlCursor = active ? active.jsonlLineCursor : null;
@@ -196,10 +189,10 @@ export class OrchestratorRuntimeSnapshots {
       rawJsonlPath,
       rawJsonlExists,
       rawJsonlCursor,
-      replayPath,
-      replayExists,
-      replayLineCount: replayExists && replayPath ? countJsonlLines(replayPath) : 0,
-      replayHighWaterSeq: replay?.highWaterSeq ?? 0,
+      replayPath: null,
+      replayExists: replayLineCount > 0,
+      replayLineCount,
+      replayHighWaterSeq,
       queueDepth,
       queue,
     };

@@ -217,7 +217,7 @@ async function handlePromptSend<
     broadcastSendQueueSnapshot,
     onSessionEnsured: (id, session) => {
       broadcastTo(id, { type: 'session-changed', session });
-      broadcastTo(id, sessionReplayPayload(loadRuntimeSessionReplay(runtime, session.id)));
+      broadcastTo(id, sessionReplayPayload(loadRuntimeSessionReplay(session.id)));
     },
   });
 

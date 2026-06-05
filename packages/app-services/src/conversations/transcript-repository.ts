@@ -1,33 +1,23 @@
-// FileTranscriptRepository (slice 006).
+// DbTranscriptRepository (M3b — was FileTranscriptRepository, slice 006).
 //
-// A read-only seam over the EXISTING on-disk JSONL replay. It does NOT own the
-// read logic itself: the byte-identical `loadSessionReplayCheckpoint` (server
-// session-replay.ts) is INJECTED as `readCheckpoint`, so this repository cannot
-// drift from the live replay parser (jsonl-events.jsonl with legacy
-// events.jsonl fallback, malformed-row skipping, per-session seq/highWaterSeq).
+// The conversation replay store is the `conversation_events` table; replay is
+// a query. ☠ M3b: the file repository + the `session-replay.ts` parser — the
+// on-disk jsonl-events.jsonl files were imported once at boot (renamed
+// `*.imported`); the parser survives ONLY inside the backfill importer
+// (apps/server conversation-backfill.ts). No file fallback exists.
 //
-// It adds only the after-seq trim on top: `listAfter({ afterSeq, limit })`
-// returns rows with `seq > afterSeq` while keeping `highWaterSeq` derived from
-// the FULL checkpoint (stable across reconnect). This is the transcript `seq`
-// cursor — NOT the slice-002 global outbox cursor.
-//
-// It writes NOTHING — no JSONL append, no SQLite, no InteractiveSession touch.
-// Only `'orchestrator-session'` is wired to a live read this slice.
+// `listAfter` keeps the reconnect contract: rows with `seq > afterSeq`,
+// oldest-first, optional cap — while `highWaterSeq` stays the FULL session
+// high water (stable across reconnect). This is the transcript `seq` cursor —
+// NOT the slice-002 global outbox cursor.
 
-import type { SessionReplayCheckpointLike } from './adapters.ts';
+import {
+  getConversationHighWaterSeq as defaultGetHighWaterSeq,
+  listConversationEvents as defaultListEvents,
+  type ConversationEventRow,
+} from '@pc/db';
 
-/** Injected byte-identical reader. The server passes `loadSessionReplayCheckpoint`. */
-export type ReadSessionCheckpoint = (
-  sessionDataPath: string,
-  sessionId?: string,
-) => SessionReplayCheckpointLike;
-
-/** Resolves a conversation to its on-disk session-data path. The server passes
- *  `runtime.sessionDataPath(sessionId)`. */
-export type ResolveSessionDataPath = (input: {
-  projectId: string;
-  sessionId: string;
-}) => string;
+import type { ReplayEnvelopeLike, SessionReplayCheckpointLike } from './adapters.ts';
 
 export interface TranscriptCheckpointQuery {
   projectId: string;
@@ -46,51 +36,55 @@ export interface TranscriptRepository {
   listAfter(args: TranscriptAfterSeqArgs): SessionReplayCheckpointLike;
 }
 
-export interface FileTranscriptRepositoryDeps {
-  readCheckpoint: ReadSessionCheckpoint;
-  resolveSessionDataPath: ResolveSessionDataPath;
+export interface DbTranscriptRepositoryDeps {
+  listEvents?: typeof defaultListEvents;
+  getHighWaterSeq?: typeof defaultGetHighWaterSeq;
 }
 
-export class FileTranscriptRepository implements TranscriptRepository {
-  private readonly readCheckpoint: ReadSessionCheckpoint;
-  private readonly resolveSessionDataPath: ResolveSessionDataPath;
+export class DbTranscriptRepository implements TranscriptRepository {
+  private readonly listEvents: typeof defaultListEvents;
+  private readonly getHighWaterSeq: typeof defaultGetHighWaterSeq;
 
-  constructor(deps: FileTranscriptRepositoryDeps) {
-    this.readCheckpoint = deps.readCheckpoint;
-    this.resolveSessionDataPath = deps.resolveSessionDataPath;
+  constructor(deps: DbTranscriptRepositoryDeps = {}) {
+    this.listEvents = deps.listEvents ?? defaultListEvents;
+    this.getHighWaterSeq = deps.getHighWaterSeq ?? defaultGetHighWaterSeq;
   }
 
-  /** Full checkpoint — byte-identical to the injected reader's output. */
   loadCheckpoint(query: TranscriptCheckpointQuery): SessionReplayCheckpointLike {
-    const path = this.resolveSessionDataPath(query);
-    return this.readCheckpoint(path, query.sessionId);
+    const rows = this.listEvents(query.sessionId);
+    return {
+      sessionId: query.sessionId,
+      highWaterSeq: rows.length > 0 ? rows[rows.length - 1]!.seq : 0,
+      events: rows.map(toReplayEnvelope),
+    };
   }
 
-  /** After-seq read: rows with `seq > afterSeq`, oldest-first, optional cap.
-   *  `highWaterSeq` stays the FULL checkpoint's high water (stable for
-   *  reconnect); `afterSeq <= 0` returns the full checkpoint unchanged. */
   listAfter(args: TranscriptAfterSeqArgs): SessionReplayCheckpointLike {
-    const checkpoint = this.loadCheckpoint(args);
-    if (!Number.isSafeInteger(args.afterSeq) || args.afterSeq <= 0) {
-      return applyLimit(checkpoint, args.limit);
-    }
-    const trimmed = checkpoint.events.filter((e) => e.seq > args.afterSeq);
-    return applyLimit(
-      { sessionId: checkpoint.sessionId, highWaterSeq: checkpoint.highWaterSeq, events: trimmed },
-      args.limit,
-    );
+    const afterSeq = Number.isSafeInteger(args.afterSeq) && args.afterSeq > 0 ? args.afterSeq : 0;
+    const rows = this.listEvents(args.sessionId, {
+      ...(afterSeq > 0 ? { afterSeq } : {}),
+      ...(args.limit !== undefined ? { limit: args.limit } : {}),
+    });
+    return {
+      sessionId: args.sessionId,
+      // Stable across reconnect — the FULL session high water, not the page's.
+      highWaterSeq: this.getHighWaterSeq(args.sessionId),
+      events: rows.map(toReplayEnvelope),
+    };
   }
 }
 
-function applyLimit(
-  checkpoint: SessionReplayCheckpointLike,
-  limit?: number,
-): SessionReplayCheckpointLike {
-  if (limit === undefined || !Number.isSafeInteger(limit) || limit <= 0) return checkpoint;
-  if (checkpoint.events.length <= limit) return checkpoint;
+function toReplayEnvelope(row: ConversationEventRow): ReplayEnvelopeLike {
   return {
-    sessionId: checkpoint.sessionId,
-    highWaterSeq: checkpoint.highWaterSeq,
-    events: checkpoint.events.slice(0, limit),
+    id: row.id,
+    sessionId: row.sessionId,
+    seq: row.seq,
+    type: row.type === 'event' ? 'event' : 'jsonl',
+    kind: row.kind,
+    event: row.event,
+    source: {
+      kind: row.sourceKind === 'legacy-events-jsonl' ? 'legacy-events-jsonl' : 'claude-jsonl',
+      cursor: row.sourceCursor,
+    },
   };
 }

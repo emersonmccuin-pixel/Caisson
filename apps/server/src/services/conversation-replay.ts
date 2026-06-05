@@ -1,56 +1,56 @@
-// Server composition for the slice-006 conversation replay seam.
+// Server composition for the conversation replay seam (slice 006 · M3b).
 //
-// Wraps the @pc/app-services `ConversationReplayService` over the EXISTING
-// byte-identical reader (`loadSessionReplayCheckpoint`). The runtime-host routes
-// + connect snapshot + new/resume routes delegate here so every `session-replay`
-// surface flows through the service while staying byte-identical. The repository
-// is read-only over files; nothing is persisted.
+// M3b: replay reads come from the `conversation_events` table through the
+// app-services `DbTranscriptRepository` — replay is a query. ☠ the byte-
+// identical file reader (`session-replay.ts`) + `FileTranscriptRepository`;
+// the on-disk jsonl-events.jsonl files were imported once at boot
+// (conversation-backfill.ts) and renamed `*.imported`. The runtime-host routes
+// + connect snapshot + new/resume routes keep delegating here; the
+// `{ ok, sessionId, highWaterSeq, events }` shapes are unchanged.
 
 import {
   ConversationReplayService,
-  FileTranscriptRepository,
+  DbTranscriptRepository,
 } from '@pc/app-services';
-import {
-  loadSessionReplayCheckpoint,
-  type SessionReplayCheckpoint,
-} from './session-replay.ts';
 
-interface SessionDataPathRuntime {
-  sessionDataPath(sessionId: string): string;
+// The replay envelope/checkpoint types survive the file reader they used to
+// live beside (session-replay.ts, ☠ M3b) — every replay surface still speaks
+// this shape; only the store moved.
+export interface ReplaySource {
+  kind: 'claude-jsonl' | 'legacy-events-jsonl';
+  cursor: number | null;
 }
 
-/** Bind the byte-identical reader + the runtime's session-data resolver into a
- *  replay service. Cheap to build per call; reads are synchronous file reads. */
-function serviceFor(runtime: SessionDataPathRuntime): ConversationReplayService {
-  const repository = new FileTranscriptRepository({
-    readCheckpoint: (path, sessionId) =>
-      loadSessionReplayCheckpoint(path, sessionId) as SessionReplayCheckpoint,
-    resolveSessionDataPath: ({ sessionId }) => runtime.sessionDataPath(sessionId),
-  });
-  return new ConversationReplayService(repository);
+export interface ReplayEnvelope {
+  id: string;
+  sessionId: string;
+  seq: number;
+  type: 'jsonl' | 'event';
+  kind: string | null;
+  event: unknown;
+  source: ReplaySource;
 }
 
-/** Full checkpoint via the service, byte-identical to `loadSessionReplayCheckpoint`. */
-export function loadConversationReplayCheckpoint(
-  runtime: SessionDataPathRuntime,
-  sessionId: string,
-): SessionReplayCheckpoint {
-  return serviceFor(runtime).loadCheckpoint({ projectId: '', sessionId }) as SessionReplayCheckpoint;
+export interface SessionReplayCheckpoint {
+  sessionId: string;
+  highWaterSeq: number;
+  events: ReplayEnvelope[];
+}
+
+const service = new ConversationReplayService(new DbTranscriptRepository());
+
+/** Full checkpoint for a session — ordered events + the session high water. */
+export function loadConversationReplayCheckpoint(sessionId: string): SessionReplayCheckpoint {
+  return service.loadCheckpoint({ projectId: '', sessionId }) as SessionReplayCheckpoint;
 }
 
 /** After-seq checkpoint: rows with `seq > afterSeq`, stable `highWaterSeq`. */
 export function loadConversationReplayCheckpointAfter(
-  runtime: SessionDataPathRuntime,
   sessionId: string,
   afterSeq: number,
   limit?: number,
 ): SessionReplayCheckpoint {
-  const response = serviceFor(runtime).loadReplayAfter({
-    projectId: '',
-    sessionId,
-    afterSeq,
-    limit,
-  });
+  const response = service.loadReplayAfter({ projectId: '', sessionId, afterSeq, limit });
   return {
     sessionId: response.sessionId,
     highWaterSeq: response.highWaterSeq,

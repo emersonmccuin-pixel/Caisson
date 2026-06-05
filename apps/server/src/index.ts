@@ -95,6 +95,7 @@ import {
 import { registerMailboxRoutes } from './features/mailbox/routes.ts';
 import { MailboxOrchestratorTurnAdapter } from './services/mailbox-orchestrator-turn-adapter.ts';
 import { MailboxWorker } from './services/mailbox-worker.ts';
+import { backfillConversationEvents } from './services/conversation-backfill.ts';
 import {
   STALE_ASK_SWEEP_MS,
   sweepStalePendingAsks,
@@ -129,6 +130,11 @@ const PORT = Number(process.env.PORT ?? 4040);
 // ROOT-relative so the staged `drizzle/` is found in a packaged build (where
 // migrate.ts's __dirname points inside the bundle). Dev resolves to the trunk.
 runMigrations(resolve(ROOT, 'packages', 'db', 'drizzle'));
+
+// M3b — one-time import of per-session replay FILES (jsonl-events.jsonl /
+// legacy events.jsonl) into conversation_events; files rename `*.imported`.
+// Cheap once swept (an existsSync per session dir). Replay reads are DB-only.
+backfillConversationEvents(DATA);
 
 // Section 10 — register the pinned, app-bundled claude (if this is a packaged
 // build that shipped one). The desktop main process sets PC_BUNDLED_CLAUDE_EXE

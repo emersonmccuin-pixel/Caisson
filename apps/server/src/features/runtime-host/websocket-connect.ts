@@ -59,7 +59,7 @@ export function sendRuntimeHostConnectSnapshot<
   send({ projectId, ...runtimeSnapshotPayload(projectId, runtime) });
 
   if (session) {
-    const replay = loadRuntimeSessionReplay(runtime, session.id);
+    const replay = loadRuntimeSessionReplay(session.id);
     send({ projectId, ...sessionReplayPayload(replay) });
     send({ projectId, ...sendQueueSnapshotPayload(session.id) });
   }

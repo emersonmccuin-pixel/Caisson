@@ -20,11 +20,11 @@ import {
   readTerminalTranscriptTail,
   type TerminalTranscriptRuntime,
 } from '../../services/terminal-mode.ts';
-import { type SessionReplayCheckpoint } from '../../services/session-replay.ts';
 import { parseTranscriptAfterSeqQuery } from '@pc/contracts';
 import {
   loadConversationReplayCheckpoint,
   loadConversationReplayCheckpointAfter,
+  type SessionReplayCheckpoint,
 } from '../../services/conversation-replay.ts';
 
 export interface RuntimeHostPtySession {
@@ -54,11 +54,9 @@ export interface RuntimeHostRoutesDeps {
   startOrchestratorPtyInBackground(projectId: ULID, runtime: RuntimeHostRuntime): void;
 }
 
-export function loadRuntimeSessionReplay(
-  runtime: Pick<RuntimeHostRuntime, 'sessionDataPath'>,
-  sessionId: ULID,
-): SessionReplayCheckpoint {
-  return loadConversationReplayCheckpoint(runtime, sessionId);
+export function loadRuntimeSessionReplay(sessionId: ULID): SessionReplayCheckpoint {
+  // M3b — replay is a conversation_events query; no session-dir read.
+  return loadConversationReplayCheckpoint(sessionId);
 }
 
 export function sessionReplayPayload(replay: SessionReplayCheckpoint): {
@@ -172,12 +170,11 @@ export function registerRuntimeHostRoutes(app: Hono, deps: RuntimeHostRoutesDeps
     });
     const replay = afterSeqQuery
       ? loadConversationReplayCheckpointAfter(
-          runtime,
           sessionId,
           afterSeqQuery.afterSeq,
           afterSeqQuery.limit,
         )
-      : loadRuntimeSessionReplay(runtime, sessionId);
+      : loadRuntimeSessionReplay(sessionId);
     return c.json({
       ok: true,
       sessionId: replay.sessionId,
@@ -218,7 +215,7 @@ export function registerRuntimeHostRoutes(app: Hono, deps: RuntimeHostRoutesDeps
       deps.broadcastSendQueueSnapshot(id, previous.id);
     }
     const session = runtime.startNewSession();
-    const replay = loadRuntimeSessionReplay(runtime, session.id);
+    const replay = loadRuntimeSessionReplay(session.id);
     deps.broadcastTo(id, { type: 'session-changed', transition: 'new-session', session });
     broadcastSessionReplay(deps, id, replay);
     deps.broadcastSendQueueSnapshot(id, session.id);
@@ -251,7 +248,7 @@ export function registerRuntimeHostRoutes(app: Hono, deps: RuntimeHostRoutesDeps
       cancelOpenOrchestratorSendsForSession(previous.id, 'session replaced by resume');
       deps.broadcastSendQueueSnapshot(id, previous.id);
     }
-    const replay = loadRuntimeSessionReplay(runtime, session.id);
+    const replay = loadRuntimeSessionReplay(session.id);
     deps.broadcastTo(id, { type: 'session-changed', transition: 'resume-session', session });
     broadcastSessionReplay(deps, id, replay);
     deps.broadcastSendQueueSnapshot(id, session.id);
