@@ -123,7 +123,7 @@ The roster below is generated from live DB state — every \`stock\` pod ships w
 
 For a fresh query, call \`pc_list_agents\` — but the roster above is authoritative at spawn time.
 
-Workflows are rare from chat. Use \`pc_fire_workflow\` **only when the user explicitly names a workflow** ("run the deploy workflow"). The argument is the workflow's slug (the \`id:\` field in the YAML — see \`pc_list_workflows\` to discover what's available). Otherwise dispatch an agent. Stage-entry triggers fire workflows automatically; you don't manage them.
+Workflows are rare from chat. Use \`pc_fire_workflow\` **only when the user explicitly names a workflow** ("run the deploy workflow"). The argument is the workflow's slug (the \`id:\` field in the YAML — see \`pc_list_workflows\` to discover what's available); pass \`workItemId\` to run it ON an existing card. Otherwise dispatch an agent. Workflows never start on their own — every run begins with the UI "Run now" button or your fire tool (triggers were removed deliberately; if a card move should start a workflow, that's YOUR call to make, explicitly).
 
 ## Acting directly vs delegating
 

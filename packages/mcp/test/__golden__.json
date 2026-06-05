@@ -350,6 +350,77 @@
       }
     },
     {
+      "name": "pc_promote_agent_to_global",
+      "description": "Promote a project-scoped pod to global so every project can use it. Returns 400 if the pod is already global; 409 if a global pod with the same name exists. Audits as actor='orchestrator'. Accepts either { id } or { name }.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "pod ULID id (mutually exclusive with name)"
+          },
+          "name": {
+            "type": "string",
+            "description": "pod name (looked up if id absent)"
+          },
+          "reason": {
+            "type": "string",
+            "description": "optional one-line audit reason"
+          }
+        }
+      }
+    },
+    {
+      "name": "pc_clone_agent_to_project",
+      "description": "Clone a pod into a target project as a project-scoped copy (scalar fields + knowledge + MCP servers; secrets are NOT copied). Workflow agent steps require project-scoped pods — use this to bring a global pod into the project before wiring it into a workflow. 409 if the target name already exists in the project. Audits as actor='orchestrator'. Accepts either { id } or { name } for the source pod; projectId defaults to the calling session's project.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "source pod ULID id (mutually exclusive with name)"
+          },
+          "name": {
+            "type": "string",
+            "description": "source pod name (looked up if id absent)"
+          },
+          "projectId": {
+            "type": "string",
+            "description": "target project ULID — defaults to the calling session's project"
+          },
+          "newName": {
+            "type": "string",
+            "description": "optional name override for the clone"
+          },
+          "reason": {
+            "type": "string",
+            "description": "optional one-line audit reason"
+          }
+        }
+      }
+    },
+    {
+      "name": "pc_reset_agent_to_default",
+      "description": "Reset a STOCK pod's scalar fields (prompt, description, model, tools, …) to the canonical seed content. Knowledge docs, secrets, and MCP servers are untouched. Non-stock pods return 400. Audits as actor='orchestrator'. Accepts either { id } or { name }.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "pod ULID id (mutually exclusive with name)"
+          },
+          "name": {
+            "type": "string",
+            "description": "pod name (looked up if id absent)"
+          },
+          "reason": {
+            "type": "string",
+            "description": "optional one-line audit reason"
+          }
+        }
+      }
+    },
+    {
       "name": "pc_create_knowledge",
       "description": "Attach a knowledge document to an agent (reference material the agent can read at runtime via pc_knowledge_read). Low-friction add path: paste the content, omit the docName and we'll auto-derive from the first markdown heading or first non-empty line. Use this when the user says 'teach <agent> about <topic>: …'. Accepts either { agentId } or { agentName }. Audits as actor='orchestrator'. Returns the new knowledge row including its id.",
       "inputSchema": {
@@ -1489,6 +1560,9 @@
     "mcp__pc-rig__pc_get_agent",
     "mcp__pc-rig__pc_update_agent",
     "mcp__pc-rig__pc_delete_agent",
+    "mcp__pc-rig__pc_promote_agent_to_global",
+    "mcp__pc-rig__pc_clone_agent_to_project",
+    "mcp__pc-rig__pc_reset_agent_to_default",
     "mcp__pc-rig__pc_create_knowledge",
     "mcp__pc-rig__pc_update_knowledge",
     "mcp__pc-rig__pc_delete_knowledge",
@@ -1655,6 +1729,24 @@
       "slug": "mcp__pc-rig__pc_delete_agent",
       "label": "Delete an agent pod",
       "description": "Soft-delete a non-stock pod.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_promote_agent_to_global",
+      "label": "Promote a project pod to global",
+      "description": "Make a project pod available to all projects.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_clone_agent_to_project",
+      "label": "Clone a pod into a project",
+      "description": "Copy a pod into a project (workflows need project-scoped pods).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_reset_agent_to_default",
+      "label": "Reset a stock pod to its default",
+      "description": "Restore a stock pod's seeded content.",
       "source": "pc-rig"
     },
     {
@@ -1965,6 +2057,15 @@
     "pc_delete_agent": {
       "family": "agent"
     },
+    "pc_promote_agent_to_global": {
+      "family": "agent"
+    },
+    "pc_clone_agent_to_project": {
+      "family": "agent"
+    },
+    "pc_reset_agent_to_default": {
+      "family": "agent"
+    },
     "pc_create_knowledge": {
       "family": "agent"
     },
@@ -2001,11 +2102,8 @@
     "pc_list_areas": {
       "family": "work-item"
     },
-    "pc_save_workflow_draft": {
-      "family": "workflow"
-    },
-    "pc_read_workflow_draft": {
-      "family": "workflow"
+    "pc_update_area": {
+      "family": "work-item"
     },
     "pc_publish_workflow": {
       "family": "workflow"
@@ -2046,6 +2144,15 @@
     "pc_get_workflow": {
       "family": "workflow"
     },
+    "pc_get_workflow_run": {
+      "family": "workflow"
+    },
+    "pc_cancel_workflow_run": {
+      "family": "workflow"
+    },
+    "pc_resume_workflow_run": {
+      "family": "workflow"
+    },
     "pc_replace_stages": {
       "family": "project"
     },
@@ -2073,9 +2180,6 @@
     "pc_ask_orchestrator": {
       "family": "agent-run"
     },
-    "pc_ask_user": {
-      "family": "agent-run"
-    },
     "pc_request_approval": {
       "family": "agent-run"
     },
@@ -2085,7 +2189,19 @@
     "pc_submit_deliverable": {
       "family": "agent-run"
     },
-    "pc_update_area": {
+    "pc_find_tool": {
+      "family": "none"
+    },
+    "pc_call_tool": {
+      "family": "none"
+    },
+    "pc_get_contract": {
+      "family": "agent-run"
+    },
+    "pc_list_attachments": {
+      "family": "work-item"
+    },
+    "pc_get_attachment": {
       "family": "work-item"
     }
   }

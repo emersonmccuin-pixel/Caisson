@@ -430,6 +430,86 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
+    "name": "pc_promote_agent_to_global",
+    "family": "agent",
+    "label": "Promote a project pod to global",
+    "description": "Promote a project-scoped pod to global so every project can use it. Returns 400 if the pod is already global; 409 if a global pod with the same name exists. Audits as actor='orchestrator'. Accepts either { id } or { name }.",
+    "catalogDescription": "Make a project pod available to all projects.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with name)"
+        },
+        "name": {
+          "type": "string",
+          "description": "pod name (looked up if id absent)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      }
+    }
+  },
+  {
+    "name": "pc_clone_agent_to_project",
+    "family": "agent",
+    "label": "Clone a pod into a project",
+    "description": "Clone a pod into a target project as a project-scoped copy (scalar fields + knowledge + MCP servers; secrets are NOT copied). Workflow agent steps require project-scoped pods — use this to bring a global pod into the project before wiring it into a workflow. 409 if the target name already exists in the project. Audits as actor='orchestrator'. Accepts either { id } or { name } for the source pod; projectId defaults to the calling session's project.",
+    "catalogDescription": "Copy a pod into a project (workflows need project-scoped pods).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "source pod ULID id (mutually exclusive with name)"
+        },
+        "name": {
+          "type": "string",
+          "description": "source pod name (looked up if id absent)"
+        },
+        "projectId": {
+          "type": "string",
+          "description": "target project ULID — defaults to the calling session's project"
+        },
+        "newName": {
+          "type": "string",
+          "description": "optional name override for the clone"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      }
+    }
+  },
+  {
+    "name": "pc_reset_agent_to_default",
+    "family": "agent",
+    "label": "Reset a stock pod to its default",
+    "description": "Reset a STOCK pod's scalar fields (prompt, description, model, tools, …) to the canonical seed content. Knowledge docs, secrets, and MCP servers are untouched. Non-stock pods return 400. Audits as actor='orchestrator'. Accepts either { id } or { name }.",
+    "catalogDescription": "Restore a stock pod's seeded content.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "pod ULID id (mutually exclusive with name)"
+        },
+        "name": {
+          "type": "string",
+          "description": "pod name (looked up if id absent)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
+        }
+      }
+    }
+  },
+  {
     "name": "pc_create_knowledge",
     "family": "agent",
     "label": "Add a knowledge doc",
@@ -1737,6 +1817,11 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_get_agent: 'on-demand',
   pc_update_agent: 'on-demand',
   pc_delete_agent: 'on-demand',
+  // Agent-mgmt toolkit audit (2026-06-04) — the three UI-only pod lifecycle
+  // doors gained tools (FD: complete agent-management toolkit).
+  pc_promote_agent_to_global: 'on-demand',
+  pc_clone_agent_to_project: 'on-demand',
+  pc_reset_agent_to_default: 'on-demand',
   pc_create_agent_secret: 'on-demand',
   pc_delete_agent_secret: 'on-demand',
   pc_add_agent_mcp_server: 'on-demand',

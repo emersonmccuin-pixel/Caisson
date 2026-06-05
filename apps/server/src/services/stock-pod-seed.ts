@@ -481,7 +481,7 @@ Stock specialist editing lives in App settings > Specialists, not the project Ag
 
 ## Workflows tab
 
-The Workflows tab lists v2 workflow definitions. It shows valid workflows, invalid YAML definitions, run counts, and a Run now action.
+The Workflows tab lists the project's workflow definitions. It shows valid workflows, invalid YAML definitions, run counts, and a Run now action.
 
 Use "+ New workflow" to create one — through conversation in the main chat (the orchestrator interviews + dispatches the workflow-builder specialist), or manually (a named skeleton you fill in on the YAML tab). The Graph tab visualises a workflow's shape; the YAML tab edits the raw definition.
 
@@ -584,10 +584,10 @@ Field schemas:
 - GET /api/projects/:projectId/field-schemas
 - PUT /api/projects/:projectId/field-schemas bulk-replaces schemas.
 
-Workflow v2:
+Workflows (the route prefix is \`workflow-v2\` for historical reasons):
 
 - GET /api/projects/:projectId/workflow-v2/definitions
-- POST /api/projects/:projectId/workflow-v2/definitions publishes a v2 workflow definition.
+- POST /api/projects/:projectId/workflow-v2/definitions publishes a workflow definition.
 - GET /api/projects/:projectId/workflow-v2/definitions/:wfId
 - POST /api/projects/:projectId/workflow-v2/fire runs a workflow.
 - GET /api/projects/:projectId/workflow-v2/runs
@@ -648,7 +648,7 @@ Use this when the user asks how workflows work, why one did or did not run, or w
 
 ## Current workflow model
 
-Caisson uses workflow v2 as the active workflow surface. A workflow is a repeatable definition made of nodes — it declares NO triggers. The UI hides YAML for normal users; workflows are authored through the workflow-builder.
+A workflow is a repeatable definition made of steps (agent · review · move · loop) — it declares NO triggers. The UI hides YAML for normal users; workflows are authored through the workflow-builder.
 
 ## Authoring — caisson can do it; workflow-builder is the deep specialist
 
@@ -752,7 +752,7 @@ Stock agents are global, built-in, and available to every project:
 - planner: breaks goals into ordered, verifiable steps.
 - extractor: extracts structured JSON from unstructured input.
 - agent-designer: builds a new agent from a spec (the orchestrator interviews + dispatches it).
-- workflow-builder: builds + publishes workflow v2 definitions from a spec (orchestrator-dispatched).
+- workflow-builder: builds + publishes workflow definitions from a spec (orchestrator-dispatched).
 - caisson: explains and configures Caisson itself.
 
 ## Project agents

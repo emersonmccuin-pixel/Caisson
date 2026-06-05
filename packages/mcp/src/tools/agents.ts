@@ -277,6 +277,141 @@ export async function handleAgentTool(
       }
     }
 
+    // Agent-mgmt toolkit audit (2026-06-04) — the three pod lifecycle routes
+    // that were UI-only. Thin proxies over the existing HTTP doors.
+    case 'pc_promote_agent_to_global': {
+      try {
+        const id = await resolvePodId(args, ctx);
+        if (!id.ok) {
+          return {
+            content: [{ type: 'text', text: `pc_promote_agent_to_global: ${id.error}` }],
+            isError: true,
+          };
+        }
+        const res = await ctx.postServer(
+          `/api/agents/pods/${encodeURIComponent(id.id)}/promote-to-global`,
+          {
+            actor: 'orchestrator',
+            reason:
+              typeof args.reason === 'string' && args.reason.trim()
+                ? args.reason.trim()
+                : 'mcp-promote',
+          },
+        );
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [
+            { type: 'text', text: `pc_promote_agent_to_global failed (${res.status}): ${res.body}` },
+          ],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [
+            { type: 'text', text: `pc_promote_agent_to_global failed: ${(err as Error).message}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case 'pc_clone_agent_to_project': {
+      try {
+        const id = await resolvePodId(args, ctx);
+        if (!id.ok) {
+          return {
+            content: [{ type: 'text', text: `pc_clone_agent_to_project: ${id.error}` }],
+            isError: true,
+          };
+        }
+        const projectId =
+          typeof args.projectId === 'string' && args.projectId.trim()
+            ? args.projectId.trim()
+            : ctx.projectId;
+        if (!projectId) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'pc_clone_agent_to_project: projectId required (none passed and PC_PROJECT_ID is not set)',
+              },
+            ],
+            isError: true,
+          };
+        }
+        const res = await ctx.postServer(
+          `/api/agents/pods/${encodeURIComponent(id.id)}/clone-to-project`,
+          {
+            projectId,
+            ...(typeof args.newName === 'string' && args.newName.trim()
+              ? { name: args.newName.trim() }
+              : {}),
+            actor: 'orchestrator',
+            reason:
+              typeof args.reason === 'string' && args.reason.trim()
+                ? args.reason.trim()
+                : 'mcp-clone',
+          },
+        );
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [
+            { type: 'text', text: `pc_clone_agent_to_project failed (${res.status}): ${res.body}` },
+          ],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [
+            { type: 'text', text: `pc_clone_agent_to_project failed: ${(err as Error).message}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case 'pc_reset_agent_to_default': {
+      try {
+        const id = await resolvePodId(args, ctx);
+        if (!id.ok) {
+          return {
+            content: [{ type: 'text', text: `pc_reset_agent_to_default: ${id.error}` }],
+            isError: true,
+          };
+        }
+        const res = await ctx.postServer(
+          `/api/agents/pods/${encodeURIComponent(id.id)}/reset-to-default`,
+          {
+            actor: 'orchestrator',
+            reason:
+              typeof args.reason === 'string' && args.reason.trim()
+                ? args.reason.trim()
+                : 'mcp-reset',
+          },
+        );
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [
+            { type: 'text', text: `pc_reset_agent_to_default failed (${res.status}): ${res.body}` },
+          ],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [
+            { type: 'text', text: `pc_reset_agent_to_default failed: ${(err as Error).message}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     case 'pc_create_knowledge': {
       const content = typeof args.content === 'string' ? args.content : '';
       if (typeof args.content !== 'string') {
