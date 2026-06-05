@@ -23,6 +23,7 @@ import {
   settleNode,
   type RefResolver,
   type ReviewDecision,
+  type ReviewRejected,
   type RunStatus,
 } from '@pc/workflows';
 
@@ -200,10 +201,16 @@ export class DagExecutor {
       for (const id of reviewReady) {
         const node = this.byId.get(id) as WorkflowV2.ReviewNode;
         this.state = markRunning(this.state, id);
-        this.state = markAwaitingReview(this.state, id);
+        // Stamp the instance token = i${iteration}: the serialization guard in
+        // applyReviewDecision checks this token is present before accepting a
+        // decision. Token mirrors the mailbox idempotency key (FD-8 / build-plan
+        // step 1). `reviewIteration` is read AFTER markRunning (which doesn't
+        // change rejectIterations) so iteration is accurate.
+        const iteration = this.reviewIteration(node);
+        this.state = markAwaitingReview(this.state, id, `i${iteration}`);
         const bundle = this.resolveBundle(node, resolve);
         await this.deps.requestReview(node, this.ctx(resolve), bundle, {
-          iteration: this.reviewIteration(node),
+          iteration,
           escalated: false,
         });
         // Persist the assembled bundle into the audit log so the review surface
@@ -305,12 +312,26 @@ export class DagExecutor {
   }
 
   /**
-   * Resolve a review decision (called by the server when the orchestrator/user
-   * approves or rejects). Applies it to state, then advances (approve/kickback)
-   * or holds for human (ceiling). Returns the new run status.
+   * COMMIT PHASE — apply the decision, emit diary events, re-post escalated
+   * gate on ceiling, persist intermediate state. Does NOT call advance().
+   *
+   * Split from onReviewDecision for Part 2 (build-plan step 7+8): `advance()`
+   * can dispatch+await agents which may take minutes; by committing first and
+   * running advance async, the HTTP caller receives a response in <100ms even
+   * when a reject triggers an agent dispatch.
+   *
+   * Returns `{ rejected }` if the idempotency guard fires (gate not open),
+   * or `{ status }` with the committed run status otherwise.
    */
-  async onReviewDecision(reviewNodeId: string, decision: ReviewDecision): Promise<RunStatus> {
+  async commitReviewDecision(
+    reviewNodeId: string,
+    decision: ReviewDecision,
+  ): Promise<{ rejected: ReviewRejected } | { rejected?: never; status: RunStatus }> {
     const outcome = applyReviewDecision(this.workflow, this.state, reviewNodeId, decision);
+    if (outcome.rejected) {
+      return { rejected: outcome.rejected };
+    }
+
     this.state = outcome.state;
     this.deps.event({
       type: decision.kind === 'approve' ? 'review_approved' : 'review_rejected',
@@ -349,9 +370,39 @@ export class DagExecutor {
           data: { bundle, escalated: true, iterations: count },
         });
       }
+      // Ceiling: run stays paused; persist before responding.
+      this.deps.persist(this.state, 'awaiting-review');
+      return { status: 'awaiting-review' };
     }
+
+    // Approve or kick-back: persist an intermediate `running` status. The async
+    // advance that follows will persist the final settled status.
+    const committedStatus = computeRunStatus(this.workflow, this.state);
     // ☠ FD-9 (M6 slice B): the approve-move / reject-move card effects are
     // gone — the card moves ONLY via explicit `move` steps on the forward path.
+    this.deps.persist(this.state, committedStatus);
+    return { status: committedStatus };
+  }
+
+  /**
+   * Resolve a review decision (called by the server when the orchestrator/user
+   * approves or rejects). Applies it to state, then advances (approve/kickback)
+   * or holds for human (ceiling). Returns the new run status.
+   *
+   * For the HTTP/MCP path prefer calling commitReviewDecision + advance()
+   * separately (build-plan step 8) so the response returns before dispatch.
+   * This method remains for tests and any caller that needs the settled result.
+   */
+  async onReviewDecision(reviewNodeId: string, decision: ReviewDecision): Promise<RunStatus> {
+    const commit = await this.commitReviewDecision(reviewNodeId, decision);
+    if (commit.rejected) {
+      // Guard fired — gate is not open; return current computed status.
+      return computeRunStatus(this.workflow, this.state);
+    }
+    if (commit.status === 'awaiting-review') {
+      // Ceiling case: already persisted + re-posted; just advance to re-verify.
+      return this.advance();
+    }
     return this.advance();
   }
 

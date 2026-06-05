@@ -37,6 +37,7 @@ import {
   fireDagWorkflow,
   applyV2ReviewDecision,
   resumeFailedDagRun,
+  type V2ReviewDecisionResult,
   type ResumeFailedRunResult,
   type DagRunServiceOptions,
   type ReviewInboxResolution,
@@ -355,7 +356,7 @@ export class ProjectRuntime {
     runId: ULID,
     reviewNodeId: string,
     decision: ReviewDecision,
-  ): Promise<string | null> {
+  ): Promise<V2ReviewDecisionResult> {
     return applyV2ReviewDecision(runId, reviewNodeId, decision, this.dagRunOptions());
   }
 
