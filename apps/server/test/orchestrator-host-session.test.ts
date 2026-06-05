@@ -12,9 +12,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import type { AppendConversationEventInput } from '@pc/db';
 
 import type {
   AgentHostCommand,
@@ -133,10 +135,27 @@ function snapshotFor(runId: string, patch: RunPatch = {}): AgentHostRunSnapshot 
 
 let runSeq = 0;
 
+/** M3b — in-memory conversation_events double (rows per session; mirrors the
+ *  repo's replay-state derivation: MAX(seq)+1 / MAX(source_cursor)). */
+class FakeReplayStore {
+  rows: (AppendConversationEventInput & { id: string })[] = [];
+  append = (input: AppendConversationEventInput) => {
+    this.rows.push({ ...input, id: `${input.sessionId}:${input.seq}` });
+    return this.rows[this.rows.length - 1] as never;
+  };
+  state = (sessionId: string) => {
+    const mine = this.rows.filter((r) => r.sessionId === sessionId);
+    const maxSeq = mine.reduce((m, r) => Math.max(m, r.seq), 0);
+    const maxCursor = mine.reduce((m, r) => Math.max(m, r.sourceCursor ?? 0), 0);
+    return { nextSeq: maxSeq + 1, maxCursor };
+  };
+}
+
 function makeSession(
   port: FakeHostPort,
   overrides: Partial<ConstructorParameters<typeof OrchestratorHostSession>[0]> = {},
-): { session: OrchestratorHostSession; dir: string } {
+  store = new FakeReplayStore(),
+): { session: OrchestratorHostSession; dir: string; store: FakeReplayStore } {
   const dir = mkdtempSync(join(tmpdir(), 'orch-host-'));
   const session = new OrchestratorHostSession(
     {
@@ -149,7 +168,6 @@ function makeSession(
       mode: 'fresh',
       jsonlPath: join(dir, 'cc.jsonl'),
       transcriptPath: join(dir, 'transcript.log'),
-      replayEventsPath: join(dir, 'jsonl-events.jsonl'),
       ...overrides,
     },
     {
@@ -157,9 +175,11 @@ function makeSession(
       mintRunId: () => `run-${++runSeq}`,
       transcriptPollMs: 50,
       awaitBeforeTimeoutMs: 200,
+      appendReplayEvent: store.append,
+      replayState: store.state,
     },
   );
-  return { session, dir };
+  return { session, dir, store };
 }
 
 const tick = () => new Promise((r) => setImmediate(r));
@@ -216,7 +236,7 @@ test('run-state maps to ready/busy and emits turn-end on busy→ready', async ()
 
 test('send routes to the host; jsonl events persist replay meta + dedup by cursor', async () => {
   const port = new FakeHostPort();
-  const { session, dir } = makeSession(port);
+  const { session, store } = makeSession(port);
   const seen: Array<{ ev: unknown; replay: { seq: number } }> = [];
   session.on('jsonl-event', (ev: unknown, replay: { seq: number }) => seen.push({ ev, replay }));
   session.start();
@@ -259,23 +279,22 @@ test('send routes to the host; jsonl events persist replay meta + dedup by curso
   assert.equal(seen[0]!.replay.seq, 1);
   assert.equal(seen[2]!.replay.seq, 3);
 
-  const replayPath = join(dir, 'jsonl-events.jsonl');
-  assert.ok(existsSync(replayPath));
-  const lines = readFileSync(replayPath, 'utf8').split('\n').filter(Boolean);
-  assert.equal(lines.length, 3);
-  const first = JSON.parse(lines[0]!);
+  // M3b — rows land in the conversation_events store (was: file lines).
+  assert.equal(store.rows.length, 3);
+  const first = store.rows[0]!;
   assert.equal(first.type, 'jsonl');
   assert.equal(first.sessionId, 'pc-session-1');
   assert.equal(first.kind, 'jsonl-user');
-  assert.equal(first.source.cursor, 5);
-  const last = JSON.parse(lines[2]!);
+  assert.equal(first.sourceCursor, 5);
+  assert.equal(first.id, 'pc-session-1:1');
+  const last = store.rows[2]!;
   assert.equal(last.kind, 'jsonl-turn-end');
   session.kill();
 });
 
 test('pre-restart frames replayed from the host buffer are deduped by the construct-time floor', async () => {
   const port = new FakeHostPort();
-  const { session, dir } = makeSession(port);
+  const { session, dir, store } = makeSession(port);
   session.start();
   await settleTicks();
   const runId = port.commandsOf('start-run')[0]!.request.runId;
@@ -292,7 +311,7 @@ test('pre-restart frames replayed from the host buffer are deduped by the constr
   }
   session.kill();
 
-  // "API restart": a NEW adapter over the same replay file adopts the run and
+  // "API restart": a NEW adapter over the same replay store adopts the run and
   // the host buffer replays cursors 5..9 — only 8 and 9 are new.
   port.commands = [];
   port.roster = [snapshotFor(runId, { ccSessionId: 'cc-uuid-1' })];
@@ -307,9 +326,15 @@ test('pre-restart frames replayed from the host buffer are deduped by the constr
       mode: 'resume',
       jsonlPath: join(dir, 'cc.jsonl'),
       transcriptPath: join(dir, 'transcript.log'),
-      replayEventsPath: join(dir, 'jsonl-events.jsonl'),
     },
-    { hostClient: port, mintRunId: () => 'run-second', transcriptPollMs: 50, awaitBeforeTimeoutMs: 100 },
+    {
+      hostClient: port,
+      mintRunId: () => 'run-second',
+      transcriptPollMs: 50,
+      awaitBeforeTimeoutMs: 100,
+      appendReplayEvent: store.append,
+      replayState: store.state,
+    },
   );
   const seen: unknown[] = [];
   second.on('jsonl-event', (ev: unknown) => seen.push(ev));
@@ -327,8 +352,9 @@ test('pre-restart frames replayed from the host buffer are deduped by the constr
     });
   }
   assert.equal(seen.length, 2, 'only post-floor cursors flow');
-  const lines = readFileSync(join(dir, 'jsonl-events.jsonl'), 'utf8').split('\n').filter(Boolean);
-  assert.equal(lines.length, 9, '7 originals + 2 new, no duplicates');
+  assert.equal(store.rows.length, 9, '7 originals + 2 new, no duplicates');
+  // Second lifetime resumed seq from the store: 8 and 9, no collisions.
+  assert.deepEqual(store.rows.slice(7).map((r) => r.seq), [8, 9]);
   second.kill();
 });
 

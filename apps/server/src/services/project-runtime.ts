@@ -499,7 +499,6 @@ export class ProjectRuntime {
         settingSources: podPrep.settingSources,
         pluginDirs: [podPrep.pluginDir],
         transcriptPath: resolve(sessionDir, 'transcript.log'),
-        replayEventsPath: resolve(sessionDir, 'jsonl-events.jsonl'),
         model: 'opus',
         requireReadySignal: true,
         requireMcpHandshake: !session.resume,

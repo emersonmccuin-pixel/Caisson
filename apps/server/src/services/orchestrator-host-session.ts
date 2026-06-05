@@ -19,16 +19,20 @@
 //     host is up the chat re-dispatches itself with `--resume` and the full
 //     conversation history.
 //   - Replay continuity (G7): every run-jsonl wire event is re-persisted into
-//     the same per-session jsonl-events.jsonl the UI replays from, with
-//     source-cursor dedup so a host-event-buffer replay after an API restart
-//     can't double-write history.
+//     the per-session `conversation_events` table the UI replays from (M3b —
+//     was jsonl-events.jsonl), with source-cursor dedup so a host-event-buffer
+//     replay after an API restart can't double-write history.
 //   - Terminal view: 'raw' is fed by tailing the transcript file the host's
 //     spawn writes (shared disk — scope-doc decision 6, no new protocol).
 
 import { EventEmitter } from 'node:events';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+
+import {
+  appendConversationEvent as defaultAppendConversationEvent,
+  getConversationReplayState as defaultGetConversationReplayState,
+} from '@pc/db';
 
 import type {
   AgentHostCommand,
@@ -96,8 +100,6 @@ export interface OrchestratorHostSessionInput {
   settingSources?: string;
   pluginDirs?: readonly string[];
   transcriptPath: string;
-  /** PC-owned normalized replay log (jsonl-events.jsonl in the session dir). */
-  replayEventsPath: string;
   model?: string;
   requireReadySignal?: boolean;
   requireMcpHandshake?: boolean;
@@ -120,6 +122,9 @@ export interface OrchestratorHostSessionDeps {
   awaitBeforeTimeoutMs?: number;
   mintRunId?: () => string;
   logger?: Pick<Console, 'error' | 'warn' | 'log'>;
+  /** M3b — replay store seams (default @pc/db); tests inject in-memory fakes. */
+  appendReplayEvent?: typeof defaultAppendConversationEvent;
+  replayState?: typeof defaultGetConversationReplayState;
 }
 
 const ORCHESTRATOR_TIMEOUTS = {
@@ -165,7 +170,7 @@ export class OrchestratorHostSession extends EventEmitter {
   readonly settled: Promise<void>;
   private resolveSettled!: () => void;
 
-  private readonly deps: Required<Pick<OrchestratorHostSessionDeps, 'now' | 'transcriptPollMs' | 'awaitBeforeTimeoutMs' | 'mintRunId' | 'logger'>> & {
+  private readonly deps: Required<Pick<OrchestratorHostSessionDeps, 'now' | 'transcriptPollMs' | 'awaitBeforeTimeoutMs' | 'mintRunId' | 'logger' | 'appendReplayEvent' | 'replayState'>> & {
     hostClient: OrchestratorHostPort;
   };
 
@@ -181,11 +186,14 @@ export class OrchestratorHostSession extends EventEmitter {
       awaitBeforeTimeoutMs: deps.awaitBeforeTimeoutMs ?? 10_000,
       mintRunId: deps.mintRunId ?? (() => randomUUID()),
       logger: deps.logger ?? console,
+      appendReplayEvent: deps.appendReplayEvent ?? defaultAppendConversationEvent,
+      replayState: deps.replayState ?? defaultGetConversationReplayState,
     };
     this.settled = new Promise<void>((res) => {
       this.resolveSettled = res;
     });
-    const replayState = scanReplayFile(this.input.replayEventsPath);
+    // M3b — resume the replay log from the DB (was: scan jsonl-events.jsonl).
+    const replayState = this.deps.replayState(this.input.pcSessionId);
     this.nextReplaySeq = replayState.nextSeq;
     this.maxPersistedCursor = replayState.maxCursor;
     this.dedupCursorFloor = replayState.maxCursor;
@@ -651,11 +659,18 @@ export class OrchestratorHostSession extends EventEmitter {
       source: { kind: 'claude-jsonl', cursor },
     };
     try {
-      mkdirSync(dirname(this.input.replayEventsPath), { recursive: true });
-      appendFileSync(
-        this.input.replayEventsPath,
-        JSON.stringify({ ...replay, type: 'jsonl', event }) + '\n',
-      );
+      // M3b — one row in conversation_events (was: appendFileSync to
+      // jsonl-events.jsonl). Replay is a query now.
+      this.deps.appendReplayEvent({
+        sessionId: this.input.pcSessionId,
+        seq,
+        type: 'jsonl',
+        kind: kind as string,
+        event,
+        sourceKind: 'claude-jsonl',
+        sourceCursor: cursor,
+        now: this.deps.now(),
+      });
     } catch (err) {
       this.emit('jsonl-persist-error', err);
     }
@@ -736,44 +751,8 @@ function fileSize(path: string): number {
   }
 }
 
-/** Resume the replay log: next seq + highest persisted source cursor. Same
- *  scan rules the old writers used (skip unparsable lines; max(count, maxSeq)
- *  + 1 keeps seq monotonic even across legacy rows without seq). */
-function scanReplayFile(filePath: string): { nextSeq: number; maxCursor: number } {
-  try {
-    const lines = readFileSync(filePath, 'utf-8').split('\n').filter(Boolean);
-    let validCount = 0;
-    let maxSeq = 0;
-    let maxCursor = 0;
-    for (const line of lines) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (!parsed || typeof parsed !== 'object') continue;
-      const row = parsed as {
-        type?: unknown;
-        event?: unknown;
-        seq?: unknown;
-        source?: { cursor?: unknown } | null;
-      };
-      if (row.type !== 'jsonl' || !row.event || typeof row.event !== 'object') continue;
-      validCount++;
-      if (typeof row.seq === 'number' && Number.isSafeInteger(row.seq) && row.seq > maxSeq) {
-        maxSeq = row.seq;
-      }
-      const cursor = row.source?.cursor;
-      if (typeof cursor === 'number' && Number.isSafeInteger(cursor) && cursor > maxCursor) {
-        maxCursor = cursor;
-      }
-    }
-    return { nextSeq: Math.max(validCount, maxSeq) + 1, maxCursor };
-  } catch {
-    return { nextSeq: 1, maxCursor: 0 };
-  }
-}
+// ☠ M3b: `scanReplayFile` — the construct-time jsonl-events.jsonl scan. The
+// replay state (nextSeq + dedup-floor cursor) is a conversation_events query.
 
 function delay(ms: number): Promise<void> {
   return new Promise((res) => {
