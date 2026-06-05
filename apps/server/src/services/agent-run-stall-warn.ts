@@ -207,8 +207,11 @@ function scoped(
 
 function defaultResolveJsonlPath(row: AgentRunRow): string | null {
   try {
-    const project = defaultGetProjectById(row.projectId);
-    return project ? jsonlPathFor(project.folderPath, row.ccSessionId) : null;
+    // Use the run's stored worktreeDir first — that's the cwd CC used when the
+    // agent was spawned, so its projects/ key matches the actual JSONL location.
+    // Fall back to project.folderPath for legacy rows predating the column.
+    const cwd = row.worktreeDir ?? defaultGetProjectById(row.projectId)?.folderPath ?? null;
+    return cwd ? jsonlPathFor(cwd, row.ccSessionId) : null;
   } catch {
     return null;
   }

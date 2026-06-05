@@ -42,6 +42,9 @@ export interface InsertAgentRunRowInput {
   /** Slice 013 — FK to the first-class `agent_contracts` row this run is
    *  producing. NULL for legacy/non-contract dispatches. */
   contractId?: ULID | null;
+  /** Absolute path to the worktree directory the agent was spawned in. Used to
+   *  derive the correct CC JSONL path. NULL = main project dir (legacy rows). */
+  worktreeDir?: string | null;
   queuedAt: number;
 }
 
@@ -74,6 +77,7 @@ export function insertAgentRunRow(input: InsertAgentRunRowInput): AgentRunRow {
     completedAt: null,
     rev: 0,
     contractId: input.contractId ?? null,
+    worktreeDir: input.worktreeDir ?? null,
   };
   getDb().insert(agentRuns).values(row).run();
   return row;

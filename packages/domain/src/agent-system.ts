@@ -128,6 +128,11 @@ export interface AgentRunRow {
   /** Monotonic write counter. Incremented by every status transition so WS
    *  deltas can carry a version the frontend uses to discard stale delivery. */
   rev: number;
+  /** Absolute path to the worktree directory the agent was spawned in. Used to
+   *  compute the correct CC JSONL path (CC keys its projects/ dir off the spawn
+   *  cwd). NULL for rows created before this column was added — callers fall back
+   *  to `project.folderPath` when null. */
+  worktreeDir: string | null;
 }
 
 /** Pending-ask kind. ☠ M7 (FD-6, 2026-06-04) — `'user'` deleted with

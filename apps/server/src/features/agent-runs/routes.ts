@@ -281,7 +281,10 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       return c.json({ ok: false, error: `run ${runId} not in project ${projectId}` }, 400);
     }
 
-    const jsonlPath = jsonlPathFor(project.folderPath, row.ccSessionId);
+    // Use the run's stored worktreeDir — the cwd CC used when the agent was
+    // spawned. Falls back to project.folderPath for legacy rows.
+    const jsonlCwd = row.worktreeDir ?? project.folderPath;
+    const jsonlPath = jsonlPathFor(jsonlCwd, row.ccSessionId);
     const events = loadAgentRunEvents(jsonlPath);
     return c.json({
       ok: true,

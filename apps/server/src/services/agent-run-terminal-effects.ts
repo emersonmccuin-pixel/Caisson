@@ -282,13 +282,16 @@ function bareToolName(name: string): string {
  *  route uses) and surfaces both prefixed + bare tool names so a `tool_called`
  *  predicate matches whether the orchestrator wrote `pc_ask_orchestrator` or
  *  the full `mcp__pc-rig__pc_ask_orchestrator`. `loadPendingAskCreated` reads the DB (any-status
- *  pending-ask for the run). Injected in production; tests pass their own. */
-function buildProductionVerificationDeps(projectFolderPath: string): VerificationDeps {
+ *  pending-ask for the run). Injected in production; tests pass their own.
+ *  `worktreeDir` is the agent's spawn cwd (determines CC's projects/ key);
+ *  falls back to `projectFolderPath` for legacy runs. */
+function buildProductionVerificationDeps(projectFolderPath: string, worktreeDir?: string): VerificationDeps {
+  const jsonlCwd = worktreeDir ?? projectFolderPath;
   return {
     loadToolCalls: async (input) => {
       if (!input.ccSessionId) return [];
       try {
-        const jsonlPath = jsonlPathFor(projectFolderPath, input.ccSessionId);
+        const jsonlPath = jsonlPathFor(jsonlCwd, input.ccSessionId);
         const tailer = new AgentRunJsonlTailer({ filePath: jsonlPath, pollIntervalMs: 60_000 });
         const names: { name: string }[] = [];
         tailer.on('event', (event: AgentRunJsonlEvent) => {
@@ -359,7 +362,7 @@ async function finishTerminalEffects(args: {
         // `loadPendingAskCreated` reads the DB. `executorsFor` stays on the
         // verifier's `createWorktreeExecutors` default. These power `tool_called`
         // / `pending_ask_created` for `action`-kind contracts.
-        deps.verificationDeps ?? buildProductionVerificationDeps(project.folderPath),
+        deps.verificationDeps ?? buildProductionVerificationDeps(project.folderPath, input.worktreeDir || undefined),
       );
     } catch (err) {
       deps.onError?.(err instanceof Error ? err : new Error(String(err)));
