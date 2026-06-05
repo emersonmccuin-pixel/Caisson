@@ -19,6 +19,7 @@ import { latestFieldSchemas, workItemHistoryRows } from '@/features/work-items/w
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useProjectAreas } from '@/hooks/use-project-areas';
 import { useLiveEvents } from '@/store/live-store';
+import { Markdown } from '../Markdown';
 import { TypedFieldEditor } from './TypedFieldEditor';
 import { WorkLogSection } from './WorkLogSection';
 
@@ -614,12 +615,9 @@ function OverviewTab({
       </div>
 
       <Field label="Body">
-        <textarea
+        <BodyField
           value={draft.body}
-          onChange={(e) => setDraft((p) => ({ ...p, body: e.target.value }))}
-          rows={10}
-          className="w-full resize-y border border-border bg-background px-2 py-1 font-mono text-xs leading-relaxed text-foreground"
-          placeholder="No body."
+          onChange={(body) => setDraft((p) => ({ ...p, body }))}
         />
       </Field>
 
@@ -715,6 +713,61 @@ function Field({
         {label}
       </div>
       {children}
+    </div>
+  );
+}
+
+// Body shows as rendered markdown by default (the field is prose, not source);
+// "Edit" swaps in the raw textarea. Mirrors the app's view-then-edit pattern
+// (e.g. the agent Context tab). Edits flow into the draft, so Save persists as
+// before — this toggle is presentation-only.
+function BodyField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (body: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+
+  if (editing) {
+    return (
+      <div className="flex flex-col gap-1">
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={10}
+          autoFocus
+          className="w-full resize-y border border-border bg-background px-2 py-1 font-mono text-xs leading-relaxed text-foreground"
+          placeholder="No body."
+        />
+        <button
+          type="button"
+          onClick={() => setEditing(false)}
+          className="self-start border border-border bg-card px-2 py-0.5 text-[11px] text-foreground hover:bg-muted"
+        >
+          Done
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="min-h-[2rem] max-h-96 overflow-auto border border-border bg-background px-2 py-1.5">
+        {value.trim() ? (
+          <Markdown text={value} className="text-xs" />
+        ) : (
+          <span className="text-xs italic text-muted-foreground">No body.</span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="self-start border border-border bg-card px-2 py-0.5 text-[11px] text-foreground hover:bg-muted"
+      >
+        Edit
+      </button>
     </div>
   );
 }
