@@ -11,12 +11,20 @@ import { useMemo, useState } from 'react';
 import { Bell } from 'lucide-react';
 
 import { isActionableMailboxKind } from '@pc/contracts';
-import { MailboxInbox } from './MailboxInbox';
+import { MailboxInbox, isInboxVisibleKind } from './MailboxInbox';
 import { useMailboxInbox } from '@/hooks/use-mailbox-inbox';
 
 export function InboxBell({ projectNames }: { projectNames: Record<string, string> }) {
   const [open, setOpen] = useState(false);
-  const { items } = useMailboxInbox({ all: true });
+  const { items: allItems } = useMailboxInbox({ all: true });
+
+  // Only count what the inbox panel actually SHOWS — otherwise an unread
+  // hidden-kind item (e.g. a system-notice / dead-letter) lights the badge with
+  // nothing the user can open or dismiss. Same filter the panel uses.
+  const items = useMemo(
+    () => allItems.filter((i) => isInboxVisibleKind(i.message.kind)),
+    [allItems],
+  );
 
   // The badge tracks UNREAD (anything you haven't opened or dismissed). The
   // count of those that also need a decision rides the tooltip.

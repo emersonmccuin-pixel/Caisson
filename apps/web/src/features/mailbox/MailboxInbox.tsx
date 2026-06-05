@@ -71,11 +71,20 @@ const HIDDEN_KINDS: ReadonlySet<MailboxMessageKind> = new Set([
   'workflow-run-failed',
 ]);
 
+/** Single source of truth for "does this kind show in the human inbox?" — the
+ *  panel filters on it AND the bell badge counts on it, so the badge can never
+ *  light for a card the user can't see/dismiss (e.g. an unread hidden-kind
+ *  system-notice). Burned 2026-06-05: badge counted unread across ALL kinds
+ *  while the panel hid some → a stale count with nothing to clear. */
+export function isInboxVisibleKind(kind: MailboxMessageKind): boolean {
+  return !HIDDEN_KINDS.has(kind);
+}
+
 export function MailboxInbox({ scope, onVisibleCount, projectNames }: MailboxInboxProps) {
   const { items, loading, refetch } = useMailboxInbox(scope);
 
   // Drop the never-shown kinds before anything counts, groups, or renders.
-  const visibleItems = items.filter((item) => !HIDDEN_KINDS.has(item.message.kind));
+  const visibleItems = items.filter((item) => isInboxVisibleKind(item.message.kind));
 
   useEffect(() => {
     onVisibleCount?.(visibleItems.length);
