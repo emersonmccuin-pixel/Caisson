@@ -29,9 +29,9 @@ export const MIN_CLAUDE_VERSION = '2.0.0';
  *  (banner rendering, queue protocol, transcript format, the FD-2 spike
  *  harness — all have broken under us before). The installer installs exactly
  *  this; a mismatch is a loud warning, never a hard wall (dev machines may run
- *  ahead on purpose). PC was built on 2.1.160; the dev box's CLI self-updated
- *  to 2.1.162 before the FD-22 auto-update lockdown landed. */
-export const PINNED_CLAUDE_VERSION = '2.1.160';
+ *  ahead on purpose). Keep in lockstep with stage-claude.mjs + the onboarding
+ *  wizard (they drifted 160/160/163 before 0.2.0 — now all 2.1.165). */
+export const PINNED_CLAUDE_VERSION = '2.1.165';
 
 const PROBE_TIMEOUT_MS = 10_000;
 

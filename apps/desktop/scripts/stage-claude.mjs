@@ -21,10 +21,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
 // The version the app's boot/queue/JSONL/system-prompt parsers are verified
-// against. Bump deliberately + re-verify; do not float.
-// 2.1.163 (2026-06-04): FD-2 harness re-run 6/6 green + a full day of live
-// dev-stack verification on this version (dispatch/ask-resume/workflow/replay).
-const PINNED_VERSION = process.env.PC_CLAUDE_PIN ?? '2.1.163';
+// against. Bump deliberately + re-verify; do not float. ONE source of truth is
+// preflight.ts PINNED_CLAUDE_VERSION — keep this, that, and the onboarding
+// wizard in lockstep (they drifted 160/160/163 before 0.2.0).
+// 2.1.165 (2026-06-05): a full day of live dev-stack verification on this
+// version (dispatch/ask-resume/workflow/replay/resume) — Emerson's call.
+const PINNED_VERSION = process.env.PC_CLAUDE_PIN ?? '2.1.165';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const binaryName = process.platform === 'win32' ? 'claude.exe' : 'claude';

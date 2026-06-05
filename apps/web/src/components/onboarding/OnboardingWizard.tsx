@@ -55,7 +55,7 @@ function freshMachinePreflight(): PreflightReport {
       source: 'not-found',
       version: null,
       minVersion: '2.0.0',
-      pinnedVersion: '2.1.160',
+      pinnedVersion: '2.1.165',
       pinnedMatch: null,
     },
     auth: { status: 'login-required', note: 'Simulated blank machine.' },
@@ -172,7 +172,7 @@ export function OnboardingWizard({
           source: 'default-location',
           version: '2.1.160',
           minVersion: '2.0.0',
-          pinnedVersion: '2.1.160',
+          pinnedVersion: '2.1.165',
           pinnedMatch: true,
         };
         setPreflight({ ...simPreflight.current });
