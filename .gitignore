@@ -49,6 +49,9 @@ tests/playwright/results.json
 tests/playwright/snap-shell.png
 tests/playwright/.tmp-*.spec.ts
 tests/playwright/readme-*.spec.ts
+# apps/web Playwright evidence + reports
+apps/web/e2e/evidence/
+apps/web/e2e/report/
 
 # Logs and scratch files
 *.log
