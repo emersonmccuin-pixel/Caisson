@@ -52,10 +52,15 @@ jobs:
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri 'https://claude.ai/install.ps1' -OutFile "$env:TEMP\claude-install.ps1" -UseBasicParsing
-          powershell -ExecutionPolicy Bypass -File "$env:TEMP\claude-install.ps1" -Version '2.1.165'
-          $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH', 'User')
-          $claudeExe = (where.exe claude 2>$null | Select-Object -First 1)
-          if (-not $claudeExe) { throw 'claude.exe not found on PATH after install — check installer output path' }
+          # The installer takes the version POSITIONALLY ($Target param) — '-Version' is not a parameter.
+          powershell -ExecutionPolicy Bypass -File "$env:TEMP\claude-install.ps1" 2.1.165
+          # The binary self-installs to ~/.local/bin/claude.exe (stage-claude.mjs's default lookup).
+          $claudeExe = "$env:USERPROFILE\.local\bin\claude.exe"
+          if (-not (Test-Path $claudeExe)) {
+            $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+            $claudeExe = (where.exe claude 2>$null | Select-Object -First 1)
+          }
+          if (-not $claudeExe) { throw 'claude.exe not found after install — check installer output path' }
           "PC_CLAUDE_SRC=$claudeExe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # ── Tag push: publish to GitHub Releases ─────────────────────────────────
