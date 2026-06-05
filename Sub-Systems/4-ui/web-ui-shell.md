@@ -211,7 +211,7 @@ The north star (`unified-process-supervision-2026-06-02.md §2`) says the UI she
 
 ## Known issues / scar tissue
 
-- **Rails must not be adjustable (Emerson, 2026-06-03 — open bug).** Left and right rails are meant to be fixed-width, but both still render resize-adjuster arrows, and the right-rail adjuster can actually collapse the rail. Fix: remove the adjuster affordances on both rails; kill the right-rail collapse behavior.
+- ~~**Rails must not be adjustable (Emerson, 2026-06-03)**~~ ✅ S8a (2026-06-04): both `Separator`s in `Shell.tsx` are `disabled` — no drag affordance, no resize cursor, no drag-collapse. The right rail collapses only via its chevron toggle.
 
 - ~~**`WorkflowsList.tsx` throws away `res.events`**~~ ✅ fixed in M3a — `RunInlineDetail` renders the events as the "Run diary" timeline with live updates.
 

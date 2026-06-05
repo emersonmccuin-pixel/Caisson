@@ -261,10 +261,23 @@ export function AgentDispatchGroupBubble({
           Transcript
         </div>
         {transcriptItems.length === 0 ? (
-          <div className="text-[10px] italic text-muted-foreground">
+          <div
+            className={`text-[10px] italic text-muted-foreground${
+              status?.text === 'running' ? ' animate-pulse' : ''
+            }`}
+          >
             {agentTranscriptEmptyMessage({
               loadStatus: backfill.status,
               transcriptStatus: backfill.transcriptStatus,
+              // S6/FD-18 — the bubble's coarse status: 'running' here means the
+              // agent is live but hasn't produced output yet; no events at all
+              // means the dispatch just landed (still loading).
+              runStatus:
+                status === undefined
+                  ? 'spawning'
+                  : status.text === 'running'
+                    ? 'running'
+                    : undefined,
             })}
           </div>
         ) : (

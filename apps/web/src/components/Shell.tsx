@@ -124,7 +124,10 @@ export function Shell({
             unreadProjectIds={unreadProjectIds}
           />
         </Panel>
-        <Separator className="w-px bg-border" />
+        {/* S8a (Emerson 2026-06-03): rails are fixed-width BY DESIGN — disabled
+            separators drop the drag affordance + resize cursor. The right
+            rail's collapse stays toggle-only (the chevron), never drag. */}
+        <Separator disabled className="w-px bg-border" />
         <Panel id="center" defaultSize="70%" minSize="30%">
           <Center
             activeProject={activeProject}
@@ -141,7 +144,7 @@ export function Shell({
             defaultOrchestratorSurface={defaultOrchestratorSurface}
           />
         </Panel>
-        <Separator className="w-px bg-border" />
+        <Separator disabled className="w-px bg-border" />
         <Panel
           id="activity"
           panelRef={activityRef}

@@ -14,9 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DevStatus } from '@/features/dev-controls/client';
 import { devControlsApi } from '@/features/dev-controls/client';
 import {
-  isJsonlCanonicalChat,
   isRevealHiddenChatRows,
-  setJsonlCanonicalChatOverride,
   setRevealHiddenChatRows,
 } from '@/features/chat/chatRendererFlag';
 
@@ -121,18 +119,7 @@ export function DevControls() {
         >
           reload
         </button>
-        <span className="select-none text-border">·</span>
-        <button
-          type="button"
-          onClick={() => {
-            setJsonlCanonicalChatOverride(!isJsonlCanonicalChat());
-            window.location.reload();
-          }}
-          className={isJsonlCanonicalChat() ? 'text-success hover:text-foreground' : 'hover:text-foreground'}
-          title="Toggle JSONL-canonical chat renderer (reloads)"
-        >
-          canon{isJsonlCanonicalChat() ? ' ✓' : ' ✗'}
-        </button>
+        {/* ☠ S8c: the `canon` A/B toggle died with the legacy render path. */}
         <span className="select-none text-border">·</span>
         <button
           type="button"

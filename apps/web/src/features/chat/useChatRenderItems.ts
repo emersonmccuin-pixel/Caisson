@@ -112,7 +112,6 @@ export function useChatRenderItems({
   currentSessionId,
   projectId,
   visiblePendingPrompts,
-  canonical = false,
   revealHidden = false,
   hideSystem = false,
 }: {
@@ -120,55 +119,24 @@ export function useChatRenderItems({
   currentSessionId: string | null;
   projectId: string;
   visiblePendingPrompts: PendingPrompt[];
-  canonical?: boolean;
   revealHidden?: boolean;
   hideSystem?: boolean;
 }): { chatEnvelopes: StableEnvelope[]; renderItems: RenderItem[] } {
-  const chatEnvelopes = useMemo<StableEnvelope[]>(() => {
-    if (canonical) {
-      return buildCanonicalChatEnvelopes({
+  // ☠ S8c: the legacy dual-source render path (type:'event' content + jsonl —
+  // the duplicates/reordering machine) is DELETED with its A/B flag. The
+  // JSONL-canonical builder is THE render path.
+  const chatEnvelopes = useMemo<StableEnvelope[]>(
+    () =>
+      buildCanonicalChatEnvelopes({
         events,
         currentSessionId,
         projectId,
         visiblePendingPrompts,
         revealHidden,
         hideSystem,
-      });
-    }
-    // --- legacy path (frozen; the trustworthy A/B baseline) ---
-    const eventsWithTodos = injectTodoSnapshots(events);
-    const out: StableEnvelope[] = [];
-    for (let i = 0; i < eventsWithTodos.length; i++) {
-      const env = eventsWithTodos[i]!;
-      if (env.type === 'ask') {
-        const askSessionId = (env as { sessionId?: string | null }).sessionId;
-        if (currentSessionId && askSessionId && askSessionId !== currentSessionId) {
-          continue;
-        }
-        out.push({ origIdx: i, env });
-        continue;
-      }
-      if (env.type === 'event') {
-        out.push({ origIdx: i, env });
-        continue;
-      }
-      if (env.type === 'jsonl') {
-        const normalized = normalizeJsonlEnvelope(env);
-        if (normalized) {
-          out.push({ origIdx: i, env: normalized });
-        }
-      }
-    }
-    for (let i = 0; i < visiblePendingPrompts.length; i++) {
-      const pending = visiblePendingPrompts[i]!;
-      out.push({
-        origIdx: eventsWithTodos.length + i,
-        key: `pending-${pending.id}`,
-        env: pendingPromptEnvelope(projectId, pending),
-      });
-    }
-    return out;
-  }, [events, currentSessionId, projectId, visiblePendingPrompts, canonical, revealHidden, hideSystem]);
+      }),
+    [events, currentSessionId, projectId, visiblePendingPrompts, revealHidden, hideSystem],
+  );
 
   const renderItems = useMemo(
     () => synthesizeRenderItems(chatEnvelopes),

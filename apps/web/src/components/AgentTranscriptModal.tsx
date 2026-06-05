@@ -167,10 +167,17 @@ export function AgentTranscriptModal({ run, events, onClose }: AgentTranscriptMo
           className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
         >
           {transcriptItems.length === 0 ? (
-            <div className="text-xs italic text-muted-foreground">
+            <div
+              className={`text-xs italic text-muted-foreground${
+                run.status === 'queued' || run.status === 'spawning' || run.status === 'running'
+                  ? ' animate-pulse'
+                  : ''
+              }`}
+            >
               {agentTranscriptEmptyMessage({
                 loadStatus: backfill.status,
                 transcriptStatus: backfill.transcriptStatus,
+                runStatus: run.status,
               })}
             </div>
           ) : (

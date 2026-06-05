@@ -21,7 +21,6 @@ import { usePendingPrompts } from '@/features/chat/usePendingPrompts';
 import { useChatRenderItems } from '@/features/chat/useChatRenderItems';
 import {
   isHideSystemMessages,
-  isJsonlCanonicalChat,
   isRevealHiddenChatRows,
   setHideSystemMessages,
   setRevealHiddenChatRows,
@@ -100,7 +99,6 @@ export function ChatSurface({
     currentSessionId,
     projectId,
     visiblePendingPrompts,
-    canonical: isJsonlCanonicalChat(),
     revealHidden,
     hideSystem,
   });

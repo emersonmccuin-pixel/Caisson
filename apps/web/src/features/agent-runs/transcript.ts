@@ -52,7 +52,14 @@ export function mergeAgentTranscriptEvents(input: {
 export function agentTranscriptEmptyMessage(input: {
   loadStatus: AgentTranscriptLoadStatus;
   transcriptStatus: AgentRunTranscriptStatus | null;
+  /** S6/FD-18 — the run's lifecycle status. Pre-ready states render an
+   *  explicit "Claude is loading…" instead of the ambiguous "no events yet"
+   *  ("is it frozen or loading?" must never be a guess). */
+  runStatus?: string;
 }): string {
+  if (input.runStatus === 'queued' || input.runStatus === 'spawning') {
+    return 'Claude is loading… the transcript will appear here.';
+  }
   if (input.loadStatus === 'loading') return 'Loading transcript...';
   if (input.loadStatus === 'error') return 'Live transcript starts here.';
   if (input.transcriptStatus === 'missing') {
@@ -60,6 +67,9 @@ export function agentTranscriptEmptyMessage(input: {
   }
   if (input.transcriptStatus === 'empty') {
     return 'Transcript file is empty. Live transcript starts here.';
+  }
+  if (input.runStatus === 'running') {
+    return 'Claude is working… output will appear here shortly.';
   }
   return 'No transcript events yet.';
 }

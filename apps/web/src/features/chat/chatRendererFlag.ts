@@ -1,48 +1,9 @@
-// Feature flag for the JSONL-canonical chat renderer
-// (docs/chat-canonical-source-redesign.md). Off by default. While both render
-// paths coexist (Stages 2–5) this selects between them so the legacy path stays
-// the trustworthy A/B baseline.
+// Chat-view user toggles (localStorage-backed).
 //
-// Resolution order: localStorage override (live-toggleable in DevControls,
-// survives reload) > VITE_CHAT_JSONL_CANONICAL build env > default (false).
-
-const STORAGE_KEY = 'caisson.chat.jsonlCanonical';
-
-// Default ON for A/B validation (effectively Stage 5, dev). The localStorage
-// override still wins, so legacy is one keystroke away:
-//   localStorage.setItem('caisson.chat.jsonlCanonical','0'); location.reload()
-// Env var can force a value if set; otherwise the default below applies.
-const DEFAULT_CANONICAL = true;
-
-function envDefault(): boolean {
-  const raw = (import.meta.env as Record<string, string | undefined>).VITE_CHAT_JSONL_CANONICAL;
-  if (raw === '1' || raw === 'true') return true;
-  if (raw === '0' || raw === 'false') return false;
-  return DEFAULT_CANONICAL;
-}
-
-/** True when the JSONL-canonical chat renderer should be used. Read at render
- *  time; the localStorage override wins so it can be flipped without a rebuild. */
-export function isJsonlCanonicalChat(): boolean {
-  try {
-    const override = localStorage.getItem(STORAGE_KEY);
-    if (override === '1' || override === 'true') return true;
-    if (override === '0' || override === 'false') return false;
-  } catch {
-    // localStorage unavailable (SSR / privacy mode) — fall back to env.
-  }
-  return envDefault();
-}
-
-/** Set or clear the override (null clears, reverting to the env default). */
-export function setJsonlCanonicalChatOverride(value: boolean | null): void {
-  try {
-    if (value === null) localStorage.removeItem(STORAGE_KEY);
-    else localStorage.setItem(STORAGE_KEY, value ? '1' : '0');
-  } catch {
-    // no-op when storage is unavailable
-  }
-}
+// ☠ S8c: the JSONL-canonical A/B flag (`caisson.chat.jsonlCanonical`,
+// isJsonlCanonicalChat / setJsonlCanonicalChatOverride) is DELETED — the
+// canonical renderer is THE render path; the legacy dual-source path is gone
+// (banned-resurrection: don't re-add a renderer flag).
 
 const HIDE_SYSTEM_KEY = 'caisson.chat.hideSystemMessages';
 
