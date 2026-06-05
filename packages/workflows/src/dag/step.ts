@@ -118,10 +118,17 @@ export function markRunning(state: State, nodeId: string, at = Date.now()): Stat
   return next;
 }
 
-/** Mark a review node `awaiting-review` (server calls after posting the gate). */
-export function markAwaitingReview(state: State, nodeId: string): State {
+/** Mark a review node `awaiting-review` (server calls after posting the gate).
+ *  `instanceToken` = `i${iteration}` or `i${iteration}:escalated` — stamped
+ *  as `openReviewInstance` so the serialization guard can detect a duplicate
+ *  decision after the token is cleared on commit (R3 — persisted in dagState). */
+export function markAwaitingReview(state: State, nodeId: string, instanceToken?: string): State {
   const next = clone(state);
-  next.nodes[nodeId] = { ...next.nodes[nodeId], state: 'awaiting-review' };
+  next.nodes[nodeId] = {
+    ...next.nodes[nodeId],
+    state: 'awaiting-review',
+    ...(instanceToken !== undefined ? { openReviewInstance: instanceToken } : {}),
+  };
   return next;
 }
 
@@ -189,13 +196,27 @@ export function loopSubtree(workflow: WorkflowV2.Workflow, from: string, to: str
 
 export type ReviewDecision = { kind: 'approve' } | { kind: 'reject'; notes?: string };
 
-export interface ReviewOutcome {
-  state: State;
-  /** Node ids reset to pending for re-run (reject under ceiling); null otherwise. */
-  kickedBack: string[] | null;
-  /** True when the reject hit the iteration ceiling → route to Human Review. */
-  heldForHuman: boolean;
-}
+/** Serialization guard fired — the decision is a no-op, state is UNCHANGED.
+ *  `not-awaiting` = the node is not currently `state==='awaiting-review'`.
+ *  Surface as HTTP 409 / MCP non-fatal "already resolved". */
+export type ReviewRejected = 'not-awaiting';
+
+export type ReviewOutcome =
+  | {
+      /** Guard fired — no state mutation. Caller must surface 409. */
+      rejected: ReviewRejected;
+      state: State; // original, unchanged
+      kickedBack?: never;
+      heldForHuman?: never;
+    }
+  | {
+      rejected?: never;
+      state: State;
+      /** Node ids reset to pending for re-run (reject under ceiling); null otherwise. */
+      kickedBack: string[] | null;
+      /** True when the reject hit the iteration ceiling → route to Human Review. */
+      heldForHuman: boolean;
+    };
 
 const DEFAULT_MAX_ITERATIONS = 3;
 
@@ -206,6 +227,12 @@ const DEFAULT_MAX_ITERATIONS = 3;
  * subtree to pending for re-run; at/over the ceiling, fail the review node and
  * flag a Human Review hold. A reject with no `reject` loop configured fails
  * the node (nowhere to kick back to).
+ *
+ * Gate idempotency guard (R2/build-plan step 2): if the review node is not
+ * currently `awaiting-review`, return `{ rejected: 'not-awaiting' }` with NO
+ * state mutation. The caller maps this to HTTP 409 / MCP non-fatal. Combined
+ * with the per-run serialization lock in applyV2ReviewDecision, this prevents
+ * double-fire (duplicate decide → concurrent agents in the same worktree).
  */
 export function applyReviewDecision(
   workflow: WorkflowV2.Workflow,
@@ -214,11 +241,21 @@ export function applyReviewDecision(
   decision: ReviewDecision,
   at = Date.now()
 ): ReviewOutcome {
+  // ── Idempotency guard ────────────────────────────────────────────────────────
+  const rec = state.nodes[reviewNodeId];
+  if (rec?.state !== 'awaiting-review') {
+    // The gate is not open (either never reached, already decided, or the run
+    // is mid-advance after a prior decision). Surface as 409.
+    return { rejected: 'not-awaiting', state };
+  }
+
   const node = workflow.nodes.find((n) => n.id === reviewNodeId);
   let next = clone(state);
 
   if (decision.kind === 'approve') {
-    next.nodes[reviewNodeId] = { ...next.nodes[reviewNodeId], state: 'completed', endedAt: at };
+    // Clear the instance token: this gate's decision slot is consumed.
+    const { openReviewInstance: _consumed, ...rest } = next.nodes[reviewNodeId] ?? {};
+    next.nodes[reviewNodeId] = { ...rest, state: 'completed', endedAt: at };
     return { state: next, kickedBack: null, heldForHuman: false };
   }
 
@@ -231,8 +268,10 @@ export function applyReviewDecision(
   const loopId = node && isReviewNode(node) ? node.reject : undefined;
   const loop = loopId ? workflow.nodes.find((n) => n.id === loopId) : undefined;
   if (!loop || !isLoopNode(loop)) {
+    // No loop configured — fail the node. Clear the token.
+    const { openReviewInstance: _consumed, ...rest } = next.nodes[reviewNodeId] ?? {};
     next.nodes[reviewNodeId] = {
-      ...next.nodes[reviewNodeId],
+      ...rest,
       state: 'failed',
       error: 'review rejected (no loop step configured)',
       endedAt: at,
@@ -252,14 +291,19 @@ export function applyReviewDecision(
     // goes back to awaiting-review (escalated to a HUMAN gate by the executor)
     // instead of failing the run. No work is lost; the human approves to
     // continue, rejects to keep it held, or cancels the run.
+    // Stamp a NEW instance token for the escalated gate so a replayed
+    // pre-ceiling decision cannot decide the new escalated gate (step 1/3).
     next.nodes[reviewNodeId] = {
       ...next.nodes[reviewNodeId],
       state: 'awaiting-review',
+      openReviewInstance: `i${count}:escalated`,
       error: `loop iteration ceiling reached (${count}/${String(max)}) — escalated to human`,
     };
     return { state: next, kickedBack: null, heldForHuman: true };
   }
 
+  // Under ceiling: subtree reset clears the review node record (→ pending,
+  // no openReviewInstance). The token is implicitly gone after the reset.
   const subtree = loopSubtree(workflow, loop.back_to, reviewNodeId);
   for (const id of subtree) {
     next.nodes[id] = { state: 'pending', iteration: next.nodes[id]?.iteration ?? 0 };

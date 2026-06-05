@@ -262,6 +262,13 @@ export interface NodeRunRecord {
   output?: string;
   startedAt?: number;
   endedAt?: number;
+  /** Per-instance idempotency token for this review gate. Set when the gate
+   *  arms (markAwaitingReview), cleared when a decision commits successfully.
+   *  Token = `i${iteration}` or `i${iteration}:escalated` — mirrors the
+   *  mailbox idempotency key. Absent = gate is not armed (or legacy run that
+   *  predates this field). Persisted in dagState so it survives a reload
+   *  between decision and any retry (R3). */
+  openReviewInstance?: string;
 }
 
 /** DAG execution state for one run. JSON-encoded into the sidecar row. */

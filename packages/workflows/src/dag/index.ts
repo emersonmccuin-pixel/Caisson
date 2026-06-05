@@ -27,6 +27,7 @@ export {
   type ReadySelection,
   type SkipReason,
   type ReviewDecision,
+  type ReviewRejected,
   type ReviewOutcome,
   type RunStatus,
 } from './step.ts';
