@@ -223,7 +223,7 @@ function AreaCard({
     <button
       type="button"
       onClick={onOpen}
-      className="flex cursor-pointer flex-col gap-2 border border-border bg-card p-3 text-left hover:border-primary/60"
+      className="flex cursor-pointer flex-col gap-2 border-2 border-border bg-card p-3 text-left hover:border-primary/60"
       title="Click to view this Area"
     >
       <div className="flex items-center gap-2">
