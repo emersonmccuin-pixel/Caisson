@@ -169,6 +169,7 @@ export class LowLevelSpawn extends EventEmitter {
   private state: SpawnState = 'spawning';
   private rawBuffer = '';
   private trustConfirmSent = false;
+  private resumeSummaryConfirmSent = false;
   private readonly input: LowLevelSpawnInput;
   private readonly gate: ReadyGate;
   private tailer: JsonlTailer | null = null;
@@ -437,6 +438,24 @@ export class LowLevelSpawn extends EventEmitter {
     // ☠ FD-3: the dev-channels confirmation auto-press is gone — PC no
     // longer passes the dev-channels flag, so the prompt never appears.
 
+    // Auto-confirm CC's resume-cost dialog ("This session is …d …h old … —
+    // Resuming the full session will consume a substantial portion of your
+    // usage limits. We recommend resuming from a summary."). Option 1 (Resume
+    // from summary) is pre-selected, so a bare Enter takes the recommended,
+    // cheaper path. Without this, the dialog is terminal-only and the chat
+    // window stalls behind it on every resume of a large/old session — and
+    // the ready gate eventually fail-closes it as a false "no output" hang.
+    // Match a whitespace-stripped buffer: CC can split letters within a word
+    // with cursor-right escapes (same quirk the ready gate guards against).
+    if (!this.resumeSummaryConfirmSent && looksLikeResumeSummaryDialog(this.rawBuffer)) {
+      this.resumeSummaryConfirmSent = true;
+      try {
+        this.child?.write('\r');
+      } catch {
+        /* exited mid-press */
+      }
+    }
+
     this.gate.feedChunk(data);
   }
 
@@ -535,6 +554,21 @@ export class LowLevelSpawn extends EventEmitter {
     };
     tryAttach();
   }
+}
+
+/** True when the raw PTY buffer is showing CC's resume-cost dialog ("Resuming
+ *  the full session will consume … We recommend resuming from a summary.").
+ *  Option 1 (Resume from summary) is pre-selected, so the caller answers with
+ *  a bare Enter. Pure so the string-match survives CC's letter-splitting
+ *  terminal quirk under test rather than only in production. */
+export function looksLikeResumeSummaryDialog(rawBuffer: string): boolean {
+  const compact = collapseAnsiToWhitespace(rawBuffer)
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  return (
+    compact.includes('resumefromsummary') ||
+    compact.includes('resumingthefullsession')
+  );
 }
 
 export function buildLowLevelSpawnArgs(
