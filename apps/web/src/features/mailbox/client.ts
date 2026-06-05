@@ -16,6 +16,11 @@ export const mailboxApi = {
   listGlobalInbox: (opts: { unreadOnly?: boolean; actionableOnly?: boolean } = {}) =>
     getJson<{ ok: true; items: MailboxInboxItem[] }>(`/api/mailbox${query(opts)}`).then((r) => r.items),
 
+  /** M8 (FD-7) — THE human inbox: every user-inbox recipient across ALL
+   *  projects. Powers the cross-project Inbox bell. */
+  listAllInbox: (opts: { unreadOnly?: boolean; actionableOnly?: boolean } = {}) =>
+    getJson<{ ok: true; items: MailboxInboxItem[] }>(`/api/inbox${query(opts)}`).then((r) => r.items),
+
   markRead: (projectId: ULID, recipientId: string) =>
     postJson<{ ok: boolean }>(
       `/api/projects/${projectId}/mailbox/recipients/${recipientId}/read`,
@@ -32,6 +37,40 @@ export const mailboxApi = {
     postJson<{ ok: boolean }>(
       `/api/projects/${projectId}/mailbox/recipients/${recipientId}/dismiss`,
       {},
+    ),
+
+  // ── M8 (FD-7) — decision doors the inbox cards call. The server's
+  //    decided-elsewhere resolution actions the card; these never touch
+  //    recipient state directly. ──────────────────────────────────────────────
+
+  /** Workflow review gate decision (POST workflow-v2/review). */
+  decideWorkflowReview: (
+    projectId: ULID,
+    runId: string,
+    nodeId: string,
+    decision: 'approve' | 'reject',
+    notes?: string,
+  ) =>
+    postJson<{ ok: boolean; error?: string }>(`/api/projects/${projectId}/workflow-v2/review`, {
+      runId,
+      nodeId,
+      decision,
+      ...(notes ? { notes } : {}),
+    }),
+
+  /** Verification hold approve (contract human-review tier). */
+  approveVerification: (projectId: ULID, workItemId: string, notes?: string) =>
+    postJson<{ ok: boolean; error?: string }>(
+      `/api/projects/${projectId}/work-items/${workItemId}/approve`,
+      { actor: 'user', ...(notes ? { notes } : {}) },
+    ),
+
+  /** Verification hold reject — feedback required; the producer agent is woken
+   *  back up with it (the continuation inherits the run's dispatcher). */
+  rejectVerification: (projectId: ULID, workItemId: string, feedback: string) =>
+    postJson<{ ok: boolean; error?: string }>(
+      `/api/projects/${projectId}/work-items/${workItemId}/reject`,
+      { actor: 'user', feedback },
     ),
 };
 

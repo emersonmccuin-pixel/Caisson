@@ -14,6 +14,7 @@ import { mailboxApi } from '@/features/mailbox/client';
 import type { MailboxInboxItem } from '@/features/mailbox/types';
 import {
   useLiveEntitySignature,
+  useLiveEntitySignatureAllProjects,
   useLiveGlobalSignature,
 } from '@/store/live-store';
 
@@ -23,37 +24,44 @@ export interface UseMailboxInboxResult {
   refetch: () => void;
 }
 
-/** `scope` selects the project inbox (`projectId`) or the global single-user
- *  inbox (`null`). Live updates come from the store signatures below. */
+/** `scope` selects the project inbox (`projectId`), the global single-user
+ *  inbox (`global`), or — M8 (FD-7) — THE cross-project human inbox (`all`:
+ *  every user-inbox recipient across all projects, the Inbox bell's feed).
+ *  Live updates come from the store signatures below. */
 export function useMailboxInbox(
-  scope: { projectId: string } | { global: true },
+  scope: { projectId: string } | { global: true } | { all: true },
 ): UseMailboxInboxResult {
   const [items, setItems] = useState<MailboxInboxItem[]>([]);
   const [loading, setLoading] = useState(true);
   const projectId = 'projectId' in scope ? scope.projectId : null;
+  const all = 'all' in scope;
 
   // Project scope keys on the message fact; the global inbox keys only on the
-  // global message signature.
+  // global message signature; the all-projects inbox keys on every mailbox
+  // frame (the Q12 background sockets feed inactive projects' frames too).
   const msgSig = useLiveEntitySignature('mailbox-message', projectId);
-  const globalMsgSig = useLiveGlobalSignature(projectId ? null : 'mailbox-message');
+  const globalMsgSig = useLiveGlobalSignature(projectId || all ? null : 'mailbox-message');
+  const allMsgSig = useLiveEntitySignatureAllProjects(all ? 'mailbox-message' : null);
 
   const refetch = useCallback(() => {
-    const promise = projectId
-      ? mailboxApi.listProjectInbox(projectId)
-      : mailboxApi.listGlobalInbox();
+    const promise = all
+      ? mailboxApi.listAllInbox()
+      : projectId
+        ? mailboxApi.listProjectInbox(projectId)
+        : mailboxApi.listGlobalInbox();
     setLoading(true);
     promise
       .then((next) => setItems(next))
       .catch(() => setItems([]))
       .finally(() => setLoading(false));
-  }, [projectId]);
+  }, [projectId, all]);
 
   // Initial load + reset when the scope changes, then refetch on any genuine
   // change to the in-scope signatures.
   useEffect(() => {
     refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, msgSig, globalMsgSig]);
+  }, [projectId, all, msgSig, globalMsgSig, allMsgSig]);
 
   // Exclude dismissed rows client-side so they vanish immediately on dismiss
   // and stay gone after the next refetch (the server returns them with a

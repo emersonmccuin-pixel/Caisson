@@ -248,6 +248,27 @@ export function listRecipientsForInbox(
   return out;
 }
 
+/** M8 (FD-7) — THE human inbox list: every `user-inbox` recipient across ALL
+ *  projects (plus the project-less global rows). Powers the cross-project
+ *  Inbox bell; per-project lists keep using listRecipientsForInbox. */
+export function listUserInboxRecipientsAllProjects(
+  db: DbExecutor = getDb(),
+): { recipient: MailboxRecipientRow; message: MailboxMessageRow }[] {
+  const messages = db
+    .select()
+    .from(mailboxMessages)
+    .orderBy(asc(mailboxMessages.createdAt), asc(mailboxMessages.id))
+    .all();
+  const out: { recipient: MailboxRecipientRow; message: MailboxMessageRow }[] = [];
+  for (const message of messages) {
+    for (const recipient of listRecipientsForMessage(message.id, db)) {
+      if (recipient.addressKind !== 'user-inbox') continue;
+      out.push({ recipient, message });
+    }
+  }
+  return out;
+}
+
 export function listDeliveriesForProject(
   projectId: ULID,
   db: DbExecutor = getDb(),

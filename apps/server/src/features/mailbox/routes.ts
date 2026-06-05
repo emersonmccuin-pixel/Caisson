@@ -30,6 +30,7 @@ import {
   getMailboxRecipient,
   listDeliveriesForProject,
   listRecipientsForInbox,
+  listUserInboxRecipientsAllProjects,
   newId,
   type MailboxRecipientRow,
 } from '@pc/db';
@@ -126,6 +127,18 @@ export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
       actionableOnly: c.req.query('actionableOnly'),
     });
     const rows = listRecipientsForInbox({ projectId: null });
+    return c.json({ ok: true, items: filterInbox(rows, query.ok ? query.value : {}) });
+  });
+
+  // ── M8 (FD-7) — THE human inbox: every user-inbox recipient across ALL
+  //    projects + the project-less rows. Powers the cross-project Inbox bell
+  //    ("review needed in project B finds you in project A"). ─────────────────
+  app.get('/api/inbox', (c) => {
+    const query = parseListMailboxQuery({
+      unreadOnly: c.req.query('unreadOnly'),
+      actionableOnly: c.req.query('actionableOnly'),
+    });
+    const rows = listUserInboxRecipientsAllProjects();
     return c.json({ ok: true, items: filterInbox(rows, query.ok ? query.value : {}) });
   });
 

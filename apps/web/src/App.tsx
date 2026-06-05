@@ -7,6 +7,7 @@ import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { SessionSwitcher } from '@/components/SessionSwitcher';
 import { HostHealthPill } from '@/features/system/HostHealthPill';
+import { InboxBell } from '@/features/mailbox/InboxBell';
 import { ClaudeVersionBanner } from '@/features/system/ClaudeVersionBanner';
 import { HostHealthBanner } from '@/features/system/HostHealthBanner';
 import { Shell } from '@/components/Shell';
@@ -426,6 +427,11 @@ export default function App() {
           )}
         </div>
         <div className="flex items-center gap-1">
+          {/* M8 (FD-7) — cross-project Inbox bell: decisions waiting on the
+              human, any project. */}
+          <InboxBell
+            projectNames={Object.fromEntries((projects ?? []).map((p) => [p.id, p.name]))}
+          />
           <button
             onClick={() => persistActivityPanelSetting({ open: !activityPanelOpen })}
             disabled={!settings}

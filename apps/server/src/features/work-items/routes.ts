@@ -396,7 +396,10 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     }>();
     const dispatcherSessionId =
       typeof body.dispatcherSessionId === 'string' ? body.dispatcherSessionId.trim() : '';
-    if (!dispatcherSessionId) {
+    // M8 (FD-7) — a human deciding from the Inbox card has no PC session; the
+    // service falls back to the parent run's dispatcher identity. The
+    // orchestrator path still forwards PC_SESSION_ID.
+    if (!dispatcherSessionId && body.actor !== 'user') {
       return c.json(
         { ok: false, error: 'dispatcherSessionId required (orchestrator must forward PC_SESSION_ID)' },
         400,

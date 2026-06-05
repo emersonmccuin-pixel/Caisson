@@ -145,6 +145,23 @@ export function useLiveGlobalEvents(entity: LiveEventEntity | null): LiveEvent[]
   }, [byKey, entity]);
 }
 
+/** M8 (FD-7) — stable signature of EVERY frame for `entity` across ALL
+ *  projects + global scope. The background per-project sockets (Q12) feed the
+ *  store frames from inactive projects too, so this flips when e.g. a review
+ *  card lands in project B while project A is active. Drives the cross-project
+ *  Inbox bell refetch. */
+export function useLiveEntitySignatureAllProjects(entity: LiveEventEntity | null): string {
+  return useLiveStore((s) => {
+    if (!entity) return '';
+    let sig = '';
+    for (const ev of s.byKey.values()) {
+      if (ev.entity !== entity) continue;
+      sig += `${ev.entityId}:${ev.version ?? ev.cursor};`;
+    }
+    return sig;
+  });
+}
+
 /** Stable signature of the global-scope frame set for `entity`; flips only when
  *  a global frame for that entity lands (new id, or newer version/cursor). */
 export function useLiveGlobalSignature(entity: LiveEventEntity | null): string {

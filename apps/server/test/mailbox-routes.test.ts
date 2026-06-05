@@ -277,6 +277,48 @@ test('app-level enqueue derives projectId from a project-bound recipient', async
   ));
 });
 
+// M8 (FD-7) — /api/inbox = every user-inbox recipient across ALL projects
+// (the Inbox bell's feed). Project-scoped user-inbox cards from two different
+// projects both appear; non-user-inbox recipients never do.
+test('GET /api/inbox aggregates user-inbox recipients across projects', async () => {
+  const { app } = makeApp();
+  const mk = (n: number) =>
+    createProject({
+      slug: `mbx-all-${String(n)}-${Date.now()}`,
+      name: `Mailbox All ${String(n)}`,
+      stages,
+      folderPath: join(tmpDir, `mbx-all-${String(n)}`),
+    });
+  const pA = mk(1);
+  const pB = mk(2);
+  const enqueueReview = async (projectId: string, marker: string) =>
+    app.request(`/api/projects/${projectId}/mailbox/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'workflow-review',
+        body: marker,
+        idempotencyKey: `all-${marker}`,
+        recipients: [
+          { address: { kind: 'user-inbox', userId: 'local-user', projectId }, channel: 'ui-inbox' },
+        ],
+      }),
+    });
+  await enqueueReview(pA.id, 'review in A');
+  await enqueueReview(pB.id, 'review in B');
+
+  const res = await app.request('/api/inbox');
+  const body = await json<{ items: { message: { body: string; projectId: string | null } }[] }>(res);
+  assert.ok(body.items.some((i) => i.message.body === 'review in A'));
+  assert.ok(body.items.some((i) => i.message.body === 'review in B'));
+
+  // actionableOnly filters to decision kinds.
+  const actionable = await json<{ items: { message: { body: string } }[] }>(
+    await app.request('/api/inbox?actionableOnly=1'),
+  );
+  assert.ok(actionable.items.some((i) => i.message.body === 'review in B'));
+});
+
 // ☠ M8/FD-7: the pending-interaction answer route is gone with the shadow
 // table — it must 404 like any unknown route.
 test('pending-interaction answer route stays deleted (404)', async () => {

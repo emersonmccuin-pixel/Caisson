@@ -352,6 +352,7 @@ export {
   listMailboxMessagesBySource,
   listRecipientsForInbox,
   listRecipientsForMessage,
+  listUserInboxRecipientsAllProjects,
   markDeliveryAccepted,
   markDeliveryDeadLettered,
   markDeliveryDeferred,

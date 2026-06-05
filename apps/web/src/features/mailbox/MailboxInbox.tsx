@@ -12,10 +12,13 @@ import { useMailboxInbox } from '@/hooks/use-mailbox-inbox';
 import type { MailboxInboxItem } from './types';
 
 export interface MailboxInboxProps {
-  /** Project scope, or the global single-user inbox. */
-  scope: { projectId: string } | { global: true };
+  /** Project scope, the global single-user inbox, or — M8 (FD-7) — the
+   *  cross-project human inbox (the Inbox bell's feed). */
+  scope: { projectId: string } | { global: true } | { all: true };
   /** Called whenever the visible item count changes (used by collapse headers). */
   onVisibleCount?: (n: number) => void;
+  /** Project id → display name, for the cross-project rows' project chip. */
+  projectNames?: Record<string, string>;
 }
 
 const KIND_LABELS: Record<MailboxMessageKind, string> = {
@@ -58,7 +61,7 @@ const HIDDEN_KINDS: ReadonlySet<MailboxMessageKind> = new Set([
   'system-notice',
 ]);
 
-export function MailboxInbox({ scope, onVisibleCount }: MailboxInboxProps) {
+export function MailboxInbox({ scope, onVisibleCount, projectNames }: MailboxInboxProps) {
   const { items, loading, refetch } = useMailboxInbox(scope);
 
   // Drop the never-shown kinds before anything counts, groups, or renders.
@@ -104,7 +107,14 @@ export function MailboxInbox({ scope, onVisibleCount }: MailboxInboxProps) {
             </div>
             <ul className="space-y-1.5">
               {group.map((item) => (
-                <MailboxInboxRow key={item.recipient.id} item={item} onChanged={refetch} />
+                <MailboxInboxRow
+                  key={item.recipient.id}
+                  item={item}
+                  onChanged={refetch}
+                  projectName={
+                    (item.message.projectId && projectNames?.[item.message.projectId]) || null
+                  }
+                />
               ))}
             </ul>
           </div>
@@ -138,7 +148,15 @@ function rowTitle(message: MailboxInboxItem['message']): string {
   return KIND_LABELS[message.kind];
 }
 
-function MailboxInboxRow({ item, onChanged }: { item: MailboxInboxItem; onChanged: () => void }) {
+function MailboxInboxRow({
+  item,
+  onChanged,
+  projectName,
+}: {
+  item: MailboxInboxItem;
+  onChanged: () => void;
+  projectName?: string | null;
+}) {
   const { recipient, message } = item;
   const projectId = message.projectId;
   const unread = recipient.readAt === null && recipient.dismissedAt === null;
@@ -182,6 +200,11 @@ function MailboxInboxRow({ item, onChanged }: { item: MailboxInboxItem; onChange
         <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
           {message.kind}
         </span>
+        {projectName && (
+          <span className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-accent">
+            {projectName}
+          </span>
+        )}
         <span className={`min-w-0 flex-1 truncate${unread ? ' font-medium text-foreground' : ' text-foreground/80'}`}>
           {rowTitle(message)}
         </span>
@@ -202,7 +225,12 @@ function MailboxInboxRow({ item, onChanged }: { item: MailboxInboxItem; onChange
         {message.body}
       </div>
 
-      {/* Decision actions (approve/reject via the typed doors) land in M8 slice C. */}
+      {/* M8 (FD-7) — the decision card: approve / reject-with-feedback via the
+          existing typed doors. The server's decided-elsewhere resolution
+          actions this recipient; the live frame refetches the list. */}
+      {actionable && projectId && (
+        <DecisionActions item={item} projectId={projectId} onChanged={onChanged} />
+      )}
 
       {/* Action controls */}
       <div className="flex items-center gap-1">
@@ -230,6 +258,127 @@ function MailboxInboxRow({ item, onChanged }: { item: MailboxInboxItem; onChange
       </div>
       )}
     </li>
+  );
+}
+
+/** The payloads slice B writes onto the two decision kinds. Defensive reads —
+ *  a malformed payload renders no buttons rather than a broken door. */
+function workflowReviewTarget(message: MailboxInboxItem['message']): { runId: string; nodeId: string } | null {
+  const p = message.payload as { runId?: unknown; nodeId?: unknown };
+  return typeof p.runId === 'string' && typeof p.nodeId === 'string'
+    ? { runId: p.runId, nodeId: p.nodeId }
+    : null;
+}
+function verificationTarget(message: MailboxInboxItem['message']): { workItemId: string } | null {
+  const p = message.payload as { workItemId?: unknown };
+  return typeof p.workItemId === 'string' ? { workItemId: p.workItemId } : null;
+}
+
+/** M8 (FD-7) — approve / reject-with-feedback, calling the EXISTING decision
+ *  doors (workflow-v2/review · work-items approve/reject). Visible feedback:
+ *  buttons flip to a transient ✓ Decided state; errors render inline. */
+function DecisionActions({
+  item,
+  projectId,
+  onChanged,
+}: {
+  item: MailboxInboxItem;
+  projectId: string;
+  onChanged: () => void;
+}) {
+  const { message } = item;
+  const [showReject, setShowReject] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [decided, setDecided] = useState<'approved' | 'rejected' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const wfTarget = message.kind === 'workflow-review' ? workflowReviewTarget(message) : null;
+  const vrTarget = message.kind === 'verification-review' ? verificationTarget(message) : null;
+  if (!wfTarget && !vrTarget) return null;
+
+  // Verification rejects REQUIRE feedback (the agent is woken up with it);
+  // workflow-review reject notes flow into the loop's $carry.feedback — same
+  // requirement so the kicked-back agent always knows why.
+  const decide = async (decision: 'approve' | 'reject') => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = wfTarget
+        ? await mailboxApi.decideWorkflowReview(
+            projectId,
+            wfTarget.runId,
+            wfTarget.nodeId,
+            decision,
+            decision === 'reject' ? feedback.trim() : undefined,
+          )
+        : decision === 'approve'
+          ? await mailboxApi.approveVerification(projectId, vrTarget!.workItemId)
+          : await mailboxApi.rejectVerification(projectId, vrTarget!.workItemId, feedback.trim());
+      if (!res.ok) throw new Error(res.error ?? 'decision failed');
+      setDecided(decision === 'approve' ? 'approved' : 'rejected');
+      setTimeout(onChanged, 1200); // let the ✓ register before the row refreshes away
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (decided) {
+    return (
+      <div
+        className={`mb-1.5 px-2 py-1 text-[11px] font-medium ${
+          decided === 'approved' ? 'bg-success/15 text-success' : 'bg-destructive/15 text-destructive'
+        }`}
+      >
+        ✓ {decided === 'approved' ? 'Approved — the run continues.' : 'Sent back with your feedback.'}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-1.5 flex flex-col gap-1.5">
+      <div className="flex gap-1.5">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void decide('approve')}
+          className="bg-primary px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        >
+          Approve
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => setShowReject((v) => !v)}
+          className="border border-destructive/60 bg-card px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-destructive hover:bg-destructive/10 disabled:opacity-50"
+        >
+          Reject…
+        </button>
+      </div>
+      {showReject && (
+        <div className="flex flex-col gap-1">
+          <textarea
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            rows={2}
+            placeholder="What should change? (required — the agent gets this feedback)"
+            disabled={busy}
+            className="border border-border bg-background px-1.5 py-1 text-[11px]"
+          />
+          <button
+            type="button"
+            disabled={busy || !feedback.trim()}
+            onClick={() => void decide('reject')}
+            className="self-start bg-destructive px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+          >
+            Send back
+          </button>
+        </div>
+      )}
+      {error && <div className="text-[11px] text-destructive">Failed: {error}</div>}
+    </div>
   );
 }
 

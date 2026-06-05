@@ -27,7 +27,7 @@
 
 import type { Contract } from '@pc/contracts';
 import { ContractService, WorkItemMutationGateway } from '@pc/app-services';
-import { applyRunOutcome, getWorkItem } from '@pc/db';
+import { applyRunOutcome, getAgentRunRow, getWorkItem } from '@pc/db';
 import type { Project, ULID, WorkItem } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
@@ -155,10 +155,12 @@ export interface RejectAgentWorkItemInput {
   workItemId: ULID;
   feedback: string;
   actor?: 'orchestrator' | 'user';
-  /** Caller's PC session-id. Forwarded to `dispatchContinueAgent` as the
-   *  ownership identity on the continuation. Required because the
-   *  continuation respects the parent run's `dispatcher_session_id`. */
-  dispatcherSessionId: string;
+  /** Caller's PC session-id, forwarded to `dispatchContinueAgent` as the
+   *  ownership identity on the continuation. M8 (FD-7): optional — a human
+   *  deciding from the Inbox card has no PC session; the continuation then
+   *  inherits the PARENT run's `dispatcher_session_id` (the original owner
+   *  keeps getting the envelopes). */
+  dispatcherSessionId?: string | null;
   /** Project record — passed through to the continuation dispatch so it can
    *  resolve the worktree + slug + folder path. */
   project: Project;
@@ -210,6 +212,18 @@ export async function rejectAgentWorkItem(
     );
   }
   const actor = input.actor ?? 'orchestrator';
+  // M8 (FD-7) — Inbox-card rejects carry no PC session; the continuation
+  // inherits the parent run's dispatcher identity.
+  const dispatcherSessionId =
+    input.dispatcherSessionId?.trim() ||
+    getAgentRunRow(contract.agentRunId as ULID)?.dispatcherSessionId ||
+    '';
+  if (!dispatcherSessionId) {
+    throw new VerificationReviewError(
+      'no-assigned-run',
+      `contract ${contract.id}'s producer run has no dispatcher session to continue under`,
+    );
+  }
 
   // Flip the contract to rejected.
   service.setVerification({
@@ -252,7 +266,7 @@ export async function rejectAgentWorkItem(
       worktreeDir: input.project.folderPath,
       parentAgentRunId: contract.agentRunId as ULID,
       input: continuationInput,
-      dispatcherSessionId: input.dispatcherSessionId,
+      dispatcherSessionId,
       ...(contract.workItemId ? { workItemId: contract.workItemId as ULID } : {}),
       slug: input.project.slug,
     },
