@@ -8,15 +8,23 @@
 // typed feedback that an accidental dismiss would destroy).
 
 import { useMemo, useState } from 'react';
-import { Bell } from 'lucide-react';
+import { Bell, Download } from 'lucide-react';
 
 import { isActionableMailboxKind } from '@pc/contracts';
 import { MailboxInbox, isInboxVisibleKind } from './MailboxInbox';
+import { UpdateBellCard, isUpdatePending } from './UpdateBellCard';
 import { useMailboxInbox } from '@/hooks/use-mailbox-inbox';
+import { useDesktopUpdates } from '@/hooks/use-desktop-updates';
 
 export function InboxBell({ projectNames }: { projectNames: Record<string, string> }) {
   const [open, setOpen] = useState(false);
   const { items: allItems } = useMailboxInbox({ all: true });
+
+  // A pending desktop update rides the same bell — its own green dot (distinct
+  // from the red unread count) and a pinned card in the panel. Inert in the
+  // browser / dev-run (state stays null), so this adds nothing there.
+  const updates = useDesktopUpdates();
+  const updatePending = isUpdatePending(updates);
 
   // Only count what the inbox panel actually SHOWS — otherwise an unread
   // hidden-kind item (e.g. a system-notice / dead-letter) lights the badge with
@@ -47,10 +55,15 @@ export function InboxBell({ projectNames }: { projectNames: Record<string, strin
   );
 
   const title =
-    unread > 0
-      ? `${String(unread)} unread message${unread === 1 ? '' : 's'}` +
-        (actionable > 0 ? ` · ${String(actionable)} need a decision` : '')
-      : 'Inbox';
+    [
+      unread > 0
+        ? `${String(unread)} unread message${unread === 1 ? '' : 's'}` +
+          (actionable > 0 ? ` · ${String(actionable)} need a decision` : '')
+        : null,
+      updatePending ? 'Caisson update available' : null,
+    ]
+      .filter(Boolean)
+      .join(' · ') || 'Inbox';
 
   return (
     <div className="relative flex h-full items-center">
@@ -70,6 +83,14 @@ export function InboxBell({ projectNames }: { projectNames: Record<string, strin
             {unread > 9 ? '9+' : unread}
           </span>
         )}
+        {updatePending && (
+          <span
+            className="absolute bottom-1 right-0 flex h-[14px] w-[14px] items-center justify-center rounded-full bg-primary text-primary-foreground"
+            title="Caisson update available"
+          >
+            <Download className="h-2.5 w-2.5" />
+          </span>
+        )}
       </button>
       {open && (
         <div className="absolute right-0 top-full z-50 flex max-h-[70vh] w-[380px] flex-col border border-border bg-card shadow-lg">
@@ -87,6 +108,7 @@ export function InboxBell({ projectNames }: { projectNames: Record<string, strin
             </button>
           </div>
           <div className="overflow-y-auto p-3">
+            {updatePending && <UpdateBellCard updates={updates} />}
             <MailboxInbox scope={{ all: true }} projectNames={projectNames} />
           </div>
         </div>
