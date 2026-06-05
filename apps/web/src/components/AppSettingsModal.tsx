@@ -375,6 +375,7 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
       {editPod && (
         <PodDetailModal
           pod={editPod}
+          readOnly={editPod.origin === 'stock'}
           onClose={() => {
             setEditPodId(null);
             refetchStockPods();
@@ -946,7 +947,7 @@ function SpecialistsTab({
   return (
     <div className="flex flex-col gap-3">
       <div className="border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-        Editing stock specialists changes how every project's agents behave. Workflows that depend on the seeded prompt or tools may break. Reset to default restores the seeded content; knowledge, secrets, and MCP servers are untouched.
+        Built-in specialists are controlled centrally — view-only here, not editable. Each boot resyncs them to the shipped defaults. Reset to default forces that resync now (knowledge, secrets, and MCP servers are untouched). To customize one, clone it into a project and edit the copy.
       </div>
       {error && (
         <div className="border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">

@@ -110,7 +110,7 @@ export function AgentsList({ project, events }: AgentsListProps) {
         <aside className="overflow-y-auto border-r border-border">
           <ListSection
             title="Built-in"
-            subtitle="Read-only here. Edit in Global Settings → Specialists."
+            subtitle="Built-in — view-only. Clone into a project to customize."
             count={stockPods.length}
             filteredCount={filtered.stock.length}
             empty="No stock specialists."

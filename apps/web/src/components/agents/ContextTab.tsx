@@ -22,8 +22,9 @@ interface ContextTabProps {
   error: string | null;
   onChanged: () => void;
   /** When true: Add / Edit / Delete buttons are hidden so the section becomes
-   *  a pure rendered-markdown viewer. Used when a stock pod is opened from
-   *  the project Agents tab; edits live in Global Settings → Specialists. */
+   *  a pure rendered-markdown viewer. Used whenever a built-in (stock) pod is
+   *  opened — built-ins are controlled centrally and view-only; clone into a
+   *  project to customize. */
   readOnly?: boolean;
   /** Compact list mode for summary surfaces such as the project Agents tab. */
   collapseDocsByDefault?: boolean;

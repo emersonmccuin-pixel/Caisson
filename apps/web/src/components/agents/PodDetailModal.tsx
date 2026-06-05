@@ -280,9 +280,9 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
 
         {readOnly && (
           <div className="border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
-            This is a stock specialist. To edit the prompt or settings, open{' '}
-            <span className="font-medium text-foreground">Global Settings → Specialists</span>{' '}
-            (danger-zone).
+            Built-in agent — controlled centrally and can't be edited. To customize, clone it
+            into a project (<span className="font-medium text-foreground">Add agent</span>) and edit
+            the copy.
           </div>
         )}
 
