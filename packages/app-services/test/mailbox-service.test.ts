@@ -88,8 +88,11 @@ function delivery(over: Partial<MailboxDeliveryRow> = {}): MailboxDeliveryRow {
   };
 }
 
-function mailboxHarness(opts: { failTx?: boolean; msg?: MailboxMessageRow } = {}) {
+function mailboxHarness(
+  opts: { failTx?: boolean; msg?: MailboxMessageRow; enqueueCreated?: boolean } = {},
+) {
   const inserted: InsertLiveEventDraft[] = [];
+  const enqueued: Parameters<NonNullable<MailboxServiceDeps['enqueueMailboxMessage']>>[0][] = [];
   const msg = opts.msg ?? message();
   const deps: MailboxServiceDeps = {
     transaction: (fn) => {
@@ -100,12 +103,15 @@ function mailboxHarness(opts: { failTx?: boolean; msg?: MailboxMessageRow } = {}
       inserted.push(draft as InsertLiveEventDraft);
       return fakeInsert(db, draft);
     }) as MailboxServiceDeps['insertLiveEvent'],
-    enqueueMailboxMessage: () => ({
-      message: msg,
-      recipients: [recipient()],
-      deliveries: [delivery()],
-      created: true,
-    }),
+    enqueueMailboxMessage: (input) => {
+      enqueued.push(input);
+      return {
+        message: msg,
+        recipients: [recipient()],
+        deliveries: [delivery()],
+        created: opts.enqueueCreated ?? true,
+      };
+    },
     getMailboxMessage: () => msg,
     listRecipientsForMessage: () => [recipient()],
     markDeliveryAccepted: () => delivery({ status: 'accepted', attempts: 1, targetRefKind: 'send-queue', targetRefId: 'sq1' }),
@@ -115,8 +121,12 @@ function mailboxHarness(opts: { failTx?: boolean; msg?: MailboxMessageRow } = {}
     markRecipientActioned: () => recipient({ actionedAt: 6 }),
     markRecipientDismissed: () => recipient({ dismissedAt: 7 }),
     writeAudit: () => undefined,
+    newId: (() => {
+      let n = 0;
+      return () => `nid-${++n}` as never;
+    })(),
   };
-  return { service: new MailboxService(deps), inserted };
+  return { service: new MailboxService(deps), inserted, enqueued };
 }
 
 test('enqueue emits one mailbox.message.changed (project scope) with recipient summary', () => {
@@ -210,3 +220,63 @@ test('T3.1 — message-fact and delivery frames for the same message use DISTINC
 
 // ☠ M8/FD-7: the PendingInteractionService tests are gone with the write-only
 // shadow table (archived in migration 0045).
+
+// ── M4b (FD-8) — a dead letter is never silent ───────────────────────────────
+
+test('M4b — dead-lettering a delivery mints ONE user-inbox system-notice in the same tx', () => {
+  const h = mailboxHarness();
+  const d = h.service.deadLetterDelivery({
+    deliveryId: 'd1' as never,
+    messageId: 'm1' as never,
+    recipientId: 'r1' as never,
+    reason: 'non-retryable',
+    lastError: 'orchestrator session does not exist: x',
+    now: 9,
+  });
+  assert.ok(d);
+  assert.equal(h.enqueued.length, 1);
+  const notice = h.enqueued[0]!;
+  assert.equal(notice.message.kind, 'system-notice');
+  assert.equal(notice.message.sourceKind, 'mailbox-dead-letter');
+  assert.equal(notice.message.sourceId, 'd1');
+  assert.equal(notice.message.idempotencyKey, 'dead-letter:d1');
+  assert.match(notice.message.subject ?? '', /could not be delivered/);
+  assert.match(notice.message.body, /non-retryable: orchestrator session does not exist/);
+  assert.equal(notice.recipients.length, 1);
+  assert.equal(notice.recipients[0]!.addressKind, 'user-inbox');
+  assert.equal(notice.recipients[0]!.channel, 'ui-inbox');
+  // Two facts: the delivery frame + the notice's message fact.
+  assert.equal(h.inserted.length, 2);
+  assert.equal(h.inserted[0]!.type, 'mailbox.delivery.changed');
+  assert.equal(h.inserted[1]!.type, 'mailbox.message.changed');
+});
+
+test('M4b — recursion guard: a notice that itself dead-letters is NOT re-noticed', () => {
+  const h = mailboxHarness({ msg: message({ sourceKind: 'mailbox-dead-letter' }) });
+  const d = h.service.deadLetterDelivery({
+    deliveryId: 'd1' as never,
+    messageId: 'm1' as never,
+    recipientId: 'r1' as never,
+    reason: 'max-retries',
+    lastError: null,
+    now: 9,
+  });
+  assert.ok(d);
+  assert.equal(h.enqueued.length, 0);
+  assert.equal(h.inserted.length, 1); // delivery frame only
+});
+
+test('M4b — a replayed dead-letter (idempotent enqueue hit) emits no duplicate message fact', () => {
+  const h = mailboxHarness({ enqueueCreated: false });
+  const d = h.service.deadLetterDelivery({
+    deliveryId: 'd1' as never,
+    messageId: 'm1' as never,
+    recipientId: 'r1' as never,
+    reason: 'max-retries',
+    lastError: 'boom',
+    now: 9,
+  });
+  assert.ok(d);
+  assert.equal(h.enqueued.length, 1);
+  assert.equal(h.inserted.length, 1); // delivery frame only — created:false emits nothing
+});

@@ -34,6 +34,7 @@ import {
   markRecipientActioned as defaultMarkRecipientActioned,
   markRecipientDismissed as defaultMarkRecipientDismissed,
   markRecipientRead as defaultMarkRecipientRead,
+  newId as defaultNewId,
   writeAudit as defaultWriteAudit,
   type DbExecutor,
   type EnqueueMailboxMessageInput,
@@ -78,6 +79,8 @@ export interface MailboxServiceDeps {
   markRecipientActioned?: typeof defaultMarkRecipientActioned;
   markRecipientDismissed?: typeof defaultMarkRecipientDismissed;
   writeAudit?: typeof defaultWriteAudit;
+  /** Id mint for M4b dead-letter notices; tests inject deterministic ids. */
+  newId?: typeof defaultNewId;
 }
 
 export class MailboxService {
@@ -96,6 +99,7 @@ export class MailboxService {
   private readonly actionRecipient: typeof defaultMarkRecipientActioned;
   private readonly dismissRecipient: typeof defaultMarkRecipientDismissed;
   private readonly audit: typeof defaultWriteAudit;
+  private readonly newId: typeof defaultNewId;
 
   constructor(deps: MailboxServiceDeps = {}) {
     this.tx = deps.transaction ?? ((fn) => getDb().transaction(fn));
@@ -113,6 +117,7 @@ export class MailboxService {
     this.actionRecipient = deps.markRecipientActioned ?? defaultMarkRecipientActioned;
     this.dismissRecipient = deps.markRecipientDismissed ?? defaultMarkRecipientDismissed;
     this.audit = deps.writeAudit ?? defaultWriteAudit;
+    this.newId = deps.newId ?? defaultNewId;
   }
 
   /** Enqueue a message + recipients + deliveries (+ audit) + the message fact
@@ -275,9 +280,68 @@ export class MailboxService {
         },
         tx,
       );
-      const liveEvent = this.insert(tx, buildDeliveryDraft(this.getMessage(delivery.messageId, tx)!, delivery));
+      const message = this.getMessage(delivery.messageId, tx)!;
+      const liveEvent = this.insert(tx, buildDeliveryDraft(message, delivery));
+      this.mintDeadLetterNotice(message, delivery, input, tx);
       return { liveEvent, delivery };
     });
+  }
+
+  /** M4b (FD-8) — a dead letter is never silent: every dead-lettered delivery
+   *  mints a user-inbox `system-notice` card in the SAME tx, idempotent per
+   *  delivery (`dead-letter:<deliveryId>`). Guard: a notice's own delivery is
+   *  ui-inbox (accepts immediately) so recursion is structurally impossible —
+   *  but skip re-noticing a notice anyway (sourceKind `mailbox-dead-letter`). */
+  private mintDeadLetterNotice(
+    message: MailboxMessageRow,
+    delivery: MailboxDeliveryRow,
+    input: { deliveryId: ULID; reason: string; lastError: string | null; now: number },
+    tx: DbExecutor,
+  ): void {
+    if (message.sourceKind === 'mailbox-dead-letter') return;
+    const about = message.subject?.trim() || message.kind;
+    const res = this.enqueueRepo(
+      {
+        message: {
+          id: this.newId(),
+          projectId: message.projectId,
+          kind: 'system-notice',
+          subject: `Message could not be delivered: ${about}`,
+          body:
+            `A "${message.kind}" message ("${about}") could not be delivered ` +
+            `(${input.reason}${input.lastError ? `: ${input.lastError}` : ''}). ` +
+            `Original message:\n\n${message.body}`,
+          payload: {
+            deadLetter: true,
+            originalMessageId: message.id,
+            originalKind: message.kind,
+            deliveryId: input.deliveryId,
+            channel: delivery.channel,
+            reason: input.reason,
+            lastError: input.lastError,
+          },
+          sourceKind: 'mailbox-dead-letter',
+          sourceId: input.deliveryId,
+          idempotencyKey: `dead-letter:${input.deliveryId}`,
+        },
+        recipients: [
+          {
+            id: this.newId(),
+            addressKind: 'user-inbox',
+            addressJson: {
+              kind: 'user-inbox',
+              userId: 'local-user',
+              ...(message.projectId === null ? {} : { projectId: message.projectId }),
+            },
+            channel: 'ui-inbox',
+            deliveryId: this.newId(),
+          },
+        ],
+        now: input.now,
+      },
+      tx,
+    );
+    if (res.created) this.insert(tx, buildMessageDraft(res.message, res.recipients));
   }
 
   /** Recipient UI state (read/action/dismiss). Re-emits the message fact so the
