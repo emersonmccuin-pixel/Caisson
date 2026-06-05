@@ -620,7 +620,10 @@ export function continueAgent(
     };
   }
 
-  // JSONL retention guard.
+  // JSONL retention guard. Use the parent run's stored worktreeDir (the cwd the
+  // agent was actually spawned in) so CC's worktree-keyed projects/ path is
+  // resolved correctly. Fall back to project.folderPath for legacy rows that
+  // predate the worktree_dir column.
   const project = getProjectById(parent.projectId);
   if (!project) {
     return {
@@ -629,7 +632,8 @@ export function continueAgent(
       cause: 'project-missing',
     };
   }
-  const jsonlPath = jsonlPathFor(project.folderPath, parent.ccSessionId);
+  const jsonlCwd = parent.worktreeDir ?? project.folderPath;
+  const jsonlPath = jsonlPathFor(jsonlCwd, parent.ccSessionId);
   if (!jsonlExists(jsonlPath)) {
     return {
       ok: false,
@@ -657,6 +661,8 @@ export function continueAgent(
     parentInvokeDepth: parent.parentInvokeDepth,
     continues: parent.id,
     podRevisionAtDispatch,
+    // Carry the worktree path forward — the continuation spawns in the same dir.
+    worktreeDir: parent.worktreeDir,
     queuedAt: now,
   });
 

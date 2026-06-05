@@ -408,6 +408,7 @@ export async function dispatchFreshAgent(
     parentInvokeDepth: input.invokeDepth,
     continues: null,
     podRevisionAtDispatch,
+    worktreeDir: input.worktreeDir,
     queuedAt: now,
   });
 

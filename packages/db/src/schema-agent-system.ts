@@ -92,6 +92,11 @@ export const agentRuns = sqliteTable(
     /** Monotonic write counter — incremented on every status transition.
      *  WS deltas carry this so the frontend can discard stale deliveries. */
     rev: integer('rev').notNull().default(0),
+    /** Absolute path to the worktree the agent was spawned in. CC keys its
+     *  projects/ dir off the spawn cwd — this is the authoritative JSONL root.
+     *  NULL for rows predating this column; callers fall back to
+     *  `project.folderPath`. */
+    worktreeDir: text('worktree_dir'),
   },
   (t) => [
     index('agent_runs_session_queued_idx').on(t.dispatcherSessionId, t.queuedAt),

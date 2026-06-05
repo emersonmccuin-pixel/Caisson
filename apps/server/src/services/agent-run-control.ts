@@ -229,8 +229,11 @@ export function lastJsonlAction(
 
 function defaultResolveJsonlPath(row: AgentRunRow): string | null {
   try {
-    const project = defaultGetProjectById(row.projectId);
-    return project ? jsonlPathFor(project.folderPath, row.ccSessionId) : null;
+    // Use the run's stored worktreeDir — the cwd CC used at spawn time, which
+    // determines the projects/ key for the agent's JSONL. Falls back to
+    // project.folderPath for legacy rows that predate the worktree_dir column.
+    const cwd = row.worktreeDir ?? defaultGetProjectById(row.projectId)?.folderPath ?? null;
+    return cwd ? jsonlPathFor(cwd, row.ccSessionId) : null;
   } catch {
     return null;
   }
