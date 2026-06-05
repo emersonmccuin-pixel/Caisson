@@ -1,27 +1,30 @@
 // Generic "seed pod with drift-reseed" helper.
 //
-// Pulled out of orchestrator-pod-seed.ts (16a.2) so all stock pods can share
-// the same trust model: insert if missing, auto-update if the live row has
-// drifted from the seed and has only system-authored audit rows, skip + warn
-// if the user has edited it.
+// Pulled out of orchestrator-pod-seed.ts (16a.2) so all stock pods share one
+// trust model: insert if missing, else auto-update every field that has
+// drifted from the canonical seed. The seed is the SINGLE SOURCE OF TRUTH for
+// built-in (stock) pods — they are controlled centrally and cannot be
+// user-edited (the PATCH /api/agents/pods/:id door rejects stock rows). To
+// customize a built-in, clone it into a project; the clone is user-created and
+// fully editable.
 //
-// User edits are preserved by design — `hasUserAuthoredEdit` returns true if
-// any audit row was written by something other than the orchestrator with a
-// `system-seed:` / `system-reseed:` reason prefix. Once a user touches a
-// stock pod through the UI, the seed stops updating it; source changes have
-// to be applied manually via "Reset to default."
+// Historical note: this helper used to SKIP rows a user had edited
+// (`hasUserAuthoredEdit`), preserving their customization. That lock was
+// removed when built-ins became non-editable — the seed now always wins, which
+// also heals any install that diverged via the old edit path on its next boot.
 
 import {
   createAgent,
   getAgentByName,
-  listAgentAudit,
   updateAgent,
   type CreateAgentInput,
   type UpdateAgentInput,
 } from '@pc/db';
-import type { PodAgentRow, PodAuditRow } from '@pc/domain';
+import type { PodAgentRow } from '@pc/domain';
 import { mergeRequiredAgentTools } from '@pc/domain';
 
+// `skipped-user-edited` is retired — the seed never skips anymore (see header).
+// Kept in the union so existing boot-log switch arms stay valid; never produced.
 export type SeedPodAction = 'inserted' | 'unchanged' | 'reseeded' | 'skipped-user-edited';
 
 export interface SeedPodResult {
@@ -39,18 +42,9 @@ export interface SeedPodOptions {
   reasonTag: string;
 }
 
-const SYSTEM_SEED_REASON_PREFIXES = ['system-seed:', 'system-reseed:'];
-
-/** Reasons that count as system-authored regardless of `actor`. A
- *  "Reset to default" click is recorded with `actor='user'` (the user clicked
- *  the button) but the EFFECT is a reset back to canonical seed content — it
- *  is NOT a user customization. Without this carve-out the row's audit log
- *  permanently blocks future drift-reseeds. */
-const SYSTEM_DRIVEN_USER_REASONS = ['ui-reset-to-default'];
-
-/** Insert `content` if no row by that name+scope exists; otherwise update any
- *  drifted fields (unless the row has user-authored audit rows, in which case
- *  the live row is left alone and the drift is reported). */
+/** Insert `content` if no row by that name+scope exists; otherwise update
+ *  every field that drifted from the canonical seed (built-ins are controlled
+ *  centrally — no user-edit lock). */
 export function seedPodWithDriftReseed(
   content: CreateAgentInput,
   opts: SeedPodOptions,
@@ -69,10 +63,9 @@ export function seedPodWithDriftReseed(
     return { action: 'unchanged', agentId: existing.id, reseededFields: [] };
   }
 
-  if (hasUserAuthoredEdit(existing.id as PodAgentRow['id'])) {
-    return { action: 'skipped-user-edited', agentId: existing.id, reseededFields: drift };
-  }
-
+  // No user-edit lock: built-ins are controlled centrally, so the seed always
+  // reseeds drifted fields (this also heals installs that diverged via the old
+  // — now removed — stock-pod edit path).
   const patch: UpdateAgentInput = {};
   for (const key of drift) {
     (patch as Record<string, unknown>)[key] = (content as unknown as Record<string, unknown>)[key];
@@ -127,31 +120,4 @@ export function collectDriftedFields(
     if (JSON.stringify(seedVal) !== JSON.stringify(liveVal)) drift.push(f);
   }
   return drift;
-}
-
-function hasUserAuthoredEdit(agentId: PodAgentRow['id']): boolean {
-  // Walk newest-first. The drift-reseed lock applies only when an ACTIVE user
-  // customization is still in effect — a user edit that has since been
-  // followed by a "Reset to default" (or any other system-driven row) is no
-  // longer in effect, so future seed reseeds should resume. Returns true at
-  // the first user-authored row encountered; returns false the moment a
-  // system-driven row breaks the chain.
-  const rows = listAgentAudit({ agentId, limit: 1000 });
-  for (const r of rows) {
-    if (isSystemAuthored(r)) return false;
-    if (r.actor === 'user') return true;
-  }
-  return false;
-}
-
-function isSystemAuthored(row: PodAuditRow): boolean {
-  const reason = row.reason ?? '';
-  // System-driven actions recorded with actor=user (e.g. Reset to default —
-  // the user clicked the button, but the EFFECT is a reset back to canonical,
-  // not a customization). Don't block future reseeds.
-  if (SYSTEM_DRIVEN_USER_REASONS.some((r) => reason === r || reason.startsWith(`${r}:`))) {
-    return true;
-  }
-  if (row.actor !== 'orchestrator') return false;
-  return SYSTEM_SEED_REASON_PREFIXES.some((p) => reason.startsWith(p));
 }

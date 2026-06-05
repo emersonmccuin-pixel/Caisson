@@ -550,6 +550,22 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     const id = c.req.param('id') as ULID;
     const existing = getAgentById(id);
     if (!existing) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
+    // Built-in (stock) pods are controlled centrally — the code seed is their
+    // single source of truth and edits are rejected here (the only scalar-edit
+    // door; pc_update_agent + the Agents-tab editor both route through it). To
+    // customize a built-in, clone it into a project ("Add agent") and edit the
+    // copy. "Reset to default" + system reseeds use other doors, not this one.
+    if (existing.origin === 'stock') {
+      return c.json(
+        {
+          ok: false,
+          error:
+            'Built-in agents are controlled centrally and cannot be edited. Clone this agent into your project (Add agent) to customize it.',
+          kind: 'stock-locked' as const,
+        },
+        409,
+      );
+    }
     let body: Record<string, unknown>;
     try {
       body = (await c.req.json()) as Record<string, unknown>;
