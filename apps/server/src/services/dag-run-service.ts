@@ -14,6 +14,7 @@ import {
   resetFailedNodesForResume,
   type RefResolver,
   type ReviewDecision,
+  type ReviewRejected,
   type RunStatus,
 } from '@pc/workflows';
 import {
@@ -45,6 +46,27 @@ import type { WorktreeService } from './worktree.ts';
 
 /** FD-12 — the one write door (repo write + outbox receipt in one txn). */
 const workItemGateway = new WorkItemMutationGateway();
+
+// ── Per-run serialization lock (build-plan step 4 / R2) ─────────────────────
+// Two near-simultaneous review decisions for the same run can both read
+// `awaiting-review` before either persists, causing two advances and two
+// concurrent agents in the same worktree. A per-runId in-process mutex closes
+// the TOCTOU window. Single-server process model only (R2 — not multi-process
+// safe; acceptable for the current architecture).
+const _runLocks = new Map<string, Promise<void>>();
+
+function withRunLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = _runLocks.get(runId) ?? Promise.resolve();
+  let resolve!: () => void;
+  const next = new Promise<void>((r) => { resolve = r; });
+  _runLocks.set(runId, next);
+  // Chain the work after any previous locked operation; always release.
+  return prev.then(fn).finally(() => {
+    resolve();
+    // GC: remove the entry once the chain is empty (no more waiters).
+    if (_runLocks.get(runId) === next) _runLocks.delete(runId);
+  });
+}
 
 /** Workflow-review delivery seam. The DAG executor calls this to enqueue a
  *  durable `workflow-review` mailbox message — orchestrator flavor →
@@ -631,54 +653,111 @@ export async function fireDagWorkflow(
   return { runId: run.id, rootWorkItemId: rootWiId, done: exec.advance() };
 }
 
+/** Discriminated result for review decisions (build-plan steps 2+5). */
+export type V2ReviewDecisionResult =
+  | { ok: true; status: RunStatus }
+  | { ok: false; code: 'not-found' }
+  | { ok: false; code: ReviewRejected; error: string };
+
 /**
- * Resume a paused run to apply a review decision. Loads the run + its frozen
- * workflow + DAG state, then drives the executor's onReviewDecision.
+ * Resume a paused run to apply a review decision.
+ *
+ * Serialized per runId (build-plan step 4): a per-run in-process lock prevents
+ * two near-simultaneous decisions from both reading `awaiting-review` and each
+ * firing advance() → two concurrent agents in the same worktree.
+ *
+ * Commit-then-drive (build-plan step 8): the decision is committed (state
+ * mutated + persisted + inbox cards actioned + review fact emitted) before the
+ * HTTP response returns. advance() runs on a detached task so a reject that
+ * triggers an agent dispatch does not block the caller (fixes MCP transport drop
+ * on pc_complete_node under heavy dispatch latency).
  */
+// Internal shape carries the executor through the lock boundary.
+type _LockOutcome =
+  | { ok: true; status: RunStatus; _exec: DagExecutor }
+  | { ok: false; code: 'not-found' }
+  | { ok: false; code: ReviewRejected; error: string };
+
 export async function applyV2ReviewDecision(
   runId: ULID,
   reviewNodeId: string,
   decision: ReviewDecision,
-  opts: DagRunServiceOptions
-): Promise<RunStatus | null> {
-  const run = workflowRunsV2Repo.getRun(runId);
-  if (!run) return null;
-  const workflow = JSON.parse(run.workflowYamlSnapshot) as WorkflowV2.Workflow;
-  const deps = makeExecutorDeps(
-    { id: run.id, workItemId: run.workItemId, worktreePath: run.worktreePath },
-    workflow,
-    opts
-  );
-  const exec = DagExecutor.resume(workflow, run.dagState, deps, {
-    runId: run.id,
-    rootWorkItemId: run.workItemId,
-    worktreePath: run.worktreePath,
+  opts: DagRunServiceOptions,
+): Promise<V2ReviewDecisionResult> {
+  const lockOutcome = await withRunLock(runId, async (): Promise<_LockOutcome> => {
+    const run = workflowRunsV2Repo.getRun(runId);
+    if (!run) return { ok: false, code: 'not-found' };
+
+    const workflow = JSON.parse(run.workflowYamlSnapshot) as WorkflowV2.Workflow;
+    const deps = makeExecutorDeps(
+      { id: run.id, workItemId: run.workItemId, worktreePath: run.worktreePath },
+      workflow,
+      opts,
+    );
+    const exec = DagExecutor.resume(workflow, run.dagState, deps, {
+      runId: run.id,
+      rootWorkItemId: run.workItemId,
+      worktreePath: run.worktreePath,
+    });
+
+    // M8 (FD-7) — snapshot the gate's open inbox cards BEFORE deciding: a card
+    // the decision itself mints (ceiling escalation, same `${runId}:${nodeId}`
+    // source) must stay open. After a successful decision, action the snapshot
+    // so a gate decided through ANY door clears everywhere.
+    const reviewSourceId = `${run.id}:${reviewNodeId}`;
+    const openCards =
+      opts.reviewInbox?.collectUnactionedRecipients('workflow-run-node', reviewSourceId) ?? [];
+
+    // ── Commit phase (fast, synchronous-ish) ──────────────────────────────
+    // Apply decision + persist state. Guard fires here if gate is not open.
+    const commit = await exec.commitReviewDecision(reviewNodeId, decision);
+
+    if (commit.rejected) {
+      return {
+        ok: false,
+        code: commit.rejected,
+        error: `gate "${reviewNodeId}" is not awaiting review — decision ignored`,
+      };
+    }
+
+    // ── Side-effects that must fire before the response ───────────────────
+    // Step 9 (build-plan): card-action + emitReviewFact on the response path.
+    if (openCards.length > 0) opts.reviewInbox?.actionRecipients(openCards, Date.now());
+
+    // Slice 004 — durable workflow.review.changed (approved/rejected) fact.
+    const reviewNode = workflow.nodes.find((n) => n.id === reviewNodeId);
+    const flavor: WorkflowReviewFlavor =
+      reviewNode && reviewNode.kind === 'review' ? reviewNode.reviewer : 'human';
+    emitReviewFact(opts, {
+      runId: run.id,
+      nodeId: reviewNodeId,
+      flavor,
+      state: decision.kind === 'approve' ? 'approved' : 'rejected',
+      ...(decision.kind === 'reject' && decision.notes !== undefined
+        ? { notes: decision.notes }
+        : {}),
+    });
+
+    return { ok: true, status: commit.status, _exec: exec };
   });
-  // M8 (FD-7) — snapshot the gate's open inbox cards BEFORE deciding: a card
-  // the decision itself mints (ceiling escalation, same `${runId}:${nodeId}`
-  // source) must stay open. After a successful decision, action the snapshot
-  // so a gate decided through ANY door clears everywhere.
-  const reviewSourceId = `${run.id}:${reviewNodeId}`;
-  const openCards =
-    opts.reviewInbox?.collectUnactionedRecipients('workflow-run-node', reviewSourceId) ?? [];
-  const result = await exec.onReviewDecision(reviewNodeId, decision);
-  if (openCards.length > 0) opts.reviewInbox?.actionRecipients(openCards, Date.now());
-  // Slice 004 — durable workflow.review.changed (approved/rejected) fact +
-  // canonical frame. The run-state transition itself already fanned out a
-  // workflow.run.changed via the writer during resume.
-  const reviewNode = workflow.nodes.find((n) => n.id === reviewNodeId);
-  const flavor: WorkflowReviewFlavor =
-    reviewNode && reviewNode.kind === 'review' ? reviewNode.reviewer : 'human';
-  emitReviewFact(opts, {
-    runId: run.id,
-    nodeId: reviewNodeId,
-    flavor,
-    state: decision.kind === 'approve' ? 'approved' : 'rejected',
-    ...(decision.kind === 'reject' && decision.notes !== undefined
-      ? { notes: decision.notes }
-      : {}),
-  });
-  return result;
+
+  // ── Drive phase (async, outside the lock) ─────────────────────────────────
+  // advance() dispatches+awaits agents; could block for minutes. Run it
+  // detached so the HTTP response is already sent (build-plan step 8).
+  // Errors in the async advance land on the run's normal failure path (the
+  // executor's finalize() persists `failed` + notifyRunFailed fires — R1).
+  if (lockOutcome.ok) {
+    const exec = lockOutcome._exec;
+    setImmediate(() => {
+      exec.advance().catch((err: Error) => {
+        console.error(`[dag-run] async advance after review decision failed for run ${runId}:`, err.message);
+      });
+    });
+    // Strip the internal _exec field before returning externally.
+    return { ok: true, status: lockOutcome.status };
+  }
+
+  return lockOutcome;
 }
 
 export type ResumeFailedRunResult =

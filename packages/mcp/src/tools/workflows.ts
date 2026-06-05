@@ -250,6 +250,20 @@ export async function handleWorkflowTool(
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }
+        // 409 = idempotent already-resolved (build-plan step 6): the decision
+        // was already committed (e.g. transport drop on a prior call that DID
+        // commit server-side). Return a non-fatal "already resolved" so the
+        // orchestrator doesn't retry as a hard failure.
+        if (res.status === 409) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `pc_complete_node: gate already resolved — no-op (the decision was already committed). ${res.body}`,
+              },
+            ],
+          };
+        }
         return {
           content: [{ type: 'text', text: `pc_complete_node failed (${res.status}): ${res.body}` }],
           isError: true,

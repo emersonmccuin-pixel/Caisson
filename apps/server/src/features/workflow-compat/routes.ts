@@ -10,7 +10,7 @@ import {
   cancelWorkflowRunCascade,
   type CancelWorkflowRunResult,
 } from '../../services/workflow-run-cancel.ts';
-import type { ResumeFailedRunResult } from '../../services/dag-run-service.ts';
+import type { ResumeFailedRunResult, V2ReviewDecisionResult } from '../../services/dag-run-service.ts';
 import type { AgentHostReattachClient } from '../../services/agent-host-reattach.ts';
 
 type WorkflowReviewDecision =
@@ -31,7 +31,7 @@ export interface WorkflowCompatRuntime {
     runId: ULID,
     nodeId: string,
     decision: WorkflowReviewDecision,
-  ): Promise<string | null>;
+  ): Promise<V2ReviewDecisionResult>;
   resumeV2Run(
     runId: ULID,
     currentDefinition: WorkflowV2.Workflow | null,
@@ -161,9 +161,18 @@ export function registerWorkflowCompatRoutes(app: Hono, deps: WorkflowCompatRout
         body.decision === 'reject'
           ? { kind: 'reject' as const, ...(body.notes ? { notes: body.notes } : {}) }
           : { kind: 'approve' as const };
-      const status = await runtime.applyV2Review(body.runId as ULID, body.nodeId, decision);
-      if (status === null) return c.json({ ok: false, error: 'run not found' }, 404);
-      return c.json({ ok: true, status });
+      const result = await runtime.applyV2Review(body.runId as ULID, body.nodeId, decision);
+      if (!result.ok) {
+        if (result.code === 'not-found') {
+          return c.json({ ok: false, error: 'run not found', code: 'not-found' }, 404);
+        }
+        // Gate not awaiting review — idempotent 409 (build-plan step 5).
+        return c.json(
+          { ok: false, error: (result as { error: string }).error, code: 'already-resolved' },
+          409,
+        );
+      }
+      return c.json({ ok: true, status: result.status });
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 400);
     }
