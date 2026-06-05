@@ -297,7 +297,7 @@ test('answerPendingAsk — rejects when reconciled row is not paused (handle rep
 
 // ─────────────── M4b (FD-8) — decided-anywhere ask-card resolution ──────────
 
-test('M4b — a successful answer actions the ask\'s open inbox cards (resolve-by-source)', async () => {
+test('M4b — a successful answer actions AND dismisses the ask\'s open inbox cards (resolve-by-source auto-clear)', async () => {
   const reg = new ActiveRunRegistry();
   const runId = newId() as ULID;
   const cc = `cc-${runId}`;
@@ -316,6 +316,7 @@ test('M4b — a successful answer actions the ask\'s open inbox cards (resolve-b
 
   const collected: [string, string][] = [];
   const actioned: string[][] = [];
+  const dismissed: string[][] = [];
   const result = await answerPendingAsk(
     { pendingAskId: askId, answer: 'blue', answeredBy: 'user' },
     {
@@ -330,12 +331,19 @@ test('M4b — a successful answer actions the ask\'s open inbox cards (resolve-b
           actioned.push([...ids]);
           return ids.length;
         },
+        dismissRecipients: (ids) => {
+          dismissed.push([...ids]);
+          return ids.length;
+        },
       },
     },
   );
   assert.ok(result.ok, `expected resume; got ${JSON.stringify(result)}`);
   assert.deepEqual(collected, [['agent', askId]]);
   assert.deepEqual(actioned, [['rec-1']]);
+  // Auto-clear (user decision 2026-06-05): the answered card VANISHES, not just
+  // drops the badge — the UI hides on dismissedAt.
+  assert.deepEqual(dismissed, [['rec-1']]);
 });
 
 test('M4b — a failed answer (wrong-state) does NOT touch the inbox cards', async () => {
@@ -367,6 +375,7 @@ test('M4b — a failed answer (wrong-state) does NOT touch the inbox cards', asy
           return [];
         },
         actionRecipients: () => 0,
+        dismissRecipients: () => 0,
       },
     },
   );
@@ -374,7 +383,7 @@ test('M4b — a failed answer (wrong-state) does NOT touch the inbox cards', asy
   assert.equal(touched, 0);
 });
 
-test('M4b — cancelPendingAsk actions the ask\'s open inbox cards too', async () => {
+test('M4b — cancelPendingAsk actions AND dismisses the ask\'s open inbox cards too', async () => {
   const { cancelPendingAsk } = await import('../src/services/pause-resume.ts');
   const reg = new ActiveRunRegistry();
   const runId = newId() as ULID;
@@ -394,6 +403,7 @@ test('M4b — cancelPendingAsk actions the ask\'s open inbox cards too', async (
 
   const collected: [string, string][] = [];
   const actioned: string[][] = [];
+  const dismissed: string[][] = [];
   const result = cancelPendingAsk(
     { pendingAskId: askId },
     {
@@ -407,6 +417,10 @@ test('M4b — cancelPendingAsk actions the ask\'s open inbox cards too', async (
           actioned.push([...ids]);
           return ids.length;
         },
+        dismissRecipients: (ids) => {
+          dismissed.push([...ids]);
+          return ids.length;
+        },
       },
     },
   );
@@ -414,4 +428,5 @@ test('M4b — cancelPendingAsk actions the ask\'s open inbox cards too', async (
   assert.equal(getPendingAsk(askId)!.status, 'cancelled');
   assert.deepEqual(collected, [['agent', askId]]);
   assert.deepEqual(actioned, [['rec-9']]);
+  assert.deepEqual(dismissed, [['rec-9']]);
 });

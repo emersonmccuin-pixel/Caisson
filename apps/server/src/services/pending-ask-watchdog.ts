@@ -21,8 +21,12 @@ import type { PendingAskRow } from '@pc/domain';
 
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
 
-/** 15 minutes — an orchestrator answer normally lands in seconds-to-minutes. */
-export const STALE_ASK_THRESHOLD_MS = 15 * 60_000;
+/** 30 minutes — an orchestrator answer normally lands in seconds-to-minutes; the
+ *  window gives it real headroom before bothering the human (user decision
+ *  2026-06-05, after a 15m threshold escalated an ask the orchestrator answered
+ *  at ~17m). The human card is a failsafe, not the primary path: agents ask the
+ *  orchestrator, and only an unanswered-past-this-window ask escalates. */
+export const STALE_ASK_THRESHOLD_MS = 30 * 60_000;
 /** Sweep cadence (matches the mailbox defer recheck). */
 export const STALE_ASK_SWEEP_MS = 60_000;
 

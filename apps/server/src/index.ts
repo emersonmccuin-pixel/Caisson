@@ -1073,6 +1073,7 @@ registerAgentRunRoutes(app, {
     collectUnactionedRecipients: (sourceKind, sourceId) =>
       mailboxService.collectUnactionedRecipients(sourceKind, sourceId),
     actionRecipients: (ids, now) => mailboxService.actionRecipients(ids, now),
+    dismissRecipients: (ids, now) => mailboxService.dismissRecipients(ids, now),
   },
 });
 

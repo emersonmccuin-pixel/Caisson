@@ -170,6 +170,18 @@ export class MailboxService {
     return actioned;
   }
 
+  /** Auto-clear a resolved-elsewhere snapshot from the inbox. Dismissed is what
+   *  the UI hides on (actioned only drops the actionable count); use this when a
+   *  card should VANISH once its underlying decision is made — e.g. an escalated
+   *  agent question answered through any door (user decision 2026-06-05). */
+  dismissRecipients(ids: readonly ULID[], now: number): number {
+    let dismissed = 0;
+    for (const id of ids) {
+      if (this.markDismissed(id, now)) dismissed += 1;
+    }
+    return dismissed;
+  }
+
   acceptDelivery(input: {
     deliveryId: ULID;
     targetRefKind: 'send-queue' | 'ui-inbox' | 'channel' | null;

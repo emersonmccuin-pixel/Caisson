@@ -70,11 +70,12 @@ export interface AgentRunRouteDeps {
   cancelPendingAsk?: typeof defaultCancelPendingAsk;
   checkInvokeDepth?: typeof defaultCheckInvokeDepth;
   now?: () => number;
-  /** M4b (FD-8) — an ask decided through ANY door actions its open
-   *  `agent-ask-escalated` inbox cards (MailboxService collect/action pair). */
+  /** M4b (FD-8) — an ask decided through ANY door clears its open
+   *  `agent-ask-escalated` inbox cards (MailboxService collect/action/dismiss). */
   askInbox?: {
     collectUnactionedRecipients(sourceKind: string, sourceId: string): ULID[];
     actionRecipients(ids: readonly ULID[], now: number): number;
+    dismissRecipients(ids: readonly ULID[], now: number): number;
   } | null;
 }
 

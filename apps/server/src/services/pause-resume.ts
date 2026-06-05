@@ -126,10 +126,17 @@ export interface PauseResumeDeps {
   askInbox?: {
     collectUnactionedRecipients(sourceKind: string, sourceId: string): ULID[];
     actionRecipients(ids: readonly ULID[], now: number): number;
+    dismissRecipients(ids: readonly ULID[], now: number): number;
   } | null;
 }
 
-/** M4b (FD-8) — clear the ask's open inbox cards after a terminal decision. */
+/** M4b (FD-8) — clear the ask's open inbox cards after a terminal decision.
+ *  The question is answered (by anyone, through any door), so the escalation
+ *  card has nothing left to act on: action it (decision recorded) AND dismiss it
+ *  so it VANISHES from the human inbox rather than lingering with only a Dismiss
+ *  button (user decision 2026-06-05 — "Agents Waiting on You" shows only agents
+ *  still actually waiting). The UI hides on dismissedAt; actioned alone only
+ *  drops the badge count. */
 function resolveAskInbox(
   askInbox: PauseResumeDeps['askInbox'],
   pendingAskId: ULID,
@@ -138,7 +145,10 @@ function resolveAskInbox(
   if (!askInbox) return;
   try {
     const open = askInbox.collectUnactionedRecipients('agent', pendingAskId);
-    if (open.length > 0) askInbox.actionRecipients(open, now);
+    if (open.length > 0) {
+      askInbox.actionRecipients(open, now);
+      askInbox.dismissRecipients(open, now);
+    }
   } catch {
     /* inbox bookkeeping must never fail the decision */
   }
