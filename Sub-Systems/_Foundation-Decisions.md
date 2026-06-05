@@ -338,7 +338,9 @@ cards. `GET /api/inbox` = every user-inbox recipient across all projects.
 
 ## FD-8 — No message silently dies (mailbox lifecycle + failsafes)
 
-**Status:** 🟢 Locked — 2026-06-03 · **core delivered in M4a (2026-06-04)**
+**Status:** 🟢 Locked — 2026-06-03 · core delivered in M4a (2026-06-04) ·
+**✅ CLOSED in M4b (2026-06-04, as amended; scope:
+`refactor plan/m4b-lifecycle-failsafes-scope-2026-06-04.md`)**
 
 **The decision:** the principle is law — **every undelivered or unanswered mailbox message must
 either retry or surface visibly. Silent loss is never acceptable.** Concretely:
@@ -352,7 +354,18 @@ either retry or surface visibly. Silent loss is never acceptable.** Concretely:
 - **Lifecycle tracking:** sent → delivered → *expecting response* → response received → done. The
   plumbing half-exists (delivery rows track pending→accepted; interactions track open→answered); the
   rebuild unifies it and adds a **watchdog for "expecting a response that never came."**
-  *(Remaining M4b scope, with message-expiry cleanup — `expiresAt` exists, nothing sweeps it.)*
+  ✅ **M4b delivered the watchdog** (open ask > 15min → ONE actionable `agent-ask-escalated`
+  user-inbox card; answer/cancel from the card through the EXISTING doors; decided-anywhere clears
+  it, resolve-by-source). The M4b refute REJECTED a literal unified state machine — the states
+  already live in the right places (delivery rows · `pending_asks`); one more table would be a
+  pending_interactions-style shadow. FD-17's stall ladder deliberately excludes paused runs;
+  this watchdog is its complement.
+- **M4b amendments:** ☠ `expires_at` deleted whole (migration 0046) — the column was dead since
+  birth (one NULL-writing site, zero readers), and message expiry CONTRADICTS this decision
+  (silent loss by timer). · Honest dead letters now mint a user-inbox `system-notice` card in the
+  same tx ("Message could not be delivered" + original content + reason) — **notice, not
+  requeue**: the remaining dead-letter causes are permanent or already-retried ×5, so requeue
+  would re-run a guaranteed failure.
 
 **Why:** Emerson's failsafes note + the known issue that dead-lettered orchestrator copies vanish
 with no alert, no indicator, no requeue.

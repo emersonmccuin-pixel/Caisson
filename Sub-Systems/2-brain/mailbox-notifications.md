@@ -1,7 +1,7 @@
 # Mailbox & Notifications
 
 > **Role:** cross-cutting (Brain writes, Engine reads, UI views)
-> **Status:** as-built snapshot — 2026-06-03 · M8 (FD-7) sweep 2026-06-04
+> **Status:** as-built snapshot — 2026-06-03 · M8 (FD-7) sweep 2026-06-04 · M4b (FD-8 close) 2026-06-04
 > **Code anchors:**
 > `packages/contracts/src/mailbox.ts` · `packages/db/src/repos/mailbox.ts`
 > `packages/app-services/src/mailbox/mailbox-service.ts`
@@ -38,7 +38,7 @@ Every notification is a **message** stored in three linked database rows. Togeth
 
 | Field | Plain meaning | Example |
 |---|---|---|
-| `kind` | What type of event this is | `agent-terminal`, `agent-question`, `agent-approval`, `workflow-review`, `workflow-run-failed`, `runtime-hook-ask`, `system-notice`, `external-webhook` |
+| `kind` | What type of event this is | `agent-terminal`, `agent-question`, `agent-approval`, `agent-ask-escalated`, `workflow-review`, `workflow-run-failed`, `runtime-hook-ask`, `system-notice`, `external-webhook` |
 | `subject` | A short summary line | "Agent 'writer' completed" |
 | `body` | The full message text | (the agent's output, a question, etc.) |
 | `payload` | Structured data for the app to act on | JSON with run ID, project ID, etc. |
@@ -92,6 +92,8 @@ Five callers can drop a message into the mailbox today:
 
 All internal callers go through `deliverAgentEnvelope` (`agent-delivery.ts:86`), which calls `MailboxService.enqueue`. The enqueue is idempotent on `idempotencyKey` — calling it again with the same key returns the existing rows and emits nothing new.
 
+A sixth sender (M4b/FD-8): **the stale-ask watchdog** (`pending-ask-watchdog.ts`, 60s sweep). An agent question that has sat unanswered past 15 minutes mints ONE actionable `agent-ask-escalated` user-inbox card (idempotency `ask-stale:<askId>`) carrying the question + options. The card's Answer/Cancel buttons call the EXISTING pending-ask doors (`answeredBy:'user'`); an ask decided through ANY door (card, orchestrator `pc_answer_pending`, raw HTTP) clears the card via resolve-by-source on (`agent`, askId). FD-17's stall ladder deliberately excludes paused runs — this watchdog is its complement for deliberate waits.
+
 > ✅ **`inbox-drain.cjs` hook — DELETED in M4a (2026-06-04, ledger row 9).** The refute held an
 > illusion: the hook only READ rows nothing had written since slice 017 (it drained an
 > eternally-empty set on every prompt). Hook + repo + `agent_inbox` tables deleted whole
@@ -111,7 +113,7 @@ All internal callers go through `deliverAgentEnvelope` (`agent-delivery.ts:86`),
    consumed, rechecked every 60s until an orchestrator exists. **A message never dies because
    the orchestrator was away.**
 5. **On success:** marks the delivery `accepted` and records the created row reference.
-6. **On a real send failure:** retries with exponential backoff — 1s, 2s, 4s … capped at 60s. After 5 failures, the delivery is dead-lettered and a `mailbox_dead_letters` row is written.
+6. **On a real send failure:** retries with exponential backoff — 1s, 2s, 4s … capped at 60s. After 5 failures, the delivery is dead-lettered and a `mailbox_dead_letters` row is written — **and (M4b/FD-8) a `system-notice` card is minted to the user inbox in the same transaction** ("Message could not be delivered: …" with the original content + reason). A dead letter is never silent. Idempotent per delivery (`dead-letter:<deliveryId>`); a notice can't recurse (its own delivery is ui-inbox, which always accepts — and a notice-of-a-notice is guarded off anyway).
 
 The worker is "unref'd" — it does not prevent the server process from shutting down cleanly.
 
@@ -207,6 +209,6 @@ What the channel system was (all dead): the per-orchestrator channel-server chil
 
 **Technical:**
 
-- ~~**Dead-letter requeue**~~ ✅ moot for the away-orchestrator case (M4a defer). M4b remainder: expecting-response lifecycle + watchdog · message-expiry sweep (`expiresAt` unswept) · optional requeue UI for honest dead letters.
-- **`PendingInteractionService` answer authority:** the in-memory resolver at `/api/ask` is still the actual unblock path; the durable `PendingInteractionService.answer` is a shadow. When does the durable path become sole authority, and does the turn adapter need to wire answer/resume as a result?
+- ~~**Dead-letter requeue**~~ ✅ moot for the away-orchestrator case (M4a defer). ~~M4b remainder~~ ✅ **M4b CLOSED FD-8 (2026-06-04):** unanswered-ask watchdog (15min → escalated card) · ☠ `expires_at` deleted whole (migration 0046 — dead column, one NULL-writing site, zero readers; expiry contradicts FD-8) · dead letters mint a user-inbox notice (notice-not-requeue: the remaining dead-letter causes are permanent or already-retried ×5, so requeue would re-run a guaranteed failure).
+- ~~**`PendingInteractionService` answer authority**~~ — moot: ☠ M8 deleted the service + table whole (the question predates the 0045 demolition; pruned in the M4b sweep).
 - **Worker throughput:** 1-second sweep, 50-message cap, 30-second lease. Under high agent concurrency, does the 50-per-pass ceiling cause delivery lag? No queue-depth monitoring exists today.

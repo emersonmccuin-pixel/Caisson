@@ -85,9 +85,30 @@ dead-letter surface, and the "expecting a response that never came" watchdog.
   the card → agent resumes → run completes · answer a second ask via the orchestrator door →
   its card clears.
 
+## OUTCOME — ✅ ALL FOUR SLICES SHIPPED + LIVE GAUNTLET GREEN (2026-06-04)
+
+Commits: scope `3b2a2c3e` · A `6260c394` · B `cb8af617` · C `f6327fd2` · D (this sweep).
+Suites: server 285 · web 126 · app-services 83 · db 41 · contracts 73 · workspace typecheck — all green.
+Migration 0046 verified on the live dev DB (`expires_at` gone).
+
+**Live gauntlet (dev stack, real agents):**
+- **G1 dead-letter notice:** enqueued a message pinned to a nonexistent orchestrator session →
+  dead-lettered non-retryable on the first worker pass → `system-notice` card in `GET /api/inbox`
+  with full forensics payload (originalMessageId, deliveryId, reason, lastError). ✓
+- **G2 stale-ask → card → answer-from-card → resume:** live `writer` agent asked w/ options
+  alpha/bravo → paused → ask backdated 16min (time machine) → watchdog minted the card on its
+  next sweep ("Agent writer has been waiting 17m on a question", options in payload) → answered
+  `alpha` through the card door (`answeredBy:'user'`) → card actioned instantly → agent resumed →
+  run `completed`, result = `alpha`. ✓
+- **G3 decided-anywhere:** second live ask → card → answered through the ORCHESTRATOR door →
+  card auto-cleared without being touched → run `completed`, result = `yes`. ✓
+
+Gauntlet debris left deliberately: the G1 notice card + two actioned escalation cards sit in the
+inbox for Emerson's visual pass (a DECIDED card shows only Dismiss — the M8 gotcha).
+
 ## Open questions for Emerson
 
-- 15-minute threshold OK? (Watchdog constant; can become a setting later.)
+- 15-minute threshold OK? (Watchdog constant `STALE_ASK_THRESHOLD_MS`; can become a setting later.)
 
 ## Known risks
 
