@@ -125,7 +125,10 @@ the WHOLE rework loop synchronously — use a 300s timeout) · verification: POS
 .../agents/:name/invoke {input, workItemId, expectedOutput REQUIRED (materialiser gate), any
 dispatcherSessionId} — dispatch REUSES the WI's existing contract (tier flows).
 
-👁 Emerson visual pending: the Inbox bell + decision cards + project chips; ActivityPanel cards.
+**👁 Emerson visual pass ✅ same day:** fresh undecided card fired for him (note: a DECIDED card
+correctly shows only Dismiss — his first look hit my already-gauntleted cards); he drove the full
+loop from the bell — reject w/ feedback → round-two card → approve. "worked!" **M8 CLOSED, nothing
+open.**
 
 ## Known risks
 
