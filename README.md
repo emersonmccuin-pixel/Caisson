@@ -203,9 +203,6 @@ pnpm desktop:dist:mac
 
 Windows installers are built on Windows. macOS DMG/ZIP builds are built on macOS. GitHub Actions has separate workflows for package smoke and release installers. macOS release builds require Apple Developer signing and notarization secrets; Windows signing is optional but recommended before public distribution.
 
-Archived docs, tests, CI metadata, and investigation utilities live under [archive](archive).
-See [archive/docs/desktop-build.md](archive/docs/desktop-build.md) for the old GitHub Actions runbook and signing secret list.
-
 ## License
 
 MIT. See [LICENSE](./LICENSE).
