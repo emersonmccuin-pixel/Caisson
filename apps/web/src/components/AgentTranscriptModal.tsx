@@ -13,7 +13,7 @@
 // Modal dismiss contract: explicit Close button only — no Escape, no backdrop
 // click. Per `feedback_modals_explicit_close_only`.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { agentRunsApi, type AgentRunRecord } from '@/features/agent-runs/client';
 import {
@@ -21,7 +21,7 @@ import {
   mergeAgentTranscriptEvents,
   type AgentTranscriptLoadStatus,
 } from '@/features/agent-runs/transcript';
-import { TranscriptRow } from '@/features/agent-runs/TranscriptRow';
+import { RichAgentTranscript } from '@/features/agent-runs/RichAgentTranscript';
 import type { AgentRunTranscriptStatus } from '@/features/agent-runs/types';
 import type { JsonlEvent, WsEnvelope } from '@/features/runtime/ws-types';
 
@@ -92,14 +92,6 @@ export function AgentTranscriptModal({ run, events, onClose }: AgentTranscriptMo
     [backfill.events, events, run.runId],
   );
 
-  // Auto-scroll body to bottom when new events arrive.
-  const bodyRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [transcriptItems.length]);
-
   const statusPillClasses =
     run.status === 'paused'
       ? 'bg-warning/25 text-warning'
@@ -162,33 +154,29 @@ export function AgentTranscriptModal({ run, events, onClose }: AgentTranscriptMo
           </button>
         </header>
 
-        <div
-          ref={bodyRef}
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
-        >
-          {transcriptItems.length === 0 ? (
-            <div
-              className={`text-xs italic text-muted-foreground${
-                run.status === 'queued' || run.status === 'spawning' || run.status === 'running'
-                  ? ' animate-pulse'
-                  : ''
-              }`}
-            >
-              {agentTranscriptEmptyMessage({
-                loadStatus: backfill.status,
-                transcriptStatus: backfill.transcriptStatus,
-                runStatus: run.status,
-              })}
-            </div>
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {transcriptItems.map((item) => (
-                <TranscriptRow key={item.key} event={item.event} />
-              ))}
-            </ul>
-          )}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <RichAgentTranscript
+            projectId={run.projectId}
+            sessionId={run.sessionId}
+            items={transcriptItems}
+            emptyState={
+              <span
+                className={
+                  run.status === 'queued' || run.status === 'spawning' || run.status === 'running'
+                    ? 'animate-pulse'
+                    : ''
+                }
+              >
+                {agentTranscriptEmptyMessage({
+                  loadStatus: backfill.status,
+                  transcriptStatus: backfill.transcriptStatus,
+                  runStatus: run.status,
+                })}
+              </span>
+            }
+          />
           {backfill.status === 'error' && (
-            <div className="mt-3 text-xs text-destructive">
+            <div className="shrink-0 border-t border-border px-4 py-2 text-xs text-destructive">
               Backfill unavailable: {backfill.error}
             </div>
           )}
