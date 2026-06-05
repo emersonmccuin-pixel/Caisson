@@ -93,6 +93,7 @@ import {
   registerChatBridgeRoutes,
 } from './features/chat-bridges/routes.ts';
 import { registerMailboxRoutes } from './features/mailbox/routes.ts';
+import { registerPastedImageRoutes } from './features/pasted-images/routes.ts';
 import { MailboxOrchestratorTurnAdapter } from './services/mailbox-orchestrator-turn-adapter.ts';
 import { MailboxWorker } from './services/mailbox-worker.ts';
 import { backfillConversationEvents } from './services/conversation-backfill.ts';
@@ -968,6 +969,10 @@ registerSettingsOnboardingRoutes(app, {
 
 registerFileRoutes(app, {
   projectFolderPath: (projectId) => getProjectById(projectId)?.folderPath ?? null,
+});
+
+registerPastedImageRoutes(app, {
+  getProject: (id) => getProjectById(id as ULID) ?? null,
 });
 
 registerProjectRoutes(app, {

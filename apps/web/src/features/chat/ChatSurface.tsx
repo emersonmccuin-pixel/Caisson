@@ -210,6 +210,7 @@ export function ChatSurface({
       )}
       {!composerHidden && !terminalActive && (
         <Composer
+          projectId={projectId}
           historyKey={composerHistoryKey}
           onSend={handleSend}
           onInterrupt={handleInterrupt}

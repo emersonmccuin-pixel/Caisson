@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useChatComposerPrefill } from '@/store/chat-composer-prefill';
 import { useOrchestratorTelemetry } from '@/store/orchestrator-telemetry';
+import { uploadPastedImage } from '@/features/pasted-images/client';
 
 const PROMPT_HISTORY_CAP = 100;
 
@@ -86,6 +87,7 @@ function writeHistory(key: string, list: string[]) {
 }
 
 export function Composer({
+  projectId,
   historyKey,
   onSend,
   onInterrupt,
@@ -97,6 +99,7 @@ export function Composer({
   statusMessage,
   sendLabel,
 }: {
+  projectId: string;
   historyKey: string;
   onSend: (text: string) => boolean;
   onInterrupt: () => boolean;
@@ -110,6 +113,10 @@ export function Composer({
 }) {
   const [text, setText] = useState('');
   const [interruptFeedback, setInterruptFeedback] = useState<'sent' | 'failed' | null>(null);
+  const [pasteUpload, setPasteUpload] = useState<{
+    uploading: number;
+    errors: string[];
+  } | null>(null);
   const interruptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const composerMinPx = 56;
@@ -202,6 +209,80 @@ export function Composer({
     }
   }
 
+  /** Insert text at the current textarea cursor position, padded with spaces
+   *  when mid-text. Used synchronously for the text part of a mixed paste. */
+  function insertAtCursor(insert: string): void {
+    const el = textareaRef.current;
+    if (!el) {
+      setText((prev) => prev + (prev && !/\s$/.test(prev) ? ' ' : '') + insert);
+      return;
+    }
+    const start = el.selectionStart ?? text.length;
+    const end = el.selectionEnd ?? text.length;
+    const before = text.slice(0, start);
+    const after = text.slice(end);
+    const needLead = before.length > 0 && !/\s$/.test(before);
+    const needTrail = after.length > 0 && !/^\s/.test(after);
+    const padded = (needLead ? ' ' : '') + insert + (needTrail ? ' ' : '');
+    setText(before + padded + after);
+    if (historyIdx !== null) setHistoryIdx(null);
+    const newPos = start + padded.length - (needTrail ? 1 : 0);
+    setTimeout(() => el.setSelectionRange(newPos, newPos), 0);
+  }
+
+  /** Append a path to the end of the composer text (used for async image upload
+   *  results where the cursor may have moved since the paste event). */
+  function appendPath(path: string): void {
+    setText((prev) => {
+      const sep = prev.length > 0 && !/\s$/.test(prev) ? ' ' : '';
+      return prev + sep + path + ' ';
+    });
+  }
+
+  async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>): Promise<void> {
+    const imageItems: DataTransferItem[] = [];
+    for (let i = 0; i < e.clipboardData.items.length; i++) {
+      const item = e.clipboardData.items[i];
+      if (item.type.startsWith('image/')) imageItems.push(item);
+    }
+    if (imageItems.length === 0) return; // text-only paste: default browser handling
+
+    // Has images — take over the paste entirely
+    e.preventDefault();
+
+    // Insert any plain-text portion at the cursor position (synchronous)
+    const plainText = e.clipboardData.getData('text/plain');
+    if (plainText) insertAtCursor(plainText);
+
+    // Collect blobs synchronously before the event object goes stale
+    const blobs = imageItems
+      .map((item) => item.getAsFile())
+      .filter((b): b is File => b !== null);
+    if (blobs.length === 0) return;
+
+    const errors: string[] = [];
+    let remaining = blobs.length;
+    setPasteUpload({ uploading: remaining, errors: [] });
+
+    // Upload sequentially; append each path as it resolves
+    for (const blob of blobs) {
+      const result = await uploadPastedImage(projectId, blob);
+      remaining -= 1;
+      if (result.ok) {
+        appendPath(result.path);
+      } else {
+        errors.push(result.error);
+      }
+      setPasteUpload(remaining > 0 ? { uploading: remaining, errors: [...errors] } : null);
+      if (remaining === 0 && errors.length > 0) {
+        // Keep errors visible for a few seconds then auto-clear
+        const snap = [...errors];
+        setPasteUpload({ uploading: 0, errors: snap });
+        setTimeout(() => setPasteUpload(null), 4000);
+      }
+    }
+  }
+
   const historyLen = historyRef.current.length;
   const sessionState = useOrchestratorTelemetry((s) => s.sessionState);
   const contextUsedPct = useOrchestratorTelemetry((s) => s.contextUsedPct);
@@ -244,6 +325,7 @@ export function Composer({
           setText(e.target.value);
           if (historyIdx !== null) setHistoryIdx(null);
         }}
+        onPaste={(e) => { void handlePaste(e); }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -270,6 +352,20 @@ export function Composer({
         className="resize-none overflow-y-auto border border-border bg-background px-2 py-1 text-sm focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:bg-muted/60 disabled:opacity-60"
         style={{ minHeight: composerMinPx, maxHeight: composerMaxPx }}
       />
+      {pasteUpload && (
+        <div className="flex items-center gap-2 bg-muted px-2 py-1 text-[10px]">
+          {pasteUpload.uploading > 0 && (
+            <span className="text-muted-foreground">
+              saving image{pasteUpload.uploading > 1 ? `s (${pasteUpload.uploading})` : ''}…
+            </span>
+          )}
+          {pasteUpload.errors.map((err, i) => (
+            <span key={i} className="text-destructive">
+              image upload failed: {err}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <button
           type="button"

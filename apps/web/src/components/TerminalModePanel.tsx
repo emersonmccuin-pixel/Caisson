@@ -11,6 +11,7 @@ import {
 } from '@/features/chat/terminalTranscript';
 import { runtimeApi } from '@/features/runtime/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
+import { uploadPastedImage } from '@/features/pasted-images/client';
 
 const TRANSCRIPT_TAIL_BYTES = 1024 * 1024;
 
@@ -70,6 +71,53 @@ export function TerminalModePanel({
   useEffect(() => {
     onResizeRef.current = onResize;
   }, [onResize]);
+
+  // Intercept paste events in the capture phase (before xterm's own handler)
+  // so image items are routed through the upload API. Plain-text pastes are NOT
+  // intercepted — the event propagates to xterm normally.
+  useEffect(() => {
+    const target = fitTargetRef.current;
+    if (!target) return;
+
+    function onPaste(e: ClipboardEvent): void {
+      if (!writableRef.current) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      const imageItems: DataTransferItem[] = [];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) imageItems.push(items[i]);
+      }
+      if (imageItems.length === 0) return; // text-only: let xterm handle it
+
+      // Image paste — intercept before xterm touches it
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Send any plain-text part first
+      const text = e.clipboardData?.getData('text/plain') ?? '';
+      if (text) onInputRef.current(text);
+
+      // Upload images; write each path into the PTY as typed text
+      for (const item of imageItems) {
+        const blob = item.getAsFile();
+        if (!blob) continue;
+        void uploadPastedImage(projectId, blob).then((result) => {
+          if (!writableRef.current) return;
+          if (result.ok) {
+            onInputRef.current(result.path + ' ');
+          } else {
+            console.error('[pc] terminal image upload failed:', result.error);
+          }
+        });
+      }
+    }
+
+    target.addEventListener('paste', onPaste, { capture: true });
+    return () => target.removeEventListener('paste', onPaste, { capture: true });
+    // projectId captured in handler; onInputRef + writableRef are always-current refs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   const flushWrites = useCallback(() => {
     rafRef.current = null;
