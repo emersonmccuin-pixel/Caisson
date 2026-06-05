@@ -259,6 +259,7 @@ export {
   hasPendingAskForRun,
   listOpenPendingAsksForProject,
   listOpenPendingAsksForSession,
+  listOpenPendingAsksOlderThan,
   markPendingAskAnswered,
   markPendingAskCancelled,
 } from './repos/pending-asks.ts';

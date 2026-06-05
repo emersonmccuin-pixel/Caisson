@@ -72,6 +72,23 @@ export const mailboxApi = {
       `/api/projects/${projectId}/work-items/${workItemId}/reject`,
       { actor: 'user', feedback },
     ),
+
+  // ── M4b (FD-8) — the escalated-ask card's doors (the EXISTING pending-ask
+  //    answer/cancel surfaces; the server clears the card resolve-by-source). ──
+
+  /** Answer a paused agent's question as the human. Resumes the agent. */
+  answerPendingAsk: (projectId: ULID, pendingAskId: string, answer: string) =>
+    postJson<{ ok: boolean; error?: string }>(
+      `/api/projects/${projectId}/agent-pending-asks/${pendingAskId}/answer`,
+      { answer, answeredBy: 'user' },
+    ),
+
+  /** Cancel a paused agent (drops the ask AND the run). */
+  cancelPendingAsk: (projectId: ULID, pendingAskId: string) =>
+    postJson<{ ok: boolean; error?: string }>(
+      `/api/projects/${projectId}/agent-pending-asks/${pendingAskId}/cancel`,
+      {},
+    ),
 };
 
 function query(opts: { unreadOnly?: boolean; actionableOnly?: boolean }): string {

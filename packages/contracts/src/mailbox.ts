@@ -61,13 +61,23 @@ export const MAILBOX_MESSAGE_KINDS = [
   'external-webhook',
   'runtime-hook-ask',
   'system-notice',
+  /** M4b/FD-8 — the stale-ask watchdog: an agent's pc_ask_* question has sat
+   *  unanswered past the threshold. ONE user-inbox card per ask (idempotency
+   *  `ask-stale:<askId>`), actionable — answer/cancel ride the EXISTING
+   *  pending-ask doors; a decision through ANY door clears the card
+   *  (resolve-by-source on sourceKind 'agent' + askId). */
+  'agent-ask-escalated',
 ] as const;
 export type MailboxMessageKind = (typeof MAILBOX_MESSAGE_KINDS)[number];
 
 /** M8 (FD-7) — kinds that ask the human for a DECISION (approve/reject/answer),
  *  not just attention. Drives the inbox `actionable` count + the actionableOnly
  *  filter. */
-export const ACTIONABLE_MAILBOX_KINDS = ['workflow-review', 'verification-review'] as const;
+export const ACTIONABLE_MAILBOX_KINDS = [
+  'workflow-review',
+  'verification-review',
+  'agent-ask-escalated',
+] as const;
 export function isActionableMailboxKind(kind: string): boolean {
   return (ACTIONABLE_MAILBOX_KINDS as readonly string[]).includes(kind);
 }

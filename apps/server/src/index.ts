@@ -95,6 +95,10 @@ import {
 import { registerMailboxRoutes } from './features/mailbox/routes.ts';
 import { MailboxOrchestratorTurnAdapter } from './services/mailbox-orchestrator-turn-adapter.ts';
 import { MailboxWorker } from './services/mailbox-worker.ts';
+import {
+  STALE_ASK_SWEEP_MS,
+  sweepStalePendingAsks,
+} from './services/pending-ask-watchdog.ts';
 import { registerPodRoutes } from './routes/pod-routes.ts';
 import { registerWorkflowRoutes } from './routes/workflow-routes.ts';
 import { seedOrchestratorPodIfMissing } from './services/orchestrator-pod-seed.ts';
@@ -713,6 +717,17 @@ const mailboxWorkerSweep = setInterval(() => {
 }, MAILBOX_WORKER_SWEEP_MS);
 if (typeof mailboxWorkerSweep.unref === 'function') mailboxWorkerSweep.unref();
 
+// M4b (FD-8) — stale-ask watchdog: an open pc_ask_* past the threshold mints
+// ONE actionable user-inbox card (idempotent per ask). Unref'd like the worker.
+const staleAskSweep = setInterval(() => {
+  try {
+    sweepStalePendingAsks({ mailboxEnqueue: enqueueMailboxAndFanout });
+  } catch (err) {
+    console.warn('[mailbox] stale-ask sweep failed:', (err as Error).message);
+  }
+}, STALE_ASK_SWEEP_MS);
+if (typeof staleAskSweep.unref === 'function') staleAskSweep.unref();
+
 // Slice 015a — universal post-commit relay drain. Gateways write the outbox row
 // in-txn; this short-interval drain fans the committed rows to subscribers
 // regardless of which subsystem wrote them, so 015a delivers via the relay for
@@ -1043,6 +1058,13 @@ registerAgentRunRoutes(app, {
   // Agent delivery enqueues + fans out the mailbox message frame (the worker
   // then drains delivery + fans delivery frames) — the sole delivery door.
   mailboxEnqueue: enqueueMailboxAndFanout,
+  // M4b (FD-8) — an ask decided through ANY door clears its open
+  // `agent-ask-escalated` inbox cards.
+  askInbox: {
+    collectUnactionedRecipients: (sourceKind, sourceId) =>
+      mailboxService.collectUnactionedRecipients(sourceKind, sourceId),
+    actionRecipients: (ids, now) => mailboxService.actionRecipients(ids, now),
+  },
 });
 
 registerStatuslineRoutes(app, { broadcastTo });
@@ -1141,6 +1163,7 @@ const wss = registerRuntimeHostWebSocketServer<ReturnType<ProjectRuntime['ensure
 function gracefulShutdown(): void {
   agentRunReconciler.stop();
   clearInterval(mailboxWorkerSweep);
+  clearInterval(staleAskSweep);
   clearInterval(liveRelayDrainSweep);
   clearInterval(liveOutboxPruneSweep);
   // Send clean close frames (1001 "going away") to every live WS client so

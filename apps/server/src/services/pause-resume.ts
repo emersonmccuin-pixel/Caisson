@@ -118,6 +118,30 @@ export interface PauseResumeDeps {
   jsonlExists?: (path: string) => boolean;
   /** Test seam: override now(). */
   now?: () => number;
+  /** M4b (FD-8) — an ask decided through ANY door (inbox card, orchestrator
+   *  tool, raw HTTP) actions the ask's open `agent-ask-escalated` inbox cards
+   *  so they never linger. Source = ('agent', askId) — the same source the
+   *  ask envelope + the watchdog card use. Best-effort: inbox bookkeeping
+   *  never fails the decision. */
+  askInbox?: {
+    collectUnactionedRecipients(sourceKind: string, sourceId: string): ULID[];
+    actionRecipients(ids: readonly ULID[], now: number): number;
+  } | null;
+}
+
+/** M4b (FD-8) — clear the ask's open inbox cards after a terminal decision. */
+function resolveAskInbox(
+  askInbox: PauseResumeDeps['askInbox'],
+  pendingAskId: ULID,
+  now: number,
+): void {
+  if (!askInbox) return;
+  try {
+    const open = askInbox.collectUnactionedRecipients('agent', pendingAskId);
+    if (open.length > 0) askInbox.actionRecipients(open, now);
+  } catch {
+    /* inbox bookkeeping must never fail the decision */
+  }
 }
 
 /** Pause a running AgentRun in response to a pc_ask_* tool call. Mints a
@@ -361,6 +385,12 @@ export async function answerPendingAsk(
     };
   }
 
+  // M4b (FD-8) — the ask is now terminal (answered); clear its open inbox
+  // cards regardless of which door the answer came through. Done BEFORE the
+  // resume drive: even if the resume fails below, the question itself is
+  // decided and the card must not linger.
+  resolveAskInbox(deps.askInbox, ask.id, now);
+
   // Drive the run. The active handle transitions paused -> spawning ->
   // running and constructs a fresh LowLevelSpawn in resume mode with the
   // answer as the typed first user turn in in-process mode. A post-flip resume
@@ -441,7 +471,7 @@ export type CancelPendingAskResult =
  *  second cancel returns `already-terminal`. */
 export function cancelPendingAsk(
   input: CancelPendingAskInput,
-  deps: Pick<PauseResumeDeps, 'registry' | 'now' | 'broadcast'>,
+  deps: Pick<PauseResumeDeps, 'registry' | 'now' | 'broadcast' | 'askInbox'>,
 ): CancelPendingAskResult {
   const reg = deps.registry ?? getActiveRunRegistry();
   const now = (deps.now ?? Date.now)();
@@ -479,6 +509,9 @@ export function cancelPendingAsk(
 
   const entry = reg.get(ask.agentRunId);
   if (entry) entry.run.cancel();
+
+  // M4b (FD-8) — cancelled is terminal too; clear the ask's open inbox cards.
+  resolveAskInbox(deps.askInbox, ask.id, now);
 
   return { ok: true, agentRunId: ask.agentRunId };
 }

@@ -22,6 +22,7 @@ export interface MailboxInboxProps {
 }
 
 const KIND_LABELS: Record<MailboxMessageKind, string> = {
+  'agent-ask-escalated': 'Agents Waiting on You',
   'agent-question':   'Agent Questions',
   'agent-approval':   'Agent Approvals',
   'workflow-review':  'Workflow Review',
@@ -35,7 +36,9 @@ const KIND_LABELS: Record<MailboxMessageKind, string> = {
 };
 
 // Actionable/asks first, then informational — matches catalog UI-home ordering.
+// M4b: escalated asks lead — an agent is BLOCKED until the human answers.
 const KIND_ORDER: MailboxMessageKind[] = [
+  'agent-ask-escalated',
   'agent-question',
   'agent-approval',
   'workflow-review',
@@ -228,8 +231,14 @@ function MailboxInboxRow({
       {/* M8 (FD-7) — the decision card: approve / reject-with-feedback via the
           existing typed doors. The server's decided-elsewhere resolution
           actions this recipient; the live frame refetches the list. */}
-      {actionable && projectId && (
+      {actionable && projectId && message.kind !== 'agent-ask-escalated' && (
         <DecisionActions item={item} projectId={projectId} onChanged={onChanged} />
+      )}
+
+      {/* M4b (FD-8) — the escalated-ask card: answer (option buttons or free
+          text) / cancel via the EXISTING pending-ask doors. */}
+      {actionable && projectId && message.kind === 'agent-ask-escalated' && (
+        <AskEscalatedActions item={item} projectId={projectId} onChanged={onChanged} />
       )}
 
       {/* Action controls */}
@@ -377,6 +386,135 @@ function DecisionActions({
           </button>
         </div>
       )}
+      {error && <div className="text-[11px] text-destructive">Failed: {error}</div>}
+    </div>
+  );
+}
+
+/** The watchdog payload (slice C). Defensive reads — a malformed payload
+ *  renders no buttons rather than a broken door. */
+function askEscalatedTarget(
+  message: MailboxInboxItem['message'],
+): { pendingAskId: string; options: { label: string; value: string }[] } | null {
+  const p = message.payload as { pendingAskId?: unknown; options?: unknown };
+  if (typeof p.pendingAskId !== 'string') return null;
+  const options = Array.isArray(p.options)
+    ? p.options.filter(
+        (o): o is { label: string; value: string } =>
+          !!o && typeof o === 'object' &&
+          typeof (o as { label?: unknown }).label === 'string' &&
+          typeof (o as { value?: unknown }).value === 'string',
+      )
+    : [];
+  return { pendingAskId: p.pendingAskId, options };
+}
+
+/** M4b (FD-8) — answer a blocked agent from the card. Option buttons when the
+ *  ask carried options, free text always; Cancel agent drops ask + run. All
+ *  through the EXISTING pending-ask doors — the server clears the card
+ *  resolve-by-source whichever door decides. */
+function AskEscalatedActions({
+  item,
+  projectId,
+  onChanged,
+}: {
+  item: MailboxInboxItem;
+  projectId: string;
+  onChanged: () => void;
+}) {
+  const { message } = item;
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<'answered' | 'cancelled' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const target = askEscalatedTarget(message);
+  if (!target) return null;
+
+  const act = async (fn: () => Promise<{ ok: boolean; error?: string }>, result: 'answered' | 'cancelled') => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fn();
+      if (!res.ok) throw new Error(res.error ?? 'request failed');
+      setDone(result);
+      setTimeout(onChanged, 1200);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <div
+        className={`mb-1.5 px-2 py-1 text-[11px] font-medium ${
+          done === 'answered' ? 'bg-success/15 text-success' : 'bg-destructive/15 text-destructive'
+        }`}
+      >
+        ✓ {done === 'answered' ? 'Answer sent — the agent resumes.' : 'Agent cancelled.'}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-1.5 flex flex-col gap-1.5">
+      {target.options.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {target.options.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                void act(
+                  () => mailboxApi.answerPendingAsk(projectId, target.pendingAskId, opt.value),
+                  'answered',
+                )
+              }
+              className="bg-primary px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-col gap-1">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={2}
+          placeholder="Type an answer for the waiting agent…"
+          disabled={busy}
+          className="border border-border bg-background px-1.5 py-1 text-[11px]"
+        />
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={busy || !text.trim()}
+            onClick={() =>
+              void act(
+                () => mailboxApi.answerPendingAsk(projectId, target.pendingAskId, text.trim()),
+                'answered',
+              )
+            }
+            className="bg-primary px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            Send answer
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void act(() => mailboxApi.cancelPendingAsk(projectId, target.pendingAskId), 'cancelled')
+            }
+            className="border border-destructive/60 bg-card px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-destructive hover:bg-destructive/10 disabled:opacity-50"
+          >
+            Cancel agent
+          </button>
+        </div>
+      </div>
       {error && <div className="text-[11px] text-destructive">Failed: {error}</div>}
     </div>
   );

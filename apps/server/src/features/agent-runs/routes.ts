@@ -70,6 +70,12 @@ export interface AgentRunRouteDeps {
   cancelPendingAsk?: typeof defaultCancelPendingAsk;
   checkInvokeDepth?: typeof defaultCheckInvokeDepth;
   now?: () => number;
+  /** M4b (FD-8) — an ask decided through ANY door actions its open
+   *  `agent-ask-escalated` inbox cards (MailboxService collect/action pair). */
+  askInbox?: {
+    collectUnactionedRecipients(sourceKind: string, sourceId: string): ULID[];
+    actionRecipients(ids: readonly ULID[], now: number): number;
+  } | null;
 }
 
 const VALID_AGENT_RUN_STATUSES: AgentRunStatus[] = [
@@ -886,6 +892,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         {
           slug: project.slug,
           broadcast: (env) => deps.broadcastTo(projectId, env),
+          askInbox: deps.askInbox ?? null,
         },
       );
 
@@ -927,7 +934,10 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       const pendingAskId = c.req.param('askId') as ULID;
       const result = services.cancelPendingAsk(
         { pendingAskId },
-        { broadcast: (env) => deps.broadcastTo(projectId, env) },
+        {
+          broadcast: (env) => deps.broadcastTo(projectId, env),
+          askInbox: deps.askInbox ?? null,
+        },
       );
       if (!result.ok) {
         const statusFor: Record<string, number> = {

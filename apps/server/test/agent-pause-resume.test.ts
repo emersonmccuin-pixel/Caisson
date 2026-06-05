@@ -294,3 +294,124 @@ test('answerPendingAsk — rejects when reconciled row is not paused (handle rep
   if (result.ok) return;
   assert.equal(result.cause, 'wrong-state');
 });
+
+// ─────────────── M4b (FD-8) — decided-anywhere ask-card resolution ──────────
+
+test('M4b — a successful answer actions the ask\'s open inbox cards (resolve-by-source)', async () => {
+  const reg = new ActiveRunRegistry();
+  const runId = newId() as ULID;
+  const cc = `cc-${runId}`;
+  const askId = newId() as ULID;
+  seedRow(runId, cc, 'paused');
+  createPendingAsk({
+    id: askId,
+    agentRunId: runId,
+    ccSessionId: cc,
+    projectId,
+    kind: 'orchestrator',
+    promptBody: '?',
+    now: 1_700_000_000_000,
+  });
+  registerStale(reg, runId, cc, 'paused');
+
+  const collected: [string, string][] = [];
+  const actioned: string[][] = [];
+  const result = await answerPendingAsk(
+    { pendingAskId: askId, answer: 'blue', answeredBy: 'user' },
+    {
+      slug,
+      registry: reg,
+      askInbox: {
+        collectUnactionedRecipients: (kind, id) => {
+          collected.push([kind, id]);
+          return ['rec-1' as ULID];
+        },
+        actionRecipients: (ids) => {
+          actioned.push([...ids]);
+          return ids.length;
+        },
+      },
+    },
+  );
+  assert.ok(result.ok, `expected resume; got ${JSON.stringify(result)}`);
+  assert.deepEqual(collected, [['agent', askId]]);
+  assert.deepEqual(actioned, [['rec-1']]);
+});
+
+test('M4b — a failed answer (wrong-state) does NOT touch the inbox cards', async () => {
+  const reg = new ActiveRunRegistry();
+  const runId = newId() as ULID;
+  const cc = `cc-${runId}`;
+  const askId = newId() as ULID;
+  seedRow(runId, cc, 'running'); // not paused → answer rejected pre-flip
+  createPendingAsk({
+    id: askId,
+    agentRunId: runId,
+    ccSessionId: cc,
+    projectId,
+    kind: 'orchestrator',
+    promptBody: '?',
+    now: 1_700_000_000_000,
+  });
+  registerStale(reg, runId, cc, 'paused');
+
+  let touched = 0;
+  const result = await answerPendingAsk(
+    { pendingAskId: askId, answer: 'x', answeredBy: 'user' },
+    {
+      slug,
+      registry: reg,
+      askInbox: {
+        collectUnactionedRecipients: () => {
+          touched += 1;
+          return [];
+        },
+        actionRecipients: () => 0,
+      },
+    },
+  );
+  assert.equal(result.ok, false);
+  assert.equal(touched, 0);
+});
+
+test('M4b — cancelPendingAsk actions the ask\'s open inbox cards too', async () => {
+  const { cancelPendingAsk } = await import('../src/services/pause-resume.ts');
+  const reg = new ActiveRunRegistry();
+  const runId = newId() as ULID;
+  const cc = `cc-${runId}`;
+  const askId = newId() as ULID;
+  seedRow(runId, cc, 'paused');
+  createPendingAsk({
+    id: askId,
+    agentRunId: runId,
+    ccSessionId: cc,
+    projectId,
+    kind: 'orchestrator',
+    promptBody: '?',
+    now: 1_700_000_000_000,
+  });
+  registerStale(reg, runId, cc, 'paused');
+
+  const collected: [string, string][] = [];
+  const actioned: string[][] = [];
+  const result = cancelPendingAsk(
+    { pendingAskId: askId },
+    {
+      registry: reg,
+      askInbox: {
+        collectUnactionedRecipients: (kind, id) => {
+          collected.push([kind, id]);
+          return ['rec-9' as ULID];
+        },
+        actionRecipients: (ids) => {
+          actioned.push([...ids]);
+          return ids.length;
+        },
+      },
+    },
+  );
+  assert.ok(result.ok);
+  assert.equal(getPendingAsk(askId)!.status, 'cancelled');
+  assert.deepEqual(collected, [['agent', askId]]);
+  assert.deepEqual(actioned, [['rec-9']]);
+});

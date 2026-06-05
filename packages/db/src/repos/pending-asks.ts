@@ -4,7 +4,7 @@
 // JSONL-replay re-delivery of an already-handled event cannot double-resume
 // the child — the second update is a no-op (`changes === 0`).
 
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, lte } from 'drizzle-orm';
 
 import type {
   PendingAskKind,
@@ -82,6 +82,18 @@ export function listOpenPendingAsksForSession(ccSessionId: string): PendingAskRo
     .select()
     .from(pendingAsks)
     .where(and(eq(pendingAsks.ccSessionId, ccSessionId), eq(pendingAsks.status, 'open')))
+    .orderBy(asc(pendingAsks.createdAt))
+    .all();
+}
+
+/** M4b/FD-8 — open asks created at or before `cutoff`, ALL projects, oldest
+ *  first. Drives the stale-ask watchdog ("expecting a response that never
+ *  came"). */
+export function listOpenPendingAsksOlderThan(cutoff: number): PendingAskRow[] {
+  return getDb()
+    .select()
+    .from(pendingAsks)
+    .where(and(eq(pendingAsks.status, 'open'), lte(pendingAsks.createdAt, cutoff)))
     .orderBy(asc(pendingAsks.createdAt))
     .all();
 }
