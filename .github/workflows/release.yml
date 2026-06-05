@@ -1,0 +1,102 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '10.33.0'
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Mac: native installer drops the binary at ~/.local/bin/claude
+      - name: Install Claude CLI 2.1.165 (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s 2.1.165
+          echo "PC_CLAUDE_SRC=$HOME/.local/bin/claude" >> "$GITHUB_ENV"
+
+      # Windows: download and run the PS1 installer, then locate the binary.
+      # NOTE: exact install path depends on the PS1 installer — verify on first live run.
+      # PATH is refreshed in-session so where.exe can find the binary.
+      - name: Install Claude CLI 2.1.165 (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri 'https://claude.ai/install.ps1' -OutFile "$env:TEMP\claude-install.ps1" -UseBasicParsing
+          powershell -ExecutionPolicy Bypass -File "$env:TEMP\claude-install.ps1" -Version '2.1.165'
+          $env:PATH = [System.Environment]::GetEnvironmentVariable('PATH', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('PATH', 'User')
+          $claudeExe = (where.exe claude 2>$null | Select-Object -First 1)
+          if (-not $claudeExe) { throw 'claude.exe not found on PATH after install — check installer output path' }
+          "PC_CLAUDE_SRC=$claudeExe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # ── Tag push: publish to GitHub Releases ─────────────────────────────────
+
+      - name: Build and publish release (macOS)
+        if: github.event_name == 'push' && matrix.os == 'macos-latest'
+        run: pnpm desktop:publish:mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Build and publish release (Windows)
+        if: github.event_name == 'push' && matrix.os == 'windows-latest'
+        run: pnpm desktop:publish:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── workflow_dispatch: build only, upload as workflow artifacts ──────────
+
+      - name: Build dist (macOS)
+        if: github.event_name == 'workflow_dispatch' && matrix.os == 'macos-latest'
+        run: pnpm desktop:dist:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Build dist (Windows)
+        if: github.event_name == 'workflow_dispatch' && matrix.os == 'windows-latest'
+        run: pnpm desktop:dist:win
+
+      - name: Upload macOS installers
+        if: github.event_name == 'workflow_dispatch' && matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-dist
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+
+      - name: Upload Windows installer
+        if: github.event_name == 'workflow_dispatch' && matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-dist
+          path: apps/desktop/release/*.exe
