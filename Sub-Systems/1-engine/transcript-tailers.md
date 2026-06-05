@@ -2,7 +2,7 @@
 
 > **Role:** Engine / cross-cutting (chat rendering + historical replay)
 > **Status:** as-built snapshot — 2026-06-03
-> **Code anchors:** `packages/runtime/src/jsonl-tailer.ts` · `packages/runtime/src/agent-run-jsonl-tailer.ts` · `packages/runtime/src/path-resolver.ts` · `apps/server/src/services/jsonl-sweep.ts` · `apps/server/src/services/session-replay.ts` · `apps/server/src/services/conversation-replay.ts`
+> **Code anchors:** `packages/runtime/src/jsonl-tailer.ts` · `packages/runtime/src/agent-run-jsonl-tailer.ts` · `packages/runtime/src/path-resolver.ts` · `apps/server/src/services/jsonl-sweep.ts` · `apps/server/src/services/conversation-replay.ts` · `conversation-backfill.ts` *(☠ M3b: `session-replay.ts`)*
 
 ---
 
@@ -113,15 +113,17 @@ Several parts of the server create a tailer, call `drainAvailable()` to read all
 
 ### 6. Replay — loading history when you reconnect
 
-When the UI reconnects to a session (or loads the transcript view), it needs the full conversation history. Two services handle this:
+When the UI reconnects to a session (or loads the transcript view), it needs the full conversation history.
 
-**`apps/server/src/services/session-replay.ts`** (`loadSessionReplayCheckpoint`):
-- Reads PC's own normalized event log at `<sessionDataPath>/jsonl-events.jsonl` (written by `PtySession`'s tailer as events flow through)
-- Falls back to `events.jsonl` (written by the legacy hook) for pre-Section 23 sessions
-- Returns sorted envelopes with stable `seq` numbers for ordered replay
+**✅ M3b (2026-06-04): replay is a database query.** The orchestrator chat's normalized events
+live in the `conversation_events` table (one row per event; `OrchestratorHostSession` writes them
+as the host stream flows). `conversation-replay.ts` composes the app-services
+`DbTranscriptRepository` and serves every replay surface — sorted envelopes with stable `seq`
+numbers, `?afterSeq=` cursor reads, stable high-water.
 
-**`apps/server/src/services/conversation-replay.ts`** (`ConversationReplayService`):
-- An HTTP wrapper around `session-replay.ts` — delegates all reads there, exposes it to routes
+*(☠ M3b: `session-replay.ts` — the `jsonl-events.jsonl` / legacy `events.jsonl` file reader. The
+on-disk logs were imported once at boot by `conversation-backfill.ts` and renamed `*.imported`;
+the parser survives only inside that importer.)*
 
 ---
 
@@ -151,7 +153,7 @@ The web layer receives events from two sources on the same connection: the hook 
   - `PtySession` — live chat rendering for orchestrator + modals today
   - `InteractiveSession` — live chat rendering for orchestrator today
   - Server routes — one-shot drain for card display, verification gate, reattach backfill
-  - `session-replay.ts` / `conversation-replay.ts` — historical replay on reconnect
+  - `conversation-replay.ts` — historical replay on reconnect (a `conversation_events` query — M3b)
   - `jsonl-sweep.ts` — retention cleanup at boot
 - **Events emitted:** `JsonlEvent` (v1) · `AgentRunJsonlEvent` (v2) · `jsonl-turn-end` · `jsonl-pause-detected`
 - **Events consumed:** `AgentRun` listens on `'jsonl-event'` from `LowLevelSpawn`; the WS stream receives `{ type: 'jsonl', event }` envelopes written through by `PtySession`

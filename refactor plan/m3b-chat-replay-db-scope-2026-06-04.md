@@ -77,6 +77,20 @@ the WS jsonl-event channel; the replay log exists ONLY for reconnect/history).
   renders in the chat + Sessions tab → live chat streams → reconnect replays from DB. Docs
   sweep + memory.
 
+## OUTCOME — ✅ ALL FOUR SLICES SHIPPED + LIVE GREEN (2026-06-04)
+
+Commits: scope `689b304d` · A `e9199ddb` · B `928f9bb6` · C `cf9148cc` · D (this sweep).
+Suites: server 290 · app-services 83 · db 47 · workspace typecheck — green.
+
+**Live verify (dev stack):**
+- Boot backfill: **21,271 events from 313 sessions imported; 664 files renamed `*.imported`;
+  zero `jsonl-events.jsonl` remain.** Second boot sweeps nothing (self-extinguished).
+- Historical replay from the DB: the biggest session (1,654 events) serves
+  `?afterSeq=1650` → 4 rows, correct kinds + source cursors, stable high water.
+- Live round-trip: fresh orchestrator session → injected turn ("reply kumquat") → reply
+  persisted as `conversation_events` rows → replay route returns them (highWaterSeq 9,
+  "kumquat" present).
+
 ## Known risks
 
 - The backfill must use the SAME parser semantics (skip malformed lines, max(count,maxSeq)+1

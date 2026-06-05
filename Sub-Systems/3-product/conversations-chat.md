@@ -1,9 +1,10 @@
 # Conversations & Chat
 
 > **Role:** Store (conversation persistence) · UI (chat rendering) · cross-cutting (send, replay, dual-stream dedup)
-> **Status:** as-built snapshot — 2026-06-03
+> **Status:** as-built snapshot — 2026-06-03 · M3b (replay → DB) sweep 2026-06-04
 > **Code anchors:**
-> `apps/server/src/services/conversation-send.ts` · `conversation-replay.ts` · `session-replay.ts` · `session-title-writer.ts` · `ask-shadow.ts`
+> `apps/server/src/services/conversation-send.ts` · `conversation-replay.ts` · `conversation-backfill.ts` *(☠ M3b: `session-replay.ts` · ☠ M8: `ask-shadow.ts`)* · `session-title-writer.ts`
+> `packages/db/src/repos/conversation-events.ts`
 > `apps/server/src/features/chat-bridges/routes.ts`
 > `packages/runtime/src/chat-policy.ts` · `packages/contracts/src/conversations.ts` · `runtime-transcript.ts`
 > `packages/db/src/repos/orchestrator-sessions.ts` · `post-turn-summaries.ts`
@@ -58,11 +59,11 @@ The service only ever sees a narrow port interface into the PTY — no internals
 
 When you open a chat — or reconnect after losing the browser tab — the full history loads in two steps:
 
-1. **Server side** (`session-replay.ts:loadSessionReplayCheckpoint()`): reads the normalized event log (`jsonl-events.jsonl`) and returns all events in sequence order, plus a "high water mark" (the latest sequence number seen). Falls back to the older `events.jsonl` format for conversations that predate Section 23.
+1. **Server side** (✅ M3b, 2026-06-04): replay is a **database query** over the `conversation_events` table (`DbTranscriptRepository` behind the slice-006 seam; `conversation-replay.ts` composes it). Events come back in sequence order plus a "high water mark" (the latest sequence number seen). The old per-session files (`jsonl-events.jsonl`, legacy `events.jsonl`) were imported once at boot (`conversation-backfill.ts`) and renamed `*.imported` — forensics only, nothing reads them.
 
 2. **Client side** (`chat-session-reducer.ts:applySnapshot()`): receives the events and rebuilds the timeline in sequence order. Live events arriving after the replay are inserted at their correct position in that sequence — never blindly appended. If a reconnect happens mid-session, only the events since the high water mark are fetched (`?afterSeq=` cursor), not the whole history again.
 
-> ⚠️ **Gap:** the replay reads a file on disk (`readFileSync` on `jsonl-events.jsonl`). This works today but there's a race window between the tailer writing the file and the replay reading it. The target is to move to a DB query instead — see Target shape.
+> ✅ **M3b closed the gap:** the file-read race window (tailer appending while replay reads) is gone — writer and reader share the one table.
 
 ### 4. The dual-stream merge (why two streams exist, and how they're deduplicated)
 
@@ -125,7 +126,7 @@ After every completed turn, a `jsonl-post-turn-summary` event causes a row to be
 
 ## How it connects
 
-- **Depends on:** `ProjectRuntime` / `OrchestratorHostSession` (the Engine-owned send surface) · the JSONL tailer in `transcript-tailers.md` (writes `jsonl-events.jsonl`) · `live_outbox` / live-relay (for title state changes) · `@pc/app-services` (`ConversationReplayService`, `ConversationSendService`) · `post_turn_summaries` table. *(☠ M8: `PendingInteractionService` + its table.)*
+- **Depends on:** `ProjectRuntime` / `OrchestratorHostSession` (the Engine-owned send surface; writes `conversation_events` per wire event — M3b) · the JSONL tailer in `transcript-tailers.md` · `live_outbox` / live-relay (for title state changes) · `@pc/app-services` (`ConversationReplayService`, `ConversationSendService`, `DbTranscriptRepository`) · `post_turn_summaries` table. *(☠ M8: `PendingInteractionService` + its table.)*
 - **Used by:** `Orchestrator.tsx` / `ChatSurface.tsx` (primary consumer) · `AgentDesignerChat` (transient modal sessions also render through `ChatSurface`) · agent run cards (inline JSONL transcript via `GET /api/subagent-transcript`) · WS reconnect path (`use-project-ws.ts` uses the after-seq cursor).
 - **Contracts / events crossed:** `ConversationSessionDto`, `TranscriptEventDto`, `TranscriptReplayResponse` (`contracts/conversations.ts`, `runtime-transcript.ts`) · WS envelope types: `session-replay`, `session-changed`, `ask`, `jsonl`, `event`, `send-ack`, `send-queue-snapshot` · `live_outbox` rows: `session.title.changed`. *(☠ M8: `pending-interaction.changed`.)*
 
@@ -138,7 +139,7 @@ The north star (`unified-process-supervision-2026-06-02.md §2`): **chat is a pu
 **What stays:** the `orchestrator_sessions` table (source of truth for conversation identity and JSONL cursor) · the `live_outbox`-driven title and ask-shadow flow (already correct) · `rowPolicy` / `chat-policy.ts` as the single suppression table · the canonical JSONL-only renderer path (`buildCanonicalChatEnvelopes`) · the seq-ordered timeline in `chat-session-reducer`.
 
 **What changes:**
-- **Replay source moves to the DB — now named M3b.** Today `session-replay.ts` reads a file (`jsonl-events.jsonl`) written by the Brain's tailer. In the target, events are the append-only event log in SQLite; replay is a DB query. Split out of M3 in the M3a pass (2026-06-04 — the workflow diary shipped; this shares zero code with it): own pass, scope at `refactor plan/m3a-run-diary-scope-2026-06-04.md` §Scope-split.
+- ~~**Replay source moves to the DB — now named M3b.**~~ ✅ **M3b DONE 2026-06-04** (scope: `refactor plan/m3b-chat-replay-db-scope-2026-06-04.md`): events are the append-only `conversation_events` log in SQLite; replay is a query; ☠ `session-replay.ts` + `FileTranscriptRepository` (parser lives ONLY in the boot backfill importer); 21k+ historical events imported, files renamed `*.imported`.
 - **Send path re-routes.** `ConversationSendService` today reaches into `ProjectRuntime` → `InteractiveSession`. After Steps 4–5, the orchestrator session moves to the Engine, and the send path adapts: the Brain routes the send to the Engine rather than into its own PTY.
 - **Post-turn summaries get a read surface.** Write path stays; UI to be built in the slow migration.
 - **Legacy render path deleted.** The `type:'event'` dual-source path in `useChatRenderItems.ts` is frozen as A/B baseline. Once the canonical path has enough production time, the legacy branch is deleted (one-path rule).
@@ -153,13 +154,13 @@ The north star (`unified-process-supervision-2026-06-02.md §2`): **chat is a pu
 
 **Legacy render path is a one-path violation.** The canonical path is the one path. The legacy `type:'event'` branch is frozen in `useChatRenderItems.ts` as an A/B baseline but has not been deleted yet. Every day it stays is a day the two paths can diverge. Delete when the acceptance gate is decided (see Decisions below).
 
-**Replay source is a file, not a DB query.** `session-replay.ts` does `readFileSync` on `jsonl-events.jsonl`. There's a race window between the tailer writing the file and the replay reading it — a partial checkpoint is possible. Target: DB query removes this. (Slice-3.)
+~~**Replay source is a file, not a DB query.**~~ ✅ M3b (2026-06-04): replay is a `conversation_events` query; the file-race window is gone.
 
 **CC ≥2.1 queue protocol shift.** CC uses `remove` (not `dequeue`) on queue consume; queued commands appear as `type:"attachment"` with `attachment.type === "queued_command"`, not plain user rows. `normalizeJsonlEnvelope` routes `jsonl-queue-enqueue` / `jsonl-queue-dequeue` kinds — confirm the tailer's parsing matches CC's current emit shape. (Memory: `[CC ≥2.1 queue protocol shift]`.)
 
 **`post_turn_summaries` is write-only.** Useful per-turn metadata accumulates invisibly — no UI reads it.
 
-**Pre-Section-23 sessions render in degraded form.** The `events.jsonl` fallback for old sessions lacks the full canonical JSONL types. No migration path exists.
+**Pre-Section-23 sessions render in degraded form.** Their imported rows (M3b: `type:'event'`, source `legacy-events-jsonl`) lack the full canonical JSONL types. No upgrade path exists — same degraded render as before, just served from the DB.
 
 **`SUPPRESSED_TOOLS` duplicated in two places.** `toolGrouping.ts:20` and `chat-policy.ts:36` both define the same set. Stage 3 of the redesign deletes `toolGrouping`'s copy. Until then, they can silently diverge.
 
