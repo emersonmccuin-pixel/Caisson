@@ -23,6 +23,12 @@
 //     roster rather than dispatches it. Live from DB at spawn — never hardcode
 //     the roster in caisson's prompt or knowledge.
 //
+//   - `PROJECT_AREAS` — the orchestrator's live view of the project's Areas
+//     (the optional buckets work items file into). Each entry = name + id (to
+//     pass back as `area_id`) + its plain-language summary (the filing signal).
+//     Ordered by sortOrder, same as the Areas rail. Live from DB at spawn —
+//     never hardcode the Area list in the orchestrator's prompt.
+//
 //   - `AVAILABLE_TOOLS` — materializer-owned in @pc/runtime so it can render
 //     from the final expanded tool list (post-wildcard,
 //     post-mergeRequiredAgentTools).
@@ -30,7 +36,7 @@
 // Add new DB-backed variables here as the need arises — one variable per use
 // case, no general-purpose templating.
 
-import { listAgents, listProjectVisibleAgents } from '@pc/db';
+import { listAgents, listAreas, listProjectVisibleAgents } from '@pc/db';
 import type { ULID } from '@pc/domain';
 
 /** Format the full agent roster the orchestrator (or any other pod opting in
@@ -112,4 +118,21 @@ export function renderAgentRosterForCaisson(projectId: ULID | null | undefined):
     );
   }
   return sections.join('\n\n');
+}
+
+/** Format the project's live Areas for the orchestrator's `{{PROJECT_AREAS}}`.
+ *  Each Area = name + id (passed back as `area_id` when filing) + its
+ *  plain-language summary (the filing signal). Ordered by sortOrder, same as
+ *  the Areas rail. Returns a clear sentinel when the project has none, so the
+ *  orchestrator files Uncaptured (or creates an Area) rather than guessing. */
+export function renderProjectAreas(projectId: ULID | null | undefined): string {
+  if (!projectId) return '_No Areas — this project has none yet._';
+  const rows = listAreas(projectId);
+  if (rows.length === 0) return '_No Areas — this project has none yet._';
+  return rows
+    .map((a) => {
+      const summary = a.summary.trim() || '_(no summary yet — write one with pc_update_area)_';
+      return `- **${a.name}** (id: \`${a.id}\`) — ${summary}`;
+    })
+    .join('\n');
 }

@@ -23,7 +23,11 @@ import {
   type ClaudeRuntimeIdentity,
 } from './claude-runtime-bundle.ts';
 import { PC_RIG_TOOL_NAMES } from './pod-tool-catalog.ts';
-import { renderAgentRosterForCaisson, renderAvailableAgents } from './pod-variable-renderers.ts';
+import {
+  renderAgentRosterForCaisson,
+  renderAvailableAgents,
+  renderProjectAreas,
+} from './pod-variable-renderers.ts';
 
 export interface PreparePodSpawnInput {
   /** Agent name — looked up against the pod rows. */
@@ -113,6 +117,9 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
   }
   if (promptBody.includes('{{AGENT_ROSTER}}')) {
     variables.AGENT_ROSTER = renderAgentRosterForCaisson(input.projectId ?? null);
+  }
+  if (promptBody.includes('{{PROJECT_AREAS}}')) {
+    variables.PROJECT_AREAS = renderProjectAreas(input.projectId ?? null);
   }
 
   const materialised: MaterializedPluginPod = materializePodPlugin({

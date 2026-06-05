@@ -78,6 +78,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "area_id": {
           "type": "string",
           "description": "the Area (ULID) this item belongs to — consider this on EVERY create; pc_list_areas has ids + summaries. Omit only when no Area fits (Uncaptured)."
+        },
+        "parent_work_item_id": {
+          "type": "string",
+          "description": "optional parent work item id (ULID) — nest this card as a sub-task under a parent. The child gets a dotted callsign (parent proj-2 → child proj-2.1)."
         }
       },
       "required": [
@@ -895,6 +899,29 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "inputSchema": {
       "type": "object",
       "properties": {}
+    }
+  },
+  {
+    "name": "pc_create_area",
+    "family": "work-item",
+    "label": "Create area",
+    "description": "Create a new Area — a first-class bucket that groups work items across the board (a feature area, initiative, or epic). Create one ONLY when the work opens a genuinely new track future cards will share — not for a one-off, and not merely because a card has no good home. When unsure between an existing Area, Uncaptured, or a new Area, prefer them in that order (existing -> Uncaptured -> new). Give the Area a clear plain-language summary of what belongs in it so future filing is accurate. PC_PROJECT_ID env is the implicit scope.",
+    "catalogDescription": "Create a new Area (focus bucket) with a name + plain-language summary.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "short Area name (e.g. \"Billing\", \"Onboarding\")"
+        },
+        "summary": {
+          "type": "string",
+          "description": "plain-language summary — what belongs in this Area, written for filing decisions"
+        }
+      },
+      "required": [
+        "name"
+      ]
     }
   },
   {
@@ -1809,6 +1836,7 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_list_workflows: 'first-order',
   pc_list_field_schemas: 'first-order',
   pc_list_areas: 'first-order',
+  pc_create_area: 'first-order',
   pc_update_area: 'first-order',
   pc_find_tool: 'first-order',
   pc_call_tool: 'first-order',

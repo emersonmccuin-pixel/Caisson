@@ -41,6 +41,8 @@ export async function handleWorkItemTool(
       if (stageId) payload.stageId = stageId;
       if (typeof args.area_id === 'string' && args.area_id.trim()) payload.areaId = args.area_id.trim();
       else if (args.area_id === null) payload.areaId = null;
+      if (typeof args.parent_work_item_id === 'string' && args.parent_work_item_id.trim())
+        payload.parentId = args.parent_work_item_id.trim();
       if (bodyText !== undefined) payload.body = (bodyText + originNote).trim();
       else if (originNote) payload.body = originNote.trim();
       try {
@@ -456,6 +458,37 @@ export async function handleWorkItemTool(
       } catch (err) {
         return {
           content: [{ type: 'text', text: `pc_list_areas failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
+    case 'pc_create_area': {
+      // FD-19 — the orchestrator mints a new Area when work opens a genuinely
+      // new track. POSTs the existing area-create route (AreaService writes the
+      // area.changed live_outbox row in-txn).
+      const name = typeof args.name === 'string' ? args.name.trim() : '';
+      if (!name) {
+        return {
+          content: [{ type: 'text', text: 'pc_create_area: name required' }],
+          isError: true,
+        };
+      }
+      const summary = typeof args.summary === 'string' ? args.summary : undefined;
+      try {
+        const payload: Record<string, unknown> = { name };
+        if (summary !== undefined) payload.summary = summary;
+        const res = await ctx.postServer(ctx.projectPath('areas'), payload);
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `pc_create_area failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_create_area failed: ${(err as Error).message}` }],
           isError: true,
         };
       }

@@ -25,6 +25,10 @@
           "area_id": {
             "type": "string",
             "description": "the Area (ULID) this item belongs to — consider this on EVERY create; pc_list_areas has ids + summaries. Omit only when no Area fits (Uncaptured)."
+          },
+          "parent_work_item_id": {
+            "type": "string",
+            "description": "optional parent work item id (ULID) — nest this card as a sub-task under a parent. The child gets a dotted callsign (parent proj-2 → child proj-2.1)."
           }
         },
         "required": [
@@ -770,6 +774,26 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      }
+    },
+    {
+      "name": "pc_create_area",
+      "description": "Create a new Area — a first-class bucket that groups work items across the board (a feature area, initiative, or epic). Create one ONLY when the work opens a genuinely new track future cards will share — not for a one-off, and not merely because a card has no good home. When unsure between an existing Area, Uncaptured, or a new Area, prefer them in that order (existing -> Uncaptured -> new). Give the Area a clear plain-language summary of what belongs in it so future filing is accurate. PC_PROJECT_ID env is the implicit scope.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "short Area name (e.g. \"Billing\", \"Onboarding\")"
+          },
+          "summary": {
+            "type": "string",
+            "description": "plain-language summary — what belongs in this Area, written for filing decisions"
+          }
+        },
+        "required": [
+          "name"
+        ]
       }
     },
     {
@@ -1575,6 +1599,7 @@
     "mcp__pc-rig__pc_get_work_item",
     "mcp__pc-rig__pc_list_work_items",
     "mcp__pc-rig__pc_list_areas",
+    "mcp__pc-rig__pc_create_area",
     "mcp__pc-rig__pc_update_area",
     "mcp__pc-rig__pc_publish_workflow",
     "mcp__pc-rig__pc_write_claude_md",
@@ -1819,6 +1844,12 @@
       "slug": "mcp__pc-rig__pc_list_areas",
       "label": "List areas",
       "description": "List the project's Areas (focus buckets) + their work-item counts.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_create_area",
+      "label": "Create area",
+      "description": "Create a new Area (focus bucket) with a name + plain-language summary.",
       "source": "pc-rig"
     },
     {
@@ -2100,6 +2131,9 @@
       "family": "work-item"
     },
     "pc_list_areas": {
+      "family": "work-item"
+    },
+    "pc_create_area": {
       "family": "work-item"
     },
     "pc_update_area": {
