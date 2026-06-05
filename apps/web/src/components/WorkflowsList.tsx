@@ -35,11 +35,16 @@ interface WorkflowsListProps {
 
 type StatusFilter = 'all' | 'enabled' | 'disabled' | 'invalid';
 type DetailTab = 'graph' | 'runs' | 'yaml';
+// Top-level Workflows-tab view: the workflow library, or the cross-workflow run
+// history (every run from every workflow in one filterable list).
+type WorkflowsView = 'workflows' | 'runs';
+type RunStatusFilter = 'all' | V2RunStatus;
 
 export function WorkflowsList({ project, events }: WorkflowsListProps) {
   const { workflows, refetch } = useProjectWorkflows(project, events);
   const { runs } = useProjectWorkflowV2Runs(project, events);
 
+  const [view, setView] = useState<WorkflowsView>('workflows');
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<ULID | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -59,6 +64,7 @@ export function WorkflowsList({ project, events }: WorkflowsListProps) {
 
   // Clear selection + filters on project switch.
   useEffect(() => {
+    setView('workflows');
     setSelectedId(null);
     setSelectedRunId(null);
     setFilter('');
@@ -76,6 +82,8 @@ export function WorkflowsList({ project, events }: WorkflowsListProps) {
       // place so a subsequent render (when `workflows` arrives) consumes it.
       return;
     }
+    // A nav directive targets a specific workflow → snap back to the library.
+    setView('workflows');
     setSelectedId(target.id);
     if (navRunId) setSelectedRunId(navRunId);
     if (navTab) setTab(navTab);
@@ -227,38 +235,53 @@ export function WorkflowsList({ project, events }: WorkflowsListProps) {
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background">
       <header className="flex flex-col gap-2 border-b border-border px-4 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex flex-1 items-center gap-2 border border-border bg-card px-2 py-1.5">
-            <span aria-hidden className="text-muted-foreground">⌕</span>
-            <input
-              type="text"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filter workflows…"
-              className="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => setCreateOpen(true)}
-            className="border border-primary bg-primary/30 px-3 py-1.5 text-xs font-medium text-foreground hover:bg-primary/50"
-          >
-            + New workflow
-          </button>
+        <div className="flex items-center gap-1">
+          <ViewTab active={view === 'workflows'} onClick={() => setView('workflows')}>
+            Workflows
+          </ViewTab>
+          <ViewTab active={view === 'runs'} onClick={() => setView('runs')}>
+            Runs
+            {runs.length > 0 && (
+              <span className="ml-1.5 border border-border px-1 text-[9px]">{runs.length}</span>
+            )}
+          </ViewTab>
         </div>
-        <div className="flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-wider text-muted-foreground">
-          <ChipGroup
-            label="Status"
-            value={status}
-            onChange={setStatus}
-            options={[
-              { value: 'all', label: 'All' },
-              { value: 'enabled', label: 'Enabled' },
-              { value: 'disabled', label: 'Disabled' },
-              { value: 'invalid', label: 'Invalid' },
-            ]}
-          />
-        </div>
+        {view === 'workflows' && (
+          <>
+            <div className="flex items-center gap-3">
+              <div className="flex flex-1 items-center gap-2 border border-border bg-card px-2 py-1.5">
+                <span aria-hidden className="text-muted-foreground">⌕</span>
+                <input
+                  type="text"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  placeholder="Filter workflows…"
+                  className="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setCreateOpen(true)}
+                className="border border-primary bg-primary/30 px-3 py-1.5 text-xs font-medium text-foreground hover:bg-primary/50"
+              >
+                + New workflow
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-[10px] uppercase tracking-wider text-muted-foreground">
+              <ChipGroup
+                label="Status"
+                value={status}
+                onChange={setStatus}
+                options={[
+                  { value: 'all', label: 'All' },
+                  { value: 'enabled', label: 'Enabled' },
+                  { value: 'disabled', label: 'Disabled' },
+                  { value: 'invalid', label: 'Invalid' },
+                ]}
+              />
+            </div>
+          </>
+        )}
       </header>
 
       {actionErr && (
@@ -270,6 +293,9 @@ export function WorkflowsList({ project, events }: WorkflowsListProps) {
         </div>
       )}
 
+      {view === 'runs' ? (
+        <RunsHistoryView project={project} runs={runs} workflows={workflows} />
+      ) : (
       <div className="grid min-h-0 flex-1 grid-cols-[300px_1fr] overflow-hidden">
         <aside className="overflow-y-auto border-r border-border">
           <ListSection
@@ -331,6 +357,7 @@ export function WorkflowsList({ project, events }: WorkflowsListProps) {
           )}
         </main>
       </div>
+      )}
 
       {createOpen && (
         <CreateWorkflowModal
@@ -344,6 +371,230 @@ export function WorkflowsList({ project, events }: WorkflowsListProps) {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ── Top-level view toggle (Workflows · Runs) ───────────────────────────────
+
+function ViewTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        'flex items-center px-3 py-1.5 text-xs font-medium ' +
+        (active
+          ? 'border-b-2 border-primary text-foreground'
+          : 'border-b-2 border-transparent text-muted-foreground hover:text-foreground')
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+// ── Cross-workflow run history ──────────────────────────────────────────────
+
+/** Every run from every workflow in this project, newest first, filterable by
+ *  status. The failed-run home (failed runs no longer ping the human inbox —
+ *  user decision 2026-06-05). Reuses RunInlineDetail (graph + diary + the
+ *  "Resume from failed step" action) for the expanded row. */
+function RunsHistoryView({
+  project,
+  runs,
+  workflows,
+}: {
+  project: Project;
+  runs: V2RunSummary[];
+  workflows: WorkflowRow[];
+}) {
+  const [statusFilter, setStatusFilter] = useState<RunStatusFilter>('all');
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+
+  // slug → workflow row (for the expanded run's parsed definition + graph).
+  const rowBySlug = useMemo(() => {
+    const m = new Map<string, WorkflowRow>();
+    for (const w of workflows) m.set(w.slug, w);
+    return m;
+  }, [workflows]);
+
+  const sorted = useMemo(
+    () => [...runs].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)),
+    [runs],
+  );
+  const filtered = useMemo(
+    () => (statusFilter === 'all' ? sorted : sorted.filter((r) => r.status === statusFilter)),
+    [sorted, statusFilter],
+  );
+
+  // Per-status counts for the filter chip labels.
+  const counts = useMemo(() => {
+    const c: Partial<Record<V2RunStatus, number>> = {};
+    for (const r of runs) c[r.status] = (c[r.status] ?? 0) + 1;
+    return c;
+  }, [runs]);
+
+  const selectedRun = useMemo(
+    () => (selectedRunId ? runs.find((r) => r.id === selectedRunId) ?? null : null),
+    [runs, selectedRunId],
+  );
+  const selectedRow = selectedRun ? rowBySlug.get(selectedRun.workflowId) ?? null : null;
+
+  const chip = (value: RunStatusFilter, label: string) => {
+    const n = value === 'all' ? runs.length : counts[value] ?? 0;
+    return { value, label: n > 0 ? `${label} (${n})` : label };
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+        <ChipGroup
+          label="Status"
+          value={statusFilter}
+          onChange={(v) => {
+            setStatusFilter(v);
+            setSelectedRunId(null);
+          }}
+          options={[
+            chip('all', 'All'),
+            chip('running', 'Running'),
+            chip('paused', 'Paused'),
+            chip('completed', 'Completed'),
+            chip('failed', 'Failed'),
+            chip('cancelled', 'Cancelled'),
+          ]}
+        />
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="flex h-full items-center justify-center p-8 text-center text-xs text-muted-foreground">
+          <div>
+            {runs.length === 0
+              ? 'No workflow runs yet.'
+              : `No ${statusFilter === 'all' ? '' : `${statusFilter} `}runs.`}
+          </div>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="flex flex-col overflow-y-auto">
+            {filtered.map((r) => (
+              <RunHistoryRow
+                key={r.id}
+                project={project}
+                run={r}
+                selected={r.id === selectedRunId}
+                onSelect={() => setSelectedRunId(r.id === selectedRunId ? null : r.id)}
+              />
+            ))}
+          </div>
+          {selectedRunId && selectedRow && selectedRow.parsedDefinition && (
+            <RunInlineDetail
+              project={project}
+              row={selectedRow}
+              runId={selectedRunId}
+              onClose={() => setSelectedRunId(null)}
+            />
+          )}
+          {selectedRunId && (!selectedRow || !selectedRow.parsedDefinition) && (
+            <div className="border-t border-border bg-card p-4 text-xs text-muted-foreground">
+              This run's workflow definition is unavailable (the workflow may have
+              been deleted), so the run graph can't be shown.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RunHistoryRow({
+  project,
+  run,
+  selected,
+  onSelect,
+}: {
+  project: Project;
+  run: V2RunSummary;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const started = run.startedAt ?? run.createdAt;
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  // Resume straight off the row (FD-14 door). Completed steps are kept and any
+  // definition edits are picked up. stopPropagation so it doesn't toggle the
+  // expanded detail. Errors render inline so the row stays retryable.
+  async function resume(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await workflowsApi.resumeV2Run(project.id as ULID, run.id);
+      setMsg(`Resumed${res.defChanged ? ' with your edits' : ''}.`);
+    } catch (err) {
+      setMsg((err as Error).message);
+    } finally {
+      setBusy(false);
+      setTimeout(() => setMsg(null), 5000);
+    }
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      className={
+        'flex cursor-pointer items-center justify-between gap-3 border-b border-border/40 border-l-2 px-4 py-2.5 text-xs transition-colors ' +
+        (selected ? 'border-l-primary bg-muted' : 'border-l-transparent hover:bg-muted/40')
+      }
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <StatusPill status={run.status} />
+        <span className="truncate font-medium text-foreground">{run.workflowName}</span>
+        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
+          {run.id.slice(-8)}
+        </span>
+        {run.workItemId && (
+          <span className="shrink-0 border border-border/60 px-1 text-[9px] uppercase tracking-wider text-muted-foreground">
+            wi {run.workItemId.slice(-6)}
+          </span>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {msg && <span className="bg-muted px-1.5 py-0.5 text-[10px] text-foreground">{msg}</span>}
+        {run.status === 'failed' && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={resume}
+            className="border border-primary/50 bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary hover:bg-primary/20 disabled:opacity-50"
+            title="Re-runs the failed steps; completed work is kept. Picks up definition edits."
+          >
+            {busy ? 'Resuming…' : 'Resume'}
+          </button>
+        )}
+        <span className="text-[10px] tabular-nums text-muted-foreground/60">
+          {formatRelativeTime(started)}
+        </span>
+      </div>
     </div>
   );
 }
