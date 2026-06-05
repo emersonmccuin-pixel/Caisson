@@ -700,20 +700,31 @@ lives in per-session scratch dirs outside the repo).
 
 ## Audit backlog (agreed work, not decisions)
 
-- **Knowledge usage audit** — is attached knowledge actually *used* by agents, or just listed in a
-  footer? Dispatch agents with knowledge attached, read transcripts, verify they reach for
-  `pc_knowledge_read` when relevant. Nobody has checked.
-- **Agent-management toolkit audit** — FD requirement: one built-in, orchestrator-callable agent with
-  the *complete* agent-management toolkit (apply knowledge, secrets, tools, MCP servers…). Verify
-  what's tool-doable today vs UI-only; close the gaps.
+- **Knowledge usage audit — ✅ DONE 2026-06-04, PASS.** Two live probes (Quick Tasks writer pod,
+  planted-fact glossary doc): (1) unprimed fact-retrieval task → ONE `pc_knowledge_read` call,
+  correct fact delivered; (2) knowledge-helpful-but-not-literal task → agent consulted the doc
+  unprompted and wove both facts in naturally. Knowledge is genuinely used, not just listed.
+  Probe artifacts removed.
+- **Agent-management toolkit audit — ✅ DONE 2026-06-04 (d1eec913).** 14 of 17 capabilities were
+  already tool-complete; the 3 UI-only gaps (reset-to-default · clone-to-project ·
+  promote-to-global) gained on-demand tools (`pc_reset_agent_to_default` /
+  `pc_clone_agent_to_project` / `pc_promote_agent_to_global`) — thin proxies over the existing
+  routes. Registry 56→59; golden regenerated. Design rule going forward: every pod-management
+  capability ships with an on-demand MCP tool, not just a UI button.
 - **Baseline-tools audit — ✅ first half DONE in M7 (2026-06-04).** The always-granted set is 6:
   `pc_get_work_item` · `pc_submit_deliverable` · `pc_ask_orchestrator` (the ONE escalation door) ·
   `pc_get_contract` · `pc_list_attachments` · `pc_get_attachment` (`REQUIRED_AGENT_TOOLS`,
-  tool-catalog.ts). Still open: the full agent roster audit (tools, descriptions, dispatch
-  guidance) — deliberately *after* the rebuild's bigger pieces settle. ~~M7 finding: `agent-ask-*`
-  history kinds have no writer~~ ✅ cleanup sweep 2026-06-04 — the writerless kinds (and their
-  dead fields + web render branches) DELETED; zero rows carried them. Same pass: contracts
-  `PENDING_ASK_KINDS` 'user' leftover narrowed (domain had it since M7).
+  tool-catalog.ts). ~~Still open: the full agent roster audit~~ **✅ roster audit DONE 2026-06-04
+  (d1eec913):** tools clean across all 10 stock pods (required-6 everywhere, zero dead grants);
+  descriptions/dispatch-guidance all current. 3 findings fixed: live `caisson-workflows-guide`
+  taught the deleted trigger/6-kind model (reseed-LOCKED by historical hand-edits — overwritten
+  directly via updateKnowledge; a seed edit can never heal a hand-edited knowledge row) ·
+  orchestrator prompt's stage-entry-triggers clause → no-triggers truth · 'workflow v2' labels in
+  3 caisson seeds. NOTE the audit corrected a premise: stock pods DRIFT-RESEED on boot
+  (pod-seed-with-drift.ts), they are NOT insert-if-not-exists — only hand-edited knowledge locks.
+  ~~M7 finding: `agent-ask-*` history kinds have no writer~~ ✅ cleanup sweep 2026-06-04 — the
+  writerless kinds (and their dead fields + web render branches) DELETED; zero rows carried them.
+  Same pass: contracts `PENDING_ASK_KINDS` 'user' leftover narrowed (domain had it since M7).
 - **Dispatch-payload audit — ✅ DONE 2026-06-03.** Verdict: the context-pod goal is **partially met,
   broken for attachments.**
   - **Body / fields / parent / live-read:** OK — body referenced in the prompt, everything readable
