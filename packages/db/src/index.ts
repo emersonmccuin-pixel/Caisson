@@ -252,6 +252,21 @@ export type {
 // the one delivery system.
 
 // Section 25 — pending asks repo.
+// M3b — conversation replay store (chat events in SQLite; replay = a query).
+export {
+  appendConversationEvent,
+  appendConversationEvents,
+  countConversationEvents,
+  getConversationHighWaterSeq,
+  getConversationReplayState,
+  hasConversationEvents,
+  listConversationEvents,
+} from './repos/conversation-events.ts';
+export type {
+  AppendConversationEventInput,
+  ConversationEventRow,
+} from './repos/conversation-events.ts';
+
 export {
   createPendingAsk,
   getPendingAsk,

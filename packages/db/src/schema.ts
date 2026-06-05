@@ -863,6 +863,28 @@ export const postTurnSummaries = sqliteTable(
 // side-table — archived in migration 0045. The mailbox user-inbox channel IS
 // the one durable human inbox; pending_asks stays as ask-state.
 
+/** M3b — the orchestrator chat's replay store (one row per normalized chat
+ *  event; replay = a query). Replaces the per-session `jsonl-events.jsonl`
+ *  append file (imported once at boot, then ☠). `seq` is the per-session
+ *  replay cursor; `source_cursor` drives the G7 host-buffer dedup floor. */
+export const conversationEvents = sqliteTable(
+  'conversation_events',
+  {
+    /** `<sessionId>:<seq>` — the envelope id the UI already keys on. */
+    id: text('id').primaryKey(),
+    sessionId: text('session_id').notNull(),
+    seq: integer('seq').notNull(),
+    /** 'jsonl' (Section-23 normalized) | 'event' (legacy pre-23 import). */
+    type: text('type').notNull(),
+    kind: text('kind'),
+    event: text('event', { mode: 'json' }).notNull().$type<unknown>(),
+    sourceKind: text('source_kind').notNull(),
+    sourceCursor: integer('source_cursor'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [uniqueIndex('conversation_events_session_seq_idx').on(t.sessionId, t.seq)],
+);
+
 /** A durable mailbox message. `idempotency_key` dedupes replayed sources. */
 export const mailboxMessages = sqliteTable(
   'mailbox_messages',
