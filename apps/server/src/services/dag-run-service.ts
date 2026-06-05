@@ -77,6 +77,12 @@ export type WorkflowRunFailedDelivery = (input: {
   workflowName: string;
   workItemId: ULID | null;
   reason: string;
+  /** S5/FD-14 — 0-based failure incident: the count of `run_resumed` diary
+   *  lines at failure time. Keys the mailbox idempotency so a run that fails,
+   *  gets resumed, and fails AGAIN mints a FRESH card (FD-8 — the constant
+   *  per-run key silently dropped the second failure). Same incident
+   *  re-delivered (crash replay) still dedupes. */
+  incident: number;
 }) => void;
 
 // Slice 015b — durable workflow.review.changed facts via the run gateway. The
@@ -497,6 +503,11 @@ export function makeExecutorDeps(
         workflowName: workflow.name,
         workItemId: run.workItemId ?? null,
         reason,
+        // Incident = resumes so far (diary `run_resumed` count) — see the
+        // WorkflowRunFailedDelivery doc for why this keys the card.
+        incident: workflowRunsV2Repo
+          .listEvents(run.id)
+          .filter((e) => e.type === 'run_resumed').length,
       }),
     // ☠ holdForHuman (M6 slice C / FD-11): the ceiling now PAUSES the run as an
     // escalated HUMAN review gate (executor re-posts via requestReview) instead
@@ -723,6 +734,14 @@ export async function resumeFailedDagRun(
     rootWorkItemId: run.workItemId,
     worktreePath: run.worktreePath,
   });
+  // S5/FD-14 — resumed-through-ANY-door (inbox card / pc_resume_workflow_run /
+  // raw HTTP) actions the run's open `workflow-run-failed` cards so they never
+  // linger. A later failure mints a FRESH card (incident-keyed idempotency).
+  const openFailureCards =
+    opts.reviewInbox?.collectUnactionedRecipients('workflow-run', runId) ?? [];
+  if (openFailureCards.length > 0)
+    opts.reviewInbox?.actionRecipients(openFailureCards, Date.now());
+
   // Advance in the background (mirrors fireDagWorkflow) — the route returns a
   // receipt now; the run proceeds + broadcasts on its own.
   exec.advance().catch((err: Error) => {

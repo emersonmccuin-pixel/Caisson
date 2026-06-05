@@ -8,6 +8,8 @@ import { useEffect, useState } from 'react';
 
 import { isActionableMailboxKind, type MailboxMessageKind } from '@pc/contracts';
 import { mailboxApi } from './client';
+import { workflowsApi } from '@/features/workflows/client';
+import type { ULID } from '@/features/projects/types';
 import { useMailboxInbox } from '@/hooks/use-mailbox-inbox';
 import type { MailboxInboxItem } from './types';
 
@@ -231,7 +233,8 @@ function MailboxInboxRow({
       {/* M8 (FD-7) — the decision card: approve / reject-with-feedback via the
           existing typed doors. The server's decided-elsewhere resolution
           actions this recipient; the live frame refetches the list. */}
-      {actionable && projectId && message.kind !== 'agent-ask-escalated' && (
+      {actionable && projectId &&
+        (message.kind === 'workflow-review' || message.kind === 'verification-review') && (
         <DecisionActions item={item} projectId={projectId} onChanged={onChanged} />
       )}
 
@@ -239,6 +242,13 @@ function MailboxInboxRow({
           text) / cancel via the EXISTING pending-ask doors. */}
       {actionable && projectId && message.kind === 'agent-ask-escalated' && (
         <AskEscalatedActions item={item} projectId={projectId} onChanged={onChanged} />
+      )}
+
+      {/* S5 (FD-14) — the failed-run card: resume from the failed step via the
+          EXISTING resume door. The server actions the run's open failure cards
+          resolve-by-source whichever door resumes. */}
+      {actionable && projectId && message.kind === 'workflow-run-failed' && (
+        <ResumeFailedActions item={item} projectId={projectId} onChanged={onChanged} />
       )}
 
       {/* Action controls */}
@@ -387,6 +397,72 @@ function DecisionActions({
         </div>
       )}
       {error && <div className="text-[11px] text-destructive">Failed: {error}</div>}
+    </div>
+  );
+}
+
+/** The failed-run payload (S5/FD-14). Defensive read — a malformed payload
+ *  renders no button rather than a broken door. */
+function runFailedTarget(message: MailboxInboxItem['message']): { runId: string } | null {
+  const p = message.payload as { runId?: unknown };
+  return typeof p.runId === 'string' ? { runId: p.runId } : null;
+}
+
+/** S5 (FD-14) — resume a failed run from its failed step, straight off the
+ *  inbox card. Completed work is kept; the CURRENT definition is re-frozen
+ *  (the repair loop: fix the workflow, then press Resume). Errors render
+ *  inline — e.g. the definition is still broken — so the card stays actionable
+ *  for another try. */
+function ResumeFailedActions({
+  item,
+  projectId,
+  onChanged,
+}: {
+  item: MailboxInboxItem;
+  projectId: string;
+  onChanged: () => void;
+}) {
+  const { message } = item;
+  const [busy, setBusy] = useState(false);
+  const [resumed, setResumed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const target = runFailedTarget(message);
+  if (!target) return null;
+
+  const resume = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await workflowsApi.resumeV2Run(projectId as ULID, target.runId);
+      setResumed(true);
+      setTimeout(onChanged, 1200); // let the ✓ register before the row refreshes away
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (resumed) {
+    return (
+      <div className="mb-1.5 bg-success/15 px-2 py-1 text-[11px] font-medium text-success">
+        ✓ Resumed — picking up from the failed step.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-1.5 flex flex-col gap-1.5">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void resume()}
+        className="self-start bg-primary px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+      >
+        Resume from failed step
+      </button>
+      {error && <div className="text-[11px] text-destructive">Couldn’t resume: {error}</div>}
     </div>
   );
 }

@@ -659,6 +659,10 @@ function deliverWorkflowRunFailed(input: {
   workflowName: string;
   workItemId: ULID | null;
   reason: string;
+  /** 0-based failure incident (resume count at failure time). Keys the
+   *  idempotency below: fail → resume → fail-again mints a FRESH card (FD-8);
+   *  a crash-replay of the SAME incident still dedupes. */
+  incident: number;
 }): void {
   const body =
     `Workflow "${input.workflowName}" failed.\n\n` +
@@ -685,7 +689,7 @@ function deliverWorkflowRunFailed(input: {
       },
       sourceKind: 'workflow-run',
       sourceId: input.runId,
-      idempotencyKey: `workflow-run-failed:${input.runId}`,
+      idempotencyKey: `workflow-run-failed:${input.runId}:${input.incident}`,
     },
     recipients: [
       {
