@@ -9,10 +9,10 @@ export interface ChatSurfaceProps {
    *  Wrappers adapt their source-of-truth into this shape before passing in.
    *  Does NOT contain raw PTY frames — those flow via rawEvents below. */
   events: WsEnvelope[];
-  /** Raw PTY frame envelopes only. Keyed on terminalRaw in the reducer so it
-   *  changes per 50 ms terminal batch without touching the chat events[] identity.
-   *  Pass to TerminalPane instead of events to prevent chat timeline recomputes. */
-  rawEvents?: WsEnvelope[];
+  /** Stable imperative subscription for raw PTY batches. Replaces the old
+   *  rawEvents array prop — frames are delivered directly to TerminalModePanel
+   *  via a callback, bypassing React state and causing ~0 re-renders per batch. */
+  subscribeRawTerminal?: (cb: (envs: WsEnvelope[]) => void) => () => void;
   /** Project id - needed for AskCard reply POST. */
   projectId: string;
   /** Current session id (orchestrator session ULID, or null when unknown).

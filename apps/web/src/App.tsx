@@ -502,7 +502,7 @@ export default function App() {
           onProjectReorder={handleProjectReorder}
           unreadProjectIds={unreadProjectIds}
           wsEvents={ws.events}
-          wsRawEvents={ws.rawEvents}
+          wsSubscribeRawTerminal={ws.subscribeRawTerminal}
           wsAggregates={ws.aggregates}
           sessionChangedNonce={ws.sessionChangedNonce}
           wsSend={ws.send}
