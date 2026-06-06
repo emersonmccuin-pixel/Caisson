@@ -899,7 +899,7 @@
     },
     {
       "name": "pc_complete_node",
-      "description": "Submit an orchestrator-review decision for a workflow run paused at a review node. Use when a `kind=orchestrator-review` envelope lands in chat with `{ workflowRunId, nodeId }` and you have judged the artifact. `decision: \"approve\"` resumes the run; `decision: \"reject\"` kicks back upstream (the reject loop re-fires the prior agent with your `notes` as feedback, up to `max_iterations`). Returns { ok: true, status: <new run status> } or 404 if the run / node is unknown / no longer paused. PC_PROJECT_ID env is the implicit project scope.",
+      "description": "Submit an orchestrator-review decision for a workflow run paused at a review node. Use when a `kind=orchestrator-review` envelope lands in chat with `{ workflowRunId, nodeId, instanceToken }` and you have judged the artifact. `decision: \"approve\"` resumes the run; `decision: \"reject\"` kicks back upstream (the reject loop re-fires the prior agent with your `notes` as feedback, up to `max_iterations`). Pass `instance_token` from the envelope — this prevents a stale/duplicate decision from consuming the wrong gate (e.g. after a loop ceiling escalation). Returns { ok: true, status: <new run status> } or 404 if the run / node is unknown / no longer paused. PC_PROJECT_ID env is the implicit project scope.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -922,6 +922,10 @@
           "notes": {
             "type": "string",
             "description": "optional — required in practice for reject so the upstream agent has feedback"
+          },
+          "instance_token": {
+            "type": "string",
+            "description": "optional — the instanceToken from the review envelope. Pass it to prevent a stale pre-ceiling decision from consuming the new escalated gate."
           }
         },
         "required": [
@@ -1557,6 +1561,139 @@
       }
     },
     {
+      "name": "pc_list_context",
+      "description": "Return the context-doc index (title + one-liner + age) for a scope (project | area | work-item) or the full chain from a work item upward. Use `scope='chain'` with `scope_id=<work_item_id>` to get all docs in closest-scope-first order — always call this before dispatching so you know what domain context is already filed. Use `scope='project'` (no scope_id needed) for project-level docs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "area",
+              "work-item",
+              "chain"
+            ],
+            "description": "which scope to list: 'project' = project-level docs (no scope_id needed); 'area' = docs for an area; 'work-item' = docs for a work item; 'chain' = full chain from a work item upward (closest-scope-first)."
+          },
+          "scope_id": {
+            "type": "string",
+            "description": "ULID of the area or work item (required when scope is 'area', 'work-item', or 'chain'; omit for 'project')."
+          }
+        },
+        "required": [
+          "scope"
+        ]
+      }
+    },
+    {
+      "name": "pc_get_context_doc",
+      "description": "Fetch a single context document's full body by its id. Use this when the dispatch-time chain index listed a doc and you need to read its full content. The index always gives ids; call this for any doc whose body you need.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "description": "context doc ULID id (from pc_list_context or the chain index in your system prompt)"
+          }
+        },
+        "required": [
+          "doc_id"
+        ]
+      }
+    },
+    {
+      "name": "pc_add_context_doc",
+      "description": "File a new context document at a scope (project | area | work-item). Use the filing ladder to decide where: project = rules true for all work; area = domain truth beyond any one task; work-item = only matters until this task is done. Always state WHY in one line at the end of the doc so misfiled docs are visible. Orchestrator-held — agents propose via their report flag, the orchestrator confirms with the user before filing.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "area",
+              "work-item"
+            ],
+            "description": "where to file the doc"
+          },
+          "scope_id": {
+            "type": "string",
+            "description": "ULID of the area or work item (required when scope is 'area' or 'work-item'; omit for 'project')."
+          },
+          "title": {
+            "type": "string",
+            "description": "short scannable title"
+          },
+          "body": {
+            "type": "string",
+            "description": "doc body (markdown). End with one line: 'Filed here because: <reason>.'"
+          },
+          "author": {
+            "type": "string",
+            "description": "who is filing (default: 'orchestrator')"
+          }
+        },
+        "required": [
+          "scope",
+          "title"
+        ]
+      }
+    },
+    {
+      "name": "pc_update_context_doc",
+      "description": "Update the title or body of an existing context document. Orchestrator-held — agents propose via their report; orchestrator confirms before writing. Use when domain truth has changed (pricing changed, architecture decision revised, etc.).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "description": "context doc ULID id"
+          },
+          "title": {
+            "type": "string",
+            "description": "new title (optional)"
+          },
+          "body": {
+            "type": "string",
+            "description": "new body (replaces entire body — include all content, not just the change)"
+          }
+        },
+        "required": [
+          "doc_id"
+        ]
+      }
+    },
+    {
+      "name": "pc_search",
+      "description": "FTS5 full-text search across all context docs in the project. Searches titles and bodies. Use when you suspect a domain fact is filed somewhere but don't know which scope. Repeated searches for the same doc = a filing failure → promote the doc with pc_add_context_doc. Filters: area_id (narrow to an area), scope ('project'|'area'|'work-item'). Results are ranked by relevance (FTS rank).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "search query (plain text; tokens are phrase-matched)"
+          },
+          "area_id": {
+            "type": "string",
+            "description": "optional: narrow results to a specific area"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "area",
+              "work-item"
+            ],
+            "description": "optional: narrow results to a specific scope kind"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
       "name": "pc_get_attachment",
       "description": "Fetch one attachment's full content by id (ids come from pc_list_attachments or a work item's attachment list). Returns the attachment row including its content. Requires { attachmentId }.",
       "inputSchema": {
@@ -1633,6 +1770,11 @@
     "mcp__pc-rig__pc_call_tool",
     "mcp__pc-rig__pc_get_contract",
     "mcp__pc-rig__pc_list_attachments",
+    "mcp__pc-rig__pc_list_context",
+    "mcp__pc-rig__pc_get_context_doc",
+    "mcp__pc-rig__pc_add_context_doc",
+    "mcp__pc-rig__pc_update_context_doc",
+    "mcp__pc-rig__pc_search",
     "mcp__pc-rig__pc_get_attachment"
   ],
   "toolCatalog": [
@@ -2051,6 +2193,36 @@
       "source": "pc-rig"
     },
     {
+      "slug": "mcp__pc-rig__pc_list_context",
+      "label": "List context docs for a scope",
+      "description": "List context docs for a scope or chain.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_get_context_doc",
+      "label": "Get a context doc (full body)",
+      "description": "Fetch a context doc's full body by id.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_add_context_doc",
+      "label": "Add a context doc",
+      "description": "File a new context doc at a scope (project | area | work-item).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_update_context_doc",
+      "label": "Update a context doc",
+      "description": "Update a context doc's title or body.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_search",
+      "label": "Search context docs",
+      "description": "Full-text search across context docs in the project.",
+      "source": "pc-rig"
+    },
+    {
       "slug": "mcp__pc-rig__pc_get_attachment",
       "label": "Read an attachment",
       "description": "Fetch one attachment's content by id.",
@@ -2233,6 +2405,21 @@
       "family": "agent-run"
     },
     "pc_list_attachments": {
+      "family": "work-item"
+    },
+    "pc_list_context": {
+      "family": "work-item"
+    },
+    "pc_get_context_doc": {
+      "family": "work-item"
+    },
+    "pc_add_context_doc": {
+      "family": "work-item"
+    },
+    "pc_update_context_doc": {
+      "family": "work-item"
+    },
+    "pc_search": {
       "family": "work-item"
     },
     "pc_get_attachment": {

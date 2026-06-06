@@ -1787,6 +1787,131 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
       ]
     }
   },
+  // ── Slice 1: context-doc tools ─────────────────────────────────────────────
+  {
+    "name": "pc_list_context",
+    "family": "work-item",
+    "label": "List context docs for a scope",
+    "description": "Return the context-doc index (title + one-liner + age) for a scope (project | area | work-item) or the full chain from a work item upward. Use `scope='chain'` with `scope_id=<work_item_id>` to get all docs in closest-scope-first order — always call this before dispatching so you know what domain context is already filed. Use `scope='project'` (no scope_id needed) for project-level docs.",
+    "catalogDescription": "List context docs for a scope or chain.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["project", "area", "work-item", "chain"],
+          "description": "which scope to list: 'project' = project-level docs (no scope_id needed); 'area' = docs for an area; 'work-item' = docs for a work item; 'chain' = full chain from a work item upward (closest-scope-first)."
+        },
+        "scope_id": {
+          "type": "string",
+          "description": "ULID of the area or work item (required when scope is 'area', 'work-item', or 'chain'; omit for 'project')."
+        }
+      },
+      "required": ["scope"]
+    }
+  },
+  {
+    "name": "pc_get_context_doc",
+    "family": "work-item",
+    "label": "Get a context doc (full body)",
+    "description": "Fetch a single context document's full body by its id. Use this when the dispatch-time chain index listed a doc and you need to read its full content. The index always gives ids; call this for any doc whose body you need.",
+    "catalogDescription": "Fetch a context doc's full body by id.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "doc_id": {
+          "type": "string",
+          "description": "context doc ULID id (from pc_list_context or the chain index in your system prompt)"
+        }
+      },
+      "required": ["doc_id"]
+    }
+  },
+  {
+    "name": "pc_add_context_doc",
+    "family": "work-item",
+    "label": "Add a context doc",
+    "description": "File a new context document at a scope (project | area | work-item). Use the filing ladder to decide where: project = rules true for all work; area = domain truth beyond any one task; work-item = only matters until this task is done. Always state WHY in one line at the end of the doc so misfiled docs are visible. Orchestrator-held — agents propose via their report flag, the orchestrator confirms with the user before filing.",
+    "catalogDescription": "File a new context doc at a scope (project | area | work-item).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["project", "area", "work-item"],
+          "description": "where to file the doc"
+        },
+        "scope_id": {
+          "type": "string",
+          "description": "ULID of the area or work item (required when scope is 'area' or 'work-item'; omit for 'project')."
+        },
+        "title": {
+          "type": "string",
+          "description": "short scannable title"
+        },
+        "body": {
+          "type": "string",
+          "description": "doc body (markdown). End with one line: 'Filed here because: <reason>.'"
+        },
+        "author": {
+          "type": "string",
+          "description": "who is filing (default: 'orchestrator')"
+        }
+      },
+      "required": ["scope", "title"]
+    }
+  },
+  {
+    "name": "pc_update_context_doc",
+    "family": "work-item",
+    "label": "Update a context doc",
+    "description": "Update the title or body of an existing context document. Orchestrator-held — agents propose via their report; orchestrator confirms before writing. Use when domain truth has changed (pricing changed, architecture decision revised, etc.).",
+    "catalogDescription": "Update a context doc's title or body.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "doc_id": {
+          "type": "string",
+          "description": "context doc ULID id"
+        },
+        "title": {
+          "type": "string",
+          "description": "new title (optional)"
+        },
+        "body": {
+          "type": "string",
+          "description": "new body (replaces entire body — include all content, not just the change)"
+        }
+      },
+      "required": ["doc_id"]
+    }
+  },
+  {
+    "name": "pc_search",
+    "family": "work-item",
+    "label": "Search context docs",
+    "description": "FTS5 full-text search across all context docs in the project. Searches titles and bodies. Use when you suspect a domain fact is filed somewhere but don't know which scope. Repeated searches for the same doc = a filing failure → promote the doc with pc_add_context_doc. Filters: area_id (narrow to an area), scope ('project'|'area'|'work-item'). Results are ranked by relevance (FTS rank).",
+    "catalogDescription": "Full-text search across context docs in the project.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "search query (plain text; tokens are phrase-matched)"
+        },
+        "area_id": {
+          "type": "string",
+          "description": "optional: narrow results to a specific area"
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["project", "area", "work-item"],
+          "description": "optional: narrow results to a specific scope kind"
+        }
+      },
+      "required": ["query"]
+    }
+  },
   {
     "name": "pc_get_attachment",
     "family": "work-item",
@@ -1842,6 +1967,14 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_list_areas: 'first-order',
   pc_create_area: 'first-order',
   pc_update_area: 'first-order',
+  // Slice 1 — context-doc tools. pc_list_context + pc_get_context_doc + pc_search
+  // are first-order for both orchestrator and agents. pc_add/update_context_doc
+  // are orchestrator-held (enforced at the pod allowlist level, not the tier).
+  pc_list_context: 'first-order',
+  pc_get_context_doc: 'first-order',
+  pc_add_context_doc: 'first-order',
+  pc_update_context_doc: 'first-order',
+  pc_search: 'first-order',
   pc_find_tool: 'first-order',
   pc_call_tool: 'first-order',
   // Agent config + knowledge + secrets + audit — specialist/UI-owned defaults.
