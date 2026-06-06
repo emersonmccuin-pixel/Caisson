@@ -8,6 +8,7 @@ import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { SessionSwitcher } from '@/components/SessionSwitcher';
 import { HostHealthPill } from '@/features/system/HostHealthPill';
 import { InboxBell } from '@/features/mailbox/InboxBell';
+import { useGlobalQuickAdd } from '@/store/global-quick-add';
 import { BuildMarker } from '@/features/system/BuildMarker';
 import { ClaudeVersionBanner } from '@/features/system/ClaudeVersionBanner';
 import { HostHealthBanner } from '@/features/system/HostHealthBanner';
@@ -36,6 +37,7 @@ export default function App() {
   const [settings, setSettings] = useState<GlobalSettings | null>(null);
   const settingsOpen = useAppSettingsModal((s) => s.open);
   const setSettingsOpen = useAppSettingsModal((s) => s.setOpen);
+  const openQuickAdd = useGlobalQuickAdd((s) => s.open);
   const [restartRequired, setRestartRequired] = useState(false);
   const activeSlug = useActiveProject((s) => s.activeSlug);
   const setActiveSlug = useActiveProject((s) => s.setActiveSlug);
@@ -428,6 +430,18 @@ export default function App() {
           )}
         </div>
         <div className="flex items-center gap-1">
+          {/* Slice 2 — global quick-add: always visible when a project is active. */}
+          {activeProject && (
+            <button
+              type="button"
+              onClick={() => openQuickAdd()}
+              title="Quick-capture a task (+ Task)"
+              aria-label="Quick-add task"
+              className="px-2 py-1 text-[11px] uppercase tracking-[0.06em] text-primary hover:bg-primary/10"
+            >
+              + Task
+            </button>
+          )}
           {/* M8 (FD-7) — cross-project Inbox bell: decisions waiting on the
               human, any project. */}
           <InboxBell

@@ -34,6 +34,7 @@ import { AgentTranscriptModal } from './AgentTranscriptModal';
 import { FilesViewer } from './FilesViewer';
 import { LeftRail } from './LeftRail';
 import { WorkItemsPage } from './work-items/WorkItemsPage';
+import { GlobalQuickAdd } from './work-items/GlobalQuickAdd';
 import { Orchestrator } from './Orchestrator';
 import { AttachmentLightboxMount } from './AttachmentLightbox';
 import { ChatWorkItemModalMount } from './ChatWorkItemModalMount';
@@ -172,6 +173,7 @@ export function Shell({
           <ChatWorkItemModalMount project={activeProject} />
         )}
         {activeProject && <AttachmentLightboxMount projectId={activeProject.id} />}
+        {activeProject && <GlobalQuickAdd project={activeProject} />}
         <RichLinkPreviewCard />
       </Group>
       {import.meta.env.DEV && <DevControls />}
