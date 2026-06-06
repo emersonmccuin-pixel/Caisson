@@ -4,15 +4,16 @@
 // topbar (rendered above the body grid in Shell); restyled from folder-
 // tab to underline-active with hover-revealed ↗ popout affordance.
 
-export const TABS = ['orchestrator', 'work-items', 'agents', 'workflows', 'files'] as const;
+export const TABS = ['orchestrator', 'work-items', 'agents', 'workflows', 'patterns', 'files'] as const;
 /** `project-settings` is reachable via the right-aligned gear, not the main strip. */
 export type Tab = (typeof TABS)[number] | 'project-settings';
 
 const LABEL: Record<(typeof TABS)[number], string> = {
   orchestrator: 'chat',
-  'work-items': 'work items',
+  'work-items': 'work',
   agents: 'agents',
   workflows: 'workflows',
+  patterns: 'patterns',
   files: 'files',
 };
 
