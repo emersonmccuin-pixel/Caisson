@@ -17,9 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS PARKED — codesign hangs deep-signing Caisson.app in headless CI
-        # (see pc-pty-chat-245). Windows-only releases until that's diagnosed/fixed.
-        os: [windows-latest]
+        # DIAGNOSTIC (ci/mac-signing branch): mac-only, verbose signing, to pin
+        # the exact file codesign wedges on. Do NOT merge this matrix to main.
+        os: [macos-latest]
 
     steps:
       - name: Checkout
@@ -120,6 +120,10 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # DIAGNOSTIC: per-file signing trace so we can see which Mach-O codesign
+          # wedges on (electron-builder logs only the top-level .app at default level).
+          DEBUG: 'electron-builder,electron-osx-sign,@electron/osx-sign'
+          DEBUG_COLORS: 'false'
 
       - name: Build dist (Windows)
         if: github.event_name == 'workflow_dispatch' && matrix.os == 'windows-latest'
