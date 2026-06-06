@@ -29,6 +29,7 @@ import { useChatTimelineRenderer } from '@/features/chat/useChatTimelineRenderer
 
 export function ChatSurface({
   events,
+  rawEvents,
   projectId,
   currentSessionId,
   onSend,
@@ -181,7 +182,7 @@ export function ChatSurface({
             eligible={terminalEligible}
             projectId={projectId}
             sessionId={currentSessionId}
-            events={events}
+            rawEvents={rawEvents ?? []}
             active={terminalActive}
             writable={resolvedTerminalWritable}
             onInput={onTerminalInput}

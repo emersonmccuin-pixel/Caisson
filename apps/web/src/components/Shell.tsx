@@ -59,6 +59,9 @@ interface ShellProps {
   onProjectReorder: (orderedIds: string[]) => void;
   unreadProjectIds: ReadonlySet<string>;
   wsEvents: WsEnvelope[];
+  /** Raw PTY frame envelopes, separated from wsEvents to prevent chat timeline
+   *  recompute on every terminal batch. Passed only to the Orchestrator path. */
+  wsRawEvents: WsEnvelope[];
   wsAggregates: ChatSessionAggregates;
   /** T3.1 — session-changed nonce for the sessions rail's lifecycle refetch. */
   sessionChangedNonce: number;
@@ -79,6 +82,7 @@ export function Shell({
   onProjectReorder,
   unreadProjectIds,
   wsEvents,
+  wsRawEvents,
   wsAggregates,
   sessionChangedNonce,
   wsSend,
@@ -135,6 +139,7 @@ export function Shell({
             activeProject={activeProject}
             projectCount={projects.length}
             wsEvents={wsEvents}
+            wsRawEvents={wsRawEvents}
             wsAggregates={wsAggregates}
             wsSend={wsSend}
             wsStatus={wsStatus}
@@ -224,6 +229,7 @@ function Center({
   activeProject,
   projectCount,
   wsEvents,
+  wsRawEvents,
   wsAggregates,
   wsSend,
   wsStatus,
@@ -237,6 +243,7 @@ function Center({
   activeProject: Project | null;
   projectCount: number;
   wsEvents: WsEnvelope[];
+  wsRawEvents: WsEnvelope[];
   wsAggregates: ChatSessionAggregates;
   wsSend: (msg: WsOutbound) => boolean;
   wsStatus: WsStatus;
@@ -264,6 +271,7 @@ function Center({
           <Orchestrator
             project={activeProject}
             events={wsEvents}
+            rawEvents={wsRawEvents}
             aggregates={wsAggregates}
             send={wsSend}
             wsStatus={wsStatus}

@@ -6,8 +6,13 @@ import type { WsEnvelope, WsStatus } from '@/features/runtime/ws-types';
 
 export interface ChatSurfaceProps {
   /** Per-project WS-shaped envelope stream (event / jsonl / ask / state / turn-end / etc).
-   *  Wrappers adapt their source-of-truth into this shape before passing in. */
+   *  Wrappers adapt their source-of-truth into this shape before passing in.
+   *  Does NOT contain raw PTY frames — those flow via rawEvents below. */
   events: WsEnvelope[];
+  /** Raw PTY frame envelopes only. Keyed on terminalRaw in the reducer so it
+   *  changes per 50 ms terminal batch without touching the chat events[] identity.
+   *  Pass to TerminalPane instead of events to prevent chat timeline recomputes. */
+  rawEvents?: WsEnvelope[];
   /** Project id - needed for AskCard reply POST. */
   projectId: string;
   /** Current session id (orchestrator session ULID, or null when unknown).

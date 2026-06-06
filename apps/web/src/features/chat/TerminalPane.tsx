@@ -12,7 +12,7 @@ export function TerminalPane({
   eligible,
   projectId,
   sessionId,
-  events,
+  rawEvents,
   active,
   writable,
   onInput,
@@ -21,7 +21,10 @@ export function TerminalPane({
   eligible: boolean;
   projectId: string;
   sessionId: string | null;
-  events: WsEnvelope[];
+  /** Raw PTY frame envelopes only — no chat events. Wired to the separate
+   *  rawEvents memo in use-project-ws so terminal batches don't disturb the
+   *  chat timeline's events[] identity. */
+  rawEvents: WsEnvelope[];
   active: boolean;
   writable: boolean;
   onInput?: (data: string) => boolean;
@@ -32,7 +35,7 @@ export function TerminalPane({
     <TerminalModePanel
       projectId={projectId}
       sessionId={sessionId}
-      events={events}
+      rawEvents={rawEvents}
       visible={active}
       writable={writable}
       onInput={onInput}
