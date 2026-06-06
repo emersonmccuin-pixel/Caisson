@@ -1,9 +1,8 @@
 // FD-19 — Area edit modal. Cards on the Areas tab are display-only; ALL
-// editing (name, description, delete) happens here. Explicit close only — no
-// backdrop-click / Escape dismissal (modals host hard-to-redo work). Cancel
-// confirms discard when the user typed anything.
+// editing (name, description, delete) happens here. Close via × button,
+// Cancel, Escape, or backdrop click — dirty state prompts for discard.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { AreaConflictError, areasApi, type Area } from '@/features/areas/client';
 
@@ -32,6 +31,16 @@ export function AreaEditModal({
   const [error, setError] = useState<string | null>(null);
 
   const dirty = name !== area.name || summary !== area.summary;
+
+  // Escape key — route through attemptClose so dirty guard fires.
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') attemptClose();
+    }
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirty, busy]);
 
   function attemptClose() {
     if (busy) return;
@@ -98,8 +107,20 @@ export function AreaEditModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40">
-      <div className="flex max-h-[85vh] w-full max-w-lg flex-col border border-border bg-card text-foreground">
+    /* Backdrop — click outside routes through attemptClose (dirty guard). */
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/40"
+      onClick={attemptClose}
+    >
+      <div
+        className="flex w-[75vw] max-w-[960px] flex-col bg-card text-foreground"
+        style={{
+          maxHeight: '80vh',
+          minHeight: '75vh',
+          border: '1px solid rgba(212,166,74,0.25)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
           <div>
             <h2 className="text-base font-semibold">Edit Area</h2>

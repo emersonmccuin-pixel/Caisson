@@ -9,6 +9,32 @@
 
 import { useMemo, useState } from 'react';
 
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  rectSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+
+/** Mirrors the Transform shape from @dnd-kit/core (not re-exported). */
+interface DndTransform { x: number; y: number; scaleX: number; scaleY: number }
+
+/** Mirrors CSS.Transform.toString from @dnd-kit/utilities (not a direct dep). */
+function transformToStr(t: DndTransform | null): string | undefined {
+  if (!t) return undefined;
+  return `translate3d(${t.x}px, ${t.y}px, 0) scaleX(${t.scaleX}) scaleY(${t.scaleY})`;
+}
+
 import { areasApi, type Area } from '@/features/areas/client';
 import type { Project } from '@/features/projects/client';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
@@ -44,10 +70,24 @@ export function AreasTab({ project, events }: Props) {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [showUncategorized, setShowUncategorized] = useState(false);
 
+  // Optimistic ordering: maintained locally during drag, synced on drop.
+  const [localOrder, setLocalOrder] = useState<string[] | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+
   const sortedAreas = useMemo(
     () => [...areas].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
     [areas],
   );
+
+  // If we have a local optimistic ordering, apply it on top of sorted areas.
+  const displayAreas = useMemo(() => {
+    if (!localOrder) return sortedAreas;
+    const byId = new Map(sortedAreas.map((a) => [a.id, a]));
+    return localOrder.flatMap((id) => {
+      const a = byId.get(id);
+      return a ? [a] : [];
+    });
+  }, [sortedAreas, localOrder]);
 
   const countsByArea = useMemo(() => {
     const m = new Map<string, AreaCounts>();
@@ -85,19 +125,50 @@ export function AreasTab({ project, events }: Props) {
     }
   }
 
-  async function reorder(area: Area, dir: -1 | 1) {
-    const idx = sortedAreas.findIndex((a) => a.id === area.id);
-    const swap = idx + dir;
-    if (idx < 0 || swap < 0 || swap >= sortedAreas.length) return;
-    const ids = sortedAreas.map((a) => a.id);
-    [ids[idx], ids[swap]] = [ids[swap]!, ids[idx]!];
+  // ── DnD sensors ──────────────────────────────────────────────────────────────
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      // Small activation distance so a click still fires onOpen.
+      activationConstraint: { distance: 5 },
+    }),
+  );
+
+  function handleDragStart(event: DragStartEvent) {
+    setDraggingId(String(event.active.id));
+    // Snapshot current display order so overlay is correct.
+    setLocalOrder(displayAreas.map((a) => a.id));
+  }
+
+  async function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    setDraggingId(null);
+
+    if (!over || active.id === over.id) {
+      // No move — clear optimistic order so it reconciles on next refetch.
+      setLocalOrder(null);
+      return;
+    }
+
+    const current = localOrder ?? displayAreas.map((a) => a.id);
+    const oldIdx = current.indexOf(String(active.id));
+    const newIdx = current.indexOf(String(over.id));
+    if (oldIdx < 0 || newIdx < 0) {
+      setLocalOrder(null);
+      return;
+    }
+
+    const reordered = arrayMove(current, oldIdx, newIdx);
+    setLocalOrder(reordered);
     try {
-      await areasApi.reorderAreas(project.id, ids);
+      await areasApi.reorderAreas(project.id, reordered);
       refetch();
     } catch (e) {
       setError((e as Error).message);
+      setLocalOrder(null);
     }
   }
+
+  const draggingArea = draggingId ? sortedAreas.find((a) => a.id === draggingId) ?? null : null;
 
   return (
     <div className="mx-auto h-full max-w-[1000px] overflow-y-auto px-7 py-6 pb-16">
@@ -170,24 +241,44 @@ export function AreasTab({ project, events }: Props) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {sortedAreas.map((area, idx) => (
-          <AreaCard
-            key={area.id}
-            area={area}
-            counts={countsByArea.byArea.get(area.id) ?? { open: 0, done: 0 }}
-            isFirst={idx === 0}
-            isLast={idx === sortedAreas.length - 1}
-            onOpen={() => setDetailId(area.id)}
-            onReorder={(dir) => void reorder(area, dir)}
-          />
-        ))}
-        {/* Uncategorized: always last, visually distinct, not reorderable */}
-        <UncategorizedCard
-          counts={countsByArea.uncaptured}
-          onOpen={() => setShowUncategorized(true)}
-        />
-      </div>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={(e) => void handleDragEnd(e)}
+      >
+        <SortableContext
+          items={displayAreas.map((a) => a.id)}
+          strategy={rectSortingStrategy}
+        >
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {displayAreas.map((area) => (
+              <SortableAreaCard
+                key={area.id}
+                area={area}
+                counts={countsByArea.byArea.get(area.id) ?? { open: 0, done: 0 }}
+                onOpen={() => setDetailId(area.id)}
+              />
+            ))}
+            {/* Uncategorized: always last, visually distinct, not draggable */}
+            <UncategorizedCard
+              counts={countsByArea.uncaptured}
+              onOpen={() => setShowUncategorized(true)}
+            />
+          </div>
+        </SortableContext>
+
+        {/* Overlay: renders ghost card while dragging */}
+        <DragOverlay>
+          {draggingArea ? (
+            <AreaCardContent
+              area={draggingArea}
+              counts={countsByArea.byArea.get(draggingArea.id) ?? { open: 0, done: 0 }}
+              overlay
+            />
+          ) : null}
+        </DragOverlay>
+      </DndContext>
 
       {detailArea && (
         <AreaDetailModal
@@ -214,6 +305,8 @@ export function AreasTab({ project, events }: Props) {
     </div>
   );
 }
+
+// ── Uncategorized (non-sortable) ─────────────────────────────────────────────
 
 function UncategorizedCard({
   counts,
@@ -248,30 +341,34 @@ function UncategorizedCard({
   );
 }
 
-function AreaCard({
+// ── Card content (shared between sortable and drag-overlay) ──────────────────
+
+function AreaCardContent({
   area,
   counts,
-  isFirst,
-  isLast,
-  onOpen,
-  onReorder,
+  overlay = false,
+  dragHandleProps,
 }: {
   area: Area;
   counts: AreaCounts;
-  isFirst: boolean;
-  isLast: boolean;
-  onOpen: () => void;
-  onReorder: (dir: -1 | 1) => void;
+  overlay?: boolean;
+  dragHandleProps?: React.HTMLAttributes<HTMLElement>;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex cursor-pointer flex-col gap-2 bg-card p-3 text-left"
+    <div
+      className={`flex flex-col gap-2 bg-card p-3 ${overlay ? 'opacity-80 shadow-lg' : ''}`}
       style={{ border: '2px solid rgba(212, 166, 74, 0.45)' }}
-      title="Click to view this Area"
     >
       <div className="flex items-center gap-2">
+        {/* Drag handle — grip icon */}
+        <span
+          {...dragHandleProps}
+          className="shrink-0 cursor-grab text-[var(--fg-dim)] opacity-40 hover:opacity-80 active:cursor-grabbing"
+          title="Drag to reorder"
+          onClick={(e) => e.stopPropagation()}
+        >
+          ⠿
+        </span>
         <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-foreground">
           {area.name}
         </span>
@@ -292,53 +389,56 @@ function AreaCard({
           No description yet — click to add one.
         </p>
       )}
+    </div>
+  );
+}
 
-      <div className="flex items-center gap-1">
-        <span
-          role="button"
-          tabIndex={0}
-          onClick={(e) => {
-            e.stopPropagation();
-            onReorder(-1);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.stopPropagation();
-              onReorder(-1);
-            }
-          }}
-          aria-disabled={isFirst}
-          className={`border border-border/40 px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-border hover:text-foreground ${
-            isFirst ? 'pointer-events-none opacity-30' : ''
-          }`}
-          aria-label="Move up"
-          title="Move up"
-        >
-          ↑
-        </span>
-        <span
-          role="button"
-          tabIndex={0}
-          onClick={(e) => {
-            e.stopPropagation();
-            onReorder(1);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.stopPropagation();
-              onReorder(1);
-            }
-          }}
-          aria-disabled={isLast}
-          className={`border border-border/40 px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-border hover:text-foreground ${
-            isLast ? 'pointer-events-none opacity-30' : ''
-          }`}
-          aria-label="Move down"
-          title="Move down"
-        >
-          ↓
-        </span>
-      </div>
-    </button>
+// ── Sortable wrapper ──────────────────────────────────────────────────────────
+
+function SortableAreaCard({
+  area,
+  counts,
+  onOpen,
+}: {
+  area: Area;
+  counts: AreaCounts;
+  onOpen: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging: sortableIsDragging,
+  } = useSortable({ id: area.id });
+
+  const style: React.CSSProperties = {
+    transform: transformToStr(transform),
+    transition,
+    opacity: sortableIsDragging ? 0.3 : undefined,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      // Whole card opens area on click; drag handle stops propagation.
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') onOpen();
+      }}
+      className="cursor-pointer"
+      title="Click to view this Area"
+    >
+      <AreaCardContent
+        area={area}
+        counts={counts}
+        overlay={false}
+        dragHandleProps={{ ...attributes, ...listeners }}
+      />
+    </div>
   );
 }
