@@ -17,9 +17,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # DIAGNOSTIC (ci/mac-signing branch): mac-only, verbose signing, to pin
-        # the exact file codesign wedges on. Do NOT merge this matrix to main.
-        os: [macos-latest]
+        # macOS re-enabled 2026-06-06: signing + notarization verified end-to-end
+        # (run 27073972156). The earlier "codesign hang" was a transient Apple
+        # timestamp-server stall, not our bundle — see pc-pty-chat-245. The 30-min
+        # job timeout is the safety net if Apple's TSA stalls again (re-run the job).
+        os: [macos-latest, windows-latest]
 
     steps:
       - name: Checkout
@@ -120,10 +122,6 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # DIAGNOSTIC: per-file signing trace so we can see which Mach-O codesign
-          # wedges on (electron-builder logs only the top-level .app at default level).
-          DEBUG: 'electron-builder,electron-osx-sign,@electron/osx-sign'
-          DEBUG_COLORS: 'false'
 
       - name: Build dist (Windows)
         if: github.event_name == 'workflow_dispatch' && matrix.os == 'windows-latest'
