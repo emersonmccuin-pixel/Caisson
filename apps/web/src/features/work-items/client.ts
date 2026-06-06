@@ -163,6 +163,25 @@ export const workItemsApi = {
     return data.workItem;
   },
 
+  cancelWorkItem: async (
+    projectId: ULID,
+    wiId: ULID,
+    opts: { cascadeChildren?: boolean } = {},
+  ): Promise<{ cancelled: ULID[]; killedRuns: ULID[] }> => {
+    const res = await fetch(`/api/projects/${projectId}/work-items/${wiId}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    });
+    const data = (await res.json()) as
+      | { ok: true; cancelled: ULID[]; killedRuns: ULID[] }
+      | { ok: false; error: string };
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.ok === false ? data.error : `cancel → ${res.status}`);
+    }
+    return { cancelled: data.cancelled, killedRuns: data.killedRuns };
+  },
+
   softDeleteWorkItem: async (projectId: ULID, wiId: ULID): Promise<void> => {
     const res = await fetch(`/api/projects/${projectId}/work-items/${wiId}`, {
       method: 'DELETE',
