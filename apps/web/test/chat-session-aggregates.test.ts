@@ -13,6 +13,35 @@ import {
 } from '../src/hooks/chat-session-reducer.ts';
 import type { WsEnvelope } from '../src/features/runtime/ws-types.ts';
 
+/**
+ * Simulates the React useMemo behaviour for the events array, keyed on the
+ * three chat-tier slices that materializeChatSessionEvents actually reads.
+ * Returns the SAME array reference when those slices have not changed.
+ * This mirrors the fix in use-project-ws.ts and makes referential-stability
+ * assertable (===) in plain node:test without a React render.
+ */
+function makeEventsMemo() {
+  let cachedTimeline: ChatSessionReducerState['timeline'] | null = null;
+  let cachedSequenced: ChatSessionReducerState['sequenced'] | null = null;
+  let cachedUnsequenced: ChatSessionReducerState['unsequenced'] | null = null;
+  let cachedResult: WsEnvelope[] | null = null;
+  return (state: ChatSessionReducerState): WsEnvelope[] => {
+    if (
+      cachedResult !== null &&
+      cachedTimeline === state.timeline &&
+      cachedSequenced === state.sequenced &&
+      cachedUnsequenced === state.unsequenced
+    ) {
+      return cachedResult;
+    }
+    cachedTimeline = state.timeline;
+    cachedSequenced = state.sequenced;
+    cachedUnsequenced = state.unsequenced;
+    cachedResult = materializeChatSessionEvents(state);
+    return cachedResult;
+  };
+}
+
 const PROJECT = 'p1';
 const SESSION = 'sess-1';
 
@@ -144,6 +173,41 @@ test('raw frames appear in materializeTerminalRawEvents', () => {
   const raw = materializeTerminalRawEvents(state);
   assert.equal(raw.length, 2);
   assert.equal(raw.every((e) => e.type === 'raw'), true);
+});
+
+// Referential-stability: the events[] reference must NOT change on pure terminal batches.
+// This is the core perf invariant — if it breaks, all chat-timeline useMemo hooks fire
+// 20×/sec during terminal streaming even though no chat content changed.
+test('events[] ref is === stable across pure terminal raw batches (useMemo simulation)', () => {
+  const memo = makeEventsMemo();
+  let state = createChatSessionState(PROJECT);
+
+  // Apply a chat event so events[] is non-empty
+  const chatEnv = usageEnv({ inputTokens: 5, model: 'm1' }, 1);
+  state = dispatch(state, chatEnv);
+
+  const eventsRef0 = memo(state);           // first call — computes
+  const rawRef0 = materializeTerminalRawEvents(state);
+
+  // Apply 3 raw batches — only terminalRaw/nextOrdinal/activeSessionId change
+  state = dispatch(state, rawEnv());
+  state = dispatch(state, rawEnv());
+  state = dispatch(state, rawEnv());
+
+  const eventsRef1 = memo(state);           // must return SAME reference
+  const rawRef1 = materializeTerminalRawEvents(state);
+
+  assert.strictEqual(eventsRef0, eventsRef1, 'events[] ref must be === stable across raw batches');
+  assert.notStrictEqual(rawRef0, rawRef1, 'rawEvents ref must change after raw batches');
+  assert.equal(rawRef1.length, 3, 'rawEvents must contain all 3 raw frames');
+
+  // Also verify the underlying slice refs are unchanged (what the useMemo keying relies on)
+  // After appendTerminalRaw the spread ...state preserves timeline/sequenced/unsequenced refs.
+  const timelineRef = state.timeline;
+  const sequencedRef = state.sequenced;
+  state = dispatch(state, rawEnv());
+  assert.strictEqual(state.timeline, timelineRef, 'timeline ref stable after raw dispatch');
+  assert.strictEqual(state.sequenced, sequencedRef, 'sequenced ref stable after raw dispatch');
 });
 
 test('chat events still appear in materializeChatSessionEvents after raw frames', () => {
