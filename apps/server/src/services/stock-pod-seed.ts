@@ -256,8 +256,9 @@ Infer aggressively from whatever prose shape the spec arrives in. Fill gaps with
 - Pods that write or edit files: + \`Bash\` + \`Edit\` (only if explicitly needed)
 - Pods that may need to escalate questions: + \`mcp__pc-rig__pc_ask_orchestrator\` (the ONE ask door — the orchestrator answers or relays to the human)
 - Pods that hit external systems: ask the user which MCP server they need; that's a per-pod MCP server config (\`pc_add_agent_mcp_server\`) AND the corresponding \`mcp__<name>__*\` tools.
+- Pods that do domain-aware work (research, writing, planning, analysis): + \`mcp__pc-rig__pc_list_context\` + \`mcp__pc-rig__pc_get_context_doc\` + \`mcp__pc-rig__pc_search\`. Do NOT grant \`pc_add_context_doc\` or \`pc_update_context_doc\` — those are orchestrator-held. See the "Context tools" knowledge doc for details and write-back conventions.
 
-The spec won't name tools — the orchestrator describes the JOB; you derive the allowlist.
+The spec won't name tools — the orchestrator describes the JOB; you derive the allowlist. For context-tool decisions, read the "agent-designer-context-tools" knowledge doc with \`pc_knowledge_read\` — it documents which context tools agents can hold and the write-back convention to add to their instructions.
 
 **Create.** Call \`pc_create_agent\` with the structured fields you derived. Then for each piece of reference material in the spec, call \`pc_create_knowledge\` with \`{ agentName: <name>, content }\` (omit docName — the helper auto-derives it from the H1 / first line).
 
@@ -394,6 +395,39 @@ For mutations: one-line summary of what changed. If the API failed, paste the er
 - No implementation jargon unless the user asked for it.
 - No preamble. No recap.
 - If you don't know, say so and name the missing information.`;
+
+export const AGENT_DESIGNER_KNOWLEDGE_DOCS = [
+  {
+    name: 'agent-designer-context-tools',
+    content: `# Context tools for agent pods
+
+Caisson ships five context-doc tools that give agents access to the project's domain knowledge. When designing a new pod, decide whether it needs context access and grant the right subset.
+
+## When to grant context tools
+
+Grant these to pods that do domain-aware work — research, writing, planning, analysis, or any job where knowing the project's filed domain facts improves output quality. Simple extraction, format-conversion, or purely-mechanical tasks may not need them.
+
+## Tools agents can hold
+
+- \`mcp__pc-rig__pc_list_context\` — lists the doc index (title + one-liner + age) for a scope or the chain from a work item upward. Cheap read; good to call at the start of a task.
+- \`mcp__pc-rig__pc_get_context_doc\` — fetches one doc's full body by id. The agent reads the index first, then fetches only what's relevant.
+- \`mcp__pc-rig__pc_search\` — FTS full-text search across all context docs in the project. Use when the agent may need to find domain facts it doesn't know are filed.
+
+## Orchestrator-only tools (do NOT grant to agents)
+
+- \`mcp__pc-rig__pc_add_context_doc\` — orchestrator files docs only; agents propose via report.
+- \`mcp__pc-rig__pc_update_context_doc\` — same gate.
+
+## Write-back convention
+
+When designing a pod that may surface durable domain facts, add this to its instructions:
+
+> If you discover a fact that should persist beyond this task (a pricing detail, an architecture decision, a stable API convention, a confirmed business rule), include it in your report under "Proposed context doc": title, suggested scope (project | area | work-item), and the content. The orchestrator confirms and files it — do not call pc_add_context_doc yourself.
+
+Add this note to the prompt whenever the pod's job involves research, discovery, or any work likely to unearth facts that belong in an area doc.
+`,
+  },
+] as const;
 
 export const CAISSON_KNOWLEDGE_DOCS = [
   {
@@ -835,6 +869,69 @@ Pick the cheapest model that can reliably do the job.
 Create an agent for recurring work with a stable role. For a one-off task, ask the orchestrator to do or dispatch the work directly.`,
   },
   {
+    name: 'caisson-context-model',
+    content: `# Caisson context model
+
+Caisson has a lightweight filing system for durable domain knowledge: context docs. They live at three scopes (project, area, work item) and give agents the domain context they need at dispatch time.
+
+## The filing ladder
+
+Four homes for any fact. Pick by test:
+
+| Home | Test |
+|---|---|
+| Pod knowledge | craft — "how to do the job," domain-independent |
+| Area doc | domain truth beyond any one task |
+| Work item | only matters until this task is done |
+| On disk / CLAUDE.md | must be true even without Caisson |
+
+The orchestrator states where + why in one line at every filing so misfiles are visible immediately.
+
+## Context docs
+
+A context doc is a piece of knowledge filed at a scope (project, area, or work item). Fields: title, body, age, author. Context docs are INPUTS to work — they inform agents. Attachments are OUTPUTS — they capture results. Pod knowledge travels with the agent (in its instructions and knowledge docs); context docs travel with the scope.
+
+## Areas as context scopes
+
+Areas are the project's ongoing domain scopes (no lifecycle, never "done"). A card inside an Area automatically inherits that Area's context docs at dispatch time, on top of project-level docs.
+
+## The five context tools
+
+- \`pc_list_context({ scope, scope_id? })\` — returns the doc index (title + one-liner + age) for a scope or the full chain from a work item upward (closest-scope-first). Pass \`scope: 'chain'\` + a work item id to get all docs from that card up through its area and project.
+- \`pc_get_context_doc({ doc_id })\` — fetches a single doc's full body by id.
+- \`pc_add_context_doc({ scope, scope_id?, title, body, author? })\` — files a new doc. Orchestrator-held: agents propose via their report flag and the orchestrator confirms with the user before filing. Docs should end with one line stating why they were filed here.
+- \`pc_update_context_doc({ doc_id, title?, body? })\` — updates an existing doc. Same gate.
+- \`pc_search({ query, area_id?, scope? })\` — FTS full-text search across all docs in the project. Held by agents AND the orchestrator.
+
+## Dispatch composition
+
+When an agent is dispatched, Caisson automatically composes the chain: project docs + area docs + ancestor item docs, closest-scope-first, under a token budget (~20k chars). The agent also receives the index (title + one-liner) of any docs not inlined so it can fetch them on demand with \`pc_get_context_doc\`.
+
+## Write-back (gated)
+
+Agents flag durable facts in their report ("consider filing X at area Y") → orchestrator surfaces to the user in one line → user confirms → orchestrator calls \`pc_add_context_doc\`. Agents never write area docs directly. This keeps the filing accurate without giving agents write access.
+
+## Access doors
+
+Three ways an agent can reach context:
+
+1. **Scoped (default):** dispatch composes the chain automatically.
+2. **Browse:** \`pc_list_areas\` (names + summaries) → \`pc_list_context({ scope: 'area', scope_id })\` → \`pc_get_context_doc\`.
+3. **Search:** \`pc_search\` when the agent suspects a fact is filed but doesn't know where.
+
+## What to tell users
+
+When a user asks "where does my domain knowledge live?": context docs, filed at project / area / work-item scope. The orchestrator files them; agents read them at dispatch time.
+
+When a user asks "how do I teach an agent something?":
+- If it's craft or job-technique (domain-independent): add a knowledge doc to the pod itself.
+- If it's domain truth that should outlive any one task: file a context doc at the right scope (usually an area doc).
+- If it only matters until the current task is done: it belongs on the work item, not a doc.
+
+When a user asks how to search: use \`pc_search\` in the orchestrator chat, or have the orchestrator search on their behalf.
+`,
+  },
+  {
     name: 'caisson-troubleshooting',
     content: `# Caisson troubleshooting guide
 
@@ -1168,6 +1265,9 @@ const AGENT_DESIGNER_POD_CONTENT: CreateAgentInput = {
     // S2/FD-21: dispatched worker — pc_ask_orchestrator (blockers only) +
     // the work-item contract tools arrive via mergeRequiredAgentTools.
     'mcp__pc-rig__pc_ask_orchestrator',
+    // Slice 3 — agent-designer reads its own knowledge docs (context-tools
+    // guide) to make informed tool-allowlist decisions when designing pods.
+    'mcp__pc-rig__pc_knowledge_read',
   ]),
   model: 'sonnet',
   effort: 'medium',
@@ -1295,7 +1395,10 @@ export const STOCK_POD_CONTENT: readonly CreateAgentInput[] = [
 
 export type SeedStockPodAction = SeedPodAction;
 
-type StockKnowledgeDoc = (typeof CAISSON_KNOWLEDGE_DOCS)[number];
+interface StockKnowledgeDoc {
+  readonly name: string;
+  readonly content: string;
+}
 
 interface SeedStockKnowledgeResult {
   insertedCount: number;
@@ -1433,6 +1536,17 @@ export function seedStockPods(): SeedStockPodsResult {
         reasonTag: '17e',
         agentName: content.name,
       });
+      knowledgeInsertedCount += knowledge.insertedCount;
+      knowledgeReseededCount += knowledge.reseededCount;
+      knowledgeSkippedCount += knowledge.skippedCount;
+    }
+
+    if (content.name === 'agent-designer') {
+      const knowledge = seedStockKnowledgeDocs(
+        result.agentId as ULID,
+        AGENT_DESIGNER_KNOWLEDGE_DOCS,
+        { reasonTag: '17e', agentName: content.name },
+      );
       knowledgeInsertedCount += knowledge.insertedCount;
       knowledgeReseededCount += knowledge.reseededCount;
       knowledgeSkippedCount += knowledge.skippedCount;
