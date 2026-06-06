@@ -1,6 +1,6 @@
 // One-command staging lifecycle.
 //
-//   pnpm dev:staging           start API on :4141 + web on :5175
+//   pnpm dev:staging           start API on :4141 + web on :5175 + agent host
 //   pnpm dev:staging:stop      kill those processes
 //
 // What it does (on start):
@@ -9,10 +9,13 @@
 //   2. pnpm install in DEV_WORKTREE — only when pnpm-lock.yaml changed.
 //   3. Safe DB snapshot: better-sqlite3 readonly .backup() from LIVE_DB → SANDBOX_DB.
 //      Never a file copy — WAL mode would tear the snapshot.
-//   4. Build apps/server/dist/server.mjs in DEV_WORKTREE (fast esbuild).
-//   5. Start API child: node server.mjs (PORT=4141, PC_DATA_DIR=SANDBOX_DIR,
+//   4. Build apps/server/dist/server.mjs + packages/agent-host/dist/host.mjs in
+//      DEV_WORKTREE (fast esbuild, both in parallel).
+//   5. Spawn host child: node host.mjs --http-lock-file <lock> (PC_DATA_DIR=SANDBOX_DIR).
+//      Wait for <SANDBOX_DIR>/agent-host/host.lock.json before continuing.
+//   6. Start API child: node server.mjs (PORT=4141, PC_DATA_DIR=SANDBOX_DIR,
 //      PC_BUILD_SHA, PC_BUILD_BRANCH; PC_ROOT deleted so dev controls engage).
-//   6. Start web child: pnpm --filter @pc/web dev (PC_DEV_WEB_PORT=5175,
+//   7. Start web child: pnpm --filter @pc/web dev (PC_DEV_WEB_PORT=5175,
 //      PC_DEV_API_PORT=4141). Poll Vite until up.
 //
 // Assumptions (Windows-specific):
@@ -26,6 +29,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
   unlinkSync,
 } from 'node:fs';
@@ -44,7 +48,14 @@ const API_PORT = 4141;
 const WEB_PORT = 5175;
 const PID_FILE = join(SANDBOX_DIR, '.staging-pids.json');
 
+// Agent-host: lock file at <SANDBOX_DIR>/agent-host/host.lock.json — same path
+// the API uses for discovery (agentHostLockFilePath in @pc/runtime).
+const HOST_LOCK_FILE = join(SANDBOX_DIR, 'agent-host', 'host.lock.json');
+// Host bundle built into the dev-instance worktree (same path dev-app.mjs uses).
+const HOST_ENTRY = join(DEV_WORKTREE, 'packages', 'agent-host', 'dist', 'host.mjs');
+
 const VITE_TIMEOUT_MS = 60_000;
+const HOST_READY_TIMEOUT_MS = 20_000;
 const POLL_INTERVAL_MS = 500;
 
 // ── Port reclaim ──────────────────────────────────────────────────────────────
@@ -95,11 +106,24 @@ function reclaimPort(port) {
   return killed;
 }
 
+/** Kill a single PID (cross-platform). Silently tolerates already-dead. */
+function killPid(pid) {
+  if (!pid) return;
+  try {
+    if (process.platform === 'win32') {
+      spawnSync(`taskkill /F /T /PID ${pid}`, { shell: true, stdio: 'ignore' });
+    } else {
+      process.kill(pid, 'SIGTERM');
+    }
+  } catch { /* already dead */ }
+}
+
 /**
- * Startup preflight — run BEFORE spawning API/web children.
+ * Startup preflight — run BEFORE spawning API/web/host children.
  * 1. Reclaim API_PORT + WEB_PORT (kill any holders).
  * 2. Kill PIDs recorded in a stale PID_FILE (belt-and-suspenders).
- * 3. Delete stale PID_FILE.
+ * 3. Remove stale host lock file so a prior-run's lock never confuses discovery.
+ * 4. Delete stale PID_FILE.
  */
 async function preflight() {
   console.log('[staging] preflight: reclaiming ports and clearing stale state…');
@@ -120,19 +144,21 @@ async function preflight() {
     } catch { /* corrupted — just delete it */ }
 
     if (pids) {
-      for (const pid of [pids.apiPid, pids.webPid]) {
-        if (!pid) continue;
-        if (process.platform === 'win32') {
-          spawnSync(`taskkill /F /T /PID ${pid}`, { shell: true, stdio: 'ignore' });
-        } else {
-          try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
-        }
+      for (const pid of [pids.apiPid, pids.webPid, pids.hostPid]) {
+        killPid(pid);
       }
       anyReclaimed = true;
     }
 
     try { unlinkSync(PID_FILE); } catch { /* ignore */ }
     console.log('[staging] stale pidfile cleared.');
+  }
+
+  // Remove any stale host lock so the API never discovers a dead-run host.
+  if (existsSync(HOST_LOCK_FILE)) {
+    try { unlinkSync(HOST_LOCK_FILE); } catch { /* ignore */ }
+    console.log('[staging] stale host lock cleared.');
+    anyReclaimed = true;
   }
 
   if (!anyReclaimed) {
@@ -227,16 +253,22 @@ async function stopStaging() {
     try { unlinkSync(PID_FILE); } catch { /* ignore */ }
     return;
   }
-  console.log(`[staging] killing api (pid ${pids.apiPid}) and web (pid ${pids.webPid})…`);
-  for (const pid of [pids.apiPid, pids.webPid]) {
-    if (!pid) continue;
-    try {
-      if (process.platform === 'win32') {
-        spawnSync(`taskkill /F /T /PID ${pid}`, { shell: true, stdio: 'ignore' });
-      } else {
-        process.kill(pid, 'SIGTERM');
-      }
-    } catch { /* already dead */ }
+
+  // Attempt a polite HTTP shutdown on the host so it can tear down its PTY
+  // children before we hard-kill — mirrors what the Electron supervisor does.
+  if (pids.hostPid) {
+    console.log(`[staging] requesting host shutdown (pid ${pids.hostPid})…`);
+    await requestHostShutdown();
+    // Give it a moment to exit on its own.
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+
+  console.log(
+    `[staging] killing api (pid ${pids.apiPid}), web (pid ${pids.webPid}), ` +
+    `host (pid ${pids.hostPid ?? 'none'})…`,
+  );
+  for (const pid of [pids.apiPid, pids.webPid, pids.hostPid]) {
+    killPid(pid);
   }
 
   // Reclaim by port so orphans not in the pidfile are also cleaned up.
@@ -246,6 +278,9 @@ async function stopStaging() {
       console.log(`[staging] reclaimed :${port} (pid ${pid})`);
     }
   }
+
+  // Clean up stale host lock.
+  try { unlinkSync(HOST_LOCK_FILE); } catch { /* ignore */ }
 
   try { unlinkSync(PID_FILE); } catch { /* ignore */ }
   console.log('[staging] stopped.');
@@ -344,11 +379,82 @@ async function snapshotDb() {
   console.log('[staging] snapshot done.');
 }
 
-// ── Phase D — build server bundle ────────────────────────────────────────────
-async function buildServerBundle() {
-  console.log('[staging] building server bundle in dev-instance…');
-  const buildScript = join(DEV_WORKTREE, 'apps', 'server', 'scripts', 'build.mjs');
-  await runToExit('build:server', `node "${buildScript}"`, { cwd: DEV_WORKTREE });
+// ── Phase D — build server + host bundles ────────────────────────────────────
+async function buildBundles() {
+  console.log('[staging] building server + agent-host bundles in dev-instance…');
+  const serverBuildScript = join(DEV_WORKTREE, 'apps', 'server', 'scripts', 'build.mjs');
+  const hostBuildScript = join(DEV_WORKTREE, 'packages', 'agent-host', 'scripts', 'build.mjs');
+  // Build both in parallel — independent esbuild invocations.
+  await Promise.all([
+    runToExit('build:server', `node "${serverBuildScript}"`, { cwd: DEV_WORKTREE }),
+    runToExit('build:agent-host', `node "${hostBuildScript}"`, { cwd: DEV_WORKTREE }),
+  ]);
+}
+
+// ── Agent-host readiness + shutdown ──────────────────────────────────────────
+
+/**
+ * Poll HOST_LOCK_FILE until it appears and has a fresh mtime (>= notBefore).
+ * Returns the parsed lock object ({ pid, port, hostId, ... }) or null on timeout.
+ * Mirrors the desktop supervisor's waitForFreshFile + lock-file validation.
+ */
+async function waitForHostLock(notBefore) {
+  const deadline = Date.now() + HOST_READY_TIMEOUT_MS;
+  process.stdout.write(`[staging] waiting for host lock `);
+  while (Date.now() < deadline) {
+    if (existsSync(HOST_LOCK_FILE)) {
+      try {
+        const st = statSync(HOST_LOCK_FILE);
+        if (st.mtimeMs >= notBefore) {
+          const parsed = JSON.parse(readFileSync(HOST_LOCK_FILE, 'utf-8'));
+          if (
+            parsed &&
+            typeof parsed.pid === 'number' &&
+            typeof parsed.port === 'number' &&
+            parsed.protocolVersion === 1
+          ) {
+            process.stdout.write(` up (pid ${parsed.pid} :${parsed.port}).\n`);
+            return parsed;
+          }
+        }
+      } catch { /* lock not fully written yet */ }
+    }
+    process.stdout.write('.');
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+  process.stdout.write('\n');
+  return null;
+}
+
+/**
+ * Ask the agent host to shut itself down via HTTP POST /command
+ * (shutdown host-exit). This lets it tear down live PTY children cleanly
+ * instead of orphaning them. Falls back silently if the host is already gone.
+ * Mirrors requestPackagedAgentHostShutdown in apps/desktop/src/agent-host-process.ts.
+ */
+async function requestHostShutdown() {
+  if (!existsSync(HOST_LOCK_FILE)) return false;
+  let lock;
+  try {
+    lock = JSON.parse(readFileSync(HOST_LOCK_FILE, 'utf-8'));
+  } catch { return false; }
+  if (!lock?.port) return false;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2_000);
+  try {
+    const res = await fetch(`http://127.0.0.1:${lock.port}/command`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ command: { type: 'shutdown', mode: 'host-exit' } }),
+      signal: controller.signal,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ── Phase E — start processes ─────────────────────────────────────────────────
@@ -404,7 +510,7 @@ async function main() {
     delete process.env['CLAUDE_CONFIG_DIR'];
   }
 
-  // Preflight — reclaim ports + clear stale pidfile before touching children
+  // Preflight — reclaim ports + clear stale pidfile + stale host lock
   await preflight();
 
   // Phase A — sync dev-instance to local dev tip
@@ -417,15 +523,48 @@ async function main() {
   // Phase C — safe DB snapshot
   await snapshotDb();
 
-  // Phase D — build server bundle
-  await buildServerBundle();
+  // Phase D — build server + agent-host bundles
+  await buildBundles();
 
   // Capture build marker from the synced worktree
   const buildSha = runSyncOutput('git rev-parse --short HEAD', { cwd: DEV_WORKTREE });
   const buildBranch = runSyncOutput('git rev-parse --abbrev-ref HEAD', { cwd: DEV_WORKTREE });
   console.log(`[staging] build marker: ${buildBranch} @ ${buildSha}`);
 
-  // Phase E — start API + web
+  // Phase E.1 — start agent host
+  // Env mirrors what the Electron supervisor sets (main.ts buildSupervisor):
+  //   PC_DATA_DIR    → sandbox dir so lock lands at <SANDBOX_DIR>/agent-host/host.lock.json
+  //   PC_AGENT_HOST_LOCK_FILE → explicit lock path (also consumed via --http-lock-file arg)
+  //   PORT           → staging API port (context for the host, not a bind port for it)
+  //   PC_ROOT absent → dev-controls enabled (same as API)
+  // No ELECTRON_RUN_AS_NODE — we're spawning with the system node binary.
+  const hostEnv = { ...process.env };
+  delete hostEnv['PC_ROOT'];
+  hostEnv['PC_DATA_DIR'] = SANDBOX_DIR;
+  hostEnv['PORT'] = String(API_PORT);
+  hostEnv['PC_AGENT_HOST_LOCK_FILE'] = HOST_LOCK_FILE;
+
+  // Ensure the lock dir exists before spawning (the host also creates it, but
+  // belt-and-suspenders so a race doesn't confuse statSync in waitForHostLock).
+  mkdirSync(dirname(HOST_LOCK_FILE), { recursive: true });
+
+  const hostSpawnedAt = Date.now();
+  console.log(`[staging] spawning agent host: ${HOST_ENTRY}`);
+  const hostChild = run(
+    'host',
+    `node --report-on-fatalerror "${HOST_ENTRY}" --http-lock-file "${HOST_LOCK_FILE}"`,
+    { cwd: DEV_WORKTREE, env: hostEnv },
+  );
+
+  const hostLock = await waitForHostLock(hostSpawnedAt);
+  if (shuttingDown) return;
+  if (!hostLock) {
+    console.error('[staging] agent host did not write its lock file within timeout — aborting.');
+    shutdown(1);
+    return;
+  }
+
+  // Phase E.2 — start API
   const serverBundle = join(DEV_WORKTREE, 'apps', 'server', 'dist', 'server.mjs');
   const apiEnv = { ...process.env };
   delete apiEnv['PC_ROOT']; // packaged-mode signal; absent → dev controls engage
@@ -444,6 +583,7 @@ async function main() {
     return;
   }
 
+  // Phase E.3 — start web
   const webEnv = { ...process.env };
   webEnv['PC_DEV_WEB_PORT'] = String(WEB_PORT);
   webEnv['PC_DEV_API_PORT'] = String(API_PORT);
@@ -456,18 +596,23 @@ async function main() {
     console.error('[staging] Vite did not come up within 60s — opening the URL anyway.');
   }
 
-  // Write pidfile so dev:staging:stop can find the processes
+  // Write pidfile so dev:staging:stop can find all three processes.
   mkdirSync(SANDBOX_DIR, { recursive: true });
   writeFileSync(
     PID_FILE,
-    JSON.stringify({ apiPid: apiChild.pid, webPid: webChild.pid }),
+    JSON.stringify({
+      apiPid: apiChild.pid,
+      webPid: webChild.pid,
+      hostPid: hostChild.pid,
+    }),
   );
 
   console.error(`\n[staging] ready.`);
-  console.error(`  API : http://127.0.0.1:${API_PORT}`);
-  console.error(`  Web : http://127.0.0.1:${WEB_PORT}`);
+  console.error(`  API  : http://127.0.0.1:${API_PORT}`);
+  console.error(`  Web  : http://127.0.0.1:${WEB_PORT}`);
+  console.error(`  Host : pid ${hostLock.pid}  port :${hostLock.port}  lock ${HOST_LOCK_FILE}`);
   console.error(`  Build: ${buildBranch} @ ${buildSha}`);
-  console.error(`  Data: ${SANDBOX_DIR}`);
+  console.error(`  Data : ${SANDBOX_DIR}`);
   console.error('\nCtrl+C to stop.\n');
 }
 
