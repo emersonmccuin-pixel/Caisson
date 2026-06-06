@@ -99,6 +99,7 @@ export const liveOutbox = sqliteTable(
         | 'area'
         | 'contract'
         | 'host-health'
+        | 'context-doc'
       >(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),
