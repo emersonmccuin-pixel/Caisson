@@ -261,6 +261,38 @@ export function WorkItemDetailModal({
     }
   }
 
+  async function cancelItem() {
+    if (busy) return;
+    const OPEN_STATUSES = new Set(['pending', 'in-progress', 'awaiting-verification', 'blocked', 'failed']);
+    const openChildren = children.filter((c) => OPEN_STATUSES.has(c.status));
+    // One confirm. If there are open children, ask whether to cascade.
+    // "OK" = cancel all; for no-children case, OK = cancel just this task.
+    let cascadeChildren = false;
+    if (openChildren.length > 0) {
+      // Ask once: cascade or not?
+      const wantCascade = window.confirm(
+        `"${baseline.title}" has ${openChildren.length} open child task(s).\n\nCancel them too? OK = cancel all, Cancel = cancel this task only.`,
+      );
+      // Second gate: confirm the action chosen
+      const msg = wantCascade
+        ? `Cancel "${baseline.title}" and ${openChildren.length} child task(s)? This cannot be undone.`
+        : `Cancel "${baseline.title}" only (children stay open)? This cannot be undone.`;
+      if (!window.confirm(msg)) return;
+      cascadeChildren = wantCascade;
+    } else {
+      if (!window.confirm(`Cancel "${baseline.title}"? This cannot be undone.`)) return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await workItemsApi.cancelWorkItem(project.id, baseline.id, { cascadeChildren });
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  }
+
   const parent = baseline.parentId
     ? items.find((i) => i.id === baseline.parentId) ?? null
     : null;
@@ -408,14 +440,26 @@ export function WorkItemDetailModal({
         </div>
 
         <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <button
-            onClick={() => void softDelete()}
-            disabled={busy}
-            className="mr-auto border border-destructive/40 bg-background px-3 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
-            title="Archive this work item"
-          >
-            Archive
-          </button>
+          <div className="mr-auto flex items-center gap-2">
+            <button
+              onClick={() => void softDelete()}
+              disabled={busy}
+              className="border border-destructive/40 bg-background px-3 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
+              title="Archive this task"
+            >
+              Archive
+            </button>
+            {baseline.status !== 'cancelled' && baseline.status !== 'complete' && baseline.status !== 'archived' && (
+              <button
+                onClick={() => void cancelItem()}
+                disabled={busy}
+                className="border border-destructive/40 bg-background px-3 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                title="Cancel this task"
+              >
+                Cancel task
+              </button>
+            )}
+          </div>
           {error && (
             <span
               className="mr-2 truncate text-xs text-destructive"

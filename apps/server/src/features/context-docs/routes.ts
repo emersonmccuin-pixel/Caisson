@@ -1,24 +1,46 @@
-// Slice 1 (Areas + context model) — ContextDoc route adapters.
+// Slice 2 (Areas + context model) — ContextDoc route adapters.
 //
-// Persistence only — no outbox writes in Slice 1 (no UI consuming live doc
-// changes). Every mutation goes through the repo directly (no app-service layer
-// needed until Slice 2 adds live events). Mirrors the areas feature shape.
+// Slice 1: persistence only. Slice 2: adds `context-doc.changed` live-outbox
+// rows on create/update so the area detail page updates without refresh.
+// Every mutation goes through the repo directly (no app-service layer needed
+// for this thin feature). Mirrors the areas feature shape.
 
 import type { Hono } from 'hono';
 import type { ULID } from '@pc/domain';
 import {
   createContextDoc,
   getContextDoc,
+  getDb,
+  insertLiveEvent,
   listContextChainDocs,
   listContextDocsForScope,
   searchContextDocs,
   updateContextDoc,
+  type ContextDocRow,
   type ContextDocScope,
 } from '@pc/db';
 
 export interface ContextDocRoutesDeps {
   /** Resolves a project runtime by id; null → 404. */
   resolveProject(projectId: string): { project: { id: ULID } } | null;
+}
+
+/** Emit a project-scoped `context-doc.changed` outbox row (fire-and-forget;
+ *  non-fatal on error so the mutation response still reaches the client). */
+function emitContextDocChanged(projectId: ULID, doc: ContextDocRow): void {
+  try {
+    insertLiveEvent(getDb(), {
+      scope: 'project',
+      projectId,
+      type: 'context-doc.changed',
+      entity: 'context-doc',
+      entityId: doc.id,
+      version: doc.updatedAt,
+      payload: { doc },
+    });
+  } catch {
+    /* non-fatal — the HTTP response already carries the fresh doc */
+  }
 }
 
 export function registerContextDocRoutes(app: Hono, deps: ContextDocRoutesDeps): void {
@@ -110,6 +132,7 @@ export function registerContextDocRoutes(app: Hono, deps: ContextDocRoutesDeps):
         ...(typeof docBody === 'string' ? { body: docBody } : {}),
         ...(typeof author === 'string' ? { author } : {}),
       });
+      emitContextDocChanged(runtime.project.id, doc);
       return c.json({ ok: true, doc });
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 400);
@@ -139,6 +162,7 @@ export function registerContextDocRoutes(app: Hono, deps: ContextDocRoutesDeps):
       ...(typeof docBody === 'string' ? { body: docBody } : {}),
     });
     if (!doc) return c.json({ ok: false, error: `unknown context doc: ${docId}` }, 404);
+    emitContextDocChanged(runtime.project.id, doc);
     return c.json({ ok: true, doc });
   });
 

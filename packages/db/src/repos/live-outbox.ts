@@ -23,7 +23,8 @@ export type LiveOutboxEntity =
   | 'pod'
   | 'area'
   | 'contract'
-  | 'host-health';
+  | 'host-health'
+  | 'context-doc';
 
 export interface InsertLiveEventDraft<TPayload = unknown> {
   id?: ULID;

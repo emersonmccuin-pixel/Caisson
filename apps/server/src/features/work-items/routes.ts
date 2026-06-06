@@ -1,15 +1,18 @@
 import type { Hono } from 'hono';
-import type { Project, Stage, ULID, WorkItem, WorkItemType } from '@pc/domain';
+import type { Project, Stage, ULID, WorkItem, WorkItemStatus, WorkItemType } from '@pc/domain';
 import { isWorkItemType } from '@pc/domain';
 import { ContractService } from '@pc/app-services';
 import {
   countWorkItemsInStage,
   getProjectById,
+  listChildWorkItems,
+  listContractsForWorkItem,
   listWorkItems as dbListWorkItems,
   reassignStage,
   resolveAgentForDispatch,
   updateProjectStages,
   updateWorkItemFields as dbUpdateWorkItemFields,
+  updateWorkItemStatus,
 } from '@pc/db';
 
 import {
@@ -30,6 +33,8 @@ import {
 } from '../../services/agent-verification-review.ts';
 import type { AgentHostReattachClient } from '../../services/agent-host-reattach.ts';
 import type { ReviewInboxResolution } from '../../services/dag-run-service.ts';
+import { getActiveRunRegistry as defaultGetActiveRunRegistry } from '../../services/agent-active-runs.ts';
+import { hardKillAgentRun } from '../../services/agent-run-control.ts';
 import {
   FieldValidationError,
   looksLikeUlid,
@@ -779,5 +784,60 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 500);
     }
+  });
+
+  /** Rule 3 — cancellation cascade.
+   *  Body: { cascadeChildren?: boolean }
+   *  Always cancels the target work item. When cascadeChildren=true, also
+   *  cancels non-terminal children and kills any in-flight agent runs under
+   *  all affected items so no orphan compute is left running. */
+  app.post('/api/projects/:projectId/work-items/:wiId/cancel', async (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const wiId = c.req.param('wiId') as ULID;
+    const runtime = deps.resolveProject(projectId);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+
+    const wi = runtime.workItemService().get(wiId);
+    if (!wi || wi.projectId !== projectId) {
+      return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
+    }
+
+    const body = await c.req.json<{ cascadeChildren?: boolean }>().catch(() => ({} as { cascadeChildren?: boolean }));
+    const cascadeChildren = body.cascadeChildren === true;
+
+    // Non-terminal statuses — items in these states are "open" and cancellable.
+    const OPEN: Set<WorkItemStatus> = new Set([
+      'pending', 'in-progress', 'awaiting-verification', 'blocked', 'failed',
+    ]);
+
+    // Collect all IDs to cancel: always the target, plus open children if cascading.
+    const toCancel: ULID[] = [wiId];
+    if (cascadeChildren) {
+      for (const child of listChildWorkItems(wiId)) {
+        if (OPEN.has(child.status)) toCancel.push(child.id);
+      }
+    }
+
+    // Cancel status + kill in-flight agent runs for each affected item.
+    const cancelled: ULID[] = [];
+    const killedRuns: ULID[] = [];
+    const host = deps.getHostConnection?.() ?? null;
+    const registry = defaultGetActiveRunRegistry();
+
+    for (const id of toCancel) {
+      updateWorkItemStatus(id, 'cancelled', 'Cancelled by user');
+      cancelled.push(id);
+      for (const contract of listContractsForWorkItem(id)) {
+        if (!contract.agentRunId) continue;
+        const result = await hardKillAgentRun(contract.agentRunId, {
+          activeRunRegistry: registry,
+          broadcast: (env) => deps.broadcastTo(projectId, env),
+          ...(host ? { host } : {}),
+        });
+        if (result.ok && !result.alreadyTerminal) killedRuns.push(contract.agentRunId);
+      }
+    }
+
+    return c.json({ ok: true, cancelled, killedRuns });
   });
 }

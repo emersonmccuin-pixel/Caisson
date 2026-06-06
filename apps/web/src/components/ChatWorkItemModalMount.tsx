@@ -66,7 +66,7 @@ export function ChatWorkItemModalMount({ project }: ChatWorkItemModalMountProps)
     return createPortal(
       <div className="fixed inset-0 z-[70] flex items-center justify-center bg-background/80">
         <div className="border border-destructive bg-card px-4 py-3 text-xs">
-          <div className="mb-2 text-destructive">Failed to load work item</div>
+          <div className="mb-2 text-destructive">Failed to load task</div>
           <div className="mb-3 text-muted-foreground">{error}</div>
           <button
             type="button"
@@ -98,7 +98,7 @@ export function ChatWorkItemModalMount({ project }: ChatWorkItemModalMountProps)
     return createPortal(
       <div className="fixed inset-0 z-[70] flex items-center justify-center bg-background/80">
         <div className="border border-border bg-card px-4 py-3 text-xs">
-          <div className="mb-2 text-muted-foreground">Work item not found</div>
+          <div className="mb-2 text-muted-foreground">Task not found</div>
           <button
             type="button"
             className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground"

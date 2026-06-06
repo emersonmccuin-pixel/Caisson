@@ -191,7 +191,7 @@ export function AreasTab({ project, events }: Props) {
 
       {detailArea && (
         <AreaDetailModal
-          projectId={project.id}
+          project={project}
           area={detailArea}
           workItems={workItems}
           openCount={countsByArea.byArea.get(detailArea.id)?.open ?? 0}

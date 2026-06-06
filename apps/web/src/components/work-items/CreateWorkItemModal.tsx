@@ -126,7 +126,7 @@ export function CreateWorkItemModal({
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col border border-border bg-card text-foreground">
         <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
           <div>
-            <h2 className="text-base font-semibold">New work item</h2>
+            <h2 className="text-base font-semibold">New task</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
               Fill any required fields, then create.
             </p>
