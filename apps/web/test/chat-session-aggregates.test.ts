@@ -7,6 +7,7 @@ import {
   createChatSessionState,
   EMPTY_AGGREGATES,
   materializeChatSessionEvents,
+  materializeTerminalRawEvents,
   type ChatSessionReducerAction,
   type ChatSessionReducerState,
 } from '../src/hooks/chat-session-reducer.ts';
@@ -111,6 +112,54 @@ function dispatchAll(
 ): ChatSessionReducerState {
   return actions.reduce((s, a) => chatSessionReducer(s, a), start);
 }
+
+// Option A correctness: raw PTY frames must NOT appear in materializeChatSessionEvents
+// so that the chat timeline's events[] reference stays stable across terminal batches.
+test('raw frames are excluded from materializeChatSessionEvents', () => {
+  let state = createChatSessionState(PROJECT);
+  const chatEnvBefore = materializeChatSessionEvents(state);
+
+  // Dispatch a raw frame
+  state = dispatch(state, rawEnv());
+
+  const chatEnvAfter = materializeChatSessionEvents(state);
+  // Chat events unchanged — no raw frames in the output
+  assert.deepEqual(chatEnvAfter, chatEnvBefore);
+  assert.equal(
+    chatEnvAfter.some((e) => e.type === 'raw'),
+    false,
+    'materializeChatSessionEvents must not contain raw envelopes',
+  );
+});
+
+test('raw frames appear in materializeTerminalRawEvents', () => {
+  let state = createChatSessionState(PROJECT);
+  assert.equal(materializeTerminalRawEvents(state).length, 0);
+
+  const r1 = rawEnv();
+  const r2 = rawEnv();
+  state = dispatch(state, r1);
+  state = dispatch(state, r2);
+
+  const raw = materializeTerminalRawEvents(state);
+  assert.equal(raw.length, 2);
+  assert.equal(raw.every((e) => e.type === 'raw'), true);
+});
+
+test('chat events still appear in materializeChatSessionEvents after raw frames', () => {
+  let state = createChatSessionState(PROJECT);
+  state = dispatch(state, rawEnv());
+  state = dispatch(state, rawEnv());
+  const usageEnvelope = usageEnv({ inputTokens: 5, outputTokens: 2, model: 'm1' });
+  state = dispatch(state, usageEnvelope);
+  state = dispatch(state, rawEnv());
+
+  const chat = materializeChatSessionEvents(state);
+  // The chat events should contain the usage envelope (jsonl type), not the raw ones
+  assert.ok(chat.length > 0, 'chat events must be non-empty after jsonl event');
+  assert.ok(chat.some((e) => e.type === 'jsonl'), 'jsonl event must appear in chat events');
+  assert.equal(chat.some((e) => e.type === 'raw'), false, 'no raw frames in chat events');
+});
 
 test('incremental aggregates == brute-force oracle (usage stream)', () => {
   let state = createChatSessionState(PROJECT);
