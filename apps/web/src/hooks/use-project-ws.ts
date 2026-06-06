@@ -125,12 +125,19 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
     null,
     () => createChatSessionState(null),
   );
+  // Key ONLY on the three slices materializeChatSessionEvents actually reads
+  // (timeline / sequenced / unsequenced) plus the projectId guard, NOT on the
+  // whole sessionState object. appendTerminalRaw spreads ...state and only
+  // replaces terminalRaw/nextOrdinal/activeSessionId, so those three slice
+  // refs stay identical across pure terminal batches → useMemo cache-hits →
+  // events[] reference is stable → all downstream chat-timeline hooks skip.
   const events = useMemo(
     () =>
       projectId && sessionState.projectId === projectId
         ? materializeChatSessionEvents(sessionState)
         : [],
-    [projectId, sessionState],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, sessionState.projectId, sessionState.timeline, sessionState.sequenced, sessionState.unsequenced],
   );
   // Keyed on terminalRaw only — changes when raw batches arrive, not when chat
   // events land. Keeps the TerminalModePanel update path decoupled from the chat
