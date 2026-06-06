@@ -34,6 +34,21 @@ vi.mock('@/components/work-items/AreaEditModal', () => ({
   AreaEditModal: () => null,
 }));
 
+// contextDocsApi — not needed for z-order test.
+vi.mock('@/features/context-docs/client', () => ({
+  contextDocsApi: {
+    list: vi.fn().mockResolvedValue([]),
+    create: vi.fn(),
+    update: vi.fn(),
+  },
+}));
+
+// useGlobalQuickAdd — stub for header "+ Task" button.
+vi.mock('@/store/global-quick-add', () => ({
+  useGlobalQuickAdd: (sel: (s: { open: () => void }) => unknown) =>
+    sel({ open: vi.fn() }),
+}));
+
 // WorkItemDetailModal: useProjectAreas (fetches from API — not needed here)
 vi.mock('@/hooks/use-project-areas', () => ({
   useProjectAreas: () => ({ areas: [], refetch: vi.fn() }),
@@ -116,7 +131,7 @@ describe('modal z-order stacking', () => {
   test('AreaDetailModal backdrop has z-50 class', () => {
     const { container } = render(
       <AreaDetailModal
-        projectId="p1"
+        project={PROJECT}
         area={AREA}
         workItems={[WI]}
         openCount={1}
@@ -152,7 +167,7 @@ describe('modal z-order stacking', () => {
   test('WorkItemDetailModal z-index is strictly higher than AreaDetailModal z-index', () => {
     const { container: areaContainer } = render(
       <AreaDetailModal
-        projectId="p1"
+        project={PROJECT}
         area={AREA}
         workItems={[WI]}
         openCount={1}
