@@ -4,22 +4,14 @@
 // gone — agent tasks are no longer hidden work items. Contracts are a
 // first-class entity surfaced via the contract views (work-log + the
 // project-scoped contract list), so the board never renders them.
-//
-// Section 37: extended with `activeSubTab` for the Dashboard / Kanban / Table
-// sub-tab strip above the Work Items page. Default = 'dashboard'.
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import type { WorkItemStatus, WorkItemType } from '@/features/work-items/client';
 
-// FD-19 — the first sub-tab is labelled "Areas" in the UI (Area cards);
-// the internal key stays 'dashboard' so persisted view state migrates cleanly.
-// FD-20 — 'patterns' is a coming-soon placeholder until the design pass lands.
-export type WorkItemsSubTab = 'dashboard' | 'kanban' | 'table' | 'patterns';
-
-// Slice 010 — left-rail Area filter applied to Kanban + Table. `null` = All
-// (no filter), 'uncaptured' = items with areaId == null, otherwise an Area id.
+// Slice 010 — Area filter for the Work page. `null` = All (no filter),
+// 'uncaptured' = items with areaId == null, otherwise an Area id.
 export type AreaFilter = string | null | 'uncaptured';
 
 export type UpdatedWindow = 'all' | 'today' | 'week' | 'month';
@@ -48,13 +40,10 @@ const DEFAULT_FILTERS: WorkItemsFilters = {
 const DEFAULT_SORT: WorkItemsSort = { by: 'activity', dir: 'desc' };
 
 interface WorkItemsViewState {
-  /** Section 38 — "Parent items only" toggle. When true, both kanban and table
-   *  only render items where parentId == null (top-level items). Default off. */
+  /** "Parent items only" toggle (kept for potential future surfaces). */
   showTopLevelOnly: boolean;
   setShowTopLevelOnly: (value: boolean) => void;
-  activeSubTab: WorkItemsSubTab;
-  setActiveSubTab: (tab: WorkItemsSubTab) => void;
-  /** Slice 010 — single-select left-rail Area filter for Kanban + Table. */
+  /** Slice 010 — Area filter for the Work page. */
   areaFilter: AreaFilter;
   setAreaFilter: (filter: AreaFilter) => void;
   filters: WorkItemsFilters;
@@ -69,8 +58,6 @@ export const useWorkItemsView = create<WorkItemsViewState>()(
     (set, get) => ({
       showTopLevelOnly: false,
       setShowTopLevelOnly: (showTopLevelOnly) => set({ showTopLevelOnly }),
-      activeSubTab: 'dashboard',
-      setActiveSubTab: (activeSubTab) => set({ activeSubTab }),
       areaFilter: null,
       setAreaFilter: (areaFilter) => set({ areaFilter }),
       filters: DEFAULT_FILTERS,
