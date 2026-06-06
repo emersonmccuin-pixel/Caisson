@@ -32,7 +32,12 @@ function intakeStageId(stages: Stage[]): string {
 
 interface Props {
   project: Project;
-  area: Area;
+  /**
+   * Real area to display. When null/undefined the modal operates in
+   * "uncategorized" mode: lists open items with areaId == null, no
+   * description, no context docs, no edit affordances.
+   */
+  area?: Area | null;
   /** All work items in the project — filtered internally to open area members. */
   workItems: WorkItem[];
   openCount: number;
@@ -51,13 +56,14 @@ export function AreaDetailModal({
   onClose,
   onChanged,
 }: Props) {
+  const isUncategorized = area == null;
   const [editing, setEditing] = useState(false);
   const openWorkItem = useChatWorkItemModal((s) => s.open);
   const openQuickAdd = useGlobalQuickAdd((s) => s.open);
 
-  // Open members only.
+  // Open members only — area-scoped or uncategorized (areaId == null).
   const openMembers = workItems.filter(
-    (wi) => wi.areaId === area.id && isOpenStatus(wi.status),
+    (wi) => (isUncategorized ? wi.areaId == null : wi.areaId === area.id) && isOpenStatus(wi.status),
   );
 
   // ── Context docs ────────────────────────────────────────────────────────────
@@ -66,6 +72,8 @@ export function AreaDetailModal({
   const [docsErr, setDocsErr] = useState<string | null>(null);
 
   const fetchDocs = () => {
+    // No context docs in uncategorized mode.
+    if (!area) return;
     setDocsLoading(true);
     setDocsErr(null);
     contextDocsApi
@@ -83,7 +91,7 @@ export function AreaDetailModal({
   useEffect(() => {
     fetchDocs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id, area.id]);
+  }, [project.id, area?.id]);
 
   // Live refresh on context-doc changed events.
   const contextDocSig = useLiveEntitySignature('context-doc', project.id);
@@ -104,7 +112,7 @@ export function AreaDetailModal({
 
   async function submitDoc() {
     const t = docTitle.trim();
-    if (!t || docBusy) return;
+    if (!t || docBusy || !area) return;
     setDocBusy(true);
     try {
       await contextDocsApi.create(project.id, {
@@ -166,7 +174,8 @@ export function AreaDetailModal({
     setTaskErr(null);
     try {
       await workItemsApi.createWorkItem(project.id, t, intakeStageId(project.stages), {
-        areaId: area.id,
+        // null keeps the task area-less (stays in Uncategorized).
+        areaId: area?.id ?? null,
       });
       setNewTaskTitle('');
       setCreatingTask(false);
@@ -191,7 +200,9 @@ export function AreaDetailModal({
           {/* Header */}
           <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
             <div>
-              <h2 className="text-base font-semibold">{area.name}</h2>
+              <h2 className="text-base font-semibold">
+                {isUncategorized ? 'Uncategorized' : area.name}
+              </h2>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {openCount} open · {doneCount} done
               </p>
@@ -199,19 +210,21 @@ export function AreaDetailModal({
             <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
-                onClick={() => openQuickAdd(area.id, area.name)}
+                onClick={() => openQuickAdd(area?.id ?? null, area?.name ?? 'Uncategorized')}
                 className="border border-primary/60 px-2.5 py-1 text-[11px] uppercase tracking-[0.06em] text-primary hover:bg-primary/10"
-                title="Quick-capture a task into this area"
+                title={isUncategorized ? 'Quick-capture a task (no area)' : 'Quick-capture a task into this area'}
               >
                 + Task
               </button>
-              <button
-                type="button"
-                onClick={() => setEditing(true)}
-                className="border border-border/60 px-2.5 py-1 text-[11px] uppercase tracking-[0.06em] text-muted-foreground hover:border-border hover:text-foreground"
-              >
-                Edit
-              </button>
+              {!isUncategorized && (
+                <button
+                  type="button"
+                  onClick={() => setEditing(true)}
+                  className="border border-border/60 px-2.5 py-1 text-[11px] uppercase tracking-[0.06em] text-muted-foreground hover:border-border hover:text-foreground"
+                >
+                  Edit
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onClose}
@@ -224,24 +237,26 @@ export function AreaDetailModal({
           </header>
 
           <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-4">
-            {/* Description */}
-            <div>
-              <div className="mb-1 text-[10px] uppercase tracking-[0.08em] text-[var(--fg-dim)]">
-                Description
+            {/* Description — real areas only */}
+            {!isUncategorized && (
+              <div>
+                <div className="mb-1 text-[10px] uppercase tracking-[0.08em] text-[var(--fg-dim)]">
+                  Description
+                </div>
+                {area.summary ? (
+                  <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-muted-foreground">
+                    {area.summary}
+                  </p>
+                ) : (
+                  <p className="text-[13px] italic text-[var(--fg-dim)]">
+                    No description yet — use Edit to add one.
+                  </p>
+                )}
               </div>
-              {area.summary ? (
-                <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-muted-foreground">
-                  {area.summary}
-                </p>
-              ) : (
-                <p className="text-[13px] italic text-[var(--fg-dim)]">
-                  No description yet — use Edit to add one.
-                </p>
-              )}
-            </div>
+            )}
 
-            {/* Context docs */}
-            <div>
+            {/* Context docs — real areas only */}
+            {!isUncategorized && <div>
               <div className="mb-2 flex items-center justify-between">
                 <div className="text-[10px] uppercase tracking-[0.08em] text-[var(--fg-dim)]">
                   Context docs {docsLoading ? '…' : `· ${docs.length}`}
@@ -393,7 +408,7 @@ export function AreaDetailModal({
                   )}
                 </div>
               ))}
-            </div>
+            </div>}
 
             {/* Open tasks */}
             <div>
@@ -403,7 +418,7 @@ export function AreaDetailModal({
 
               {openMembers.length === 0 ? (
                 <div className="border border-dashed border-border/30 px-3 py-5 text-center text-[12px] text-muted-foreground">
-                  No open tasks in this area.
+                  {isUncategorized ? 'No unassigned open tasks.' : 'No open tasks in this area.'}
                 </div>
               ) : (
                 <div className="flex flex-col border border-border/40">
@@ -481,7 +496,7 @@ export function AreaDetailModal({
                     onClick={() => setCreatingTask(true)}
                     className="text-[11px] text-muted-foreground hover:text-primary"
                   >
-                    + New task in this area
+                    {isUncategorized ? '+ New task (no area)' : '+ New task in this area'}
                   </button>
                 )}
               </div>
@@ -500,7 +515,7 @@ export function AreaDetailModal({
         </div>
       </div>
 
-      {editing && (
+      {editing && area && (
         <AreaEditModal
           projectId={project.id}
           area={area}
