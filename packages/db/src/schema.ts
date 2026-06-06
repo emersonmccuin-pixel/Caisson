@@ -992,3 +992,41 @@ export const mailboxAudit = sqliteTable(
     index('mailbox_audit_delivery_idx').on(t.deliveryId, t.createdAt),
   ],
 );
+
+/**
+ * Slice 1 (Areas + context model) — ContextDocs. ONE unified docs table
+ * attachable to any scope (project | area | work item). Exactly one of
+ * (project_id, area_id, work_item_id) must be non-null; enforced by a SQL
+ * CHECK in the migration and by the repo writer in application code.
+ *
+ * FTS5 virtual table (`context_docs_fts`) lives in the same migration but is
+ * NOT modelled here — Drizzle cannot represent virtual tables. All FTS reads
+ * go through `getRawDb()`.
+ *
+ * `author` is free-form: 'user' | 'orchestrator' | '<agent-run-id>'. Agents
+ * propose docs via their report; the orchestrator writes them (tool allowlist
+ * gates `pc_add_context_doc` / `pc_update_context_doc`).
+ */
+export const contextDocs = sqliteTable(
+  'context_docs',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    /** Scope pointer — exactly one non-null. */
+    projectId: text('project_id').$type<ULID | null>(),
+    areaId: text('area_id').$type<ULID | null>(),
+    workItemId: text('work_item_id').$type<ULID | null>(),
+    title: text('title').notNull(),
+    body: text('body').notNull().default(''),
+    /** 'user' | 'orchestrator' | agent-run-id. */
+    author: text('author').notNull().default('user'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    /** Soft-delete. Soft-deleted docs excluded from all reads. */
+    deletedAt: integer('deleted_at'),
+  },
+  (t) => [
+    index('context_docs_project_idx').on(t.projectId),
+    index('context_docs_area_idx').on(t.areaId),
+    index('context_docs_work_item_idx').on(t.workItemId),
+  ],
+);

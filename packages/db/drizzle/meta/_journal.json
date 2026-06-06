@@ -344,6 +344,13 @@
       "when": 1782173300000,
       "tag": "0048_agent_run_worktree_dir",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1782173400000,
+      "tag": "0049_context_docs",
+      "breakpoints": true
     }
   ]
 }
