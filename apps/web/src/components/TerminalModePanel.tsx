@@ -18,7 +18,10 @@ const TRANSCRIPT_TAIL_BYTES = 1024 * 1024;
 interface TerminalModePanelProps {
   projectId: string;
   sessionId: string | null;
-  events: WsEnvelope[];
+  /** Raw PTY frame envelopes only. Separated from the chat events[] stream so
+   *  that the terminal's live-write effect does not trigger chat timeline
+   *  recomputes. Contains only type === 'raw' envelopes. */
+  rawEvents: WsEnvelope[];
   visible: boolean;
   writable: boolean;
   onInput: (data: string) => boolean;
@@ -28,7 +31,7 @@ interface TerminalModePanelProps {
 export function TerminalModePanel({
   projectId,
   sessionId,
-  events,
+  rawEvents,
   visible,
   writable,
   onInput,
@@ -41,7 +44,7 @@ export function TerminalModePanel({
   const webglRef = useRef<WebglAddon | null>(null);
   const dataDisposableRef = useRef<{ dispose(): void } | null>(null);
   const sessionKeyRef = useRef<string | null>(null);
-  const eventsRef = useRef(events);
+  const eventsRef = useRef(rawEvents);
   const lastTerminalSeqRef = useRef(0);
   // Index cursor into `events` so the live-write effect only scans the new tail
   // each change instead of re-walking the whole array (O(history) per keystroke
@@ -58,8 +61,8 @@ export function TerminalModePanel({
   const [readyToReveal, setReadyToReveal] = useState(false);
 
   useEffect(() => {
-    eventsRef.current = events;
-  }, [events]);
+    eventsRef.current = rawEvents;
+  }, [rawEvents]);
   useEffect(() => {
     writableRef.current = writable;
     const term = termRef.current;
@@ -256,20 +259,20 @@ export function TerminalModePanel({
 
   useEffect(() => {
     if (!sessionId) return;
-    // Walk only events appended since the last run (index cursor) so a long
+    // Walk only rawEvents appended since the last run (index cursor) so a long
     // session's history isn't re-scanned on every keystroke echo. If the array
     // was replaced or shrank (session reset / replay), startIdx falls out of
     // range and the helper does a full rescan; its seq check prevents
     // double-writes either way.
     let startIdx = lastScannedIdxRef.current;
-    if (startIdx > events.length) startIdx = 0;
+    if (startIdx > rawEvents.length) startIdx = 0;
     const pending = terminalRawBatchFromEvents(
-      events,
+      rawEvents,
       sessionId,
       lastTerminalSeqRef.current,
       startIdx,
     );
-    lastScannedIdxRef.current = events.length;
+    lastScannedIdxRef.current = rawEvents.length;
     for (const raw of pending) {
       if (attachingRef.current) {
         attachLiveBufferRef.current += raw.text;
@@ -278,7 +281,7 @@ export function TerminalModePanel({
       }
       lastTerminalSeqRef.current = Math.max(lastTerminalSeqRef.current, raw.seq);
     }
-  }, [events, enqueueWrite, sessionId]);
+  }, [rawEvents, enqueueWrite, sessionId]);
 
   useEffect(() => {
     const target = fitTargetRef.current;

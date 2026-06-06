@@ -38,6 +38,7 @@ import {
   createChatSessionState,
   EMPTY_AGGREGATES,
   materializeChatSessionEvents,
+  materializeTerminalRawEvents,
   replayEventsFromEnvelope,
   replayEventsFromItems,
   type ChatSessionAggregates,
@@ -56,6 +57,10 @@ const RAW_FRAME_BATCH_MS = 50;
 
 interface UseProjectWsResult {
   events: WsEnvelope[];
+  /** Raw PTY frame envelopes only — separated from `events` so the chat
+   *  timeline's events[] reference stays stable across 50 ms terminal batches.
+   *  Pass this prop down to TerminalModePanel; do NOT merge it into events. */
+  rawEvents: WsEnvelope[];
   aggregates: ChatSessionAggregates;
   /** T3.1 — ticks on every session-changed (new OR resume). The sessions rail
    *  keys its lifecycle refetch off this instead of scanning `events[]`. */
@@ -126,6 +131,17 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
         ? materializeChatSessionEvents(sessionState)
         : [],
     [projectId, sessionState],
+  );
+  // Keyed on terminalRaw only — changes when raw batches arrive, not when chat
+  // events land. Keeps the TerminalModePanel update path decoupled from the chat
+  // timeline fold, which is the entire point of Option A.
+  const rawEvents = useMemo(
+    () =>
+      projectId && sessionState.projectId === projectId
+        ? materializeTerminalRawEvents(sessionState)
+        : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectId, sessionState.terminalRaw],
   );
   const aggregates = useMemo(
     () =>
@@ -482,6 +498,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
 
   return {
     events,
+    rawEvents,
     aggregates,
     sessionChangedNonce: sessionState.sessionChangedNonce,
     status,

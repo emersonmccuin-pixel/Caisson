@@ -150,10 +150,17 @@ export function materializeChatSessionEvents(state: ChatSessionReducerState): Ws
       : unsequenced.get(entry.key);
     if (env) out.push(env);
   }
-  for (const entry of state.terminalRaw) {
-    out.push(entry.env);
-  }
+  // Raw PTY frames are intentionally excluded. They are exposed separately via
+  // materializeTerminalRawEvents so that the chat timeline's events[] reference
+  // remains stable across terminal batches, preventing 20×/sec useMemo misses.
   return out;
+}
+
+/** Expose only the raw PTY frame envelopes from the reducer state.
+ *  Keyed on `state.terminalRaw` so callers can memo against that field alone —
+ *  chat events changing (e.g. a new jsonl line) does not bust this memo. */
+export function materializeTerminalRawEvents(state: ChatSessionReducerState): WsEnvelope[] {
+  return state.terminalRaw.map((entry) => entry.env);
 }
 
 export function replayEventsFromEnvelope(env: WsEnvelope, projectId: string): WsEnvelope[] {
