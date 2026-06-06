@@ -47,9 +47,6 @@ export default function App() {
   const sessionLabel = useOrchestratorTelemetry((s) => s.sessionLabel);
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
   const sessionBreadcrumbRef = useRef<HTMLButtonElement | null>(null);
-  const [brandMenuOpen, setBrandMenuOpen] = useState(false);
-  const brandMenuRef = useRef<HTMLDivElement | null>(null);
-  const brandButtonRef = useRef<HTMLButtonElement | null>(null);
   const projectChangedCursorRef = useRef<string | null>(readStoredProjectChangedCursor());
   const seenProjectChangedLiveIdsRef = useRef<Set<string>>(new Set());
   const replayInFlightRef = useRef(false);
@@ -71,24 +68,6 @@ export default function App() {
   const [wizardDismissed, setWizardDismissed] = useState(false);
   const [skipWarning, setSkipWarning] = useState(false);
 
-  useEffect(() => {
-    if (!brandMenuOpen) return;
-    function onClick(e: MouseEvent) {
-      const t = e.target as Node;
-      if (brandMenuRef.current?.contains(t)) return;
-      if (brandButtonRef.current?.contains(t)) return;
-      setBrandMenuOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setBrandMenuOpen(false);
-    }
-    document.addEventListener('mousedown', onClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onClick);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [brandMenuOpen]);
 
   // Activity panel open/closed lives in settings_global.activity_panel.
   // `showAllProjects` field still in settings schema (additive — Section 7
@@ -376,15 +355,11 @@ export default function App() {
       >
         <div className="flex shrink-0 items-center" style={{ width: 192 }}>
           <button
-            ref={brandButtonRef}
             type="button"
-            onClick={() => setBrandMenuOpen((v) => !v)}
-            className={`flex h-full w-full items-center gap-2 px-3 text-left hover:bg-muted/50 ${
-              brandMenuOpen ? 'bg-muted/50' : ''
-            }`}
-            aria-haspopup="menu"
-            aria-expanded={brandMenuOpen}
-            title="App menu"
+            onClick={() => setSettingsOpen(true)}
+            disabled={!settings}
+            className="flex h-full w-full items-center gap-2 px-3 text-left hover:bg-muted/50 disabled:opacity-60"
+            title="App settings"
           >
             <span className="text-sm font-bold uppercase tracking-[0.14em] text-primary">
               caisson
@@ -521,27 +496,6 @@ export default function App() {
           onClose={() => setSessionSwitcherOpen(false)}
           applySessionTransition={ws.applySessionTransition}
         />
-      )}
-      {brandMenuOpen && (
-        <div
-          ref={brandMenuRef}
-          role="menu"
-          style={{ position: 'fixed', top: 32, left: 0, width: 192, zIndex: 50 }}
-          className="border border-primary/40 bg-popover py-1 text-popover-foreground shadow-2xl"
-        >
-          <button
-            role="menuitem"
-            type="button"
-            disabled={!settings}
-            onClick={() => {
-              setBrandMenuOpen(false);
-              setSettingsOpen(true);
-            }}
-            className="block w-full px-3 py-1.5 text-left text-xs hover:bg-muted disabled:opacity-40"
-          >
-            App settings…
-          </button>
-        </div>
       )}
       {createOpen && (
         <CreateProjectModal
