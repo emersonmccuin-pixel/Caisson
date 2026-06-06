@@ -42,6 +42,7 @@ export function AreasTab({ project, events }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [showUncategorized, setShowUncategorized] = useState(false);
 
   const sortedAreas = useMemo(
     () => [...areas].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
@@ -162,31 +163,30 @@ export function AreasTab({ project, events }: Props) {
         </div>
       )}
 
-      {sortedAreas.length === 0 ? (
-        <div className="border border-dashed border-border/30 px-4 py-10 text-center text-sm text-muted-foreground">
+      {sortedAreas.length === 0 && (
+        <div className="mb-3 border border-dashed border-border/20 px-4 py-5 text-center text-sm text-muted-foreground">
           No Areas yet. An Area is a project-scoped bucket — an outcome, a
-          category, or a junk drawer. Everything starts in{' '}
-          <span className="text-foreground">Uncaptured</span>.
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          {sortedAreas.map((area, idx) => (
-            <AreaCard
-              key={area.id}
-              area={area}
-              counts={countsByArea.byArea.get(area.id) ?? { open: 0, done: 0 }}
-              isFirst={idx === 0}
-              isLast={idx === sortedAreas.length - 1}
-              onOpen={() => setDetailId(area.id)}
-              onReorder={(dir) => void reorder(area, dir)}
-            />
-          ))}
+          category, or a junk drawer.
         </div>
       )}
 
-      <div className="mt-4 text-[11px] text-[var(--fg-dim)]">
-        Uncaptured · {countsByArea.uncaptured.open} open ·{' '}
-        {countsByArea.uncaptured.done} done — not in any Area.
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        {sortedAreas.map((area, idx) => (
+          <AreaCard
+            key={area.id}
+            area={area}
+            counts={countsByArea.byArea.get(area.id) ?? { open: 0, done: 0 }}
+            isFirst={idx === 0}
+            isLast={idx === sortedAreas.length - 1}
+            onOpen={() => setDetailId(area.id)}
+            onReorder={(dir) => void reorder(area, dir)}
+          />
+        ))}
+        {/* Uncategorized: always last, visually distinct, not reorderable */}
+        <UncategorizedCard
+          counts={countsByArea.uncaptured}
+          onOpen={() => setShowUncategorized(true)}
+        />
       </div>
 
       {detailArea && (
@@ -200,7 +200,50 @@ export function AreasTab({ project, events }: Props) {
           onChanged={refetch}
         />
       )}
+
+      {showUncategorized && (
+        <AreaDetailModal
+          project={project}
+          workItems={workItems}
+          openCount={countsByArea.uncaptured.open}
+          doneCount={countsByArea.uncaptured.done}
+          onClose={() => setShowUncategorized(false)}
+          onChanged={refetch}
+        />
+      )}
     </div>
+  );
+}
+
+function UncategorizedCard({
+  counts,
+  onOpen,
+}: {
+  counts: AreaCounts;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex cursor-pointer flex-col gap-2 border-2 border-dashed border-border/50 bg-card p-3 text-left hover:border-primary/40"
+      title="Click to view tasks not assigned to any Area"
+    >
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-muted-foreground">
+          Uncategorized
+        </span>
+        <span className="shrink-0 border border-border bg-primary/10 px-1.5 py-0.5 text-[10px] text-foreground">
+          {counts.open} open
+        </span>
+        <span className="shrink-0 border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          {counts.done} done
+        </span>
+      </div>
+      <p className="text-[12px] italic text-[var(--fg-dim)]">
+        Tasks not assigned to any Area.
+      </p>
+    </button>
   );
 }
 
