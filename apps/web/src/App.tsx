@@ -8,6 +8,7 @@ import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { SessionSwitcher } from '@/components/SessionSwitcher';
 import { HostHealthPill } from '@/features/system/HostHealthPill';
 import { InboxBell } from '@/features/mailbox/InboxBell';
+import { BuildMarker } from '@/features/system/BuildMarker';
 import { ClaudeVersionBanner } from '@/features/system/ClaudeVersionBanner';
 import { HostHealthBanner } from '@/features/system/HostHealthBanner';
 import { Shell } from '@/components/Shell';
@@ -446,6 +447,7 @@ export default function App() {
         </div>
         </div>
       </header>
+      <BuildMarker />
       <HostHealthBanner />
       <ClaudeVersionBanner />
       {restartRequired && (

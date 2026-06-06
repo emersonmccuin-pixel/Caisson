@@ -17,10 +17,15 @@ export function registerDevControlRoutes(app: Hono, deps: DevControlDeps): void 
   const scheduleRestart = deps.scheduleRestart ?? ((fn: () => void) => { setTimeout(fn, 50); });
   const exitProcess = deps.exitProcess ?? ((code: number) => { process.exit(code); });
 
-  /** GET /api/dev/status — active-agent count + whether a restart is safe. */
+  /** GET /api/dev/status — active-agent count + whether a restart is safe + build info. */
   app.get('/api/dev/status', (c) => {
     const activeAgents = activeRunCount();
-    return c.json({ activeAgents, canRestart: activeAgents === 0 });
+    return c.json({
+      activeAgents,
+      canRestart: activeAgents === 0,
+      buildSha: process.env['PC_BUILD_SHA'] ?? null,
+      buildBranch: process.env['PC_BUILD_BRANCH'] ?? null,
+    });
   });
 
   /**

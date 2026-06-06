@@ -12,6 +12,8 @@
   "scripts": {
     "dev": "node scripts/dev-app.mjs",
     "dev:app": "node scripts/dev-app.mjs",
+    "dev:staging": "node scripts/dev-staging.mjs",
+    "dev:staging:stop": "node scripts/dev-staging.mjs --stop",
     "build": "pnpm --filter @pc/web build",
     "typecheck": "pnpm -r typecheck",
     "desktop:dev": "pnpm --filter @pc/desktop dev",
