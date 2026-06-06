@@ -351,7 +351,7 @@ function ArchivedSection({
           {items === null ? (
             <p className="text-xs text-muted-foreground">Loading…</p>
           ) : items.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No archived work items.</p>
+            <p className="text-xs text-muted-foreground">No archived tasks.</p>
           ) : (
             <div className="space-y-2">
               {[...stages]
@@ -554,7 +554,7 @@ function FallbackPrompt({
   return (
     <div className="border border-warning/60 bg-warning/10 p-3">
       <div className="text-sm font-medium text-foreground">
-        {orphanCount} work item{orphanCount === 1 ? '' : 's'} live in stages you're about to remove.
+        {orphanCount} task{orphanCount === 1 ? '' : 's'} live in stages you're about to remove.
       </div>
       <ul className="ml-4 mt-1 list-disc text-xs text-foreground/80">
         {orphans.map((o) => (

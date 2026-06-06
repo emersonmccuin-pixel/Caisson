@@ -342,7 +342,7 @@ function VerificationReviewBody({
       <div className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 px-6 py-4 text-xs">
         <span className="text-muted-foreground">Agent</span>
         <span className="font-medium text-foreground">{payload.agent}</span>
-        <span className="text-muted-foreground">Contract</span>
+        <span className="text-muted-foreground">Attempt</span>
         <span className="font-mono text-[11px] text-muted-foreground/80">{contract.id}</span>
         <span className="text-muted-foreground">Finished</span>
         <span className="text-foreground">{finishedAt}</span>

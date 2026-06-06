@@ -412,7 +412,7 @@ export function WorkItemDetailModal({
             onClick={() => void softDelete()}
             disabled={busy}
             className="mr-auto border border-destructive/40 bg-background px-3 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
-            title="Archive this work item"
+            title="Archive this task"
           >
             Archive
           </button>
