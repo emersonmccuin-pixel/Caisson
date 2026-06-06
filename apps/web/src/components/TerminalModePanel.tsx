@@ -5,7 +5,6 @@ import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 
 import {
-  maxTerminalSeq,
   removeOverlappingPrefix,
   terminalRawBatchFromEvents,
 } from '@/features/chat/terminalTranscript';
@@ -18,10 +17,10 @@ const TRANSCRIPT_TAIL_BYTES = 1024 * 1024;
 interface TerminalModePanelProps {
   projectId: string;
   sessionId: string | null;
-  /** Raw PTY frame envelopes only. Separated from the chat events[] stream so
-   *  that the terminal's live-write effect does not trigger chat timeline
-   *  recomputes. Contains only type === 'raw' envelopes. */
-  rawEvents: WsEnvelope[];
+  /** Stable imperative subscription for raw PTY batches. Each 50 ms flush
+   *  delivers frames directly to the subscriber callback without touching
+   *  React state, so terminal output causes ~0 re-renders in the parent tree. */
+  subscribeRawTerminal?: (cb: (envs: WsEnvelope[]) => void) => () => void;
   visible: boolean;
   writable: boolean;
   onInput: (data: string) => boolean;
@@ -31,7 +30,7 @@ interface TerminalModePanelProps {
 export function TerminalModePanel({
   projectId,
   sessionId,
-  rawEvents,
+  subscribeRawTerminal,
   visible,
   writable,
   onInput,
@@ -44,13 +43,7 @@ export function TerminalModePanel({
   const webglRef = useRef<WebglAddon | null>(null);
   const dataDisposableRef = useRef<{ dispose(): void } | null>(null);
   const sessionKeyRef = useRef<string | null>(null);
-  const eventsRef = useRef(rawEvents);
   const lastTerminalSeqRef = useRef(0);
-  // Index cursor into `events` so the live-write effect only scans the new tail
-  // each change instead of re-walking the whole array (O(history) per keystroke
-  // echo → O(history^2) over a session). The seq check below stays the
-  // correctness guard; this is purely the perf cursor.
-  const lastScannedIdxRef = useRef(0);
   const attachingRef = useRef(false);
   const attachLiveBufferRef = useRef('');
   const writeQueueRef = useRef('');
@@ -60,9 +53,6 @@ export function TerminalModePanel({
   const onResizeRef = useRef(onResize);
   const [readyToReveal, setReadyToReveal] = useState(false);
 
-  useEffect(() => {
-    eventsRef.current = rawEvents;
-  }, [rawEvents]);
   useEffect(() => {
     writableRef.current = writable;
     const term = termRef.current;
@@ -161,10 +151,10 @@ export function TerminalModePanel({
 
     disposeTerminal();
     sessionKeyRef.current = sessionKey;
-    lastTerminalSeqRef.current = maxTerminalSeq(eventsRef.current, sessionId);
-    // Everything currently in the array is accounted for (loaded via the
-    // transcript fetch); the live effect only needs to process appends after this.
-    lastScannedIdxRef.current = eventsRef.current.length;
+    // Subscription delivers frames from now forward; the transcript fetch covers
+    // all prior history. Initialize to 0 — the seq guard in the subscription
+    // callback prevents any double-writes from the overlapping window.
+    lastTerminalSeqRef.current = 0;
     attachingRef.current = true;
     attachLiveBufferRef.current = '';
     setReadyToReveal(false);
@@ -252,36 +242,32 @@ export function TerminalModePanel({
       disposeTerminal();
       sessionKeyRef.current = null;
       lastTerminalSeqRef.current = 0;
-      lastScannedIdxRef.current = 0;
       setReadyToReveal(false);
     }
   }, [sessionId]);
 
+  // Imperative subscription — frames are pushed directly from the WS batch-flush
+  // handler; this effect never runs on a prop change, so terminal output causes
+  // ~0 React re-renders in the parent tree. Deps are all stable: subscribeRawTerminal
+  // is a useCallback([], []) from useProjectWs, sessionId only changes on session
+  // switch, enqueueWrite is a stable useCallback.
   useEffect(() => {
-    if (!sessionId) return;
-    // Walk only rawEvents appended since the last run (index cursor) so a long
-    // session's history isn't re-scanned on every keystroke echo. If the array
-    // was replaced or shrank (session reset / replay), startIdx falls out of
-    // range and the helper does a full rescan; its seq check prevents
-    // double-writes either way.
-    let startIdx = lastScannedIdxRef.current;
-    if (startIdx > rawEvents.length) startIdx = 0;
-    const pending = terminalRawBatchFromEvents(
-      rawEvents,
-      sessionId,
-      lastTerminalSeqRef.current,
-      startIdx,
-    );
-    lastScannedIdxRef.current = rawEvents.length;
-    for (const raw of pending) {
-      if (attachingRef.current) {
-        attachLiveBufferRef.current += raw.text;
-      } else {
-        enqueueWrite(raw.text);
+    if (!sessionId || !subscribeRawTerminal) return;
+    const unsub = subscribeRawTerminal((envs) => {
+      // envs is the current 50 ms batch — small. Full batch scan (no startIdx
+      // needed); seq guard + sessionId filter in terminalRawBatchFromEvents still apply.
+      const pending = terminalRawBatchFromEvents(envs, sessionId, lastTerminalSeqRef.current);
+      for (const raw of pending) {
+        if (attachingRef.current) {
+          attachLiveBufferRef.current += raw.text;
+        } else {
+          enqueueWrite(raw.text);
+        }
+        lastTerminalSeqRef.current = Math.max(lastTerminalSeqRef.current, raw.seq);
       }
-      lastTerminalSeqRef.current = Math.max(lastTerminalSeqRef.current, raw.seq);
-    }
-  }, [rawEvents, enqueueWrite, sessionId]);
+    });
+    return unsub;
+  }, [subscribeRawTerminal, sessionId, enqueueWrite]);
 
   useEffect(() => {
     const target = fitTargetRef.current;
