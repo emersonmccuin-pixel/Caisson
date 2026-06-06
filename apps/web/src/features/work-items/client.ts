@@ -117,6 +117,7 @@ export const workItemsApi = {
       initiativeId?: ULID | null;
       type?: WorkItemType;
       fields?: Record<string, unknown>;
+      areaId?: ULID | null;
     } = {},
   ): Promise<{ ok: true; workItem: WorkItem }> => {
     const res = await fetch(`/api/projects/${projectId}/work-items/create`, {
