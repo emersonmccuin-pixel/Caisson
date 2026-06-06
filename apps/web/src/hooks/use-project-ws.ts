@@ -38,11 +38,11 @@ import {
   createChatSessionState,
   EMPTY_AGGREGATES,
   materializeChatSessionEvents,
-  materializeTerminalRawEvents,
   replayEventsFromEnvelope,
   replayEventsFromItems,
   type ChatSessionAggregates,
 } from '@/hooks/chat-session-reducer';
+import { type SubscribeRawTerminal } from './raw-terminal-emitter';
 import { useWsEpoch } from '@/store/ws-epoch';
 import { useLiveStore } from '@/store/live-store';
 import {
@@ -57,10 +57,11 @@ const RAW_FRAME_BATCH_MS = 50;
 
 interface UseProjectWsResult {
   events: WsEnvelope[];
-  /** Raw PTY frame envelopes only — separated from `events` so the chat
-   *  timeline's events[] reference stays stable across 50 ms terminal batches.
-   *  Pass this prop down to TerminalModePanel; do NOT merge it into events. */
-  rawEvents: WsEnvelope[];
+  /** Stable imperative subscription for raw PTY batches. Replaces the old
+   *  `rawEvents` prop — subscribers receive each 50 ms batch directly without
+   *  any React state update. Pass `subscribeRawTerminal` down to
+   *  TerminalModePanel instead of threading a mutating array prop. */
+  subscribeRawTerminal: SubscribeRawTerminal;
   aggregates: ChatSessionAggregates;
   /** T3.1 — ticks on every session-changed (new OR resume). The sessions rail
    *  keys its lifecycle refetch off this instead of scanning `events[]`. */
@@ -139,16 +140,18 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projectId, sessionState.projectId, sessionState.timeline, sessionState.sequenced, sessionState.unsequenced],
   );
-  // Keyed on terminalRaw only — changes when raw batches arrive, not when chat
-  // events land. Keeps the TerminalModePanel update path decoupled from the chat
-  // timeline fold, which is the entire point of Option A.
-  const rawEvents = useMemo(
-    () =>
-      projectId && sessionState.projectId === projectId
-        ? materializeTerminalRawEvents(sessionState)
-        : [],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projectId, sessionState.terminalRaw],
+  // Step 1 — stable imperative emitter for raw PTY batches. Lives in a ref so
+  // it never changes identity across renders. Subscribers (TerminalModePanel)
+  // register once on mount and receive each batch directly, bypassing React
+  // state entirely. No useMemo for rawEvents is needed after Step 1b removes
+  // the dispatchSession call for raw frames.
+  const rawTerminalSubsRef = useRef(new Set<(envs: WsEnvelope[]) => void>());
+  const subscribeRawTerminal = useCallback(
+    (cb: (envs: WsEnvelope[]) => void): (() => void) => {
+      rawTerminalSubsRef.current.add(cb);
+      return () => rawTerminalSubsRef.current.delete(cb);
+    },
+    [], // stable — ref never changes identity
   );
   const aggregates = useMemo(
     () =>
@@ -194,7 +197,10 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
       const envs = rawFrameBatch;
       rawFrameBatch = [];
       if (cancelled) return;
-      dispatchSession({ type: 'envelopes', envs });
+      // Step 1b — push directly to imperative subscribers; do NOT dispatch to
+      // the reducer. Raw frames never touch sessionState → no React useMemo
+      // bust → ~0 React re-renders per terminal batch in the entire App tree.
+      for (const cb of rawTerminalSubsRef.current) cb(envs);
     }
 
     function dispatchRuntimeEnvelope(env: WsEnvelope): void {
@@ -505,7 +511,7 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
 
   return {
     events,
-    rawEvents,
+    subscribeRawTerminal,
     aggregates,
     sessionChangedNonce: sessionState.sessionChangedNonce,
     status,

@@ -59,9 +59,9 @@ interface ShellProps {
   onProjectReorder: (orderedIds: string[]) => void;
   unreadProjectIds: ReadonlySet<string>;
   wsEvents: WsEnvelope[];
-  /** Raw PTY frame envelopes, separated from wsEvents to prevent chat timeline
-   *  recompute on every terminal batch. Passed only to the Orchestrator path. */
-  wsRawEvents: WsEnvelope[];
+  /** Stable imperative subscription for raw PTY batches. Replaces the old
+   *  wsRawEvents array prop — terminal frames bypass React state entirely. */
+  wsSubscribeRawTerminal: (cb: (envs: WsEnvelope[]) => void) => () => void;
   wsAggregates: ChatSessionAggregates;
   /** T3.1 — session-changed nonce for the sessions rail's lifecycle refetch. */
   sessionChangedNonce: number;
@@ -82,7 +82,7 @@ export function Shell({
   onProjectReorder,
   unreadProjectIds,
   wsEvents,
-  wsRawEvents,
+  wsSubscribeRawTerminal,
   wsAggregates,
   sessionChangedNonce,
   wsSend,
@@ -139,7 +139,7 @@ export function Shell({
             activeProject={activeProject}
             projectCount={projects.length}
             wsEvents={wsEvents}
-            wsRawEvents={wsRawEvents}
+            wsSubscribeRawTerminal={wsSubscribeRawTerminal}
             wsAggregates={wsAggregates}
             wsSend={wsSend}
             wsStatus={wsStatus}
@@ -229,7 +229,7 @@ function Center({
   activeProject,
   projectCount,
   wsEvents,
-  wsRawEvents,
+  wsSubscribeRawTerminal,
   wsAggregates,
   wsSend,
   wsStatus,
@@ -243,7 +243,7 @@ function Center({
   activeProject: Project | null;
   projectCount: number;
   wsEvents: WsEnvelope[];
-  wsRawEvents: WsEnvelope[];
+  wsSubscribeRawTerminal: (cb: (envs: WsEnvelope[]) => void) => () => void;
   wsAggregates: ChatSessionAggregates;
   wsSend: (msg: WsOutbound) => boolean;
   wsStatus: WsStatus;
@@ -271,7 +271,7 @@ function Center({
           <Orchestrator
             project={activeProject}
             events={wsEvents}
-            rawEvents={wsRawEvents}
+            subscribeRawTerminal={wsSubscribeRawTerminal}
             aggregates={wsAggregates}
             send={wsSend}
             wsStatus={wsStatus}

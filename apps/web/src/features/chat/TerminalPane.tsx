@@ -12,7 +12,7 @@ export function TerminalPane({
   eligible,
   projectId,
   sessionId,
-  rawEvents,
+  subscribeRawTerminal,
   active,
   writable,
   onInput,
@@ -21,10 +21,9 @@ export function TerminalPane({
   eligible: boolean;
   projectId: string;
   sessionId: string | null;
-  /** Raw PTY frame envelopes only — no chat events. Wired to the separate
-   *  rawEvents memo in use-project-ws so terminal batches don't disturb the
-   *  chat timeline's events[] identity. */
-  rawEvents: WsEnvelope[];
+  /** Stable imperative subscription for raw PTY batches. Terminal frames are
+   *  delivered directly to TerminalModePanel without touching React state. */
+  subscribeRawTerminal?: (cb: (envs: WsEnvelope[]) => void) => () => void;
   active: boolean;
   writable: boolean;
   onInput?: (data: string) => boolean;
@@ -35,7 +34,7 @@ export function TerminalPane({
     <TerminalModePanel
       projectId={projectId}
       sessionId={sessionId}
-      rawEvents={rawEvents}
+      subscribeRawTerminal={subscribeRawTerminal}
       visible={active}
       writable={writable}
       onInput={onInput}

@@ -39,10 +39,10 @@ import type { ULID } from '@/features/projects/types';
 interface OrchestratorProps {
   project: Project;
   events: WsEnvelope[];
-  /** Raw PTY frame envelopes only — does NOT contain chat events. Passed
-   *  directly to TerminalPane so the chat timeline fold is not woken by
-   *  terminal output. See pc-pty-chat-237 (Option A). */
-  rawEvents: WsEnvelope[];
+  /** Stable imperative subscription for raw PTY batches. Passed directly to
+   *  TerminalModePanel so that terminal output causes zero React re-renders in
+   *  the Orchestrator/ChatSurface subtree. See pc-pty-chat-244. */
+  subscribeRawTerminal: (cb: (envs: WsEnvelope[]) => void) => () => void;
   aggregates: ChatSessionAggregates;
   send: (msg: WsOutbound) => boolean;
   wsStatus: WsStatus;
@@ -219,7 +219,7 @@ function composerStatusMessageFor(
 export function Orchestrator({
   project,
   events,
-  rawEvents,
+  subscribeRawTerminal,
   aggregates,
   send,
   wsStatus,
@@ -706,7 +706,7 @@ export function Orchestrator({
   return (
     <ChatSurface
       events={sourceEvents}
-      rawEvents={rawEvents}
+      subscribeRawTerminal={subscribeRawTerminal}
       projectId={project.id}
       currentSessionId={session?.id ?? null}
       onSend={(text, clientMessageId) => send({ type: 'send', text, clientMessageId })}
