@@ -127,6 +127,17 @@ export {
   withSettingsDefaults,
 } from './settings.ts';
 export type { Worktree, WorktreeStatus } from './worktree.ts';
+
+// Slice 1 (Areas + context model) — roll-up decision engine.
+export {
+  decideContractCompletion,
+  planRollUp,
+} from './roll-up.ts';
+export type {
+  ContractCompletionDecision,
+  PlanRollUpInput,
+  WorkItemSnapshot,
+} from './roll-up.ts';
 export type {
   AgentColor,
   AgentDef,

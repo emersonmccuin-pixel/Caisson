@@ -22,6 +22,7 @@ import {
   prepareClaudeRuntimeFiles,
   type ClaudeRuntimeIdentity,
 } from './claude-runtime-bundle.ts';
+import { buildContextChain } from './context-chain.ts';
 import { PC_RIG_TOOL_NAMES } from './pod-tool-catalog.ts';
 import {
   renderAgentRosterForCaisson,
@@ -128,6 +129,22 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
     variables.PROJECT_AREAS = renderProjectAreas(input.projectId ?? null);
   }
 
+  // Slice 1 (context model) — build the "## Project & area context" chain
+  // block for injection into the system prompt when a work item is present.
+  // Only the server has DB access; this is the right call site.
+  let contextChain: string | undefined;
+  if (input.workItem?.workItemId && input.projectId) {
+    try {
+      contextChain = buildContextChain({
+        workItemId: input.workItem.workItemId as ULID,
+        projectId: input.projectId,
+      }) || undefined;
+    } catch {
+      // Non-fatal: missing context chain is better than a spawn failure.
+      contextChain = undefined;
+    }
+  }
+
   const materialised: MaterializedPluginPod = materializePodPlugin({
     bundle,
     worktreeDir: input.worktreeDir,
@@ -135,6 +152,7 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
     baselineMcpServers: runtimeFiles.baselineMcpServers,
     mcpToolCatalog: { 'pc-rig': PC_RIG_TOOL_NAMES },
     workItem: input.workItem,
+    ...(contextChain ? { contextChain } : {}),
     ...(Object.keys(variables).length > 0 ? { variables } : {}),
   });
 

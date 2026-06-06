@@ -48,7 +48,13 @@ import type {
   VerificationStatus,
   VerificationTier,
 } from '@pc/domain';
-import { ContractV2, KINDS_REQUIRING_EVIDENCE, evaluateAcceptance } from '@pc/domain';
+import {
+  ContractV2,
+  KINDS_REQUIRING_EVIDENCE,
+  evaluateAcceptance,
+  decideContractCompletion,
+  planRollUp,
+} from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
 
@@ -294,7 +300,13 @@ export async function runVerificationOnTerminal(
 /** Accept the contract + fire the WI-advance roll-up. The roll-up flips the
  *  linked work item to `complete` + auto-advances it to the done stage — but
  *  ONLY when the contract has a linked WI. Fires exactly once (this is the sole
- *  accept path). */
+ *  accept path).
+ *
+ *  Slice 1 — Rule 1 + Rule 2 guard (Steps 9+10):
+ *    - Leaf WI (no children): complete immediately (existing behavior).
+ *    - Parent WI (children present): accept contract only; roll-up cascade
+ *      completes the parent when all children are done.
+ *    - Workflow root: exempt from roll-up — keep existing completion behavior. */
 function acceptContract(args: {
   input: RunVerificationInput;
   contractId: ULID;
@@ -320,18 +332,35 @@ function acceptContract(args: {
   // gateway transaction. Row gone mid-flight → commit nothing, emit nothing.
   const wiRow = workItemId ? getWorkItem(workItemId) : null;
   if (workItemId && wiRow) {
-    gateway.tryCommitWorkItemChange({
-      projectId: wiRow.projectId,
-      mutate: () => {
-        const updated = applyRunOutcome(workItemId, 'complete', null, historyNote);
-        if (!updated) return null;
-        if (input.project) {
-          const advanced = autoAdvanceToDoneStage(workItemId, input.project);
-          if (advanced) return { row: advanced, reason: 'auto-advanced' };
-        }
-        return { row: updated, reason: 'verified' };
-      },
+    // Step 9 — Rule 1 + Rule 2 guard: decide whether this contract acceptance
+    // should immediately complete the WI or defer to roll-up.
+    const children = listChildWorkItems(workItemId);
+    const decision = decideContractCompletion({
+      childCount: children.length,
+      isWorkflowRoot: wiRow.isWorkflowRoot ?? false,
     });
+
+    if (decision === 'complete') {
+      // Leaf or workflow root — current behavior: flip to complete immediately.
+      gateway.tryCommitWorkItemChange({
+        projectId: wiRow.projectId,
+        mutate: () => {
+          const updated = applyRunOutcome(workItemId, 'complete', null, historyNote);
+          if (!updated) return null;
+          if (input.project) {
+            const advanced = autoAdvanceToDoneStage(workItemId, input.project);
+            if (advanced) return { row: advanced, reason: 'auto-advanced' };
+          }
+          return { row: updated, reason: 'verified' };
+        },
+      });
+
+      // Step 10 — cascade: after the leaf completes, check if its ancestors
+      // also become complete (planRollUp). Apply each roll-up in order.
+      applyRollUpCascade(workItemId, historyNote, input.project ?? null);
+    }
+    // else 'accept-only': contract is marked passed but the WI stays open
+    // until its children all complete (cascade fires from those children).
   }
   return {
     contractId,
@@ -341,6 +370,54 @@ function acceptContract(args: {
     notes,
     predicatesEvaluated,
   };
+}
+
+/**
+ * Step 10 — roll-up cascade: after completing `justCompletedId`, walk up the
+ * parent chain and complete any ancestor whose children are now all done.
+ * Each ancestor's completion is a separate gateway commit (each emits its own
+ * `work-item.changed` live-event). Cascade continues until no more ancestors
+ * qualify or a workflow root is reached.
+ */
+function applyRollUpCascade(
+  justCompletedId: ULID,
+  _historyNote: string,
+  project: Project | null,
+): void {
+  // Snapshot helper that wraps the DB repo calls for planRollUp.
+  const toRollUp = planRollUp({
+    completedWorkItemId: justCompletedId,
+    getParent: (id) => {
+      const row = getWorkItem(id);
+      if (!row) return null;
+      const parent = row.parentId ? getWorkItem(row.parentId) : null;
+      if (!parent) return null;
+      return {
+        id: parent.id,
+        parentId: parent.parentId,
+        isWorkflowRoot: parent.isWorkflowRoot ?? false,
+        status: parent.status,
+      };
+    },
+    getChildren: (parentId) => listChildWorkItems(parentId),
+  });
+
+  for (const ancestorId of toRollUp) {
+    const ancestorRow = getWorkItem(ancestorId);
+    if (!ancestorRow) continue;
+    gateway.tryCommitWorkItemChange({
+      projectId: ancestorRow.projectId,
+      mutate: () => {
+        const updated = applyRunOutcome(ancestorId, 'complete', null, 'completed by roll-up');
+        if (!updated) return null;
+        if (project) {
+          const advanced = autoAdvanceToDoneStage(ancestorId, project);
+          if (advanced) return { row: advanced, reason: 'auto-advanced' };
+        }
+        return { row: updated, reason: 'verified' };
+      },
+    });
+  }
 }
 
 // ── Predicate executors ────────────────────────────────────────────────────

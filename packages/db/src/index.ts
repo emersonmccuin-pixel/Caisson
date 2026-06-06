@@ -327,6 +327,34 @@ export {
 } from './repos/orchestrator-sessions.ts';
 export type { CreateOrchestratorSessionInput } from './repos/orchestrator-sessions.ts';
 
+// Slice 1 (Areas + context model) — ContextDoc repo.
+export {
+  createContextDoc,
+  createContextDocInDb,
+  getContextDoc,
+  getContextDocInDb,
+  listContextChainDocs,
+  listContextChainDocsInDb,
+  listContextDocsForScope,
+  listContextDocsForScopeInDb,
+  sanitizeFts5Query,
+  searchContextDocs,
+  softDeleteContextDoc,
+  softDeleteContextDocInDb,
+  updateContextDoc,
+  updateContextDocInDb,
+} from './repos/context-docs.ts';
+export type {
+  ContextDocRow,
+  ContextDocScope,
+  ContextDocSearchResult,
+  ContextDocWithRank,
+  CreateContextDocInput,
+  ListContextChainDocsInput,
+  ListContextDocsOptions,
+  UpdateContextDocInput,
+} from './repos/context-docs.ts';
+
 export {
   cancelOpenOrchestratorSendsForSession,
   cancelQueuedOrchestratorSend,

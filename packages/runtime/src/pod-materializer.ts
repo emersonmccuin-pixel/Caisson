@@ -72,6 +72,12 @@ export interface MaterializePodOptions {
    *  values; AVAILABLE_TOOLS is always recomputed here from the final
    *  expanded tool list. No-op when omitted. */
   variables?: Record<string, string>;
+  /** Slice 1 (context model) — pre-built "## Project & area context" chain
+   *  string injected between the prompt body and the "## Your contract" section.
+   *  Built by `buildContextChain` in apps/server/src/services/context-chain.ts.
+   *  Independent of whether a contract is present (both can arrive together).
+   *  Empty/undefined → no chain section rendered. */
+  contextChain?: string;
 }
 
 export interface MaterializedPod {
@@ -164,6 +170,7 @@ function materializePodFiles(
       bundle.knowledge,
       opts.workItem,
       variables,
+      opts.contextChain,
     ),
     'utf8',
   );
@@ -212,6 +219,7 @@ export function renderAgentMd(
   knowledge: readonly PodKnowledgeRow[] = [],
   workItem?: PodWorkItemContext,
   variables?: Record<string, string>,
+  contextChain?: string,
 ): string {
   const fm: string[] = ['---', `name: ${agent.name}`];
   if (agent.description.trim() !== '') fm.push(`description: ${agent.description}`);
@@ -222,13 +230,22 @@ export function renderAgentMd(
   fm.push('---');
   const effectiveVariables = withMaterializerVariables(variables, tools);
   const body = substituteVariables(agent.prompt.trim(), effectiveVariables);
+  // Slice 1: context chain goes between the prompt body and the contract section.
+  const chainBlock = renderContextChainSection(contextChain);
   const assignment = workItem ? renderAssignment(workItem) : '';
   const canReadKnowledge = tools.includes(KNOWLEDGE_READ_TOOL);
   const footer = canReadKnowledge ? renderKnowledgeFooter(agent.id, knowledge) : '';
   const toolsFooter = agent.prompt.includes('{{AVAILABLE_TOOLS}}')
     ? ''
     : renderAvailableToolsFooter(tools);
-  return `${fm.join('\n')}\n\n${body}${assignment}${footer}${toolsFooter}\n`;
+  return `${fm.join('\n')}\n\n${body}${chainBlock}${assignment}${footer}${toolsFooter}\n`;
+}
+
+/** Emit the pre-built context chain block (between prompt body and contract).
+ *  Returns `''` when there is no chain to render. */
+function renderContextChainSection(chain: string | undefined): string {
+  if (!chain?.trim()) return '';
+  return `\n\n${chain}`;
 }
 
 /** Canonical tool-list rendering for agent prompts. This runs inside the

@@ -15,6 +15,7 @@ import { PC_RIG_TOOL_REGISTRY } from '@pc/domain/tool-registry';
 import type { ToolContext, ToolResult } from './context.ts';
 import { handleAgentRunTool } from './agent-runs.ts';
 import { handleAgentTool } from './agents.ts';
+import { handleContextDocTool } from './context-docs.ts';
 import { handleMetaTool } from './meta.ts';
 import { handleProjectConfigTool } from './project-config.ts';
 import { handleWorkItemTool } from './work-items.ts';
@@ -37,6 +38,8 @@ export async function dispatchPcRigTool(
   if (workItemResult) return workItemResult;
   const agentResult = await handleAgentTool(name, args, ctx);
   if (agentResult) return agentResult;
+  const contextDocResult = await handleContextDocTool(name, args, ctx);
+  if (contextDocResult) return contextDocResult;
   const workflowResult = await handleWorkflowTool(name, args, ctx);
   if (workflowResult) return workflowResult;
   const projectConfigResult = await handleProjectConfigTool(name, args, ctx);

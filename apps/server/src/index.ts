@@ -74,6 +74,7 @@ import { registerRuntimeHostRoutes } from './features/runtime-host/routes.ts';
 import { registerRuntimeHostWebSocketServer } from './features/runtime-host/websocket-server.ts';
 import { registerWorkItemRoutes } from './features/work-items/routes.ts';
 import { registerAreaRoutes } from './features/areas/routes.ts';
+import { registerContextDocRoutes } from './features/context-docs/routes.ts';
 import { registerContractRoutes } from './features/contracts/routes.ts';
 import { registerAgentRunRoutes } from './features/agent-runs/routes.ts';
 import { registerWorktreeRoutes } from './features/project-worktrees/routes.ts';
@@ -1103,6 +1104,8 @@ registerWorkItemRoutes(app, {
 });
 
 registerAreaRoutes(app, { resolveProject });
+
+registerContextDocRoutes(app, { resolveProject });
 
 registerContractRoutes(app, {});
 
