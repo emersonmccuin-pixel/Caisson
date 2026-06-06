@@ -47,6 +47,99 @@ const PID_FILE = join(SANDBOX_DIR, '.staging-pids.json');
 const VITE_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 500;
 
+// ── Port reclaim ──────────────────────────────────────────────────────────────
+/**
+ * Kill every process currently listening on `port` (127.0.0.1 or 0.0.0.0).
+ * Returns the list of PIDs that were killed.
+ * Silently tolerates "no process found" and races to already-dead.
+ *
+ * win32 : netstat -ano → parse LISTENING rows → taskkill /F /T /PID
+ * posix : lsof -ti tcp:<port> (fallback: fuser <port>/tcp) → kill -9
+ */
+function reclaimPort(port) {
+  /** @type {number[]} */
+  const killed = [];
+
+  if (process.platform === 'win32') {
+    const r = spawnSync('netstat -ano', { shell: true, encoding: 'utf-8' });
+    const re = new RegExp(`(?:127\\.0\\.0\\.1|0\\.0\\.0\\.0):${port}\\s`);
+    for (const line of (r.stdout ?? '').split('\n')) {
+      if (!line.includes('LISTENING')) continue;
+      if (!re.test(line)) continue;
+      const parts = line.trim().split(/\s+/);
+      const pid = parseInt(parts[parts.length - 1], 10);
+      // Guard against obviously-invalid PIDs (System Idle = 0, System = 4)
+      if (!isNaN(pid) && pid > 4) {
+        spawnSync(`taskkill /F /T /PID ${pid}`, { shell: true, stdio: 'ignore' });
+        killed.push(pid);
+      }
+    }
+  } else {
+    // Try lsof; fall back to fuser
+    let rawPids = '';
+    const lsof = spawnSync(`lsof -ti tcp:${port}`, { shell: true, encoding: 'utf-8' });
+    if ((lsof.status ?? 1) === 0) {
+      rawPids = (lsof.stdout ?? '').trim();
+    } else {
+      const fuser = spawnSync(`fuser ${port}/tcp 2>/dev/null`, { shell: true, encoding: 'utf-8' });
+      rawPids = (fuser.stdout ?? '').trim();
+    }
+    for (const token of rawPids.split(/\s+/).filter(Boolean)) {
+      const pid = parseInt(token, 10);
+      if (isNaN(pid) || pid <= 0) continue;
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+      killed.push(pid);
+    }
+  }
+
+  return killed;
+}
+
+/**
+ * Startup preflight — run BEFORE spawning API/web children.
+ * 1. Reclaim API_PORT + WEB_PORT (kill any holders).
+ * 2. Kill PIDs recorded in a stale PID_FILE (belt-and-suspenders).
+ * 3. Delete stale PID_FILE.
+ */
+async function preflight() {
+  console.log('[staging] preflight: reclaiming ports and clearing stale state…');
+  let anyReclaimed = false;
+
+  for (const port of [API_PORT, WEB_PORT]) {
+    const killed = reclaimPort(port);
+    for (const pid of killed) {
+      console.log(`[staging] reclaimed :${port} (pid ${pid})`);
+      anyReclaimed = true;
+    }
+  }
+
+  if (existsSync(PID_FILE)) {
+    let pids;
+    try {
+      pids = JSON.parse(readFileSync(PID_FILE, 'utf-8'));
+    } catch { /* corrupted — just delete it */ }
+
+    if (pids) {
+      for (const pid of [pids.apiPid, pids.webPid]) {
+        if (!pid) continue;
+        if (process.platform === 'win32') {
+          spawnSync(`taskkill /F /T /PID ${pid}`, { shell: true, stdio: 'ignore' });
+        } else {
+          try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+        }
+      }
+      anyReclaimed = true;
+    }
+
+    try { unlinkSync(PID_FILE); } catch { /* ignore */ }
+    console.log('[staging] stale pidfile cleared.');
+  }
+
+  if (!anyReclaimed) {
+    console.log('[staging] ports clear');
+  }
+}
+
 // ── Process registry ──────────────────────────────────────────────────────────
 /** @type {{ label: string; child: import('node:child_process').ChildProcess }[]} */
 const children = [];
@@ -145,6 +238,15 @@ async function stopStaging() {
       }
     } catch { /* already dead */ }
   }
+
+  // Reclaim by port so orphans not in the pidfile are also cleaned up.
+  for (const port of [API_PORT, WEB_PORT]) {
+    const killed = reclaimPort(port);
+    for (const pid of killed) {
+      console.log(`[staging] reclaimed :${port} (pid ${pid})`);
+    }
+  }
+
   try { unlinkSync(PID_FILE); } catch { /* ignore */ }
   console.log('[staging] stopped.');
 }
@@ -301,6 +403,9 @@ async function main() {
     console.error(`[staging] clearing inherited CLAUDE_CONFIG_DIR (${process.env['CLAUDE_CONFIG_DIR']})`);
     delete process.env['CLAUDE_CONFIG_DIR'];
   }
+
+  // Preflight — reclaim ports + clear stale pidfile before touching children
+  await preflight();
 
   // Phase A — sync dev-instance to local dev tip
   console.log('[staging] syncing dev-instance worktree…');
