@@ -53,7 +53,6 @@ import {
 } from '@/features/live/hooks';
 
 const INBOUND_DIAGNOSTICS_MIN_INTERVAL_MS = 250;
-const RAW_FRAME_BATCH_MS = 50;
 
 interface UseProjectWsResult {
   events: WsEnvelope[];
@@ -210,11 +209,11 @@ export function useProjectWs(project: Project | null): UseProjectWsResult {
         return;
       }
       rawFrameBatch.push(env);
-      if (rawFrameFlushTimer !== null) return;
-      rawFrameFlushTimer = setTimeout(() => {
-        rawFrameFlushTimer = null;
-        flushRawFrames();
-      }, RAW_FRAME_BATCH_MS);
+      // Flush IMMEDIATELY — no batch wall. The old 50ms timer bounded keystroke
+      // echo latency (sluggish typing). Raw frames bypass React (Step 1b) and the
+      // terminal's own RAF-batched write coalesces rendering, so flushing per
+      // frame has no re-render cost and removes the typing lag.
+      flushRawFrames();
     }
 
     function connect(): void {
