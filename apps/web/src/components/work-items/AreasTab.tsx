@@ -226,7 +226,8 @@ function UncategorizedCard({
     <button
       type="button"
       onClick={onOpen}
-      className="flex cursor-pointer flex-col gap-2 border-2 border-dashed border-border/50 bg-card p-3 text-left hover:border-primary/40"
+      className="flex cursor-pointer flex-col gap-2 bg-card p-3 text-left"
+      style={{ border: '2px dashed rgba(212, 166, 74, 0.4)' }}
       title="Click to view tasks not assigned to any Area"
     >
       <div className="flex items-center gap-2">
@@ -266,7 +267,8 @@ function AreaCard({
     <button
       type="button"
       onClick={onOpen}
-      className="flex cursor-pointer flex-col gap-2 border-2 border-border bg-card p-3 text-left hover:border-primary/60"
+      className="flex cursor-pointer flex-col gap-2 bg-card p-3 text-left"
+      style={{ border: '2px solid rgba(212, 166, 74, 0.45)' }}
       title="Click to view this Area"
     >
       <div className="flex items-center gap-2">

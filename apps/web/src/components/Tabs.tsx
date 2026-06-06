@@ -12,7 +12,7 @@ const LABEL: Record<(typeof TABS)[number], string> = {
   orchestrator: 'chat',
   'work-items': 'work',
   agents: 'agents',
-  workflows: 'workflows',
+  workflows: 'processes',
   patterns: 'patterns',
   files: 'files',
 };
