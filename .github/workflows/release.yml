@@ -17,7 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # macOS PARKED — codesign hangs deep-signing Caisson.app in headless CI
+        # (see pc-pty-chat-245). Windows-only releases until that's diagnosed/fixed.
+        os: [windows-latest]
 
     steps:
       - name: Checkout
