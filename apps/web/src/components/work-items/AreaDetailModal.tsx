@@ -5,7 +5,7 @@
 //  • Create-a-task-in-place (title only, defaults to intake stage + this area)
 //
 // Live refresh: re-fetches docs on `context-doc` live-event frames for this area.
-// Explicit close only — no backdrop/Escape (house rule; modals host hard-to-redo work).
+// Close: × button, footer Close, Escape key, or backdrop click.
 
 import { useEffect, useRef, useState } from 'react';
 
@@ -60,6 +60,15 @@ export function AreaDetailModal({
   const [editing, setEditing] = useState(false);
   const openWorkItem = useChatWorkItemModal((s) => s.open);
   const openQuickAdd = useGlobalQuickAdd((s) => s.open);
+
+  // Escape key closes the modal.
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [onClose]);
 
   // Open members only — area-scoped or uncategorized (areaId == null).
   const openMembers = workItems.filter(
@@ -195,8 +204,21 @@ export function AreaDetailModal({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 grid place-items-center bg-black/40">
-        <div className="flex max-h-[85vh] w-full max-w-2xl flex-col border border-border bg-card text-foreground">
+      {/* Backdrop — click outside to close */}
+      <div
+        className="fixed inset-0 z-50 grid place-items-center bg-black/40"
+        onClick={onClose}
+      >
+        {/* Modal panel — stop propagation so inner clicks don't close */}
+        <div
+          className="flex w-[75vw] max-w-[960px] flex-col bg-card text-foreground"
+          style={{
+            maxHeight: '80vh',
+            minHeight: '75vh',
+            border: '1px solid rgba(212,166,74,0.25)',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
           {/* Header */}
           <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
             <div>
