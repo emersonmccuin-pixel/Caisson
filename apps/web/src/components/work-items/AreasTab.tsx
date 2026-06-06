@@ -347,12 +347,10 @@ function AreaCardContent({
   area,
   counts,
   overlay = false,
-  dragHandleProps,
 }: {
   area: Area;
   counts: AreaCounts;
   overlay?: boolean;
-  dragHandleProps?: React.HTMLAttributes<HTMLElement>;
 }) {
   return (
     <div
@@ -362,10 +360,9 @@ function AreaCardContent({
       <div className="flex items-center gap-2">
         {/* Drag handle — grip icon */}
         <span
-          {...dragHandleProps}
-          className="shrink-0 cursor-grab text-[var(--fg-dim)] opacity-40 hover:opacity-80 active:cursor-grabbing"
+          className="shrink-0 text-[14px] leading-none text-[rgba(212,166,74,0.85)]"
           title="Drag to reorder"
-          onClick={(e) => e.stopPropagation()}
+          aria-hidden="true"
         >
           ⠿
         </span>
@@ -405,7 +402,6 @@ function SortableAreaCard({
   onOpen: () => void;
 }) {
   const {
-    attributes,
     listeners,
     setNodeRef,
     transform,
@@ -423,22 +419,18 @@ function SortableAreaCard({
     <div
       ref={setNodeRef}
       style={style}
-      // Whole card opens area on click; drag handle stops propagation.
+      {...listeners}
+      // Drag anywhere on the card to reorder; a click (no drag) opens it.
       onClick={onOpen}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') onOpen();
       }}
-      className="cursor-pointer"
-      title="Click to view this Area"
+      className="cursor-grab active:cursor-grabbing"
+      title="Drag to reorder · click to open"
     >
-      <AreaCardContent
-        area={area}
-        counts={counts}
-        overlay={false}
-        dragHandleProps={{ ...attributes, ...listeners }}
-      />
+      <AreaCardContent area={area} counts={counts} overlay={false} />
     </div>
   );
 }
