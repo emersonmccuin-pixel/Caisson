@@ -56,13 +56,20 @@ export function browseFolder(input: string | null | undefined, opts: BrowseOptio
   if (!isAbsolute(expanded)) {
     throw new BrowseError(`path must be absolute (got: ${JSON.stringify(input)})`, 'invalid');
   }
-  const path = resolve(expanded);
+  const requested = resolve(expanded);
 
-  if (gateRoots.length > 0 && !isInsideAnyRoot(path, gateRoots)) {
-    throw new BrowseError(`path not inside the allowed root(s): ${path}`, 'forbidden');
+  if (gateRoots.length > 0 && !isInsideAnyRoot(requested, gateRoots)) {
+    throw new BrowseError(`path not inside the allowed root(s): ${requested}`, 'forbidden');
   }
+
+  // Walk up to the nearest existing ancestor — prevents the picker from
+  // dead-ending when the stored/seeded path doesn't exist yet (e.g. ~/Projects
+  // on a fresh Mac). The ancestor is clamped at the gate root (when set) or
+  // the home directory so we never escape the intended scope.
+  const path = existingAncestor(requested, gateRoots, home);
   if (!existsSync(path)) {
-    throw new BrowseError(`path does not exist: ${path}`, 'not_found');
+    // Only reachable if home itself doesn't exist — extremely unlikely.
+    throw new BrowseError(`path does not exist: ${requested}`, 'not_found');
   }
   if (!statSync(path).isDirectory()) {
     throw new BrowseError(`path is not a directory: ${path}`, 'not_directory');
@@ -143,6 +150,34 @@ export type BrowseErrorKind =
 export class BrowseError extends Error {
   constructor(message: string, public readonly kind: BrowseErrorKind) {
     super(message);
+  }
+}
+
+/**
+ * Walk up from `path` until we reach an existing directory, stopping no
+ * higher than the lowest gate root (or `home` if no gate roots are set).
+ * Always returns an absolute path that exists on disk (home is the fallback).
+ */
+function existingAncestor(path: string, gateRoots: string[], home: string): string {
+  const floor = gateRoots.length > 0
+    ? gateRoots.reduce((shortest, r) =>
+        r.length < shortest.length ? r : shortest,
+      )
+    : home;
+
+  let current = path;
+  while (true) {
+    if (existsSync(current) && statSync(current).isDirectory()) return current;
+    const parent = dirname(current);
+    // At filesystem root or at/below the floor — use the floor itself.
+    if (parent === current || normalize(current) === normalize(floor)) {
+      return existsSync(floor) ? floor : home;
+    }
+    // Don't walk past the floor.
+    if (floor.length > current.length) {
+      return existsSync(floor) ? floor : home;
+    }
+    current = parent;
   }
 }
 

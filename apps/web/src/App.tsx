@@ -58,8 +58,10 @@ export default function App() {
 
   // Section 10 Phase 2 — first-run onboarding gate. `?onboarding=force` opens
   // it with real preflight; `?onboarding=sim` opens it on a faked blank machine
-  // (dev "fresh machine" switch). Otherwise it shows only on a true first run
-  // (marker unset + no projects yet).
+  // (dev "fresh machine" switch). Otherwise, gate is PREREQUISITE-DRIVEN:
+  // on every launch we check actual auth + folder state, not a completion marker.
+  // This forces users who previously skipped onboarding back through setup when
+  // their Claude auth is missing.
   const onboardingParam = useMemo(
     () => new URLSearchParams(window.location.search).get('onboarding'),
     [],
@@ -67,8 +69,16 @@ export default function App() {
   const forceOnboarding = onboardingParam === 'force' || onboardingParam === 'sim';
   const onboardingSimMode = onboardingParam === 'sim';
   const [wizardDismissed, setWizardDismissed] = useState(false);
-  const [skipWarning, setSkipWarning] = useState(false);
-
+  // Boot readiness: null = checking; true = auth ok + folder set; false = wizard needed.
+  // Force/sim modes skip the check and always show the wizard.
+  const [bootReady, setBootReady] = useState<boolean | null>(
+    forceOnboarding || onboardingSimMode ? false : null,
+  );
+  // Auth banner: shown when the user is inside the app but Claude isn't signed
+  // in (e.g. the token expired). Checked once on mount, after onboarding.
+  // 'unknown' = not checked yet; 'authed' = fine; 'login-required' = show banner.
+  const [appAuthStatus, setAppAuthStatus] = useState<'unknown' | 'authed' | 'login-required'>('unknown');
+  const authCheckDoneRef = useRef(false);
 
   // Activity panel open/closed lives in settings_global.activity_panel.
   // `showAllProjects` field still in settings schema (additive — Section 7
@@ -87,10 +97,40 @@ export default function App() {
         projectsLoadedRef.current = true;
         setProjects([]);
       });
-    void settingsApi.getSettings().then(setSettings).catch(() => {
+    void settingsApi.getSettings().then((s) => {
+      setSettings(s);
+      // Prerequisite-driven gate: check ACTUAL state, not a completion marker.
+      // Any missing auth or unset folder → wizard, regardless of prior "skipped" state.
+      if (!forceOnboarding && !onboardingSimMode) {
+        const folderOk = (s.projectsFolder ?? '').trim().length > 0;
+        void settingsApi.getPreflight()
+          .then((p) => { setBootReady(p.auth.status === 'authed' && folderOk); })
+          .catch(() => { setBootReady(true); }); // transient API error → let through
+      }
+    }).catch(() => {
       /* best-effort — surfaces as gear icon disabled until next load */
+      if (!forceOnboarding && !onboardingSimMode) setBootReady(true);
     });
-  }, []);
+  }, [forceOnboarding, onboardingSimMode]);
+
+  // Check auth status once after onboarding is dismissed (or on load if already
+  // completed). Shows a banner if the account isn't signed in — prevents a
+  // blank/broken app when the session expires after first-run.
+  useEffect(() => {
+    if (authCheckDoneRef.current) return;
+    if (!settings) return; // wait until settings load
+    if (!wizardDismissed && !forceOnboarding) return; // wizard still showing
+    if (onboardingSimMode) return; // sim mode — skip real auth check
+    authCheckDoneRef.current = true;
+    void settingsApi.getPreflight()
+      .then((p) => {
+        setAppAuthStatus(p.auth.status === 'authed' ? 'authed' : 'login-required');
+      })
+      .catch(() => {
+        // Transient failure — don't surface the banner (API may be starting).
+        setAppAuthStatus('authed');
+      });
+  }, [settings, wizardDismissed, forceOnboarding, onboardingSimMode]);
 
   // Apply the persisted fontScale to documentElement so every rem-based UI
   // size scales. The slider in AppSettingsModal updates the same variable
@@ -274,7 +314,6 @@ export default function App() {
 
   const finishOnboarding = useCallback(() => {
     setWizardDismissed(true);
-    setSkipWarning(false);
     setCreateOpen(true);
     if (!onboardingSimMode) {
       void settingsApi.patchSettings({ onboardingCompletedAt: new Date().toISOString() })
@@ -304,20 +343,10 @@ export default function App() {
     [],
   );
 
-  const skipOnboarding = useCallback(
-    (hardDepsMissing: boolean) => {
-      setWizardDismissed(true);
-      if (hardDepsMissing) setSkipWarning(true);
-      if (!onboardingSimMode) {
-        void settingsApi.patchSettings({ onboardingCompletedAt: new Date().toISOString() })
-          .then((r) => setSettings(r.settings))
-          .catch(() => {});
-      }
-    },
-    [onboardingSimMode],
-  );
 
-  if (projects === null) {
+  // Wait for both projects and boot readiness to load before rendering.
+  // bootReady===null means the preflight check is still in-flight.
+  if (projects === null || bootReady === null) {
     return (
       <div
         data-testid="app-loading"
@@ -328,11 +357,10 @@ export default function App() {
     );
   }
 
-  // First-run gate: render the wizard full-screen instead of the Shell.
-  const showWizard =
-    !wizardDismissed &&
-    (forceOnboarding ||
-      (settings !== null && settings.onboardingCompletedAt === null && projects.length === 0));
+  // Prerequisite-driven gate: show the wizard when real-state readiness fails,
+  // not when a "completed" marker is absent. Users who previously skipped
+  // (no Claude auth) are automatically caught here on every launch.
+  const showWizard = !wizardDismissed && (forceOnboarding || onboardingSimMode || !bootReady);
   if (showWizard) {
     return (
       <OnboardingWizard
@@ -342,7 +370,6 @@ export default function App() {
         onProjectsFolderChange={handleProjectsFolderChange}
         onDefaultSurfaceChange={handleDefaultSurfaceChange}
         onComplete={finishOnboarding}
-        onSkip={skipOnboarding}
       />
     );
   }
@@ -445,6 +472,19 @@ export default function App() {
       <BuildMarker />
       <HostHealthBanner />
       <ClaudeVersionBanner />
+      {appAuthStatus === 'login-required' && (
+        <div className="flex items-center justify-between gap-3 border-b border-destructive/60 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          <span>
+            Claude Code isn't signed in — chats and agents won't work until you sign in again.
+          </span>
+          <a
+            href="/?onboarding=force"
+            className="text-destructive underline-offset-2 hover:text-foreground hover:underline"
+          >
+            Open setup
+          </a>
+        </div>
+      )}
       {restartRequired && (
         <div className="flex items-center justify-between gap-3 border-b border-warning/60 bg-warning/10 px-3 py-1.5 text-xs text-warning">
           <span>
@@ -452,20 +492,6 @@ export default function App() {
           </span>
           <button
             onClick={() => setRestartRequired(false)}
-            className="text-warning hover:text-foreground"
-          >
-            dismiss
-          </button>
-        </div>
-      )}
-      {skipWarning && (
-        <div className="flex items-center justify-between gap-3 border-b border-warning/60 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-          <span>
-            Setup isn't finished — Claude Code or git is still missing, so chats and
-            projects won't work until you install them.
-          </span>
-          <button
-            onClick={() => setSkipWarning(false)}
             className="text-warning hover:text-foreground"
           >
             dismiss

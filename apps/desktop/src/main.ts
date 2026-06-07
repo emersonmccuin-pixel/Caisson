@@ -400,6 +400,19 @@ ipcMain.handle('pc:update:download', async () => {
   return updateState;
 });
 
+// Native OS folder chooser — used by the onboarding wizard (and future pickers)
+// so desktop users get the familiar system dialog instead of the custom browser
+// picker. Returns the chosen absolute path, or null if the user cancelled.
+ipcMain.handle('pc:choose-folder', async (): Promise<string | null> => {
+  const win = mainWindow ?? undefined;
+  const result = await dialog.showOpenDialog(win!, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Choose projects folder',
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0] ?? null;
+});
+
 ipcMain.handle('pc:update:install', async () => {
   if (!updaterEnabled() || updateState.status !== 'downloaded') return false;
   // The supervised api + agent-host run AS Caisson.exe (ELECTRON_RUN_AS_NODE),

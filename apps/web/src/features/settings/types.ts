@@ -70,9 +70,14 @@ export interface PreflightReport {
   ok: boolean;
 }
 
+export type LoginMode = 'callback' | 'code-paste' | 'unknown';
+
 export interface OnboardingLoginState {
   running: boolean;
   url: string | null;
+  mode: LoginMode;
+  planFailure: boolean;
+  planFailureNote: string | null;
   exited: boolean;
   exitCode: number | null;
   tail: string;

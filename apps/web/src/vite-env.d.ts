@@ -22,6 +22,8 @@ interface DesktopUpdateState {
 interface PcDesktopBridge {
   isDesktop: true;
   platform: string;
+  /** Open the native OS folder chooser. Returns the chosen path, or null if cancelled. */
+  chooseFolder(): Promise<string | null>;
   updates: {
     getState(): Promise<DesktopUpdateState>;
     check(): Promise<DesktopUpdateState>;
