@@ -24,6 +24,7 @@ import {
   type GlobalSettings,
 } from '@/features/settings/client';
 import { useDesktopUpdates } from '@/hooks/use-desktop-updates';
+import { useNotificationDingEnabled } from '@/hooks/use-notification-settings';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { PodDetailModal } from './agents/PodDetailModal';
 
@@ -605,6 +606,8 @@ function GeneralTab({
         </div>
       </FieldRow>
 
+      <NotificationDingRow />
+
       <FieldRow
         label="Font scale"
         help={`Scales every text size in the app. ${Math.round(draft.fontScale * 100)}% — drag to preview, Save to keep.`}
@@ -633,6 +636,27 @@ function GeneralTab({
         </div>
       </FieldRow>
     </div>
+  );
+}
+
+// ── Notification ding row (inside General tab) ────────────────────────────
+
+function NotificationDingRow() {
+  const [enabled, setEnabled] = useNotificationDingEnabled();
+  return (
+    <FieldRow
+      label="Notification sound"
+      help="Play a soft ding when a reply arrives in a project you're not looking at, or when the window is out of focus. Takes effect immediately — no Save needed."
+    >
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+        />
+        <span>Enable notification ding</span>
+      </label>
+    </FieldRow>
   );
 }
 
