@@ -31,6 +31,8 @@ const UPDATE_STATE_CHANNEL = 'pc:update-state';
 contextBridge.exposeInMainWorld('pcDesktop', {
   isDesktop: true,
   platform: process.platform,
+  /** Open the native OS folder chooser. Returns the chosen path, or null if cancelled. */
+  chooseFolder: (): Promise<string | null> => ipcRenderer.invoke('pc:choose-folder'),
   updates: {
     getState: (): Promise<UpdateState> => ipcRenderer.invoke('pc:update:get-state'),
     check: (): Promise<UpdateState> => ipcRenderer.invoke('pc:update:check'),
