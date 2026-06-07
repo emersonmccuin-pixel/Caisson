@@ -19,7 +19,7 @@ import {
 } from '@pc/db';
 import { AgentRunJsonlTailer, jsonlPathFor, type AgentRunJsonlEvent } from '@pc/runtime';
 import { ContractService } from '@pc/app-services';
-import { contractDeliverableText, type Contract, type Deliverable } from '@pc/contracts';
+import { contractDeliverableText, makeReviewPackage, type Contract, type Deliverable } from '@pc/contracts';
 
 import {
   buildAgentCompletedBody,
@@ -412,24 +412,45 @@ async function finishTerminalEffects(args: {
     const workItemTitle = outcome.workItemId
       ? (getWorkItem(outcome.workItemId)?.title ?? null)
       : null;
+    // Phase 1.1 — build the unified ReviewPackage envelope (additive: carried
+    // alongside the existing payload fields, existing consumers unchanged).
+    const verificationTitle = workItemTitle
+      ? `Review needed: ${agentName} — ${workItemTitle}`
+      : `Review needed: ${agentName} finished its work`;
+    const verificationBody =
+      `Agent ${agentName} handed in its work; the contract is waiting on YOUR review.\n` +
+      (outcome.workItemId ? `Card: ${outcome.workItemId}\n` : '') +
+      `Approve to accept the work (the card advances); reject with feedback to send it back.`;
+    const reviewPackage = makeReviewPackage({
+      id: newId(),
+      producer: 'agent-verification',
+      owner: 'human',
+      title: verificationTitle,
+      whatWasAsked: workItemTitle ? `Review ${workItemTitle}` : `Review ${agentName}'s completed work`,
+      acceptanceCriteria: '',
+      work: { kind: 'prose', text: verificationBody },
+      provenance: {
+        agentRunId: input.runId,
+        workItemId: outcome.workItemId ?? null,
+        workflowNodeId: null,
+        dispatchedAt: Date.now(),
+      },
+    });
     deps.mailboxEnqueue({
       message: {
         id: newId(),
         projectId: input.projectId,
         kind: 'verification-review',
-        subject: workItemTitle
-          ? `Review needed: ${agentName} — ${workItemTitle}`
-          : `Review needed: ${agentName} finished its work`,
-        body:
-          `Agent ${agentName} handed in its work; the contract is waiting on YOUR review.\n` +
-          (outcome.workItemId ? `Card: ${outcome.workItemId}\n` : '') +
-          `Approve to accept the work (the card advances); reject with feedback to send it back.`,
+        subject: verificationTitle,
+        body: verificationBody,
         payload: {
           contractId,
           workItemId: outcome.workItemId,
           workItemTitle,
           runId: input.runId,
           agent: agentName,
+          // Phase 1.1 — unified ReviewPackage envelope (additive).
+          reviewPackage,
         },
         sourceKind: 'agent-contract',
         sourceId: contractId,
