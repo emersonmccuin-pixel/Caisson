@@ -62,16 +62,21 @@ export {
   patchWorkItem,
   reassignStage,
   restoreWorkItem,
+  searchWorkItems,
   softDeleteWorkItem,
+  toSlimWorkItem,
   updateWorkItemFields,
   updateWorkItemStatus,
   WorkItemVersionConflictError,
 } from './repos/work-items.ts';
 export type {
   CreateWorkItemInput,
-  PatchWorkItemInput,
   ListWorkItemsOptions,
+  PatchWorkItemInput,
+  SearchWorkItemsInput,
   WorkItemAreaFilter,
+  WorkItemSearchResult,
+  WorkItemSlim,
 } from './repos/work-items.ts';
 
 // Slice 013 — agent_contracts repo (persistence-only; app-services announces).
