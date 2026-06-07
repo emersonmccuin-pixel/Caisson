@@ -10,8 +10,40 @@ permissions:
   contents: write
 
 jobs:
+  # Release gate (pc-pty-chat-300): the suite must pass before anything builds,
+  # signs, or publishes. The build matrix `needs: test`, so a tagged release with
+  # a red typecheck/test will NOT ship. Mirrors ci.yml; fast (Linux, no desktop build).
+  test:
+    name: Typecheck + tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '10.33.0'
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Unit tests
+        run: pnpm -r test
+
   build:
     name: Build (${{ matrix.os }})
+    needs: test
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
