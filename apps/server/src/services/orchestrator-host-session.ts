@@ -471,6 +471,15 @@ export class OrchestratorHostSession extends EventEmitter {
         this.onRunJsonl(event);
         return;
       }
+      case 'run-chunk':
+        // PTY output landed on the host — pull the transcript NOW instead of
+        // waiting for the next 250ms timer tick. By the time this event arrives
+        // the bytes are already in the kernel page cache and readable via the
+        // existing readSync path (no fsync needed on localhost).
+        if (event.runId !== this.runId) return;
+        if (this.closing || this.terminalReached) return;
+        this.pollTranscript();
+        return;
       case 'run-error':
         if (event.runId !== this.runId) return;
         this.emit('error', new Error(event.error));

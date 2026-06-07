@@ -502,6 +502,62 @@ test('start-run failure → typed failed state (no alternate spawn)', async () =
   await session.settled;
 });
 
+test('run-chunk triggers immediate pollTranscript (event-driven echo, not timer-driven)', async () => {
+  const port = new FakeHostPort();
+  // Use a very long poll interval so the timer never fires during the test.
+  const dir = mkdtempSync(join(tmpdir(), 'orch-chunk-'));
+  const transcriptPath = join(dir, 'transcript.log');
+  const store = new FakeReplayStore();
+  const session = new OrchestratorHostSession(
+    {
+      pcSessionId: 'pc-session-chunk',
+      providerSessionId: 'cc-uuid-chunk',
+      projectId: '01PRJ' as never,
+      podDefinition: { name: 'pc:orchestrator' },
+      worktreePath: dir,
+      env: {},
+      mode: 'fresh',
+      jsonlPath: join(dir, 'cc.jsonl'),
+      transcriptPath,
+    },
+    {
+      hostClient: port,
+      mintRunId: () => `run-chunk-${++runSeq}`,
+      // Long poll — if the timer fires, the test result is ambiguous.
+      transcriptPollMs: 60_000,
+      awaitBeforeTimeoutMs: 200,
+      appendReplayEvent: store.append,
+      replayState: store.state,
+    },
+  );
+  const rawChunks: string[] = [];
+  session.on('raw', (s: string) => rawChunks.push(s));
+  session.start();
+  await settleTicks();
+
+  const runId = port.commandsOf('start-run')[0]!.request.runId;
+  port.emitEvent({ type: 'run-state', run: snapshotFor(runId, { ccSessionId: 'cc-uuid-chunk', turnState: 'ready' }) });
+
+  // Write PTY output to the transcript file, then fire run-chunk.
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(transcriptPath, 'hello world');
+
+  port.emitEvent({ type: 'run-chunk', runId, text: 'hello world' });
+  // One tick is enough — pollTranscript() is synchronous.
+  await tick();
+
+  assert.ok(rawChunks.length > 0, 'run-chunk must trigger an immediate transcript read');
+  assert.equal(rawChunks.join(''), 'hello world');
+
+  // run-chunk for a different runId must not trigger a poll.
+  const prevLen = rawChunks.length;
+  port.emitEvent({ type: 'run-chunk', runId: 'other-run-id', text: 'noise' });
+  await tick();
+  assert.equal(rawChunks.length, prevLen, 'foreign runId must be ignored');
+
+  session.kill();
+});
+
 test('asOrchestratorHostPort narrows only full clients', () => {
   const port = new FakeHostPort();
   assert.equal(asOrchestratorHostPort(port), port);
