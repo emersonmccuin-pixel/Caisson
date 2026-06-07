@@ -13,7 +13,7 @@ import { resolve } from 'node:path';
 
 import type { OrchestratorSession, Project, ULID, WorkflowRow, WorkflowV2, WorkItem } from '@pc/domain';
 import { postMoveStatusForStage, resolveRemoteControlEnabled, withSettingsDefaults } from '@pc/domain';
-import type { ReviewDecision } from '@pc/workflows';
+
 import {
   createOrchestratorSession,
   endOrchestratorSession,
@@ -35,9 +35,7 @@ import { WorktreeService } from './worktree.ts';
 import { importV2WorkflowsFromDisk } from './workflow-import.ts';
 import {
   fireDagWorkflow,
-  applyV2ReviewDecision,
   resumeFailedDagRun,
-  type V2ReviewDecisionResult,
   type ResumeFailedRunResult,
   type DagRunServiceOptions,
   type ReviewInboxResolution,
@@ -45,6 +43,11 @@ import {
   type WorkflowRunFailedDelivery,
   type WorkflowRunCompletedDelivery,
 } from './dag-run-service.ts';
+import {
+  applyReviewDecision,
+  type ReviewDecisionResult,
+  type WorkflowGateDecision,
+} from './review-decision-service.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import {
   asOrchestratorHostPort,
@@ -351,14 +354,18 @@ export class ProjectRuntime {
     return moved;
   }
 
-  /** Apply an orchestrator/human review decision to a paused v2 run. */
-  async applyV2Review(
+  /** Phase 1.2 — apply a workflow gate decision through the unified
+   *  review-decision service (loop-back mechanic, unchanged). */
+  async applyWorkflowGateDecision(
     runId: ULID,
-    reviewNodeId: string,
-    decision: ReviewDecision,
+    nodeId: string,
+    decision: WorkflowGateDecision,
     instanceToken?: string,
-  ): Promise<V2ReviewDecisionResult> {
-    return applyV2ReviewDecision(runId, reviewNodeId, decision, this.dagRunOptions(), instanceToken);
+  ): Promise<ReviewDecisionResult> {
+    return applyReviewDecision(
+      { kind: 'workflow-gate', runId, nodeId, decision, instanceToken },
+      { kind: 'workflow-gate', dagOpts: this.dagRunOptions() },
+    );
   }
 
   /** M6 slice C (FD-11 restart-at-step) — resume a FAILED run against the
