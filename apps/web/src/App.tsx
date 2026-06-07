@@ -58,8 +58,10 @@ export default function App() {
 
   // Section 10 Phase 2 — first-run onboarding gate. `?onboarding=force` opens
   // it with real preflight; `?onboarding=sim` opens it on a faked blank machine
-  // (dev "fresh machine" switch). Otherwise it shows only on a true first run
-  // (marker unset + no projects yet).
+  // (dev "fresh machine" switch). Otherwise, gate is PREREQUISITE-DRIVEN:
+  // on every launch we check actual auth + folder state, not a completion marker.
+  // This forces users who previously skipped onboarding back through setup when
+  // their Claude auth is missing.
   const onboardingParam = useMemo(
     () => new URLSearchParams(window.location.search).get('onboarding'),
     [],
@@ -67,6 +69,11 @@ export default function App() {
   const forceOnboarding = onboardingParam === 'force' || onboardingParam === 'sim';
   const onboardingSimMode = onboardingParam === 'sim';
   const [wizardDismissed, setWizardDismissed] = useState(false);
+  // Boot readiness: null = checking; true = auth ok + folder set; false = wizard needed.
+  // Force/sim modes skip the check and always show the wizard.
+  const [bootReady, setBootReady] = useState<boolean | null>(
+    forceOnboarding || onboardingSimMode ? false : null,
+  );
   // Auth banner: shown when the user is inside the app but Claude isn't signed
   // in (e.g. the token expired). Checked once on mount, after onboarding.
   // 'unknown' = not checked yet; 'authed' = fine; 'login-required' = show banner.
@@ -90,10 +97,21 @@ export default function App() {
         projectsLoadedRef.current = true;
         setProjects([]);
       });
-    void settingsApi.getSettings().then(setSettings).catch(() => {
+    void settingsApi.getSettings().then((s) => {
+      setSettings(s);
+      // Prerequisite-driven gate: check ACTUAL state, not a completion marker.
+      // Any missing auth or unset folder → wizard, regardless of prior "skipped" state.
+      if (!forceOnboarding && !onboardingSimMode) {
+        const folderOk = (s.projectsFolder ?? '').trim().length > 0;
+        void settingsApi.getPreflight()
+          .then((p) => { setBootReady(p.auth.status === 'authed' && folderOk); })
+          .catch(() => { setBootReady(true); }); // transient API error → let through
+      }
+    }).catch(() => {
       /* best-effort — surfaces as gear icon disabled until next load */
+      if (!forceOnboarding && !onboardingSimMode) setBootReady(true);
     });
-  }, []);
+  }, [forceOnboarding, onboardingSimMode]);
 
   // Check auth status once after onboarding is dismissed (or on load if already
   // completed). Shows a banner if the account isn't signed in — prevents a
@@ -326,7 +344,9 @@ export default function App() {
   );
 
 
-  if (projects === null) {
+  // Wait for both projects and boot readiness to load before rendering.
+  // bootReady===null means the preflight check is still in-flight.
+  if (projects === null || bootReady === null) {
     return (
       <div
         data-testid="app-loading"
@@ -337,11 +357,10 @@ export default function App() {
     );
   }
 
-  // First-run gate: render the wizard full-screen instead of the Shell.
-  const showWizard =
-    !wizardDismissed &&
-    (forceOnboarding ||
-      (settings !== null && settings.onboardingCompletedAt === null && projects.length === 0));
+  // Prerequisite-driven gate: show the wizard when real-state readiness fails,
+  // not when a "completed" marker is absent. Users who previously skipped
+  // (no Claude auth) are automatically caught here on every launch.
+  const showWizard = !wizardDismissed && (forceOnboarding || onboardingSimMode || !bootReady);
   if (showWizard) {
     return (
       <OnboardingWizard
