@@ -48,6 +48,12 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      # Serialize publish jobs (pc-pty-chat-302): electron-builder does
+      # get-or-create-release per job; running the 3 platforms in parallel races
+      # on release creation → the 2nd+ get 422 already_exists and the DMG never
+      # uploads. max-parallel:1 = first job creates the release, the rest upload
+      # into it. (Slower; a build-then-single-publish restructure is the faster fix.)
+      max-parallel: 1
       matrix:
         # macOS re-enabled 2026-06-06: signing + notarization verified end-to-end
         # (run 27073972156). The earlier "codesign hang" was a transient Apple
