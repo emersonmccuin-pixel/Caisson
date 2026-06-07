@@ -18,7 +18,7 @@ import {
   setRevealHiddenChatRows,
 } from '@/features/chat/chatRendererFlag';
 
-type Phase = 'idle' | 'restarting' | 'reconnecting';
+type Phase = 'idle' | 'restarting' | 'reconnecting' | 'unsupported';
 
 export function DevControls() {
   const [status, setStatus] = useState<DevStatus | null>(null);
@@ -44,8 +44,20 @@ export function DevControls() {
           phaseRef.current = 'idle';
           setPhase('idle');
         }
-      } catch {
-        // Server down or restarting — keep polling.
+      } catch (err) {
+        if (!mountedRef.current) return;
+        // A 404 means the /api/dev/* routes aren't registered — this stack is
+        // packaged (or half-packaged: pc-pty-chat-272). The controls can't
+        // work, and re-polling a route that will never exist just spams the
+        // browser console every cycle. Stand down PERMANENTLY: stop the loop
+        // and render nothing. Any OTHER failure (connection refused / 503 /
+        // 500) is a transient restart window — keep polling as before.
+        if (/→\s*404\b/.test(err instanceof Error ? err.message : String(err))) {
+          phaseRef.current = 'unsupported';
+          setPhase('unsupported');
+          return; // do not reschedule — polling stops
+        }
+        // transient — keep polling
       }
       if (!mountedRef.current) return;
       const ms = phaseRef.current === 'reconnecting' ? 800 : 3_000;
@@ -79,6 +91,10 @@ export function DevControls() {
     setPhase('reconnecting');
     setStatus(null);
   }, [status, forceArmed]);
+
+  // Routes absent (packaged / half-packaged stack) — the controls are inert
+  // and polling has stopped; render nothing rather than show dead buttons.
+  if (phase === 'unsupported') return null;
 
   if (phase === 'restarting' || phase === 'reconnecting') {
     return (

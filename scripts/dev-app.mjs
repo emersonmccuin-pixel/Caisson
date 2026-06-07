@@ -118,6 +118,21 @@ async function main() {
     delete process.env.CLAUDE_CONFIG_DIR;
   }
 
+  // PC_ROOT is the SINGLE "this is a packaged build" signal (server-root.ts +
+  // dev-controls/constants.ts both key off its presence). A dev stack must
+  // NEVER inherit a stray PC_ROOT — if it does, the server boots half-packaged
+  // (dev-controls routes unregistered, wrong root) while the Vite UI still
+  // renders dev affordances that poll the now-absent /api/dev/* routes →
+  // 404 console-error storm (pc-pty-chat-272). dev:app is the ONE entrypoint
+  // for every dev launch, so it owns the mode authoritatively: scrub PC_ROOT
+  // for the whole child tree here. A proper dev stack runs with it unset (the
+  // dev case in server-root.ts); the repo data dir is set explicitly via
+  // PC_DATA_DIR below.
+  if (process.env.PC_ROOT) {
+    console.error(`[dev:app] clearing inherited PC_ROOT (${process.env.PC_ROOT}) — a dev stack must not run half-packaged`);
+    delete process.env.PC_ROOT;
+  }
+
   console.error('[dev:app] building bundles (server · agent-host · mcp)…');
   await Promise.all([
     runToExit('build:server', 'pnpm --filter @pc/server build'),
