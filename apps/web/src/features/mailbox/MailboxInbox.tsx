@@ -195,7 +195,7 @@ function MailboxInboxRow({
   // Collapsed by default — the card shows a title + type; the full body lives
   // behind a click so completed-agent dumps don't flood the rail.
   const [expanded, setExpanded] = useState(false);
-  // Review modal — opened by the "Review" button on verification/workflow cards.
+  // Review modal — opened by clicking the row on verification/workflow cards.
   const [reviewOpen, setReviewOpen] = useState(false);
 
   const isReview = isReviewKind(message.kind);
@@ -217,90 +217,129 @@ function MailboxInboxRow({
     <>
       <li
         className={[
-          'border border-border text-[12px]',
+          'overflow-hidden border border-border text-[12px]',
           unread ? 'bg-primary/5' : 'bg-card',
         ].join(' ')}
       >
-        {/* Collapsed header — click to expand; review cards also get a Review button */}
-        <div className="flex w-full items-center gap-1.5 p-2">
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-          >
-            <span className="text-[9px] text-muted-foreground/60">{expanded ? '▾' : '▸'}</span>
+        {/* Primary click: review kinds open the modal; other kinds toggle inline expand */}
+        <button
+          type="button"
+          onClick={() => {
+            if (isReview && projectId) {
+              setReviewOpen(true);
+            } else if (!isReview) {
+              setExpanded((v) => !v);
+            }
+          }}
+          className="w-full p-2 text-left hover:bg-muted/30"
+        >
+          {/* Row 1: unread dot + title + relative time — title gets all remaining space */}
+          <div className="flex min-w-0 items-center gap-1.5">
             {unread && <span className="size-1.5 shrink-0 bg-primary" aria-label="unread" />}
-            <span className="shrink-0 bg-muted px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <span
+              className={`min-w-0 flex-1 truncate text-[12px]${
+                unread ? ' font-medium text-foreground' : ' text-foreground/80'
+              }`}
+            >
+              {rowTitle(message)}
+            </span>
+            <span className="shrink-0 pl-2 text-[9px] tabular-nums text-muted-foreground/60">
+              {formatRelativeTime(message.createdAt)}
+            </span>
+          </div>
+          {/* Row 2: kind chip + optional project chip + action/expand indicator */}
+          <div className="mt-1 flex min-w-0 items-center gap-1 pl-3">
+            <span className="max-w-[120px] truncate bg-muted px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
               {message.kind}
             </span>
             {projectName && (
-              <span className="shrink-0 bg-accent/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-accent">
+              <span className="max-w-[80px] truncate bg-accent/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-accent">
                 {projectName}
               </span>
             )}
-            <span className={`min-w-0 flex-1 truncate${unread ? ' font-medium text-foreground' : ' text-foreground/80'}`}>
-              {rowTitle(message)}
-            </span>
-          </button>
-          {/* Review button — primary action for decision cards; replaces inline Approve/Reject */}
-          {actionable && isReview && projectId && (
-            <button
-              type="button"
-              onClick={() => setReviewOpen(true)}
-              className="shrink-0 bg-primary px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-primary-foreground hover:bg-primary/90"
-            >
-              Review
-            </button>
-          )}
-          {actionable && !isReview && (
-            <span className="shrink-0 bg-primary/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-primary">
-              Action
-            </span>
-          )}
-          <span className="shrink-0 text-[9px] tabular-nums text-muted-foreground/60">
-            {formatRelativeTime(message.createdAt)}
-          </span>
-        </div>
+            <span className="flex-1" />
+            {isReview && actionable && (
+              <span className="shrink-0 bg-primary px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-primary-foreground">
+                Pending
+              </span>
+            )}
+            {!isReview && actionable && (
+              <span className="shrink-0 bg-primary/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-primary">
+                Action
+              </span>
+            )}
+            {!isReview && !actionable && (
+              <span className="text-[9px] text-muted-foreground/40">
+                {expanded ? '▾' : '▸'}
+              </span>
+            )}
+          </div>
+        </button>
 
-        {!expanded ? null : (
-        <div className="px-2 pb-2">
-        {/* Body — only show for non-review kinds (reviews open the modal instead) */}
-        {!isReview && (
-          <div className="mb-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground/80">
-            {message.body}
+        {/* Mark-read / Dismiss for review cards — separate click targets, not inside the modal-open button */}
+        {isReview && projectId && (unread || recipient.dismissedAt === null) && (
+          <div className="flex items-center gap-3 border-t border-border/30 px-2 py-1">
+            {unread && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void act(() => mailboxApi.markRead(projectId, recipient.id))}
+                className="text-[9px] text-muted-foreground/60 hover:text-muted-foreground disabled:opacity-50"
+              >
+                Mark read
+              </button>
+            )}
+            {recipient.dismissedAt === null && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void act(() => mailboxApi.dismiss(projectId, recipient.id))}
+                className="text-[9px] text-muted-foreground/60 hover:text-muted-foreground disabled:opacity-50"
+              >
+                Dismiss
+              </button>
+            )}
           </div>
         )}
 
-        {/* M4b (FD-8) — the escalated-ask card: answer (option buttons or free
-            text) / cancel via the EXISTING pending-ask doors. Stays inline. */}
-        {actionable && projectId && message.kind === 'agent-ask-escalated' && (
-          <AskEscalatedActions item={item} projectId={projectId} onChanged={onChanged} />
-        )}
+        {/* Inline expand for non-review kinds only */}
+        {!isReview && expanded && (
+          <div className="px-2 pb-2">
+            {/* Body text */}
+            <div className="mb-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground/80">
+              {message.body}
+            </div>
 
-        {/* Action controls */}
-        <div className="flex items-center gap-1">
-          {projectId && unread && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void act(() => mailboxApi.markRead(projectId, recipient.id))}
-              className="border border-border bg-card px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted disabled:opacity-50"
-            >
-              Mark read
-            </button>
-          )}
-          {projectId && recipient.dismissedAt === null && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void act(() => mailboxApi.dismiss(projectId, recipient.id))}
-              className="border border-border bg-card px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted disabled:opacity-50"
-            >
-              Dismiss
-            </button>
-          )}
-        </div>
-        </div>
+            {/* M4b (FD-8) — the escalated-ask card: answer (option buttons or free
+                text) / cancel via the EXISTING pending-ask doors. Stays inline. */}
+            {actionable && projectId && message.kind === 'agent-ask-escalated' && (
+              <AskEscalatedActions item={item} projectId={projectId} onChanged={onChanged} />
+            )}
+
+            {/* Action controls */}
+            <div className="flex items-center gap-1">
+              {projectId && unread && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void act(() => mailboxApi.markRead(projectId, recipient.id))}
+                  className="border border-border bg-card px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted disabled:opacity-50"
+                >
+                  Mark read
+                </button>
+              )}
+              {projectId && recipient.dismissedAt === null && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void act(() => mailboxApi.dismiss(projectId, recipient.id))}
+                  className="border border-border bg-card px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-muted disabled:opacity-50"
+                >
+                  Dismiss
+                </button>
+              )}
+            </div>
+          </div>
         )}
       </li>
       {/* Review modal — full-size, explicit close only */}
