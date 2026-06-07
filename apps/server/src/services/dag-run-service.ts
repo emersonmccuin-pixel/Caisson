@@ -32,8 +32,10 @@ import {
   WorkflowRunMutationGateway,
 } from '@pc/app-services';
 import {
+  buildDecisionContract,
   classifyInboxItem,
   contractDeliverableText,
+  decisionContractHeaderText,
   makeReviewPackage,
   type WorkflowReviewFlavor,
   type WorkflowReviewState,
@@ -458,8 +460,24 @@ export function makeExecutorDeps(
     // matches the openReviewInstance stamped on the node record.
     const deliveryInstanceToken =
       `i${String(reviewOpts.iteration)}` + (reviewOpts.escalated ? ':escalated' : '');
+
+    // pc-pty-chat-221 — decision-contract header. Every review surface opens
+    // with a system-generated block stating lifecycle position, approve/reject
+    // effects, and what verification is possible. maxRounds comes from the loop
+    // node's max_iterations (null = unlimited, undefined = no reject loop).
+    const loopNode = node.reject
+      ? (workflow.nodes.find((n) => n.id === node.reject && n.kind === 'loop') as WorkflowV2.LoopNode | undefined)
+      : undefined;
+    const maxRounds = loopNode?.max_iterations ?? null;
+    const decisionContract = buildDecisionContract({
+      lifecyclePosition: 'completed-work',
+      maxRounds: typeof maxRounds === 'number' ? maxRounds : null,
+    });
+    const headerText = decisionContractHeaderText(decisionContract);
+
     const body =
       `[pc:workflow-review run=${run.id} node=${node.id} flavor=${flavor} instance=${deliveryInstanceToken}]\n` +
+      headerText + '\n\n' +
       `${prompt}\n\n${summary}\n\n` +
       `Approve: pc_complete_node-equivalent (v2 review endpoint) · Reject sends it back.`;
     // M8 (FD-7) — EVERY review flavor delivers (pre-M8 only the orchestrator
@@ -489,6 +507,8 @@ export function makeExecutorDeps(
         dispatchedAt: Date.now(),
       },
       attemptHistory: [{ attempt: reviewOpts.iteration + 1, submittedAt: Date.now() }],
+      // pc-pty-chat-221 — decision contract so every surface knows what it is deciding.
+      decisionContract,
     });
 
     opts.deliverReview?.({

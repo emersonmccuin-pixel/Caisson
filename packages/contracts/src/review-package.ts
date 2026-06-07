@@ -4,6 +4,12 @@
 //
 // ADDITIVE only: no producers wired, no existing callers changed.
 // Browser-safe; zero runtime deps beyond shared.ts.
+//
+// pc-pty-chat-221: DecisionContract header — every human review surface opens
+// with a system-generated block stating lifecycle position, approve/reject
+// effects, and what verification is possible. Generated server-side so it
+// rides on the review envelope and renders consistently in the inbox card,
+// the review modal, and the orchestrator-relayed gate prompt.
 
 import { parseErr, parseOk, type ParseResult, type ULID } from './shared.ts';
 
@@ -100,6 +106,103 @@ export const REVIEW_ACTIONS = [
   'discuss',
 ] as const satisfies readonly ReviewAction[];
 
+// ---- Decision contract (pc-pty-chat-221) ------------------------------------
+
+/** Lifecycle position of this review gate. */
+export type LifecyclePosition = 'completed-work' | 'plan-awaiting';
+
+/** System-generated decision contract — what the reviewer is actually deciding,
+ *  what each button does, and what verification is possible. Generated server-
+ *  side so it is consistent across the inbox card, the review modal, and the
+ *  orchestrator-relayed gate prompt. */
+export interface DecisionContract {
+  /** Whether this is completed work awaiting acceptance, or a plan awaiting
+   *  a go-ahead. Drives the label and icon shown in the review surface. */
+  lifecyclePosition: LifecyclePosition;
+  /** Plain-English: what happens when the reviewer approves. */
+  approveEffect: string;
+  /** Plain-English: what happens when the reviewer rejects. */
+  rejectEffect: string;
+  /** What kind of verification the reviewer can actually do. */
+  verificationGuidance: string;
+}
+
+function isLifecyclePosition(v: unknown): v is LifecyclePosition {
+  return v === 'completed-work' || v === 'plan-awaiting';
+}
+
+export function isDecisionContract(v: unknown): v is DecisionContract {
+  if (!isRecord(v)) return false;
+  return (
+    isLifecyclePosition(v.lifecyclePosition) &&
+    typeof v.approveEffect === 'string' &&
+    typeof v.rejectEffect === 'string' &&
+    typeof v.verificationGuidance === 'string'
+  );
+}
+
+/**
+ * Build a DecisionContract for a gate.
+ *
+ * `lifecyclePosition`: 'completed-work' for Build-workflow human gates (code
+ *   written, QA passed, merged to local dev); 'plan-awaiting' reserved for
+ *   future plan-approval gates.
+ *
+ * `maxRounds`: from the loop node's `max_iterations`. Pass `null` for
+ *   unlimited, omit when there is no reject loop.
+ *
+ * `verificationGuidance`: override the default guidance string. When omitted
+ *   a sensible default is used based on `lifecyclePosition`.
+ */
+export function buildDecisionContract(opts: {
+  lifecyclePosition: LifecyclePosition;
+  maxRounds?: number | null;
+  verificationGuidance?: string;
+}): DecisionContract {
+  const { lifecyclePosition, maxRounds } = opts;
+
+  if (lifecyclePosition === 'completed-work') {
+    const rejectEffect =
+      typeof maxRounds === 'number'
+        ? `Returns the work to the builder with your feedback for another round (max ${maxRounds}).`
+        : 'Returns the work to the builder with your feedback for another round.';
+    return {
+      lifecyclePosition,
+      approveEffect:
+        'Accepts the finished work and advances it toward release. Nothing new starts.',
+      rejectEffect,
+      verificationGuidance:
+        opts.verificationGuidance ??
+        'Nothing to click — your review is the evidence chain: tests + code review + the agent report. For UI work, follow the How to verify steps in the report.',
+    };
+  }
+
+  // 'plan-awaiting' — future variant; leave room here.
+  return {
+    lifecyclePosition,
+    approveEffect: 'Greenlights the plan; work begins.',
+    rejectEffect: 'Returns the plan to the author for revision.',
+    verificationGuidance:
+      opts.verificationGuidance ?? 'Review the proposed plan steps below.',
+  };
+}
+
+/** Render a plain-text decision-contract header for the orchestrator-facing
+ *  review body and the review modal's top-of-card block. */
+export function decisionContractHeaderText(dc: DecisionContract): string {
+  const emoji = dc.lifecyclePosition === 'completed-work' ? '✅' : '📋';
+  const label =
+    dc.lifecyclePosition === 'completed-work'
+      ? 'Work COMPLETE and verified'
+      : 'Plan awaiting go-ahead';
+  return (
+    `${emoji} ${label}\n` +
+    `Approve: ${dc.approveEffect}\n` +
+    `Reject: ${dc.rejectEffect}\n` +
+    `Verification: ${dc.verificationGuidance}`
+  );
+}
+
 // ---- The envelope -----------------------------------------------------------
 
 export interface ReviewPackage {
@@ -120,6 +223,9 @@ export interface ReviewPackage {
   attemptHistory: ReviewAttempt[];
   /** Actions the current owner may take. */
   availableActions: ReviewAction[];
+  /** System-generated decision contract (pc-pty-chat-221). Present on all new
+   *  gates; absent on envelopes minted before this field was added. */
+  decisionContract?: DecisionContract | null;
 }
 
 // ---- Guards -----------------------------------------------------------------
@@ -208,7 +314,10 @@ export function isReviewPackage(v: unknown): v is ReviewPackage {
     Array.isArray(v.attemptHistory) &&
     (v.attemptHistory as unknown[]).every(isReviewAttempt) &&
     Array.isArray(v.availableActions) &&
-    (v.availableActions as unknown[]).every(isReviewAction)
+    (v.availableActions as unknown[]).every(isReviewAction) &&
+    (v.decisionContract === undefined ||
+      v.decisionContract === null ||
+      isDecisionContract(v.decisionContract))
   );
 }
 
@@ -233,6 +342,13 @@ export function parseReviewPackage(input: unknown): ParseResult<ReviewPackage> {
   if (!Array.isArray(input.availableActions)) return parseErr('availableActions must be an array');
   for (const a of input.availableActions as unknown[]) {
     if (!isReviewAction(a)) return parseErr('availableActions contains invalid action: ' + String(a));
+  }
+  if (
+    input.decisionContract !== undefined &&
+    input.decisionContract !== null &&
+    !isDecisionContract(input.decisionContract)
+  ) {
+    return parseErr('decisionContract is invalid');
   }
   return parseOk(input as unknown as ReviewPackage);
 }

@@ -14,7 +14,8 @@ import {
 } from '@/features/contracts/work-log';
 import type { Contract } from '@/features/contracts/client';
 import { workItemsApi, type WorkItem } from '@/features/work-items/client';
-import type { AcceptanceCriteria, AcceptancePredicate } from '@pc/contracts';
+import type { AcceptanceCriteria, AcceptancePredicate, DecisionContract } from '@pc/contracts';
+import { isDecisionContract } from '@pc/contracts';
 import { mailboxApi } from './client';
 import type { MailboxInboxItem } from './types';
 
@@ -88,6 +89,44 @@ function parseWorkflowPayload(p: unknown): WorkflowPayload | null {
   };
 }
 
+// ── Decision-contract helpers (pc-pty-chat-221) ───────────────────────────────
+
+/** Pull the DecisionContract from the mailbox message payload (nested inside
+ *  the reviewPackage). Returns null when absent (old envelopes). */
+function extractDecisionContract(payload: unknown): DecisionContract | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const o = payload as Record<string, unknown>;
+  const rp = o.reviewPackage;
+  if (!rp || typeof rp !== 'object') return null;
+  const dc = (rp as Record<string, unknown>).decisionContract;
+  return isDecisionContract(dc) ? dc : null;
+}
+
+/** Prominent decision-contract header block shown at the top of every review
+ *  surface. Conveys lifecycle position, approve/reject effects, and what
+ *  verification is possible — system-generated, not author-dependent. */
+function DecisionContractHeader({ dc }: { dc: DecisionContract }) {
+  const isComplete = dc.lifecyclePosition === 'completed-work';
+  const emoji = isComplete ? '✅' : '📋';
+  const label = isComplete ? 'Work COMPLETE and verified' : 'Plan awaiting go-ahead';
+  return (
+    <div className="border-b border-border bg-primary/5 px-6 py-4">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-base">{emoji}</span>
+        <span className="text-[13px] font-semibold text-foreground">{label}</span>
+      </div>
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-xs">
+        <dt className="text-muted-foreground">Approve</dt>
+        <dd className="text-foreground">{dc.approveEffect}</dd>
+        <dt className="text-muted-foreground">Reject</dt>
+        <dd className="text-foreground">{dc.rejectEffect}</dd>
+        <dt className="text-muted-foreground">Verification</dt>
+        <dd className="text-foreground">{dc.verificationGuidance}</dd>
+      </dl>
+    </div>
+  );
+}
+
 // ── Public component ──────────────────────────────────────────────────────────
 
 export interface ReviewModalProps {
@@ -107,6 +146,9 @@ export function ReviewModal({
   onDecided,
 }: ReviewModalProps) {
   const { message } = item;
+  // pc-pty-chat-221 — extract the decision contract from the envelope payload
+  // once so both sub-modals receive it without re-parsing.
+  const decisionContract = extractDecisionContract(message.payload);
 
   if (message.kind === 'verification-review') {
     const vp = parseVerificationPayload(message.payload);
@@ -127,6 +169,7 @@ export function ReviewModal({
         projectId={projectId}
         onClose={onClose}
         onDecided={onDecided}
+        decisionContract={decisionContract}
       />
     );
   }
@@ -149,6 +192,7 @@ export function ReviewModal({
         projectId={projectId}
         onClose={onClose}
         onDecided={onDecided}
+        decisionContract={decisionContract}
       />
     );
   }
@@ -218,6 +262,7 @@ function VerificationReviewModal({
   projectId,
   onClose,
   onDecided,
+  decisionContract,
 }: {
   payload: VerificationPayload;
   message: MailboxInboxItem['message'];
@@ -225,6 +270,7 @@ function VerificationReviewModal({
   projectId: string;
   onClose: () => void;
   onDecided: () => void;
+  decisionContract: DecisionContract | null;
 }) {
   const [contract, setContract] = useState<Contract | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -286,6 +332,7 @@ function VerificationReviewModal({
           contract={contract}
           message={message}
           projectId={projectId}
+          decisionContract={decisionContract}
         />
       )}
     </ModalShell>
@@ -309,11 +356,13 @@ function VerificationReviewBody({
   payload,
   contract,
   projectId,
+  decisionContract,
 }: {
   payload: VerificationPayload;
   contract: Contract;
   message: MailboxInboxItem['message'];
   projectId: string;
+  decisionContract: DecisionContract | null;
 }) {
   const deliverable = describeDeliverable(contract.deliverable);
   const asked = summarizeExpectedOutput(contract.expectedOutput);
@@ -338,6 +387,8 @@ function VerificationReviewBody({
 
   return (
     <div className="divide-y divide-border/40">
+      {/* pc-pty-chat-221 — decision-contract header */}
+      {decisionContract && <DecisionContractHeader dc={decisionContract} />}
       {/* Header strip */}
       <div className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 px-6 py-4 text-xs">
         <span className="text-muted-foreground">Agent</span>
@@ -647,12 +698,14 @@ function WorkflowReviewModal({
   projectId,
   onClose,
   onDecided,
+  decisionContract,
 }: {
   payload: WorkflowPayload;
   projectName: string | null;
   projectId: string;
   onClose: () => void;
   onDecided: () => void;
+  decisionContract: DecisionContract | null;
 }) {
   const badge = (
     <span className="flex items-center gap-1.5">
@@ -684,6 +737,8 @@ function WorkflowReviewModal({
       }
     >
       <div className="divide-y divide-border/40">
+        {/* pc-pty-chat-221 — decision-contract header */}
+        {decisionContract && <DecisionContractHeader dc={decisionContract} />}
         {/* Header strip */}
         <div className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 px-6 py-4 text-xs">
           <span className="text-muted-foreground">Workflow</span>
