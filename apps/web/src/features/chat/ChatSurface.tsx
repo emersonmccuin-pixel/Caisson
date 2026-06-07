@@ -5,12 +5,10 @@
 // session lifecycle / past-session fetching / status bar; ChatSurface
 // owns the top-level rendering and chat coordination.
 
-import { useCallback, useState } from 'react';
-
 import { Composer } from '@/features/chat/ChatComposer';
 import type { ChatSurfaceProps } from '@/features/chat/ChatSurfaceProps';
 import { ChatTimeline } from '@/features/chat/ChatTimeline';
-import { RemoteControlToggle, TerminalModeToggle, TerminalPane } from '@/features/chat/TerminalPane';
+import { RemoteStatusLed, TerminalModeToggle, TerminalPane } from '@/features/chat/TerminalPane';
 import { SendBatchTray } from '@/features/chat/SendBatchTray';
 import { ThinkingIndicator } from '@/features/chat/ThinkingIndicator';
 import { useChatComposerActions } from '@/features/chat/useChatComposerActions';
@@ -54,6 +52,7 @@ export function ChatSurface({
   emptyState,
   wsStatus,
   onSurfaceModeChange,
+  remoteControlActive,
 }: ChatSurfaceProps) {
   const { visiblePendingPrompts, recordPendingPrompt } = usePendingPrompts({
     events,
@@ -73,17 +72,6 @@ export function ChatSurface({
   const revealHidden = isRevealHiddenChatRows();
   const hideSystem = isHideSystemMessages();
 
-  // Per-session remote control. Flipping types `/remote-control` into the live
-  // session (control plane, not a chat turn) so it can be driven from the
-  // Claude phone/web app. `remoteControlOn` is the optimistic local view —
-  // Claude owns the real state. Project/global settings decide the launch
-  // default; this is the live override.
-  const remoteControlEligible = Boolean(onTerminalInput && currentSessionId && !composerHidden);
-  const [remoteControlOn, setRemoteControlOn] = useState(false);
-  const toggleRemoteControl = useCallback(() => {
-    onTerminalInput?.('/remote-control\r');
-    setRemoteControlOn((prev) => !prev);
-  }, [onTerminalInput]);
 
   const { chatEnvelopes, renderItems } = useChatRenderItems({
     events,
@@ -218,8 +206,8 @@ export function ChatSurface({
         <div className="shrink-0 border-t border-border bg-card px-3 py-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              {remoteControlEligible && (
-                <RemoteControlToggle active={remoteControlOn} onToggle={toggleRemoteControl} />
+              {remoteControlActive !== undefined && (
+                <RemoteStatusLed active={remoteControlActive} />
               )}
             </div>
             <TerminalModeToggle

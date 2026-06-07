@@ -502,10 +502,11 @@ The session switcher lives in the breadcrumb when the chat tab is active. It let
 
 A chat session can be made remotely accessible so the user can continue it from the Claude mobile app, a tablet, or a browser — all in sync with the desktop. The user's machine stays in control; only the conversation is mirrored to their devices.
 
-- The "Remote control" switch is in the chat footer bar (bottom of the chat tab, next to the Chat/Terminal switch). Flip it on to make the current session remotely drivable; flip it off to stop.
-- When it turns on, a connection URL and a QR code appear in the session's terminal view (use the Chat/Terminal switch to see them). Scan the QR with a phone, or open the URL in a browser.
+- Remote control is a launch setting, not a live switch — a session is either started remote-ready or not. (Claude can't be toggled on/off mid-session from the app.)
+- Turn it on by default in App settings (global default, on by default) and override per project in Project settings (use global / always on / always off). A change takes effect on the next chat session in that project.
+- The chat footer bar shows a read-only "Remote" status light: green when the current session is remote-ready, dark when it isn't. It's an indicator, not a button.
+- When a session is remote-ready, a connection URL and QR code appear in the session's terminal view (use the Chat/Terminal switch to see them). Scan the QR with a phone, or open the URL in a browser.
 - To access from a phone: install the Claude mobile app, sign in with the same Claude account, and the session appears there. From a browser: open claude.ai/code signed into the same account.
-- Defaults: whether new sessions start remote-ready is set in App settings (global default) and can be overridden per project in Project settings. The footer switch is the live, per-session override.
 - Requirement: the user must be signed into Claude with a paid plan (Pro, Max, Team, or Enterprise). It does not work on an API-key login.
 
 ## Work items tab

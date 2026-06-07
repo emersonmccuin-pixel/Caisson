@@ -103,6 +103,8 @@ export interface OrchestratorHostSessionInput {
   model?: string;
   requireReadySignal?: boolean;
   requireMcpHandshake?: boolean;
+  /** Launch the session remote-ready (`--remote-control`), dialog-free. */
+  remoteControl?: boolean;
   cols?: number;
   rows?: number;
   /** Wait for the PREVIOUS chat session's host-run to settle before starting
@@ -404,6 +406,7 @@ export class OrchestratorHostSession extends EventEmitter {
       // composer readiness is enough (mirrors the old ensurePty policy).
       requireMcpHandshake:
         mode === 'resume' ? false : this.input.requireMcpHandshake,
+      remoteControl: this.input.remoteControl,
       cols: this.input.cols,
       rows: this.input.rows,
       timeouts: { ...ORCHESTRATOR_TIMEOUTS },

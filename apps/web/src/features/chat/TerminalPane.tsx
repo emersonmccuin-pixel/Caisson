@@ -102,44 +102,40 @@ export function TerminalModeToggle({
   );
 }
 
-/** Per-session remote-control switch. Flipping ON types `/remote-control` into
- *  the live orchestrator session, which makes it drivable from the Claude phone
- *  / web app (a connect URL + QR appear in the terminal view). Defaults come
- *  from project + global settings; this is the live per-session override.
- *  `active` is the optimistic local view — Claude owns the true state. */
-export function RemoteControlToggle({
-  active,
-  onToggle,
-}: {
-  active: boolean;
-  onToggle: () => void;
-}) {
+/** Read-only remote-control status light. Green when this session launched
+ *  remote-ready (drivable from the Claude phone/web app), dark when not.
+ *  It's an indicator, not a control — Claude can't be toggled on/off live from
+ *  outside the terminal, so remote control is a launch setting (App / Project
+ *  settings) and this just reflects it. */
+export function RemoteStatusLed({ active }: { active: boolean }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={active}
-      data-testid="chat-remote-control-toggle"
-      aria-label={active ? 'Remote control enabled' : 'Remote control disabled'}
+    <span
+      data-testid="chat-remote-status-led"
+      aria-label={active ? 'Remote control on' : 'Remote control off'}
       title={
         active
-          ? 'Remote control ON — drive this session from the Claude phone/web app. Switch to the terminal view to see the connect QR code. Click to disconnect.'
-          : 'Remote control OFF — click to make this session drivable from the Claude phone/web app.'
+          ? 'Remote control is ON for this session — drive it from the Claude phone/web app. Open the terminal view for the connect QR code. Change the default in App or Project settings.'
+          : 'Remote control is OFF for this session. Turn it on by default in App or Project settings (takes effect on the next session).'
       }
-      onClick={onToggle}
       className={
-        'inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium shadow-sm transition-colors ' +
+        'inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium ' +
         (active
-          ? 'border-primary bg-primary/10 text-foreground'
-          : 'border-border bg-background text-muted-foreground hover:border-primary/60')
+          ? 'border-border bg-background text-foreground'
+          : 'border-border bg-background text-muted-foreground')
       }
     >
       <Smartphone className="h-3.5 w-3.5" aria-hidden="true" />
-      <span>Remote control</span>
-      <span className={active ? 'text-primary' : 'text-muted-foreground'}>
-        {active ? 'on' : 'off'}
-      </span>
-    </button>
+      <span>Remote</span>
+      <span
+        aria-hidden="true"
+        className={
+          'h-2 w-2 rounded-full ' +
+          (active
+            ? 'bg-success shadow-[0_0_6px_1px] shadow-success/70'
+            : 'bg-muted-foreground/40')
+        }
+      />
+    </span>
   );
 }
 

@@ -11,6 +11,7 @@ import { useLiveEvents } from '@/store/live-store';
 
 import type { Project } from '@/features/projects/client';
 import type { OrchestratorSurfacePreference } from '@/features/settings/client';
+import { settingsApi } from '@/features/settings/client';
 import { runtimeApi, type OrchestratorRuntimeHealth, type OrchestratorRuntimeSnapshot, type OrchestratorSession, type SessionTransitionResponse } from '@/features/runtime/client';
 import { latestSessionFromTitleEvents } from '@/features/runtime/session-title-live-events';
 import {
@@ -282,6 +283,21 @@ export function Orchestrator({
   const [session, setSession] = useState<OrchestratorSession | null>(null);
   const [runtimeSnapshot, setRuntimeSnapshot] =
     useState<OrchestratorRuntimeSnapshot | null>(null);
+
+  // Remote-control status for the footer LED. Resolves the per-project override
+  // against the global default (mirrors the server's launch-time resolution).
+  // Read-only — it reflects whether sessions launch remote-ready; changing it
+  // happens in App / Project settings.
+  const [globalRemoteControl, setGlobalRemoteControl] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void settingsApi.getSettings()
+      .then((s) => { if (alive) setGlobalRemoteControl(s.remoteControlEnabled === true); })
+      .catch(() => { /* leave default off */ });
+    return () => { alive = false; };
+  }, []);
+  const rc = project.settings.remoteControl;
+  const remoteControlActive = rc === 'on' ? true : rc === 'off' ? false : globalRemoteControl;
   useEffect(() => {
     let cancelled = false;
     runtimeApi.getActiveSession(project.id)
@@ -732,6 +748,7 @@ export function Orchestrator({
       footerSlot={footerSlot}
       emptyState={emptyState}
       wsStatus={wsStatus}
+      remoteControlActive={remoteControlActive}
     />
   );
 }

@@ -71,4 +71,8 @@ export interface ChatSurfaceProps {
   /** Reports the active surface to parent shells that need to adapt their
    *  surrounding layout, such as hiding side previews while xterm is active. */
   onSurfaceModeChange?: (mode: OrchestratorSurfacePreference) => void;
+  /** Whether this session launched remote-ready (resolved project/global
+   *  default). Drives the read-only remote-status LED in the footer. Omit on
+   *  surfaces where remote control doesn't apply (the LED is hidden). */
+  remoteControlActive?: boolean;
 }

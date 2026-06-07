@@ -538,6 +538,7 @@ export class AgentHostService extends EventEmitter {
       model: request.model,
       requireReadySignal: request.requireReadySignal,
       requireMcpHandshake: request.requireMcpHandshake,
+      remoteControl: request.remoteControl,
       cols: request.cols,
       rows: request.rows,
       spawnStuckMs: request.timeouts?.spawnStuckMs,
