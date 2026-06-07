@@ -39,6 +39,10 @@ Caisson closes that gap. You describe how the work should be done, in plain Engl
 | --- | --- |
 | ![Specialists](docs/images/04-specialists.png) | ![Work item inspector](docs/images/05-work-item.png) |
 
+A workflow, visualized — read it left to right, click any step for a plain-English explanation of what it does:
+
+![The Build workflow, visualized as a left-to-right graph](docs/images/06-workflow-graph.png)
+
 ## Unpacking the contract
 
 **"A one-person operation — technical or not."** The audience is a single operator running several initiatives — an SDR, an analyst, a founder, a fractional consultant, a solo dev. No team handoffs, no shared dev loop. Local-first, single-user by design.
