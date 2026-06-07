@@ -238,6 +238,13 @@ export type DispatchAgentFailure =
     }
   | {
       ok: false;
+      /** Dispatch invariant: a contract is mandatory. The row was inserted then
+       *  immediately marked terminal-failed; the agent never spawned. */
+      cause: 'contract-required';
+      error: string;
+    }
+  | {
+      ok: false;
       cause: ContinueAgentResult extends { ok: false; cause: infer C } ? C : never;
       error: string;
     };
@@ -445,6 +452,33 @@ export async function dispatchFreshAgent(
     contractService: deps.contractService,
     expectedOutput: input.expectedOutput,
   });
+
+  // Contract invariant: every run MUST have a contract before it spawns. If
+  // resolveContractForDispatch returned null (it caught an internal error and
+  // logged it), abort NOW — mark the already-inserted row terminal-failed and
+  // return a typed refusal. Never spawn contract-less.
+  if (!contractId) {
+    const reason = 'contract resolution failed — dispatch aborted (contract is mandatory)';
+    markAgentRunTerminal({
+      id: agentRunId,
+      status: 'failed',
+      result: null,
+      failureCause: 'contract-required',
+      failureReason: reason,
+      completedAt: now,
+    });
+    podPrep.cleanup();
+    const failBroadcast = deps.broadcast
+      ? (event: unknown) => deps.broadcast?.(event as { type: string; [key: string]: unknown })
+      : undefined;
+    try {
+      announceAgentRunChange(
+        { runId: agentRunId, reason: 'failed', worktreeDir: input.worktreeDir, startedAt: now },
+        failBroadcast,
+      );
+    } catch { /* best-effort */ }
+    return { ok: false, cause: 'contract-required', error: reason };
+  }
 
   // Register the run-keyed settlement waiter BEFORE start so a terminal applied
   // synchronously in the start response (or by the persistent host-event

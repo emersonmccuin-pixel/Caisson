@@ -1134,6 +1134,10 @@ registerAgentRunRoutes(app, {
     actionRecipients: (ids, now) => mailboxService.actionRecipients(ids, now),
     dismissRecipients: (ids, now) => mailboxService.dismissRecipients(ids, now),
   },
+  // Isolation invariant: when a dispatch declares isolation: "worktree", the
+  // route provisions a real worktree before spawn via the project's
+  // WorktreeService (same primitive the DAG executor uses).
+  worktreeServiceFor: (projectId) => resolveProject(projectId)?.worktrees() ?? null,
 });
 
 registerStatuslineRoutes(app, { broadcastTo });

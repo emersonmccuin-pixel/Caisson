@@ -53,7 +53,14 @@ export type AgentRunFailureCause =
    *  WITHOUT submitting a deliverable against its contract. Delivery is the
    *  sole done-signal; ending a turn / exiting with nothing delivered is a
    *  failure with a reason, not a silent "completed-but-empty". */
-  | 'no-deliverable';
+  | 'no-deliverable'
+  /** Contract invariant: the dispatch was aborted because the contract could
+   *  not be resolved or created. A run must ALWAYS have a contract before the
+   *  agent spawns; if one can't be guaranteed the dispatch is refused. */
+  | 'contract-required'
+  /** Isolation invariant: the dispatch declared `isolation: "worktree"` but
+   *  the worktree provisioning step failed. Never fall back to the main repo. */
+  | 'worktree-provision-failed';
 
 export const AGENT_RUN_FAILURE_CAUSES: readonly AgentRunFailureCause[] = [
   'spawn-stuck',
@@ -73,6 +80,8 @@ export const AGENT_RUN_FAILURE_CAUSES: readonly AgentRunFailureCause[] = [
   'host-crashed',
   'host-protocol-error',
   'no-deliverable',
+  'contract-required',
+  'worktree-provision-failed',
 ];
 
 /** One persisted agent_runs row. Mirrors the in-memory AgentRunRecord plus

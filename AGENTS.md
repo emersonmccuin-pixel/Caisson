@@ -48,6 +48,13 @@ land:**
   **typed failure with a reason** — never a silent hang or a fake success.
 - **The DB is the source of truth.** Runtime processes + in-memory registries are projections of it.
 - **One owner per concern.** Each job lives in exactly one place.
+- **Every agent dispatch has a contract + (when declared) provisioned isolation — or it refuses
+  loudly.** A contract is a hard precondition of spawn: if one cannot be created, the dispatch is
+  aborted with `cause: 'contract-required'` before the agent ever starts. If `isolation: "worktree"`
+  is declared, a real git worktree must be provisioned before spawn; falling back to the main repo
+  folder is a silent integrity violation and is categorically refused (`cause:
+  'worktree-provision-failed'`). This is enforced structurally in code — there is no code path for
+  any work-item source or dispatch shape that brings up an agent without meeting both conditions.
 
 ## Current priority
 

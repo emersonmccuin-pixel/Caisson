@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 
 import type { Hono } from 'hono';
 import type {
@@ -30,6 +31,7 @@ import {
   dispatchContinueAgent as defaultDispatchContinueAgent,
   dispatchFreshAgent as defaultDispatchFreshAgent,
 } from '../../services/agent-run-factory.ts';
+import { resolveWorkItemRef } from '../../services/work-item.ts';
 import {
   answerPendingAsk as defaultAnswerPendingAsk,
   cancelPendingAsk as defaultCancelPendingAsk,
@@ -58,6 +60,11 @@ export interface AgentRunRouteDeps {
    *  at register time) so a host respawn on a new port is picked up without an
    *  API restart. */
   getHostConnection?: () => AgentHostReattachClient | null;
+  /** Isolation invariant: when a dispatch declares `isolation: "worktree"`, the
+   *  route provisions a real worktree via this factory BEFORE spawn. Returns null
+   *  when no ProjectRuntime exists for the project (dispatch is refused). Tests
+   *  inject a fake; production wires to `resolveProject(id)?.worktrees()`. */
+  worktreeServiceFor?: (projectId: ULID) => { ensureWorktree(name: string): Promise<{ path: string }> } | null;
   /** Mailbox enqueue port; threaded into the factory/terminal/pause/kill
    *  delivery sites — the sole delivery door. */
   mailboxEnqueue?: MailboxEnqueuePort | null;
@@ -435,10 +442,24 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     if (!input.trim()) return c.json({ ok: false, error: 'input required' }, 400);
     const parentWorkItemId =
       typeof body.parentWorkItemId === 'string' ? (body.parentWorkItemId as ULID) : null;
-    const workItemId =
-      typeof body.workItemId === 'string' && body.workItemId.trim()
-        ? (body.workItemId.trim() as ULID)
-        : null;
+
+    // Fix 3 — callsign resolution: accept either a ULID or a human-readable
+    // callsign (e.g. "pc-pty-chat-271"). Resolve via resolveWorkItemRef so the
+    // dispatch always operates on a canonical ULID — silent "not found" on a
+    // valid callsign was the hole that triggered the degenerate run path.
+    let workItemId: ULID | null = null;
+    if (typeof body.workItemId === 'string' && body.workItemId.trim()) {
+      const ref = body.workItemId.trim();
+      const wi = resolveWorkItemRef(projectId, ref);
+      if (!wi) {
+        return c.json(
+          { ok: false, error: `work item "${ref}" not found or archived`, cause: 'work-item-not-found' },
+          404,
+        );
+      }
+      workItemId = wi.id as ULID;
+    }
+
     const dispatcherSessionId =
       typeof body.dispatcherSessionId === 'string' ? body.dispatcherSessionId.trim() : '';
     if (!dispatcherSessionId) {
@@ -455,11 +476,55 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       return c.json({ ok: false, error: depthCheck.error, cause: depthCheck.cause }, 400);
     }
 
+    // Fix 2 — isolation provisioned to spec or refuse. When the dispatch
+    // declares `isolation: "worktree"`, a real git worktree must be created
+    // BEFORE spawn and used as the run's cwd. "in_place" (default) keeps
+    // the existing project.folderPath behavior.
+    // Never fall back to project.folderPath for a worktree-isolation dispatch —
+    // falling back is what caused the "committed straight to dev" incident.
+    let worktreeDir = project.folderPath;
+    const declaredIsolation = body.expectedOutput != null
+      ? (body.expectedOutput as { isolation?: unknown }).isolation
+      : undefined;
+    if (declaredIsolation === 'worktree') {
+      const wts = deps.worktreeServiceFor?.(projectId) ?? null;
+      if (!wts) {
+        return c.json(
+          {
+            ok: false,
+            error: 'no worktree service available for this project — cannot provision isolation',
+            cause: 'worktree-provision-failed',
+          },
+          503,
+        );
+      }
+      // Name mirrors the workflow convention: keyed to the linked work item when
+      // one is present (idempotent re-attach), otherwise a random session-unique
+      // suffix. WorktreeService.ensureWorktree prunes stale registrations and
+      // returns an existing worktree if the path is already attached.
+      const worktreeName = workItemId
+        ? `agent-${workItemId.slice(-8)}`
+        : `agent-${randomUUID().slice(0, 8)}`;
+      try {
+        const wt = await wts.ensureWorktree(worktreeName);
+        worktreeDir = wt.path;
+      } catch (err) {
+        return c.json(
+          {
+            ok: false,
+            error: `worktree provisioning failed: ${(err as Error).message}`,
+            cause: 'worktree-provision-failed',
+          },
+          503,
+        );
+      }
+    }
+
     const host = resolveHost();
     const result = await services.dispatchFreshAgent(
       {
         projectId,
-        worktreeDir: project.folderPath,
+        worktreeDir,
         agentName,
         input,
         dispatcherSessionId,
@@ -470,6 +535,11 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
           : {}),
         invokeDepth: depthCheck.childDepth,
         slug: project.slug,
+        // When a worktree was provisioned, pass its path in the spawn env so
+        // the path-guard hook (already used by workflow nodes) enforces worktree
+        // confinement for subagent calls too. Mirrors the workflow convention
+        // (PC_WORKFLOW_WORKTREE); reuses the same primitive.
+        ...(declaredIsolation === 'worktree' ? { extraEnv: { PC_WORKFLOW_WORKTREE: worktreeDir } } : {}),
       },
       {
         mailboxEnqueue,
@@ -479,8 +549,10 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     );
 
     if (!result.ok) {
-      // Decision 4 — a required-but-absent work-item home is a client error.
-      const status = result.cause === 'work-item-required' ? 422 : 200;
+      // Typed failure status: contract-required + work-item-required are client
+      // errors (422); everything else keeps the legacy 200 for back-compat.
+      const CLIENT_ERROR_CAUSES: ReadonlySet<string> = new Set(['work-item-required', 'contract-required']);
+      const status = CLIENT_ERROR_CAUSES.has(result.cause) ? 422 : 200;
       return c.json({ ok: false, error: result.error, cause: result.cause }, status);
     }
 
