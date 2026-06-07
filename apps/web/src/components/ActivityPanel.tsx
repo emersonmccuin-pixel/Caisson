@@ -1,13 +1,14 @@
 // Section 6 — Activity panel. Per-project scoped:
 //   1. Running agents (top)
 //   2. Running workflows
-//   3. Workflow human-review inbox (pushed to bottom via mt-auto)
+//   3. Inbox (human-actionable items only — pc-pty-chat-267)
 //   4. Failed recently (collapsed, 7-day window, very bottom)
 //
 // Section 32.3 — when collapsed, renders a 36px badge gutter instead of
-// hiding the panel. Auto-swells when "waiting on you" or "failed recently"
+// hiding the panel. Auto-swells when "inbox actionable" or "failed recently"
 // transitions from 0 → non-zero (running counts don't auto-swell — they
-// resolve themselves).
+// resolve themselves). The old "Waiting on you" region (paused-runs list)
+// is removed — the inbox is the single home for human decisions (pc-pty-chat-267).
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -23,7 +24,6 @@ import { useProjectAgentRuns } from '@/hooks/use-project-agent-runs';
 import { useProjectWorkflowV2Runs } from '@/hooks/use-project-workflow-v2-runs';
 import { useActiveCenterTab } from '@/store/active-center-tab';
 import { useAgentTranscript } from '@/store/agent-transcript';
-import { useChatScrollTarget } from '@/store/chat-scroll-target';
 import { useWorkflowsListNav } from '@/store/workflows-list-nav';
 
 interface ActivityPanelProps {
@@ -58,10 +58,6 @@ export function ActivityPanel({
     () => runs.filter((r) => ACTIVE_STATUSES.has(r.status)),
     [runs],
   );
-  const pausedRuns = useMemo(
-    () => runs.filter((r) => r.status === 'paused'),
-    [runs],
-  );
   const { runs: agentRuns } = useProjectAgentRuns(project, events);
 
   const sevenDaysAgoMsEpoch = nowMs - 7 * 24 * 60 * 60 * 1000;
@@ -82,34 +78,35 @@ export function ActivityPanel({
         }),
     [runs, sevenDaysAgoMsEpoch, dismissedRunIds],
   );
-  // Section 32.3 — auto-swell on first non-zero "waiting on you" or
+  // Section 32.3 — auto-swell on first non-zero "inbox actionable" or
   // "failed". Running counts don't auto-swell (they resolve themselves).
-  const waitingCount = pausedRuns.length;
+  // inboxActionableCount is fed up from MailboxRegion via onActionableCount.
+  const [inboxActionableCount, setInboxActionableCount] = useState(0);
   const failedCount = recentFailedRuns.length;
-  const prevWaiting = useRef(waitingCount);
+  const prevInboxActionable = useRef(inboxActionableCount);
   const prevFailed = useRef(failedCount);
   useEffect(() => {
     if (expanded) {
-      prevWaiting.current = waitingCount;
+      prevInboxActionable.current = inboxActionableCount;
       prevFailed.current = failedCount;
       return;
     }
     if (
-      (waitingCount > 0 && prevWaiting.current === 0) ||
+      (inboxActionableCount > 0 && prevInboxActionable.current === 0) ||
       (failedCount > 0 && prevFailed.current === 0)
     ) {
       onExpand();
     }
-    prevWaiting.current = waitingCount;
+    prevInboxActionable.current = inboxActionableCount;
     prevFailed.current = failedCount;
-  }, [waitingCount, failedCount, expanded, onExpand]);
+  }, [inboxActionableCount, failedCount, expanded, onExpand]);
 
   if (!expanded) {
     return (
       <ActivityGutter
         agentsCount={agentRuns.length}
         workflowsCount={activeRuns.length}
-        waitingCount={waitingCount}
+        waitingCount={inboxActionableCount}
         failedCount={failedCount}
         onExpand={onExpand}
       />
@@ -125,7 +122,7 @@ export function ActivityPanel({
         </div>
       ) : (
         <div className="flex flex-1 flex-col overflow-y-auto">
-          <MailboxRegion project={project} />
+          <MailboxRegion project={project} onActionableCount={setInboxActionableCount} />
           <RunningAgentsRegion
             runs={agentRuns}
             nowMs={nowMs}
@@ -137,11 +134,6 @@ export function ActivityPanel({
             nowMs={nowMs}
           />
           <div className="mt-auto">
-            <HumanReviewRegion
-              project={project}
-              pausedRuns={pausedRuns}
-              nowMs={nowMs}
-            />
             <FailedRecentlyRegion
               project={project}
               runs={recentFailedRuns}
@@ -334,8 +326,10 @@ function RunningWorkflowCard({
 
 function MailboxRegion({
   project,
+  onActionableCount,
 }: {
   project: Project;
+  onActionableCount?: (n: number) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [count, setCount] = useState(0);
@@ -364,6 +358,7 @@ function MailboxRegion({
         <MailboxInbox
           scope={{ projectId: project.id }}
           onVisibleCount={setCount}
+          onActionableCount={onActionableCount}
         />
       </div>
     </section>
@@ -462,65 +457,6 @@ function formatElapsed(ms: number): string {
 }
 
 
-function HumanReviewRegion({
-  pausedRuns,
-  nowMs,
-}: {
-  project: Project;
-  pausedRuns: V2RunSummary[];
-  nowMs: number;
-}) {
-  // 19.12 — paused v2 runs land here. The old v1 `/api/projects/:id/approvals`
-  // endpoint (per-approval-node scroll-to-chat-bubble) is gone; click jumps
-  // to chat (orchestrator tab) where the human-review prompt sits as a bubble.
-  // 19.20 — modal viewer removed; we drop the dual setTab+openViewer call.
-  // Per-approval-bubble navigation re-enters when v2 surfaces a pending-asks
-  // LIST endpoint (none today).
-  const setTab = useActiveCenterTab((s) => s.setTab);
-  // requestScrollTo retained for the future per-approval navigation path; not
-  // used in v1 of this region.
-  void useChatScrollTarget;
-
-  if (pausedRuns.length === 0) {
-    return (
-      <RegionShell title="Waiting on you" badge="0">
-        <EmptyRegion text="Nothing waiting for your input." />
-      </RegionShell>
-    );
-  }
-
-  return (
-    <RegionShell title="Waiting on you" badge={String(pausedRuns.length)}>
-      <ul className="divide-y divide-border/50">
-        {pausedRuns.map((run) => {
-          const startedAt = run.startedAt ?? run.createdAt;
-          const waiting = formatElapsed(nowMs - startedAt);
-          return (
-            <li key={run.id}>
-              <button
-                type="button"
-                onClick={() => setTab('orchestrator')}
-                className="block w-full px-3 py-2 text-left hover:bg-muted/40"
-              >
-                <div className="flex items-baseline justify-between gap-2">
-                  <div className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground">
-                    {run.workflowName || run.workflowId}
-                  </div>
-                  <div className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                    {waiting}
-                  </div>
-                </div>
-                <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  paused — review in chat
-                </div>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </RegionShell>
-  );
-}
 
 function useDismissedRunIds(project: Project | null): Set<string> {
   const [ids, setIds] = useState<Set<string>>(() => new Set());

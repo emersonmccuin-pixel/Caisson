@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react';
 
-import { isActionableMailboxKind, type MailboxMessageKind } from '@pc/contracts';
+import { classifyInboxItem, isActionableMailboxKind, type MailboxMessageKind, type WorkflowReviewFlavor } from '@pc/contracts';
 import { mailboxApi } from './client';
 import { ReviewModal } from './ReviewModal';
 import { useMailboxInbox } from '@/hooks/use-mailbox-inbox';
@@ -18,6 +18,8 @@ export interface MailboxInboxProps {
   scope: { projectId: string } | { global: true } | { all: true };
   /** Called whenever the visible item count changes (used by collapse headers). */
   onVisibleCount?: (n: number) => void;
+  /** Called whenever the actionable item count changes (items needing a decision). */
+  onActionableCount?: (n: number) => void;
   /** Project id → display name, for the cross-project rows' project chip. */
   projectNames?: Record<string, string>;
 }
@@ -54,44 +56,54 @@ const KIND_ORDER: MailboxMessageKind[] = [
   'system-notice',
 ];
 
-// Kinds that are never surfaced in the human inbox — filtered out
-// unconditionally, no UI control. What remains visible: agent-ask-escalated,
-// agent-question, workflow-review, verification-review.
-// - agent-stalled is the orchestrator's to handle (the human already sees the
-//   run's `stalled` badge — rung 1 of the same ladder).
-// - workflow-run-failed (user decision 2026-06-05): a failed run is run-history,
-//   not a human decision. The orchestrator still gets it (orchestrator-turn);
-//   the human reviews failures in Workflows → Runs (filter: Failed), where the
-//   "Resume from failed step" action already lives. Hidden here so the
-//   orchestrator-addressed copy can't leak into the project-scoped inbox view.
-const HIDDEN_KINDS: ReadonlySet<MailboxMessageKind> = new Set([
-  'agent-approval',
-  'runtime-hook-ask',
-  'agent-terminal',
-  'agent-stalled',
-  'external-webhook',
-  'system-notice',
-  'workflow-run-failed',
-]);
-
-/** Single source of truth for "does this kind show in the human inbox?" — the
- *  panel filters on it AND the bell badge counts on it, so the badge can never
- *  light for a card the user can't see/dismiss (e.g. an unread hidden-kind
- *  system-notice). Burned 2026-06-05: badge counted unread across ALL kinds
- *  while the panel hid some → a stale count with nothing to clear. */
-export function isInboxVisibleKind(kind: MailboxMessageKind): boolean {
-  return !HIDDEN_KINDS.has(kind);
+/** Extract the reviewer flavor from a workflow-review message payload.
+ *  The dag-run-service writes `payload.flavor: 'human' | 'orchestrator'`;
+ *  anything else (missing or unknown) returns undefined (treated as human). */
+export function readReviewFlavor(
+  message: MailboxInboxItem['message'],
+): WorkflowReviewFlavor | undefined {
+  const f = (message.payload as { flavor?: unknown }).flavor;
+  if (f === 'human' || f === 'orchestrator') return f;
+  return undefined;
 }
 
-export function MailboxInbox({ scope, onVisibleCount, projectNames }: MailboxInboxProps) {
+/** Whether this inbox item is visible to the human user. Delegates to the
+ *  shared classifier (inbox-classifier.ts) so the panel, the bell badge, and
+ *  any future surface all agree. Replaces the old HIDDEN_KINDS kind-only check
+ *  which couldn't distinguish orchestrator-flavor workflow-review gates. */
+export function isInboxItemHumanVisible(item: MailboxInboxItem): boolean {
+  return classifyInboxItem(item.message.kind, readReviewFlavor(item.message)).humanVisible;
+}
+
+/** Thin kind-only compatibility shim — callers that already know the kind but
+ *  not the full item can use this; for full accuracy prefer isInboxItemHumanVisible. */
+export function isInboxVisibleKind(kind: MailboxMessageKind): boolean {
+  // Workflow-review without flavor defaults to human-visible (safe fallback).
+  return classifyInboxItem(kind).humanVisible;
+}
+
+export function MailboxInbox({ scope, onVisibleCount, onActionableCount, projectNames }: MailboxInboxProps) {
   const { items, loading, refetch } = useMailboxInbox(scope);
 
-  // Drop the never-shown kinds before anything counts, groups, or renders.
-  const visibleItems = items.filter((item) => isInboxVisibleKind(item.message.kind));
+  // Drop orchestrator-owned / non-human-visible items before anything counts,
+  // groups, or renders. Uses the full classifier (kind + flavor) so an
+  // orchestrator-flavor workflow-review gate is correctly excluded.
+  const visibleItems = items.filter((item) => isInboxItemHumanVisible(item));
+
+  // Actionable = visible item that still needs a decision.
+  const actionableCount = visibleItems.filter(
+    (item) =>
+      classifyInboxItem(item.message.kind, readReviewFlavor(item.message)).actionable &&
+      item.recipient.actionedAt === null,
+  ).length;
 
   useEffect(() => {
     onVisibleCount?.(visibleItems.length);
   }, [visibleItems.length, onVisibleCount]);
+
+  useEffect(() => {
+    onActionableCount?.(actionableCount);
+  }, [actionableCount, onActionableCount]);
 
   if (loading && visibleItems.length === 0) {
     return (

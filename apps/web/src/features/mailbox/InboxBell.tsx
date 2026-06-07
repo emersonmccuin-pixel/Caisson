@@ -10,8 +10,8 @@
 import { useMemo, useState } from 'react';
 import { Bell, Download } from 'lucide-react';
 
-import { isActionableMailboxKind } from '@pc/contracts';
-import { MailboxInbox, isInboxVisibleKind } from './MailboxInbox';
+import { classifyInboxItem } from '@pc/contracts';
+import { MailboxInbox, isInboxItemHumanVisible, readReviewFlavor } from './MailboxInbox';
 import { UpdateBellCard, isUpdatePending } from './UpdateBellCard';
 import { useMailboxInbox } from '@/hooks/use-mailbox-inbox';
 import { useDesktopUpdates } from '@/hooks/use-desktop-updates';
@@ -26,11 +26,11 @@ export function InboxBell({ projectNames }: { projectNames: Record<string, strin
   const updates = useDesktopUpdates();
   const updatePending = isUpdatePending(updates);
 
-  // Only count what the inbox panel actually SHOWS — otherwise an unread
-  // hidden-kind item (e.g. a system-notice / dead-letter) lights the badge with
-  // nothing the user can open or dismiss. Same filter the panel uses.
+  // Only count what the inbox panel actually SHOWS — uses the full classifier
+  // (kind + flavor) so orchestrator-flavor workflow-review gates don't light
+  // the badge when there's nothing for the human to open or dismiss.
   const items = useMemo(
-    () => allItems.filter((i) => isInboxVisibleKind(i.message.kind)),
+    () => allItems.filter((i) => isInboxItemHumanVisible(i)),
     [allItems],
   );
 
@@ -47,7 +47,7 @@ export function InboxBell({ projectNames }: { projectNames: Record<string, strin
     () =>
       items.filter(
         (i) =>
-          isActionableMailboxKind(i.message.kind) &&
+          classifyInboxItem(i.message.kind, readReviewFlavor(i.message)).actionable &&
           i.recipient.actionedAt === null &&
           i.recipient.dismissedAt === null,
       ).length,

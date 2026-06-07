@@ -110,13 +110,16 @@ export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
   });
 
   // ── Project inbox list. ─────────────────────────────────────────────────────
+  // addressKinds filter restricts to 'user-inbox' recipients so orchestrator-
+  // addressed messages (active-orchestrator, orchestrator-session, …) never
+  // leak into the human-facing inbox (pc-pty-chat-267).
   app.get('/api/projects/:projectId/mailbox', (c) => {
     const projectId = c.req.param('projectId') as ULID;
     const query = parseListMailboxQuery({
       unreadOnly: c.req.query('unreadOnly'),
       actionableOnly: c.req.query('actionableOnly'),
     });
-    const rows = listRecipientsForInbox({ projectId });
+    const rows = listRecipientsForInbox({ projectId, addressKinds: ['user-inbox'] });
     return c.json({ ok: true, items: filterInbox(rows, query.ok ? query.value : {}) });
   });
 
@@ -126,7 +129,7 @@ export function registerMailboxRoutes(app: Hono, deps: MailboxRouteDeps): void {
       unreadOnly: c.req.query('unreadOnly'),
       actionableOnly: c.req.query('actionableOnly'),
     });
-    const rows = listRecipientsForInbox({ projectId: null });
+    const rows = listRecipientsForInbox({ projectId: null, addressKinds: ['user-inbox'] });
     return c.json({ ok: true, items: filterInbox(rows, query.ok ? query.value : {}) });
   });
 

@@ -1,9 +1,9 @@
-// Inbox ownership classifier -- Phase 0.2 (pc-pty-chat-276.1).
+// Inbox ownership classifier (pc-pty-chat-276.1 → pc-pty-chat-267).
 // Single source of truth for "who owns this inbox item, is it human-visible,
 // and does it require a decision?"
 //
-// ADDITIVE only: the existing isInboxVisibleKind / ACTIONABLE_MAILBOX_KINDS
-// callers are NOT replaced here -- Phase 2.1 swaps them over.
+// Phase 2.1 (pc-pty-chat-267): callers swapped over — the panel, InboxBell
+// badge, and ActivityPanel gutter all route through classifyInboxItem now.
 // Pure function; zero side-effects; zero I/O.
 
 import type { MailboxMessageKind } from './mailbox.ts';
@@ -33,9 +33,6 @@ export interface InboxClassification {
  * - raw agent-question -> orchestrator-owned, not human-visible
  * - info-only kinds (system-notice, workflow-first-run-review, etc.) -> not actionable
  * - orchestrator-addressed kinds (agent-approval, agent-stalled, ...) -> not human-visible
- *
- * The existing isInboxVisibleKind / ACTIONABLE_MAILBOX_KINDS are NOT replaced
- * here -- Phase 2.1 swaps the callers over to this function.
  */
 export function classifyInboxItem(
   kind: MailboxMessageKind,
