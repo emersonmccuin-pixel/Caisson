@@ -10,10 +10,13 @@ import {
   listWorkItems as dbListWorkItems,
   reassignStage,
   resolveAgentForDispatch,
+  searchWorkItems as dbSearchWorkItems,
+  toSlimWorkItem,
   updateProjectStages,
   updateWorkItemFields as dbUpdateWorkItemFields,
   updateWorkItemStatus,
 } from '@pc/db';
+import type { ListWorkItemsOptions, WorkItemAreaFilter } from '@pc/db';
 
 import {
   AttachmentNotInProjectError,
@@ -89,48 +92,96 @@ function verificationDecisionStatus(code: ReviewDecisionErrorCode): 400 | 404 | 
 }
 
 export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): void {
+  // ── pc-pty-chat-254: work-item search (FTS5). MUST be registered BEFORE the
+  // /:wiId param route so the literal segment "search" doesn't bind to :wiId.
+  app.get('/api/projects/:projectId/work-items/search', (c) => {
+    const id = c.req.param('projectId') as ULID;
+    const runtime = deps.resolveProject(id);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+
+    const query = c.req.query('q') ?? '';
+    const areaId = (c.req.query('areaId') ?? '') as ULID | '';
+    const statusParam = c.req.query('status');
+    const openParam = c.req.query('open');
+
+    try {
+      const results = dbSearchWorkItems({
+        projectId: runtime.project.id,
+        query,
+        ...(areaId ? { areaId } : {}),
+        ...(statusParam ? { status: statusParam as WorkItemStatus } : {}),
+        ...(openParam === '1' ? { open: true } : {}),
+      });
+      return c.json({ ok: true, results });
+    } catch (err) {
+      return c.json({ ok: false, error: (err as Error).message }, 500);
+    }
+  });
+
   app.get('/api/projects/:projectId/work-items', (c) => {
     const id = c.req.param('projectId');
     const runtime = deps.resolveProject(id);
     if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
     const q = c.req.query();
-    // Slice 010 — `?areaId=` filters by Area. `uncaptured` (or empty) → items
-    // with no Area; a ULID → that Area's items. Runs at the repo layer.
-    if (q.areaId !== undefined) {
-      const areaFilter = q.areaId === '' || q.areaId === 'uncaptured' ? 'uncaptured' : (q.areaId as ULID);
-      let items = dbListWorkItems(runtime.project.id, { areaId: areaFilter });
-      if (q.stage !== undefined) items = items.filter((wi) => wi.stageId === q.stage);
-      if (q.parentId !== undefined) {
-        const wanted = q.parentId === '' ? null : (q.parentId as ULID);
-        items = items.filter((wi) => (wi.parentId ?? null) === wanted);
+
+    // pc-pty-chat-254: default is slim projection (no body/history/fields).
+    // Pass ?includeBody=1 for the full WorkItem shape.
+    const includeBody = q.includeBody === '1';
+
+    // pc-pty-chat-254: unified filter parsing.
+    // NOTE: `type` filter is deferred pending pc-pty-chat-285 (dual source-of-truth
+    // for work-item type — top-level `type` column vs `type` field-schema enum).
+
+    const hasPagination = q.cursor !== undefined || q.limit !== undefined;
+    const hasIncludeArchived = q.includeArchived === '1';
+
+    // Cursor-paginated or archived path: route through the service which handles
+    // cursor encoding and the archived listing. The service was extended (pc-pty-chat-254)
+    // to propagate areaId/status/open.
+    if (hasPagination || hasIncludeArchived) {
+      const svcOpts: Parameters<ReturnType<typeof runtime.workItemService>['list']>[0] = {};
+      if (q.stage !== undefined) svcOpts.stage = q.stage;
+      if (q.parentId !== undefined) svcOpts.parentId = q.parentId === '' ? null : (q.parentId as ULID);
+      if (hasIncludeArchived) svcOpts.includeArchived = true;
+      if (q.cursor !== undefined) svcOpts.cursor = q.cursor;
+      if (q.limit !== undefined) {
+        const n = Number(q.limit);
+        if (Number.isFinite(n)) svcOpts.limit = n;
       }
+      // New filters (pc-pty-chat-254).
+      if (q.areaId !== undefined) {
+        svcOpts.areaId = (q.areaId === '' || q.areaId === 'uncaptured' ? 'uncaptured' : q.areaId) as WorkItemAreaFilter;
+      }
+      if (q.status !== undefined && q.status !== '') svcOpts.status = q.status as WorkItemStatus;
+      if (q.open === '1') svcOpts.open = true;
+
+      const result = runtime.workItemService().list(svcOpts);
+      const items = includeBody ? result.items : result.items.map(toSlimWorkItem);
+      if (hasPagination) {
+        return c.json({ items, nextCursor: result.nextCursor });
+      }
+      // includeArchived without pagination: keep { workItems } shape.
       return c.json({ workItems: items });
     }
-    const hasFilters =
-      q.stage !== undefined ||
-      q.parentId !== undefined ||
-      q.includeArchived !== undefined ||
-      q.cursor !== undefined ||
-      q.limit !== undefined;
-    if (!hasFilters) {
-      return c.json({ workItems: dbListWorkItems(runtime.project.id) });
+
+    // Non-paginated, non-archived: use repo directly with DB-level filters.
+    // Slice 010 — areaId filter; pc-pty-chat-254 — status + open.
+    const repoOpts: ListWorkItemsOptions = {};
+    if (q.areaId !== undefined) {
+      repoOpts.areaId = (q.areaId === '' || q.areaId === 'uncaptured' ? 'uncaptured' : q.areaId) as WorkItemAreaFilter;
     }
-    const listOpts: {
-      stage?: string;
-      parentId?: ULID | null;
-      includeArchived?: boolean;
-      cursor?: ULID;
-      limit?: number;
-    } = {};
-    if (q.stage !== undefined) listOpts.stage = q.stage;
-    if (q.parentId !== undefined) listOpts.parentId = q.parentId === '' ? null : (q.parentId as ULID);
-    if (q.includeArchived === '1') listOpts.includeArchived = true;
-    if (q.cursor !== undefined) listOpts.cursor = q.cursor as ULID;
-    if (q.limit !== undefined) {
-      const n = Number(q.limit);
-      if (Number.isFinite(n)) listOpts.limit = n;
+    if (q.status !== undefined && q.status !== '') repoOpts.status = q.status as WorkItemStatus;
+    if (q.open === '1') repoOpts.open = true;
+
+    let items = dbListWorkItems(runtime.project.id, repoOpts);
+    if (q.stage !== undefined) items = items.filter((wi) => wi.stageId === q.stage);
+    if (q.parentId !== undefined) {
+      const wanted = q.parentId === '' ? null : (q.parentId as ULID);
+      items = items.filter((wi) => (wi.parentId ?? null) === wanted);
     }
-    return c.json(runtime.workItemService().list(listOpts));
+
+    const output = includeBody ? items : items.map(toSlimWorkItem);
+    return c.json({ workItems: output });
   });
 
   app.post('/api/projects/:projectId/work-items/move', async (c) => {
