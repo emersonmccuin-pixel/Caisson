@@ -203,10 +203,12 @@ a:hover {
    rules apply universally without per-component overrides.
    ────────────────────────────────────────────────────────────────────── */
 
-*,
-*::before,
-*::after {
-  border-color: var(--border);
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: var(--border);
+  }
 }
 
 /* Focus ring: 1px solid primary, 1px offset, no halo */

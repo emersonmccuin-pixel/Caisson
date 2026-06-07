@@ -319,8 +319,7 @@ function UncategorizedCard({
     <button
       type="button"
       onClick={onOpen}
-      className="flex cursor-pointer flex-col gap-2 bg-card p-3 text-left"
-      style={{ border: '2px dashed rgba(212, 166, 74, 0.4)' }}
+      className="flex cursor-pointer flex-col gap-2 border-2 border-dashed border-border bg-card p-3 text-left"
       title="Click to view tasks not assigned to any Area"
     >
       <div className="flex items-center gap-2">
@@ -354,8 +353,7 @@ function AreaCardContent({
 }) {
   return (
     <div
-      className={`flex flex-col gap-2 bg-card p-3 ${overlay ? 'opacity-80 shadow-lg' : ''}`}
-      style={{ border: '2px solid rgba(212, 166, 74, 0.45)' }}
+      className={`flex flex-col gap-2 border-2 border-border bg-card p-3 ${overlay ? 'opacity-80 shadow-lg' : ''}`}
     >
       <div className="flex items-center gap-2">
         {/* Drag handle — grip icon */}
