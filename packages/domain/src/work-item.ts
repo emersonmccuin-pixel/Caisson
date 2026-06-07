@@ -59,6 +59,23 @@ export interface WorkItem {
   areaId: ULID | null;
 }
 
+/** Slim projection returned by pc_list_work_items by default (pc-pty-chat-254).
+ *  Excludes body, history, fields, and other bulky columns. Use `includeBody=true`
+ *  on the list call to opt in to the full WorkItem shape. */
+export interface WorkItemSlim {
+  id: ULID;
+  projectId: ULID;
+  callsign: string | null;
+  title: string;
+  type: WorkItemType;
+  status: WorkItemStatus;
+  statusReason: string | null;
+  stageId: string;
+  areaId: ULID | null;
+  parentId: ULID | null;
+  updatedAt: number;
+}
+
 /** Append-only event log written by mutation paths in the repo + by the
  *  agent-comms HTTP routes (Section 16b.7). Surfaced on the public WorkItem
  *  shape; consumed by the work-item detail modal's Activity tab. Older

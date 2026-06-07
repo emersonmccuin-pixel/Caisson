@@ -866,8 +866,8 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_list_work_items",
     "family": "work-item",
     "label": "List work items",
-    "description": "List work items in this project. Use this when the orchestrator / an agent needs to find a card by some property (title fragment, stage, parent) rather than knowing its ULID up front. Optional filters: `stage` (stage id slug), `parentId` (a ULID, or `\"\"` for top-level only), `includeArchived` (boolean, default false). When called with no filters, returns the project's full work-item set (the same shape the kanban renders from). PC_PROJECT_ID env is the implicit scope.",
-    "catalogDescription": "Find cards in this project by stage / parent / archive-state.",
+    "description": "List work items in this project. Returns a slim projection by default (id, callsign, title, type, status, stageId, areaId, parentId, updatedAt — no body/history). Pass `includeBody: true` for the full shape. Optional filters: `stage` (stage id slug), `parentId` (a ULID, or `\"\"` for top-level only), `includeArchived` (boolean, default false), `status` (exact status string), `open` (boolean — excludes complete/cancelled/archived), `area_id` (Area ULID or `\"uncaptured\"`). When called with no filters, returns the project's full work-item set. For text search use `pc_search_work_items`. PC_PROJECT_ID env is the implicit scope.",
+    "catalogDescription": "Find cards in this project by stage / parent / status / area / archive-state.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -883,15 +883,60 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
           "type": "boolean",
           "description": "when true, also returns soft-deleted work items"
         },
+        "includeBody": {
+          "type": "boolean",
+          "description": "when true, returns full WorkItem shape including body/history/fields (default: slim projection only)"
+        },
+        "status": {
+          "type": "string",
+          "description": "optional: exact status to match (e.g. 'active', 'complete', 'cancelled')"
+        },
+        "open": {
+          "type": "boolean",
+          "description": "when true, exclude complete/cancelled/archived items"
+        },
+        "area_id": {
+          "type": "string",
+          "description": "optional: Area ULID to filter by, or 'uncaptured' for items with no area"
+        },
         "limit": {
           "type": "number",
           "description": "optional: cap on rows returned"
         },
         "cursor": {
           "type": "string",
-          "description": "optional: pagination cursor (ULID)"
+          "description": "optional: pagination cursor from a previous response's nextCursor"
         }
       }
+    }
+  },
+  {
+    "name": "pc_search_work_items",
+    "family": "work-item",
+    "label": "Search work items",
+    "description": "Full-text search work items in this project using SQLite FTS5. Returns a slim projection with a snippet field showing matched context. Optional filters: `area_id` (Area ULID or `\"uncaptured\"`), `status` (exact status string), `open` (boolean — excludes complete/cancelled/archived). Results ranked by relevance, max 50. For structured browsing (by stage/parent/area) use `pc_list_work_items`. PC_PROJECT_ID env is the implicit scope.",
+    "catalogDescription": "Full-text search work items by keyword.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "search terms (FTS5 syntax: phrase quotes, AND/OR/NOT, prefix*)"
+        },
+        "area_id": {
+          "type": "string",
+          "description": "optional: Area ULID or 'uncaptured' to scope the search"
+        },
+        "status": {
+          "type": "string",
+          "description": "optional: exact status to match"
+        },
+        "open": {
+          "type": "boolean",
+          "description": "when true, exclude complete/cancelled/archived items"
+        }
+      },
+      "required": ["query"]
     }
   },
   {
@@ -1952,6 +1997,7 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_create_agent_work_item: 'first-order',
   pc_get_work_item: 'first-order',
   pc_list_work_items: 'first-order',
+  pc_search_work_items: 'first-order',
   pc_update_work_item: 'first-order',
   pc_move_work_item: 'first-order',
   pc_resolve_work_item: 'first-order',

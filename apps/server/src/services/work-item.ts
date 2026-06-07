@@ -25,6 +25,7 @@ import type {
   ULID,
   ValidateFieldsErrors,
   WorkItem,
+  WorkItemStatus,
   WorkItemType,
 } from '@pc/domain';
 import { postMoveStatusForStage, validateFields } from '@pc/domain';
@@ -41,6 +42,7 @@ import {
   softDeleteWorkItem as dbSoftDeleteWorkItem,
   WorkItemVersionConflictError,
 } from '@pc/db';
+import type { WorkItemAreaFilter } from '@pc/db';
 import { WorkItemMutationGateway } from '@pc/app-services';
 
 /** Crockford base-32 ULID — 26 chars, no I/L/O/U. Case-insensitive.
@@ -129,6 +131,14 @@ export interface ListWorkItemsServiceOptions {
   cursor?: string;
   /** Hard cap of 500 per the buildout. Default 200. */
   limit?: number;
+  // pc-pty-chat-254 — new structured filters.
+  /** Narrow to an Area, or to Uncaptured (null / 'uncaptured'). */
+  areaId?: WorkItemAreaFilter;
+  /** Filter by exact status. */
+  status?: WorkItemStatus;
+  /** When true, exclude complete/cancelled/archived items.
+   *  NOTE: `type` filter deferred — see pc-pty-chat-285. */
+  open?: boolean;
 }
 
 export interface ListWorkItemsServiceResult {
@@ -203,13 +213,32 @@ export class WorkItemService {
     const limit = Math.min(Math.max(opts.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
     const all = opts.includeArchived
       ? listArchivedWorkItems(this.opts.projectId)
-      : dbListWorkItems(this.opts.projectId);
+      : dbListWorkItems(this.opts.projectId, {
+          // DB-side filters (pc-pty-chat-254). `includeArchived` bypasses these
+          // (listArchivedWorkItems has no filter support yet).
+          ...(opts.areaId !== undefined ? { areaId: opts.areaId } : {}),
+          ...(opts.status !== undefined ? { status: opts.status } : {}),
+          ...(opts.open === true ? { open: true } : {}),
+        });
 
     const filtered = all.filter((wi) => {
       if (opts.stage !== undefined && wi.stageId !== opts.stage) return false;
       if (opts.parentId !== undefined) {
         const wanted = opts.parentId;
         if ((wi.parentId ?? null) !== (wanted ?? null)) return false;
+      }
+      // JS-side fallback for includeArchived path (DB call doesn't support new filters).
+      if (opts.includeArchived) {
+        if (opts.areaId !== undefined) {
+          const want = opts.areaId;
+          const isUncaptured = want === null || want === 'uncaptured';
+          if (isUncaptured ? wi.areaId !== null : wi.areaId !== want) return false;
+        }
+        if (opts.status !== undefined && wi.status !== opts.status) return false;
+        if (opts.open === true &&
+            (wi.status === 'complete' || wi.status === 'cancelled' || wi.status === 'archived')) {
+          return false;
+        }
       }
       return true;
     });

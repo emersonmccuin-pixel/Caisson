@@ -1,12 +1,13 @@
-import { and, asc, eq, isNull, isNotNull, max } from 'drizzle-orm';
+import { and, asc, eq, isNull, isNotNull, max, notInArray } from 'drizzle-orm';
 import type {
   ULID,
   WorkItem,
   WorkItemHistoryEntry,
+  WorkItemSlim,
   WorkItemStatus,
   WorkItemType,
 } from '@pc/domain';
-import { getDb } from '../connection.ts';
+import { getDb, getRawDb } from '../connection.ts';
 import { newId } from '../id.ts';
 import { projects, workItems } from '../schema.ts';
 
@@ -97,9 +98,154 @@ export interface CreateWorkItemInput {
  *  area filtering. */
 export type WorkItemAreaFilter = ULID | null | 'uncaptured';
 
+/** Terminal statuses excluded by the `open: true` filter (pc-pty-chat-254). */
+const CLOSED_STATUSES: WorkItemStatus[] = ['complete', 'cancelled', 'archived'];
+
 export interface ListWorkItemsOptions {
   /** Slice 010 — narrow to one Area, or to Uncaptured. */
   areaId?: WorkItemAreaFilter;
+  /** pc-pty-chat-254 — filter by exact status. */
+  status?: WorkItemStatus;
+  /** pc-pty-chat-254 — when true, exclude complete/cancelled/archived items.
+   *  Mutually useful with `status` (e.g. open=true + status=blocked). */
+  open?: boolean;
+}
+
+/** pc-pty-chat-254 — slim projection used by default in pc_list_work_items.
+ *  Re-exported here so the route can import it without touching @pc/domain directly. */
+export type { WorkItemSlim };
+
+/** Map a full WorkItem row to its slim projection (pc-pty-chat-254). */
+export function toSlimWorkItem(wi: WorkItem): WorkItemSlim {
+  return {
+    id: wi.id,
+    projectId: wi.projectId,
+    callsign: wi.callsign,
+    title: wi.title,
+    type: wi.type,
+    status: wi.status,
+    statusReason: wi.statusReason,
+    stageId: wi.stageId,
+    areaId: wi.areaId,
+    parentId: wi.parentId,
+    updatedAt: wi.updatedAt,
+  };
+}
+
+// ── Work-item FTS5 search (pc-pty-chat-254) ────────────────────────────────────
+
+export interface SearchWorkItemsInput {
+  projectId: ULID;
+  query: string;
+  /** Narrow to a specific area. */
+  areaId?: ULID;
+  /** Filter by exact status. */
+  status?: WorkItemStatus;
+  /** When true, exclude complete/cancelled/archived. */
+  open?: boolean;
+}
+
+export interface WorkItemSearchResult {
+  id: ULID;
+  projectId: ULID;
+  callsign: string | null;
+  title: string;
+  type: WorkItemType;
+  status: WorkItemStatus;
+  stageId: string;
+  areaId: ULID | null;
+  parentId: ULID | null;
+  updatedAt: number;
+  /** FTS5 snippet excerpt. */
+  snippet: string;
+}
+
+/**
+ * FTS5 full-text search across work_items in a project.
+ * Uses getRawDb() — Drizzle cannot query virtual tables.
+ * Mirrors searchContextDocs (migration 0049 / context-docs.ts).
+ *
+ * NOTE: `type` filter is deferred pending pc-pty-chat-285 (dual source-of-truth
+ * for work-item type).
+ */
+export function searchWorkItems(input: SearchWorkItemsInput): WorkItemSearchResult[] {
+  const raw = getRawDb();
+
+  const fts5Available = (raw.prepare("SELECT sqlite_compileoption_used('ENABLE_FTS5') AS v").get() as { v: number }).v;
+  if (!fts5Available) throw new Error('FTS5 is not available in this SQLite build');
+
+  const sanitized = sanitizeFts5QueryLocal(input.query);
+  if (!sanitized) return [];
+
+  const conditions: string[] = [
+    'wi.deleted_at IS NULL',
+    'wi.project_id = ?',
+  ];
+  const params: unknown[] = [input.projectId];
+
+  if (input.areaId) {
+    conditions.push('wi.area_id = ?');
+    params.push(input.areaId);
+  }
+  if (input.status !== undefined) {
+    conditions.push('wi.status = ?');
+    params.push(input.status);
+  }
+  if (input.open === true) {
+    conditions.push(`wi.status NOT IN ('complete', 'cancelled', 'archived')`);
+  }
+
+  const whereClause = conditions.join(' AND ');
+  const sql = `
+    SELECT wi.id, wi.project_id, wi.callsign, wi.title, wi.type, wi.status,
+           wi.stage_id, wi.area_id, wi.parent_id, wi.updated_at,
+           snippet(work_items_fts, 1, '<b>', '</b>', '…', 16) AS snippet
+    FROM work_items_fts
+    JOIN work_items wi ON work_items_fts.rowid = wi.rowid
+    WHERE work_items_fts MATCH ?
+      AND ${whereClause}
+    ORDER BY rank
+    LIMIT 50
+  `;
+
+  const rows = raw.prepare(sql).all([sanitized, ...params]) as Array<{
+    id: string;
+    project_id: string;
+    callsign: string | null;
+    title: string;
+    type: string;
+    status: string;
+    stage_id: string;
+    area_id: string | null;
+    parent_id: string | null;
+    updated_at: number;
+    snippet: string;
+  }>;
+
+  return rows.map((r) => ({
+    id: r.id as ULID,
+    projectId: r.project_id as ULID,
+    callsign: r.callsign,
+    title: r.title,
+    type: r.type as WorkItemType,
+    status: r.status as WorkItemStatus,
+    stageId: r.stage_id,
+    areaId: (r.area_id as ULID) ?? null,
+    parentId: (r.parent_id as ULID) ?? null,
+    updatedAt: r.updated_at,
+    snippet: r.snippet ?? '',
+  }));
+}
+
+/** Inline copy of sanitizeFts5Query (avoids cross-repo import cycle). */
+function sanitizeFts5QueryLocal(query: string): string {
+  const tokens = query
+    .trim()
+    .split(/\s+/)
+    .map((t) => t.replace(/"/g, ''))
+    .filter(Boolean);
+  if (tokens.length === 0) return '';
+  return tokens.map((t) => `"${t}"`).join(' ');
 }
 
 export function listWorkItems(projectId: ULID, opts: ListWorkItemsOptions = {}): WorkItem[] {
@@ -110,6 +256,12 @@ export function listWorkItems(projectId: ULID, opts: ListWorkItemsOptions = {}):
         ? isNull(workItems.areaId)
         : eq(workItems.areaId, opts.areaId),
     );
+  }
+  if (opts.status !== undefined) {
+    conditions.push(eq(workItems.status, opts.status));
+  }
+  if (opts.open === true) {
+    conditions.push(notInArray(workItems.status, CLOSED_STATUSES));
   }
   const rows = getDb()
     .select()

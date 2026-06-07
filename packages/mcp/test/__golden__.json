@@ -745,7 +745,7 @@
     },
     {
       "name": "pc_list_work_items",
-      "description": "List work items in this project. Use this when the orchestrator / an agent needs to find a card by some property (title fragment, stage, parent) rather than knowing its ULID up front. Optional filters: `stage` (stage id slug), `parentId` (a ULID, or `\"\"` for top-level only), `includeArchived` (boolean, default false). When called with no filters, returns the project's full work-item set (the same shape the kanban renders from). PC_PROJECT_ID env is the implicit scope.",
+      "description": "List work items in this project. Returns a slim projection by default (id, callsign, title, type, status, stageId, areaId, parentId, updatedAt — no body/history). Pass `includeBody: true` for the full shape. Optional filters: `stage` (stage id slug), `parentId` (a ULID, or `\"\"` for top-level only), `includeArchived` (boolean, default false), `status` (exact status string), `open` (boolean — excludes complete/cancelled/archived), `area_id` (Area ULID or `\"uncaptured\"`). When called with no filters, returns the project's full work-item set. For text search use `pc_search_work_items`. PC_PROJECT_ID env is the implicit scope.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -761,15 +761,59 @@
             "type": "boolean",
             "description": "when true, also returns soft-deleted work items"
           },
+          "includeBody": {
+            "type": "boolean",
+            "description": "when true, returns full WorkItem shape including body/history/fields (default: slim projection only)"
+          },
+          "status": {
+            "type": "string",
+            "description": "optional: exact status to match (e.g. 'active', 'complete', 'cancelled')"
+          },
+          "open": {
+            "type": "boolean",
+            "description": "when true, exclude complete/cancelled/archived items"
+          },
+          "area_id": {
+            "type": "string",
+            "description": "optional: Area ULID to filter by, or 'uncaptured' for items with no area"
+          },
           "limit": {
             "type": "number",
             "description": "optional: cap on rows returned"
           },
           "cursor": {
             "type": "string",
-            "description": "optional: pagination cursor (ULID)"
+            "description": "optional: pagination cursor from a previous response's nextCursor"
           }
         }
+      }
+    },
+    {
+      "name": "pc_search_work_items",
+      "description": "Full-text search work items in this project using SQLite FTS5. Returns a slim projection with a snippet field showing matched context. Optional filters: `area_id` (Area ULID or `\"uncaptured\"`), `status` (exact status string), `open` (boolean — excludes complete/cancelled/archived). Results ranked by relevance, max 50. For structured browsing (by stage/parent/area) use `pc_list_work_items`. PC_PROJECT_ID env is the implicit scope.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "search terms (FTS5 syntax: phrase quotes, AND/OR/NOT, prefix*)"
+          },
+          "area_id": {
+            "type": "string",
+            "description": "optional: Area ULID or 'uncaptured' to scope the search"
+          },
+          "status": {
+            "type": "string",
+            "description": "optional: exact status to match"
+          },
+          "open": {
+            "type": "boolean",
+            "description": "when true, exclude complete/cancelled/archived items"
+          }
+        },
+        "required": [
+          "query"
+        ]
       }
     },
     {
@@ -1739,6 +1783,7 @@
     "mcp__pc-rig__pc_list_agent_audit",
     "mcp__pc-rig__pc_get_work_item",
     "mcp__pc-rig__pc_list_work_items",
+    "mcp__pc-rig__pc_search_work_items",
     "mcp__pc-rig__pc_list_areas",
     "mcp__pc-rig__pc_create_area",
     "mcp__pc-rig__pc_update_area",
@@ -1983,7 +2028,13 @@
     {
       "slug": "mcp__pc-rig__pc_list_work_items",
       "label": "List work items",
-      "description": "Find cards in this project by stage / parent / archive-state.",
+      "description": "Find cards in this project by stage / parent / status / area / archive-state.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_search_work_items",
+      "label": "Search work items",
+      "description": "Full-text search work items by keyword.",
       "source": "pc-rig"
     },
     {
@@ -2304,6 +2355,9 @@
       "family": "work-item"
     },
     "pc_list_work_items": {
+      "family": "work-item"
+    },
+    "pc_search_work_items": {
       "family": "work-item"
     },
     "pc_list_areas": {
