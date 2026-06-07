@@ -1062,12 +1062,13 @@ export interface ResolveContractForDispatchDeps {
 }
 
 /** Slice 019 (contract-first) — resolve the dispatch's contract. ALWAYS returns
- *  a contract: it reuses an open contract on the attached work item when one
- *  exists, else creates a fresh one — with or without a work item. (The old
+ *  a contract: it reuses an existing contract on the attached WI when no
+ *  explicit `expectedOutput` is supplied (continuation path + spec-less ad-hoc),
+ *  or mints a fresh one so the caller's spec is never silently dropped. (The old
  *  `!workItemId → null` gate, which made "no WI ⇒ no contract", is gone: the
- *  contract is the spine now.) An explicit v2 `expectedOutput`/AC wins over the
- *  linked WI's legacy columns (the WI fallback survives until dispatch authors
- *  v2 specs everywhere — 021/023). */
+ *  contract is the spine now.) A WI may host many contracts over its lifetime
+ *  (research → plan → build); explicit specs always land on their own fresh row.
+ *  Fix: pc-pty-chat-303. */
 export function resolveContractForDispatch(
   args: {
     projectId: ULID;
@@ -1087,8 +1088,14 @@ export function resolveContractForDispatch(
   const setRunContract = deps.setAgentRunContractId ?? setAgentRunContractId;
   try {
     let contractId: ULID | null = null;
-    // Reuse an existing contract ONLY when this dispatch is attached to a WI.
-    if (args.workItemId) {
+    // Reuse an existing contract ONLY when this dispatch is attached to a WI
+    // AND carries no explicit expectedOutput. When a spec IS passed it is
+    // authoritative — reusing a stale contract would silently drop it (the
+    // create branch below is the only path that consumes args.expectedOutput).
+    // A WI may accumulate many contracts over its lifetime; correctness beats
+    // reuse. The continuation path (pc_continue_agent) never passes a spec, so
+    // it always lands in the reuse branch. (pc-pty-chat-303)
+    if (args.workItemId && args.expectedOutput == null) {
       const existing = listForWi(args.workItemId);
       if (existing.length > 0) {
         // Prefer an un-dispatched contract; else the most recently created.

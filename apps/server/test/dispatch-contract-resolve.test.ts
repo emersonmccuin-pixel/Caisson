@@ -1,6 +1,8 @@
 // Slice 019 — resolveContractForDispatch is contract-first: it ALWAYS yields a
 // contract (no WI required), reuses an open contract on an attached WI, and lets
 // an explicit expectedOutput win over the linked WI's columns.
+// pc-pty-chat-303 — explicit expectedOutput must never be silently dropped when
+// a WI already has a contract; the new spec lands on a fresh contract.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -75,4 +77,76 @@ test('attached WI with an open contract → reuse it, no new create', () => {
   );
   assert.equal(id, 'C-EXIST');
   assert.equal(created.length, 0);
+});
+
+// ── pc-pty-chat-303 regression ────────────────────────────────────────────────
+
+test('[303] explicit expectedOutput + WI has dispatched contract of different kind → new contract, spec preserved', () => {
+  // WI already carries a dispatched 'answer' contract from a prior run.
+  // Re-dispatch with kind 'repo' must produce a FRESH contract — not reuse
+  // the stale 'answer' one.
+  const { service, created } = fakeService();
+  const id = resolveContractForDispatch(
+    {
+      projectId: 'P1' as any,
+      workItemId: 'W1' as any,
+      agentRunId: 'R2' as any,
+      podName: 'coder',
+      contractService: service,
+      expectedOutput: { kind: 'repo', isolation: 'in_place' } as any,
+    },
+    {
+      listContractsForWorkItem: (() => [
+        { id: 'C-OLD', agentRunId: 'R1', expectedOutput: { kind: 'answer' } },
+      ]) as any,
+      getWorkItem: (() => null) as any,
+      setAgentRunContractId: (() => {}) as any,
+    },
+  );
+  assert.equal(id, 'C-NEW');
+  assert.equal(created.length, 1, 'fresh contract must be created');
+  assert.equal(created[0].expectedOutput.kind, 'repo', 'new spec must be repo, not the stale answer');
+});
+
+test('[303] explicit expectedOutput + WI has undispatched contract → still mints fresh (correctness over reuse)', () => {
+  // An un-dispatched (open) contract exists but already has a spec; the new
+  // dispatch carries a different spec — must not reuse the stale one.
+  const { service, created } = fakeService();
+  const id = resolveContractForDispatch(
+    {
+      projectId: 'P1' as any,
+      workItemId: 'W1' as any,
+      agentRunId: 'R2' as any,
+      podName: 'coder',
+      contractService: service,
+      expectedOutput: { kind: 'repo', isolation: 'in_place' } as any,
+    },
+    {
+      listContractsForWorkItem: (() => [
+        { id: 'C-OPEN', agentRunId: null, expectedOutput: { kind: 'prose' } },
+      ]) as any,
+      getWorkItem: (() => null) as any,
+      setAgentRunContractId: (() => {}) as any,
+    },
+  );
+  assert.equal(id, 'C-NEW');
+  assert.equal(created.length, 1, 'fresh contract must be created');
+  assert.equal(created[0].expectedOutput.kind, 'repo');
+});
+
+test('[303] no explicit expectedOutput + WI has dispatched contract → reuse (continuation path unchanged)', () => {
+  // pc_continue_agent passes no expectedOutput — must still reuse.
+  const { service, created } = fakeService();
+  const id = resolveContractForDispatch(
+    { projectId: 'P1' as any, workItemId: 'W1' as any, agentRunId: 'R3' as any, podName: 'coder', contractService: service },
+    {
+      listContractsForWorkItem: (() => [
+        { id: 'C-DISPATCHED', agentRunId: 'R1', expectedOutput: { kind: 'answer' } },
+      ]) as any,
+      getWorkItem: (() => null) as any,
+      setAgentRunContractId: (() => {}) as any,
+    },
+  );
+  assert.equal(id, 'C-DISPATCHED');
+  assert.equal(created.length, 0, 'must reuse, not create');
 });
