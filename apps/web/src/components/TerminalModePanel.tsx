@@ -231,11 +231,21 @@ export function TerminalModePanel({
         if (cancelled || sessionKeyRef.current !== sessionKey) return;
         const live = attachLiveBufferRef.current;
         attachLiveBufferRef.current = '';
-        enqueueWrite(transcript.bytes);
-        enqueueWrite(removeOverlappingPrefix(transcript.bytes, live));
+        // transcript null = 404 (no runtime / no session yet) — treat as empty
+        // scrollback and still flush any live data buffered during attach.
+        const bytes = transcript?.bytes ?? '';
+        enqueueWrite(bytes);
+        enqueueWrite(removeOverlappingPrefix(bytes, live));
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (cancelled || sessionKeyRef.current !== sessionKey) return;
+        // Unexpected error (non-404, network failure) — warn so it's visible
+        // but don't let it propagate. Flush the live buffer so buffered output
+        // isn't silently discarded.
+        console.warn('[pc] terminal-transcript: unexpected fetch error:', err);
+        const live = attachLiveBufferRef.current;
+        attachLiveBufferRef.current = '';
+        enqueueWrite(live);
       })
       .finally(() => {
         if (cancelled || sessionKeyRef.current !== sessionKey) return;

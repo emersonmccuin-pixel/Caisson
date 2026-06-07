@@ -58,6 +58,15 @@ export async function getJson<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Like getJson but returns null on 404 rather than throwing.
+ *  Use for endpoints where "not found" is an expected, non-error outcome. */
+export async function getJsonOr404<T>(path: string): Promise<T | null> {
+  const res = await fetchWithRetry(path, undefined, READ_RETRY);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
 export async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetchWithRetry(
     path,
