@@ -80,7 +80,9 @@ test('enqueue → project inbox lists it → read/dismiss updates recipient stat
       kind: 'system-notice',
       body: 'hello inbox',
       idempotencyKey: `k-${Date.now()}`,
-      recipients: [{ address: { kind: 'project-inbox', projectId: project.id }, channel: 'ui-inbox' }],
+      // user-inbox: the address kind the real delivery seam (human-flavor gates)
+      // uses; the project inbox route filters to user-inbox only (pc-pty-chat-267).
+      recipients: [{ address: { kind: 'user-inbox', userId: 'local-user', projectId: project.id }, channel: 'ui-inbox' }],
     }),
   });
   assert.equal(enq.status, 200);
@@ -260,17 +262,19 @@ test('app-level enqueue derives projectId from a project-bound recipient', async
       kind: 'system-notice',
       body: 'scoped via app route',
       idempotencyKey: `d-${Date.now()}`,
-      recipients: [{ address: { kind: 'project-inbox', projectId: project.id }, channel: 'ui-inbox' }],
+      // user-inbox: the address kind the human-facing project inbox filters to
+      // (pc-pty-chat-267). project-inbox is excluded from the human view.
+      recipients: [{ address: { kind: 'user-inbox', userId: 'local-user', projectId: project.id }, channel: 'ui-inbox' }],
     }),
   });
   const enqBody = await json<{ message: { projectId: string | null } }>(enq);
   assert.equal(enqBody.message.projectId, project.id);
-  // It is NOT in the global inbox…
+  // It is NOT in the global inbox (no project-less user-inbox recipient)…
   const global = await app.request('/api/mailbox');
   assert.ok(!(await json<{ items: { message: { body: string } }[] }>(global)).items.some(
     (i) => i.message.body === 'scoped via app route',
   ));
-  // …but IS in the project inbox.
+  // …but IS in the project inbox (user-inbox address for this project).
   const proj = await app.request(`/api/projects/${project.id}/mailbox`);
   assert.ok((await json<{ items: { message: { body: string } }[] }>(proj)).items.some(
     (i) => i.message.body === 'scoped via app route',
@@ -317,6 +321,43 @@ test('GET /api/inbox aggregates user-inbox recipients across projects', async ()
     await app.request('/api/inbox?actionableOnly=1'),
   );
   assert.ok(actionable.items.some((i) => i.message.body === 'review in B'));
+});
+
+// pc-pty-chat-267 — project inbox must show ONLY user-inbox recipients.
+// An orchestrator-reviewer workflow-review gate is addressed to active-orchestrator;
+// it must NOT appear in /api/projects/:id/mailbox.  A human-reviewer gate IS
+// addressed to user-inbox and MUST appear.
+test('project inbox returns human-reviewer gates, excludes orchestrator-reviewer gates', async () => {
+  const { app } = makeApp();
+  const project = createProject({
+    slug: `mbx-flavor-${Date.now()}`,
+    name: 'Flavor Test',
+    stages,
+    folderPath: join(tmpDir, 'mbx-flavor'),
+  });
+
+  const enqueue = async (addressKind: string, addressExtra: Record<string, unknown>, body: string, key: string) =>
+    app.request(`/api/projects/${project.id}/mailbox/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'workflow-review',
+        body,
+        idempotencyKey: key,
+        recipients: [{ address: { ...addressExtra, kind: addressKind }, channel: addressKind === 'user-inbox' ? 'ui-inbox' : 'orchestrator-turn' }],
+      }),
+    });
+
+  // human-flavor gate → user-inbox
+  await enqueue('user-inbox', { userId: 'local-user', projectId: project.id }, 'human gate', `hg-${Date.now()}`);
+  // orchestrator-flavor gate → active-orchestrator
+  await enqueue('active-orchestrator', { projectId: project.id }, 'orchestrator gate', `og-${Date.now()}`);
+
+  const res = await app.request(`/api/projects/${project.id}/mailbox`);
+  const body = await json<{ items: { message: { body: string } }[] }>(res);
+
+  assert.ok(body.items.some((i) => i.message.body === 'human gate'), 'human gate must appear in project inbox');
+  assert.ok(!body.items.some((i) => i.message.body === 'orchestrator gate'), 'orchestrator gate must NOT appear in project inbox');
 });
 
 // ☠ M8/FD-7: the pending-interaction answer route is gone with the shadow
