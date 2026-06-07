@@ -177,18 +177,31 @@ export function TerminalModePanel({
     // GPU renderer — xterm's default DOM renderer is the terminal's main perf
     // bottleneck under heavy output/scroll. Load after open(); fall back
     // silently to the DOM renderer if WebGL is unavailable or its GPU context
-    // is lost.
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => {
-        webgl.dispose();
-        if (webglRef.current === webgl) webglRef.current = null;
-      });
-      term.loadAddon(webgl);
-      webglRef.current = webgl;
-    } catch {
-      /* WebGL unavailable — stays on the DOM renderer */
+    // is lost. On context loss (GPU process crash, driver reset), attempts to
+    // re-acquire a fresh WebglAddon after a short delay so GPU-accelerated
+    // scroll stays live rather than permanently falling back to the CPU path.
+    function attachWebgl(target: Terminal): void {
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => {
+          console.warn('[pc] terminal: WebGL context lost — attempting recovery in 500ms');
+          webgl.dispose();
+          if (webglRef.current === webgl) webglRef.current = null;
+          setTimeout(() => {
+            // Guard: terminal may have been disposed, or a concurrent recovery
+            // already succeeded (webglRef.current non-null).
+            if (!termRef.current || webglRef.current) return;
+            attachWebgl(termRef.current);
+          }, 500);
+        });
+        target.loadAddon(webgl);
+        webglRef.current = webgl;
+        console.log('[pc] terminal: WebGL renderer active');
+      } catch {
+        /* WebGL unavailable — stays on the DOM renderer */
+      }
     }
+    attachWebgl(term);
     term.attachCustomKeyEventHandler((event) => {
       if (
         event.type === 'keydown' &&
@@ -288,15 +301,21 @@ export function TerminalModePanel({
     setReadyToReveal(false);
     let second: number | null = null;
     const first = window.requestAnimationFrame(() => {
+      const term = termRef.current;
+      const prevCols = term?.cols;
+      const prevRows = term?.rows;
       fitAndResize();
       // The WebGL renderer caches glyph tiles in a GPU texture atlas keyed by
-      // the cell geometry at draw time. When the pane is revealed and re-fit to
-      // a different size, stale tiles can survive and render as overlapping /
-      // garbled text. Clearing the atlas + forcing a full repaint after the fit
-      // rebuilds it against the current geometry. (No-op on the DOM fallback.)
-      webglRef.current?.clearTextureAtlas();
+      // the cell geometry at draw time. When the pane is re-fit to a different
+      // size, stale tiles can survive and render as overlapping / garbled text.
+      // Only clear when fit() actually changed the terminal dimensions — clearing
+      // unconditionally wipes the warm GPU cache on every tab switch, causing a
+      // cold-atlas scroll-lag spike on the first scroll after every chat→terminal
+      // reveal even when the layout is unchanged.
+      if (webglRef.current && term && (term.cols !== prevCols || term.rows !== prevRows)) {
+        webglRef.current.clearTextureAtlas();
+      }
       second = window.requestAnimationFrame(() => {
-        const term = termRef.current;
         if (term) term.refresh(0, term.rows - 1);
         setReadyToReveal(true);
         term?.focus();
