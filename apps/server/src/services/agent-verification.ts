@@ -485,7 +485,7 @@ export function createWorktreeExecutors(input: {
         // or master). Try each in order; the first that resolves determines the
         // result. A count > 0 means committed changes exist — working-tree
         // dirtiness is intentionally IGNORED so a clean commit does NOT
-        // false-fail the predicate (pc-pty-chat-281).
+        // false-fail the predicate (pc-pty-chat-207 / pc-pty-chat-281).
         for (const base of ['dev', 'main', 'master', 'trunk']) {
           const count = await countCommitsAhead(cwdAbs, base, bashTimeoutMs);
           if (count !== null) return count > 0;
