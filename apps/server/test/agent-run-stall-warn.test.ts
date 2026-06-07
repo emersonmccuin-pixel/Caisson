@@ -53,17 +53,37 @@ test('computeIdleMs takes the latest sign of life incl. jsonl mtime', () => {
   assert.equal(computeIdleMs(r, { now: 20_000, jsonlMtime: null }), 15_000);
 });
 
+test('computeIdleMs: ptyActivityAt beats stale jsonlMtime and row timestamps', () => {
+  // Scenario: long thinking turn. JSONL mtime is stale (CC hasn't flushed),
+  // but the PTY is actively repainting the spinner. ptyActivityAt is fresh.
+  const r = row({ lastActivityAt: 1000, readyAt: 2000, queuedAt: 500 });
+  const freshPtyAt = 19_500; // PTY chunk arrived 500ms ago
+  assert.equal(
+    computeIdleMs(r, { now: 20_000, jsonlMtime: 2000, ptyActivityAt: freshPtyAt }),
+    500,
+    'fresh PTY activity drives the idle calculation',
+  );
+  // No PTY signal → falls back to jsonlMtime / row.
+  assert.equal(
+    computeIdleMs(r, { now: 20_000, jsonlMtime: 2000, ptyActivityAt: null }),
+    18_000,
+  );
+});
+
 interface Emit {
   runId: string;
   reason: 'stalled' | 'reconciled';
 }
 
-function harness(rows: AgentRunRow[], opts: { now: number; mtime?: number | null }) {
+function harness(
+  rows: AgentRunRow[],
+  opts: { now: number; mtime?: number | null; ptyAt?: number | null },
+) {
   const emits: Emit[] = [];
   const enqueued: EnqueueMailboxMessageInput[] = [];
   const stalledRuns = new Set<string>();
   const notifiedRuns = new Set<string>();
-  const run = (over: { now?: number; mtime?: number | null } = {}) =>
+  const run = (over: { now?: number; mtime?: number | null; ptyAt?: number | null } = {}) =>
     sweepStallWarn({
       stalledRuns,
       notifiedRuns,
@@ -76,6 +96,8 @@ function harness(rows: AgentRunRow[], opts: { now: number; mtime?: number | null
       jsonlMtime: () => (over.mtime !== undefined ? over.mtime : (opts.mtime ?? null)),
       lastAction: () => ({ kind: 'jsonl-tool-call', text: 'Read file.ts' }),
       announceSignal: (input) => emits.push({ runId: input.runId, reason: input.reason }),
+      ptyActivityAt: () =>
+        over.ptyAt !== undefined ? over.ptyAt : (opts.ptyAt ?? null),
     });
   return { emits, enqueued, stalledRuns, notifiedRuns, run };
 }
@@ -202,6 +224,79 @@ test('no mailbox port wired → badge-only, never throws', () => {
     listNonTerminalRuns: () => rows,
     resolveJsonlPath: () => '/x.jsonl',
     jsonlMtime: () => null,
+    announceSignal: (input) => emits.push({ runId: input.runId, reason: input.reason }),
+  });
+  assert.deepEqual(res, { checked: 1, warned: 1, cleared: 0, notified: 0 });
+});
+
+// ── PTY-activity signal: false-stall prevention ────────────────────────────────
+
+test('stale JSONL mtime + recent PTY activity → NOT stalled (thinking-turn guard)', () => {
+  // Scenario: agent is deep in a thinking turn. The JSONL transcript mtime is
+  // stale (CC buffers until turn-end), but the PTY spinner is actively
+  // repainting — run-chunk events are flowing. The ptyActivityAt signal is
+  // fresh, so idleMs is tiny and the sweep must NOT badge the run.
+  const startedAt = 1000;
+  const now = startedAt + WARN + 30_000; // well past the 3-min warn threshold
+  const ptyAt = now - 5_000;             // PTY chunk 5 s ago (fresh)
+
+  const rows = [row({ lastActivityAt: startedAt, readyAt: startedAt })];
+  const h = harness(rows, { now, mtime: startedAt, ptyAt });
+
+  const res = h.run();
+  assert.deepEqual(res, { checked: 1, warned: 0, cleared: 0, notified: 0 },
+    'recent PTY activity suppresses the stall badge');
+  assert.equal(h.emits.length, 0, 'no stalled frame emitted');
+});
+
+test('stale JSONL mtime + stale PTY activity → stalled (truly idle run)', () => {
+  // Scenario: agent is genuinely wedged. Both the JSONL mtime and the PTY
+  // activity are old — no PTY output has arrived for more than WARN_MS.
+  const startedAt = 1000;
+  const ptyAt = startedAt + 2_000; // PTY last active right after start
+  const now = startedAt + WARN + 30_000; // now well past warn
+
+  const rows = [row({ lastActivityAt: startedAt, readyAt: startedAt })];
+  const h = harness(rows, { now, mtime: startedAt, ptyAt });
+
+  const res = h.run();
+  assert.deepEqual(res, { checked: 1, warned: 1, cleared: 0, notified: 0 },
+    'stale PTY + stale JSONL → stall badge fires');
+  assert.equal(h.emits[0]?.reason, 'stalled');
+});
+
+test('PTY activity un-stalls a previously stalled run', () => {
+  // Run goes quiet → badge fires. Then PTY chunks resume → reconciled frame.
+  const startedAt = 1000;
+  const now1 = startedAt + WARN + 30_000;
+  const rows = [row({ lastActivityAt: startedAt })];
+
+  // First sweep: quiet → stalled.
+  const h = harness(rows, { now: now1, mtime: startedAt, ptyAt: startedAt });
+  h.run();
+  assert.ok(h.stalledRuns.has('run-1'), 'stalled after first sweep');
+
+  // PTY activity resumes — chunk arrived just before the sweep.
+  const ptyNow = now1 + 1_000;
+  const res = h.run({ now: ptyNow, ptyAt: ptyNow - 2_000 });
+  assert.deepEqual(res, { checked: 1, warned: 0, cleared: 1, notified: 0 });
+  assert.equal(h.emits.at(-1)?.reason, 'reconciled');
+  assert.ok(!h.stalledRuns.has('run-1'), 'badge cleared when PTY resumes');
+});
+
+test('no ptyActivityAt dep wired → falls back to JSONL mtime (backward compat)', () => {
+  // When the dep is absent the sweep behaves identically to the pre-fix code.
+  const rows = [row({ lastActivityAt: 1000 })];
+  const emits: Emit[] = [];
+  const res = sweepStallWarn({
+    stalledRuns: new Set<string>(),
+    now: () => 1000 + WARN + 5000,
+    warnMs: WARN,
+    notifyMs: NOTIFY,
+    listNonTerminalRuns: () => rows,
+    resolveJsonlPath: () => '/x.jsonl',
+    jsonlMtime: () => null,
+    // ptyActivityAt intentionally absent
     announceSignal: (input) => emits.push({ runId: input.runId, reason: input.reason }),
   });
   assert.deepEqual(res, { checked: 1, warned: 1, cleared: 0, notified: 0 });

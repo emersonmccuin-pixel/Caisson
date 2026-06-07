@@ -58,6 +58,12 @@ export interface StallWarnDeps {
   lastAction?: (jsonlPath: string) => { kind: string; text: string | null } | null;
   /** Test seam — defaults to the real rev-bump + outbox announce. */
   announceSignal?: typeof defaultAnnounceSignal;
+  /** PTY-chunk last-active timestamp for a run (from the host's run-chunk
+   *  events, relayed by the reconciler's pty-activity-store). When present and
+   *  newer than the JSONL mtime / row timestamps, prevents false-stall alerts
+   *  during long thinking turns or long tool calls where CC has not yet flushed
+   *  its JSONL transcript. */
+  ptyActivityAt?: (runId: string) => number | null;
 }
 
 export interface StallWarnResult {
@@ -97,7 +103,8 @@ export function sweepStallWarn(deps: StallWarnDeps): StallWarnResult {
 
     const jsonlPath = resolveJsonlPath(row);
     const mtime = jsonlPath ? jsonlMtime(jsonlPath) : null;
-    const idleMs = computeIdleMs(row, { now, jsonlMtime: mtime });
+    const ptyAt = deps.ptyActivityAt?.(row.id) ?? null;
+    const idleMs = computeIdleMs(row, { now, jsonlMtime: mtime, ptyActivityAt: ptyAt });
     const quiet = idleMs > warnMs;
 
     if (quiet && !deps.stalledRuns.has(row.id)) {

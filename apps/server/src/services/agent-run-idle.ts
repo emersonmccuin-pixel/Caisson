@@ -35,12 +35,23 @@ export function resolveStallNotifyMs(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_STALL_NOTIFY_MS;
 }
 
-/** Ms since the most recent sign of life. The JSONL mtime is the live signal
- *  (the tailer also stamps `lastActivityAt`, but without a rev bump, so it can
- *  lag); the timestamps cover the pre-output window before any JSONL exists. */
+/** Ms since the most recent sign of life. Three independent signals feed the
+ *  max: (1) row timestamps (lastActivityAt / readyAt / spawnedAt / queuedAt),
+ *  (2) jsonlMtime — the JSONL transcript file's mtime (stale during thinking),
+ *  (3) ptyActivityAt — the last PTY-chunk timestamp relayed from the agent host
+ *  via run-chunk events (fires continuously during thinking + long tool calls).
+ *  Signal (3) prevents false-stall alerts when CC is actively working but has
+ *  not yet flushed its JSONL transcript. */
 export function computeIdleMs(
   row: AgentRunRow,
-  opts: { now: number; jsonlMtime?: number | null },
+  opts: {
+    now: number;
+    jsonlMtime?: number | null;
+    /** Last PTY-chunk epoch-ms from the host's run-chunk events. When present
+     *  and newer than the other signals this is the authoritative activity
+     *  proof (eliminates false-stall during long thinking / tool calls). */
+    ptyActivityAt?: number | null;
+  },
 ): number {
   const lastActivity = Math.max(
     row.lastActivityAt ?? 0,
@@ -48,6 +59,7 @@ export function computeIdleMs(
     row.spawnedAt ?? 0,
     row.queuedAt,
     opts.jsonlMtime ?? 0,
+    opts.ptyActivityAt ?? 0,
   );
   return opts.now - lastActivity;
 }

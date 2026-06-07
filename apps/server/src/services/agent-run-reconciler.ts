@@ -38,6 +38,11 @@ import {
   type DeliverableNudgeOutcome,
 } from './agent-run-deliverable-nudge.ts';
 import type { MailboxEnqueuePort } from './agent-delivery.ts';
+import {
+  clearPtyActivity,
+  getPtyActivityAt,
+  recordPtyActivity,
+} from './pty-activity-store.ts';
 import { getAgentRunRow as defaultGetAgentRunRow } from '@pc/db';
 
 /** What the reconciler needs from the host connection (host mode). The real
@@ -143,6 +148,18 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
     subscribed = true;
     deps.host.onEvent((event) => {
       try {
+        // PTY-activity heartbeat: run-chunk events arrive on every PTY byte
+        // (spinner redraws, output, thinking UI). Record the timestamp (throttled
+        // to PTY_ACTIVITY_THROTTLE_MS per run) so the stall sweep's computeIdleMs
+        // sees fresh activity even when the JSONL transcript has not yet been
+        // flushed (CC only flushes at turn-end). On terminal, clear the entry so
+        // the map stays bounded.
+        if (event.type === 'run-chunk') {
+          recordPtyActivity(event.runId, (deps.now ?? Date.now)());
+        } else if (event.type === 'run-terminal') {
+          clearPtyActivity(event.run.runId);
+        }
+
         (deps.applyHostEvent ?? applyAgentHostEvent)(event, {
           activeRunRegistry: registry,
           broadcast: deps.broadcast,
@@ -230,12 +247,16 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
 
     // The P9/FD-17 stall ladder: badge (rung 1) + verify-alive→orchestrator
     // notify (rung 2). Never terminal — kills are wall-clock or confirmed-dead.
+    // ptyActivityAt feeds the PTY-chunk last-active signal from the reconciler's
+    // run-chunk handler (via pty-activity-store) so a long thinking turn never
+    // triggers a false-stall alert.
     const stallWarnRes = (deps.stallWarn ?? sweepStallWarn)({
       stalledRuns,
       notifiedRuns,
       mailboxEnqueue: deps.mailboxEnqueue,
       broadcast: deps.broadcast,
       now: deps.now,
+      ptyActivityAt: getPtyActivityAt,
     });
 
     return { held, hostReconcile, stallWarn: stallWarnRes };
