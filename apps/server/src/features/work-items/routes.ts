@@ -26,13 +26,12 @@ import {
   createAgentWorkItem,
   type CreateAgentWorkItemInput,
 } from '../../services/agent-work-item.ts';
-import {
-  approveAgentWorkItem,
-  rejectAgentWorkItem,
-  VerificationReviewError,
-} from '../../services/agent-verification-review.ts';
 import type { AgentHostReattachClient } from '../../services/agent-host-reattach.ts';
 import type { ReviewInboxResolution } from '../../services/dag-run-service.ts';
+import {
+  applyReviewDecision,
+  type ReviewDecisionErrorCode,
+} from '../../services/review-decision-service.ts';
 import { getActiveRunRegistry as defaultGetActiveRunRegistry } from '../../services/agent-active-runs.ts';
 import { hardKillAgentRun } from '../../services/agent-run-control.ts';
 import {
@@ -77,14 +76,16 @@ export interface WorkItemRoutesDeps {
   reviewInbox?: ReviewInboxResolution | null;
 }
 
-function verificationReviewStatus(err: VerificationReviewError): 400 | 404 | 409 {
-  const statusFor: Record<VerificationReviewError['cause'], 400 | 404 | 409> = {
+/** Map a ReviewDecisionErrorCode to an HTTP status for the verification path. */
+function verificationDecisionStatus(code: ReviewDecisionErrorCode): 400 | 404 | 409 | 500 {
+  const statusFor: Partial<Record<ReviewDecisionErrorCode, 400 | 404 | 409 | 500>> = {
     'wi-not-found': 404,
     'not-awaiting-verification': 409,
     'feedback-required': 400,
     'no-assigned-run': 409,
+    'internal': 500,
   };
-  return statusFor[err.cause] ?? 400;
+  return statusFor[code] ?? 400;
 }
 
 export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): void {
@@ -363,30 +364,38 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     const body = await c.req.json<{ notes?: string | null; actor?: 'orchestrator' | 'user' }>().catch(
       () => ({}) as { notes?: string | null; actor?: 'orchestrator' | 'user' },
     );
-    try {
-      const project = getProjectById(id as ULID);
-      const workItem = approveAgentWorkItem(
-        {
-          workItemId: wiId,
+    const project = getProjectById(id as ULID);
+    if (!project) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    // Phase 1.2 -- routes through the unified review-decision service.
+    const result = await applyReviewDecision(
+      {
+        kind: 'verification-hold',
+        workItemId: wiId,
+        decision: {
+          kind: 'approve',
           notes: typeof body.notes === 'string' ? body.notes : null,
           ...(body.actor === 'orchestrator' || body.actor === 'user' ? { actor: body.actor } : {}),
-          ...(project ? { project } : {}),
         },
-        { ...(deps.reviewInbox ? { reviewInbox: deps.reviewInbox } : {}) },
+        project,
+      },
+      {
+        kind: 'verification-hold',
+        ...(deps.reviewInbox ? { reviewInbox: deps.reviewInbox } : {}),
+      },
+    );
+    if (!result.ok) {
+      return c.json(
+        { ok: false, error: result.error, cause: result.code },
+        verificationDecisionStatus(result.code),
       );
-      if (workItem && workItem.projectId !== id) {
-        return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
-      }
-      return c.json({ ok: true, workItem });
-    } catch (err) {
-      if (err instanceof VerificationReviewError) {
-        return c.json(
-          { ok: false, error: err.message, cause: err.cause },
-          verificationReviewStatus(err),
-        );
-      }
-      return c.json({ ok: false, error: (err as Error).message }, 500);
     }
+    if (result.kind !== 'verification-hold') {
+      return c.json({ ok: false, error: 'unexpected result kind' }, 500);
+    }
+    if (result.workItem && result.workItem.projectId !== id) {
+      return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
+    }
+    return c.json({ ok: true, workItem: result.workItem });
   });
 
   app.post('/api/projects/:projectId/work-items/:wiId/reject', async (c) => {
@@ -401,7 +410,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     }>();
     const dispatcherSessionId =
       typeof body.dispatcherSessionId === 'string' ? body.dispatcherSessionId.trim() : '';
-    // M8 (FD-7) — a human deciding from the Inbox card has no PC session; the
+    // M8 (FD-7) -- a human deciding from the Inbox card has no PC session; the
     // service falls back to the parent run's dispatcher identity. The
     // orchestrator path still forwards PC_SESSION_ID.
     if (!dispatcherSessionId && body.actor !== 'user') {
@@ -411,40 +420,45 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       );
     }
     const host = deps.getHostConnection?.() ?? null;
-    try {
-      const result = await rejectAgentWorkItem(
-        {
-          workItemId: wiId,
+    // Phase 1.2 -- routes through the unified review-decision service.
+    const result = await applyReviewDecision(
+      {
+        kind: 'verification-hold',
+        workItemId: wiId,
+        decision: {
+          kind: 'reject',
           feedback: typeof body.feedback === 'string' ? body.feedback : '',
           ...(body.actor === 'orchestrator' || body.actor === 'user' ? { actor: body.actor } : {}),
-          dispatcherSessionId,
-          project,
+          dispatcherSessionId: dispatcherSessionId || null,
         },
-        {
-          ...(deps.mailboxEnqueue ? { mailboxEnqueue: deps.mailboxEnqueue } : {}),
-          broadcast: (env) => deps.broadcastTo(projectId, env),
-          ...(host ? { hostClient: host } : {}),
-          ...(deps.reviewInbox ? { reviewInbox: deps.reviewInbox } : {}),
-        },
+        project,
+      },
+      {
+        kind: 'verification-hold',
+        ...(deps.mailboxEnqueue ? { mailboxEnqueue: deps.mailboxEnqueue } : {}),
+        broadcast: (env) => deps.broadcastTo(projectId, env),
+        ...(host ? { hostClient: host } : {}),
+        ...(deps.reviewInbox ? { reviewInbox: deps.reviewInbox } : {}),
+      },
+    );
+    if (!result.ok) {
+      return c.json(
+        { ok: false, error: result.error, cause: result.code },
+        verificationDecisionStatus(result.code),
       );
-      if (result.workItem && result.workItem.projectId !== projectId) {
-        return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
-      }
-      return c.json({
-        ok: true,
-        workItem: result.workItem,
-        contract: result.contract,
-        continuation: result.continuation,
-      });
-    } catch (err) {
-      if (err instanceof VerificationReviewError) {
-        return c.json(
-          { ok: false, error: err.message, cause: err.cause },
-          verificationReviewStatus(err),
-        );
-      }
-      return c.json({ ok: false, error: (err as Error).message }, 500);
     }
+    if (result.kind !== 'verification-hold') {
+      return c.json({ ok: false, error: 'unexpected result kind' }, 500);
+    }
+    if (result.workItem && result.workItem.projectId !== projectId) {
+      return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
+    }
+    return c.json({
+      ok: true,
+      workItem: result.workItem,
+      contract: result.contract,
+      continuation: result.continuation,
+    });
   });
 
   app.get('/api/projects/:projectId/work-items/:wiId', (c) => {

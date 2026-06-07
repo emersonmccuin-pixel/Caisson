@@ -10,12 +10,12 @@ import {
   cancelWorkflowRunCascade,
   type CancelWorkflowRunResult,
 } from '../../services/workflow-run-cancel.ts';
-import type { ResumeFailedRunResult, V2ReviewDecisionResult } from '../../services/dag-run-service.ts';
+import type { ResumeFailedRunResult } from '../../services/dag-run-service.ts';
 import type { AgentHostReattachClient } from '../../services/agent-host-reattach.ts';
-
-type WorkflowReviewDecision =
-  | { kind: 'approve' }
-  | { kind: 'reject'; notes?: string };
+import type {
+  ReviewDecisionResult,
+  WorkflowGateDecision,
+} from '../../services/review-decision-service.ts';
 
 export interface WorkflowCompatRuntime {
   project: { id: ULID };
@@ -27,12 +27,13 @@ export interface WorkflowCompatRuntime {
     workflow: WorkflowV2.Workflow;
     yamlText: string;
   } | null;
-  applyV2Review(
+  /** Phase 1.2 — delegates to the unified review-decision service. */
+  applyWorkflowGateDecision(
     runId: ULID,
     nodeId: string,
-    decision: WorkflowReviewDecision,
+    decision: WorkflowGateDecision,
     instanceToken?: string,
-  ): Promise<V2ReviewDecisionResult>;
+  ): Promise<ReviewDecisionResult>;
   resumeV2Run(
     runId: ULID,
     currentDefinition: WorkflowV2.Workflow | null,
@@ -159,14 +160,20 @@ export function registerWorkflowCompatRoutes(app: Hono, deps: WorkflowCompatRout
       return c.json({ ok: false, error: 'require { runId, nodeId, decision: approve|reject }' }, 400);
     }
     try {
-      const decision =
+      const decision: WorkflowGateDecision =
         body.decision === 'reject'
-          ? { kind: 'reject' as const, ...(body.notes ? { notes: body.notes } : {}) }
-          : { kind: 'approve' as const };
+          ? { kind: 'reject', ...(body.notes ? { notes: body.notes } : {}) }
+          : { kind: 'approve' };
       const instanceToken = typeof body.instanceToken === 'string' && body.instanceToken
         ? body.instanceToken
         : undefined;
-      const result = await runtime.applyV2Review(body.runId as ULID, body.nodeId, decision, instanceToken);
+      // Phase 1.2 — routes through the unified review-decision service.
+      const result = await runtime.applyWorkflowGateDecision(
+        body.runId as ULID,
+        body.nodeId,
+        decision,
+        instanceToken,
+      );
       if (!result.ok) {
         if (result.code === 'not-found') {
           return c.json({ ok: false, error: 'run not found', code: 'not-found' }, 404);
@@ -175,11 +182,15 @@ export function registerWorkflowCompatRoutes(app: Hono, deps: WorkflowCompatRout
         return c.json(
           {
             ok: false,
-            error: (result as { error: string }).error,
+            error: result.error,
             code: result.code === 'instance-mismatch' ? 'instance-mismatch' : 'already-resolved',
           },
           409,
         );
+      }
+      // Narrow: this handler only invokes the workflow-gate branch.
+      if (result.kind !== 'workflow-gate') {
+        return c.json({ ok: false, error: 'unexpected result kind' }, 500);
       }
       return c.json({ ok: true, status: result.status });
     } catch (err) {
