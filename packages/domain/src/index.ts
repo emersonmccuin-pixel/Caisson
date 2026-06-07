@@ -6,6 +6,7 @@ export type {
 export type {
   WorkItem,
   WorkItemHistoryEntry,
+  WorkItemSlim,
   WorkItemStatus,
   WorkItemType,
 } from './work-item.ts';
