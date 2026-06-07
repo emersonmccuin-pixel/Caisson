@@ -108,6 +108,65 @@ test('pc_list_work_items success: raw body + hint; builds query string', async (
   );
 });
 
+// pc-pty-chat-254 — new pc_list_work_items params.
+test('pc_list_work_items: new params (includeBody, status, open, area_id) append to query string', async () => {
+  const { ctx, calls } = makeFakeContext({ responder: () => ok('{}') });
+  await handleWorkItemTool(
+    'pc_list_work_items',
+    { includeBody: true, status: 'active', open: true, area_id: 'A1' },
+    ctx,
+  );
+  const url = new URL('http://x' + calls[0].path);
+  assert.equal(url.searchParams.get('includeBody'), '1');
+  assert.equal(url.searchParams.get('status'), 'active');
+  assert.equal(url.searchParams.get('open'), '1');
+  assert.equal(url.searchParams.get('areaId'), 'A1');
+});
+
+test('pc_list_work_items: open=false and empty area_id do NOT appear in query', async () => {
+  const { ctx, calls } = makeFakeContext({ responder: () => ok('{}') });
+  await handleWorkItemTool('pc_list_work_items', {}, ctx);
+  assert.equal(calls[0].path, '/api/projects/P01/work-items');
+});
+
+// pc-pty-chat-254 — pc_search_work_items.
+test('pc_search_work_items success: GETs the search route with query + hint', async () => {
+  const serverBody = JSON.stringify({ ok: true, results: [{ id: 'WI1', title: 'hello' }] });
+  const { ctx, calls } = makeFakeContext({ responder: () => ok(serverBody) });
+  const res = await handleWorkItemTool('pc_search_work_items', { query: 'hello' }, ctx);
+  assert.equal(res!.content[0].text, serverBody);
+  assert.equal(res!.content[1].text, RICH_LINK_HINT);
+  assert.ok(calls[0].path.startsWith('/api/projects/P01/work-items/search?q=hello'));
+});
+
+test('pc_search_work_items with filters: area_id, status, open forwarded', async () => {
+  const { ctx, calls } = makeFakeContext({ responder: () => ok('{}') });
+  await handleWorkItemTool(
+    'pc_search_work_items',
+    { query: 'foo', area_id: 'A1', status: 'active', open: true },
+    ctx,
+  );
+  const url = new URL('http://x' + calls[0].path);
+  assert.equal(url.searchParams.get('q'), 'foo');
+  assert.equal(url.searchParams.get('areaId'), 'A1');
+  assert.equal(url.searchParams.get('status'), 'active');
+  assert.equal(url.searchParams.get('open'), '1');
+});
+
+test('pc_search_work_items: missing query returns validation error', async () => {
+  const { ctx } = makeFakeContext({ responder: () => ok('{}') });
+  const res = await handleWorkItemTool('pc_search_work_items', {}, ctx);
+  assert.equal(firstText(res), 'pc_search_work_items: query required');
+  assert.equal(res!.isError, true);
+});
+
+test('pc_search_work_items failure: exact failure string + isError', async () => {
+  const { ctx } = makeFakeContext({ responder: () => err(500, 'boom') });
+  const res = await handleWorkItemTool('pc_search_work_items', { query: 'x' }, ctx);
+  assert.equal(firstText(res), 'pc_search_work_items failed (500): boom');
+  assert.equal(res!.isError, true);
+});
+
 test('pc_list_areas success: emits raw body (no hint)', async () => {
   const serverBody = JSON.stringify({ areas: [{ id: 'A1' }] });
   const { ctx, calls } = makeFakeContext({ responder: () => ok(serverBody) });

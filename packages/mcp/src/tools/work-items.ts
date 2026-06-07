@@ -428,6 +428,11 @@ export async function handleWorkItemTool(
         q.set('limit', String(args.limit));
       }
       if (typeof args.cursor === 'string' && args.cursor) q.set('cursor', args.cursor);
+      // pc-pty-chat-254 — new filters.
+      if (args.includeBody === true) q.set('includeBody', '1');
+      if (typeof args.status === 'string' && args.status) q.set('status', args.status);
+      if (args.open === true) q.set('open', '1');
+      if (typeof args.area_id === 'string' && args.area_id) q.set('areaId', args.area_id);
       const query = q.toString();
       const suffix = `work-items${query ? `?${query}` : ''}`;
       try {
@@ -444,6 +449,38 @@ export async function handleWorkItemTool(
       } catch (err) {
         return {
           content: [{ type: 'text', text: `pc_list_work_items failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
+    // pc-pty-chat-254 — FTS5 search (separate tool, not a `query` param on list).
+    case 'pc_search_work_items': {
+      const query = typeof args.query === 'string' ? args.query.trim() : '';
+      if (!query) {
+        return {
+          content: [{ type: 'text', text: 'pc_search_work_items: query required' }],
+          isError: true,
+        };
+      }
+      const q = new URLSearchParams({ q: query });
+      if (typeof args.area_id === 'string' && args.area_id) q.set('areaId', args.area_id);
+      if (typeof args.status === 'string' && args.status) q.set('status', args.status);
+      if (args.open === true) q.set('open', '1');
+      try {
+        const res = await ctx.getServer(ctx.projectPath(`work-items/search?${q.toString()}`));
+        if (res.status >= 200 && res.status < 300) {
+          return ctx.withRichLinkHint(res.body);
+        }
+        return {
+          content: [
+            { type: 'text', text: `pc_search_work_items failed (${res.status}): ${res.body}` },
+          ],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_search_work_items failed: ${(err as Error).message}` }],
           isError: true,
         };
       }
