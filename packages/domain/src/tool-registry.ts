@@ -251,8 +251,8 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_update_work_item",
     "family": "work-item",
     "label": "Update work item",
-    "description": "Merge fields and/or set body/title on a work item. At least one of fields, body, or title is required. `id` accepts ULID or callsign (e.g. `pc-2.1`).",
-    "catalogDescription": "Edit a card's title, body, fields, or status.",
+    "description": "Merge fields and/or set body/title/parent on a work item. At least one of fields, body, title, area_id, or parent_work_item_id is required. `id` accepts ULID or callsign (e.g. `pc-2.1`). Pass `parent_work_item_id: null` to detach the item from its parent (make it a top-level card).",
+    "catalogDescription": "Edit a card's title, body, fields, or parent.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -276,6 +276,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "area_id": {
           "type": "string",
           "description": "set the work item's Area (ULID). Pass null to move it to Uncaptured. See pc_list_areas."
+        },
+        "parent_work_item_id": {
+          "type": "string",
+          "description": "re-parent this card under a different parent (ULID), or pass null to detach it (make it a top-level card)."
         }
       },
       "required": [

@@ -355,12 +355,13 @@ export async function handleWorkItemTool(
       const bodyText = typeof args.body === 'string' ? args.body : undefined;
       const titleText = typeof args.title === 'string' ? args.title : undefined;
       const areaIdProvided = typeof args.area_id === 'string' || args.area_id === null;
+      const parentIdProvided = typeof args.parent_work_item_id === 'string' || args.parent_work_item_id === null;
       if (!ref) {
         return { content: [{ type: 'text', text: 'pc_update_work_item: id required' }], isError: true };
       }
-      if (!fields && bodyText === undefined && titleText === undefined && !areaIdProvided) {
+      if (!fields && bodyText === undefined && titleText === undefined && !areaIdProvided && !parentIdProvided) {
         return {
-          content: [{ type: 'text', text: 'pc_update_work_item: at least one of fields, body, title, or area_id required' }],
+          content: [{ type: 'text', text: 'pc_update_work_item: at least one of fields, body, title, area_id, or parent_work_item_id required' }],
           isError: true,
         };
       }
@@ -378,6 +379,9 @@ export async function handleWorkItemTool(
         if (titleText !== undefined) payload.title = titleText;
         if (typeof args.area_id === 'string' && args.area_id.trim()) payload.areaId = args.area_id.trim();
         else if (args.area_id === null) payload.areaId = null;
+        if (typeof args.parent_work_item_id === 'string' && args.parent_work_item_id.trim())
+          payload.parentId = args.parent_work_item_id.trim();
+        else if (args.parent_work_item_id === null) payload.parentId = null;
         const res = await ctx.client.updateWorkItem(ctx.projectPath('work-items/update'), payload);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };

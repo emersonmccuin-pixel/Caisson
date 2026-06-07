@@ -220,6 +220,44 @@ test('pc_update_work_item success: emits raw body; posts update payload', async 
   assert.deepEqual(calls[0].body, { id: 'RID', body: 'newbody', areaId: null });
 });
 
+test('pc_update_work_item with parent_work_item_id: forwards parentId in payload', async () => {
+  const serverBody = JSON.stringify({ ok: true });
+  const { ctx, calls } = makeFakeContext({
+    responder: () => ok(serverBody),
+    resolveWorkItemId: async () => 'RID',
+  });
+  await handleWorkItemTool(
+    'pc_update_work_item',
+    { id: 'pc-2', parent_work_item_id: 'PARENT1' },
+    ctx,
+  );
+  assert.deepEqual(calls[0].body, { id: 'RID', parentId: 'PARENT1' });
+});
+
+test('pc_update_work_item with parent_work_item_id null: forwards parentId: null (detach)', async () => {
+  const serverBody = JSON.stringify({ ok: true });
+  const { ctx, calls } = makeFakeContext({
+    responder: () => ok(serverBody),
+    resolveWorkItemId: async () => 'RID',
+  });
+  await handleWorkItemTool(
+    'pc_update_work_item',
+    { id: 'pc-2', parent_work_item_id: null },
+    ctx,
+  );
+  assert.deepEqual(calls[0].body, { id: 'RID', parentId: null });
+});
+
+test('pc_update_work_item with no mutable fields: validation error names parent_work_item_id', async () => {
+  const { ctx } = makeFakeContext({ responder: () => ok('{}'), resolveWorkItemId: async () => 'RID' });
+  const res = await handleWorkItemTool('pc_update_work_item', { id: 'pc-2' }, ctx);
+  assert.equal(
+    firstText(res),
+    'pc_update_work_item: at least one of fields, body, title, area_id, or parent_work_item_id required',
+  );
+  assert.equal(res!.isError, true);
+});
+
 test('pc_attach_to_work_item success: emits raw body; posts attachment payload', async () => {
   const serverBody = JSON.stringify({ ok: true, attachment: { id: 'AT1' } });
   const { ctx, calls } = makeFakeContext({
