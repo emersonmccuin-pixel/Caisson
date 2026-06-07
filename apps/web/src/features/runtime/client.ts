@@ -1,4 +1,4 @@
-import { getJson, postJson } from '@/api/http';
+import { getJson, getJsonOr404, postJson } from '@/api/http';
 import type { ULID } from '@/features/projects/types';
 import type {
   OrchestratorRuntimeSnapshot,
@@ -11,8 +11,10 @@ import type {
 export * from './types';
 
 export const runtimeApi = {
+  // Returns null (no throw) when the server has no runtime for the project or
+  // no transcript for the session (expected 404 for inactive/stale sessions).
   getTerminalTranscript: (projectId: ULID, sessionId: ULID, tailBytes = 1024 * 1024) =>
-    getJson<TerminalTranscriptResponse>(
+    getJsonOr404<TerminalTranscriptResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}/terminal-transcript?tailBytes=${encodeURIComponent(String(tailBytes))}`,
     ),
 

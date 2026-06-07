@@ -1,11 +1,12 @@
 // T2.1 — getJson/postJson retry across the API-restart window.
 //   * 503 → retry (any method; honors Retry-After) then succeed.
 //   * thrown network error → retry GET only; posts fail fast (no double-submit).
+// pc-pty-chat-241 — getJsonOr404 returns null on 404 without throwing.
 
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getJson, postJson } from '../src/api/http.ts';
+import { getJson, getJsonOr404, postJson } from '../src/api/http.ts';
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -80,4 +81,37 @@ test('postJson does NOT retry a thrown network error (no double-submit)', async 
 
   await assert.rejects(postJson('/api/thing', { a: 1 }), /fetch failed/);
   assert.equal(calls, 1);
+});
+
+// pc-pty-chat-241: expected 404 for terminal-transcript endpoints should not throw
+test('getJsonOr404 returns null on 404 without throwing', async () => {
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: false, error: 'unknown project: xyz' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch;
+
+  const result = await getJsonOr404<{ bytes: string }>('/api/projects/xyz/sessions/s/terminal-transcript');
+  assert.equal(result, null);
+});
+
+test('getJsonOr404 resolves normally on 200', async () => {
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: true, bytes: 'abc', truncated: false, mtimeMs: null }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })) as typeof fetch;
+
+  const result = await getJsonOr404<{ bytes: string }>('/api/projects/p/sessions/s/terminal-transcript');
+  assert.deepEqual(result, { ok: true, bytes: 'abc', truncated: false, mtimeMs: null });
+});
+
+test('getJsonOr404 throws on non-404 errors (e.g. 500)', async () => {
+  globalThis.fetch = (async () =>
+    new Response('Internal Server Error', { status: 500 })) as typeof fetch;
+
+  await assert.rejects(
+    getJsonOr404('/api/projects/p/sessions/s/terminal-transcript'),
+    /→ 500/,
+  );
 });
