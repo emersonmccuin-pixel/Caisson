@@ -21,7 +21,12 @@ jobs:
         # (run 27073972156). The earlier "codesign hang" was a transient Apple
         # timestamp-server stall, not our bundle — see pc-pty-chat-245. The 30-min
         # job timeout is the safety net if Apple's TSA stalls again (re-run the job).
-        os: [macos-latest, windows-latest]
+        #
+        # Dual-arch macOS (pc-pty-chat-294): macos-14 = Apple Silicon (arm64),
+        # macos-13 = Intel (x64). Each runner builds its NATIVE node-pty /
+        # better-sqlite3, so we ship a correct per-arch DMG for both chips. All
+        # macOS-gated steps below match startsWith(matrix.os, 'macos').
+        os: [macos-14, macos-13, windows-latest]
 
     steps:
       - name: Checkout
@@ -43,7 +48,7 @@ jobs:
 
       # Mac: native installer drops the binary at ~/.local/bin/claude
       - name: Install Claude CLI 2.1.165 (macOS)
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos')
         run: |
           curl -fsSL https://claude.ai/install.sh | bash -s 2.1.165
           echo "PC_CLAUDE_SRC=$HOME/.local/bin/claude" >> "$GITHUB_ENV"
@@ -74,7 +79,7 @@ jobs:
       #    from CSC_KEYCHAIN (we deliberately do NOT pass CSC_LINK to the build
       #    steps, so it won't spin up its own un-authorized keychain). ──────────
       - name: Prepare macOS signing
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos')
         run: |
           set -euo pipefail
           echo "$APPLE_API_KEY_B64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
@@ -99,7 +104,7 @@ jobs:
       # ── Tag push: publish to GitHub Releases ─────────────────────────────────
 
       - name: Build and publish release (macOS)
-        if: github.event_name == 'push' && matrix.os == 'macos-latest'
+        if: github.event_name == 'push' && startsWith(matrix.os, 'macos')
         run: pnpm desktop:publish:mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -116,7 +121,7 @@ jobs:
       # ── workflow_dispatch: build only, upload as workflow artifacts ──────────
 
       - name: Build dist (macOS)
-        if: github.event_name == 'workflow_dispatch' && matrix.os == 'macos-latest'
+        if: github.event_name == 'workflow_dispatch' && startsWith(matrix.os, 'macos')
         run: pnpm desktop:dist:mac
         env:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -128,10 +133,10 @@ jobs:
         run: pnpm desktop:dist:win
 
       - name: Upload macOS installers
-        if: github.event_name == 'workflow_dispatch' && matrix.os == 'macos-latest'
+        if: github.event_name == 'workflow_dispatch' && startsWith(matrix.os, 'macos')
         uses: actions/upload-artifact@v4
         with:
-          name: mac-dist
+          name: mac-dist-${{ matrix.os }}
           path: |
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
