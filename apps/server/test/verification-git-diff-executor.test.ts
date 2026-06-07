@@ -1,9 +1,15 @@
 // Slice 014a — the hasGitDiff predicate executor.
 //
-// After pc-pty-chat-281: the executor checks COMMITTED changes vs the
-// provisioning base branch (dev/main/master) for worktree dispatches, not
+// pc-pty-chat-207 / pc-pty-chat-281: the executor checks COMMITTED changes vs
+// the provisioning base branch (dev/main/master) for worktree dispatches, not
 // working-tree dirtiness. A clean working tree with real commits PASSES;
 // an uncommitted dirty tree with no commits does NOT pass.
+//
+// pc-pty-chat-207 is the authoritative bug report; 281 was its detection ticket.
+// Both describe the same root cause: git_diff_nonempty ran `git status --porcelain`
+// (working-tree check) instead of `git rev-list <base>..HEAD` (committed-change
+// check). A coder agent that commits correctly and leaves a clean tree would
+// false-fail every repo verification.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -94,6 +100,68 @@ test('hasGitDiff: true after committing; working-tree dirtiness alone does NOT d
       await exec.hasGitDiff!('worktree'),
       true,
       'committed diff vs base must be detected',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// pc-pty-chat-207 regression: a repo contract on a worktree branch that has
+// committed work must PASS git_diff_nonempty — a clean working tree is NOT a
+// failure. This is the canonical regression guard for the bug: "well-behaved
+// coder agent commits cleanly → predicate false-fails."
+test('pc-pty-chat-207 regression: repo worktree with commits passes even with spotless working tree', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-207-regression-'));
+  try {
+    setupRepo(dir);
+
+    // Simulate a coder agent: make changes, commit them, leave clean tree.
+    writeFileSync(join(dir, 'fix.ts'), 'export const fixed = true;');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-m', 'fix: implement the thing (pc-pty-chat-207)');
+    // Ensure working tree is genuinely clean
+    // (no staged or unstaged changes — just like a well-behaved agent would leave it)
+
+    const exec = createWorktreeExecutors({ worktreeDir: dir, projectFolderPath: dir });
+    const result = await exec.hasGitDiff!('worktree');
+    assert.equal(
+      result,
+      true,
+      'committed work on a worktree branch must pass git_diff_nonempty regardless of working-tree state',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// pc-pty-chat-207 in_place: for in_place isolation the fallback is working-tree
+// dirtiness (committed-only detection requires a stored pre-dispatch HEAD).
+// An uncommitted dirty tree PASSES in_place; a clean tree does not.
+test('pc-pty-chat-207 in_place: uncommitted dirty tree passes; clean tree with commits alone does not', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-207-inplace-'));
+  try {
+    setupRepo(dir);
+
+    // Commit something on this branch
+    writeFileSync(join(dir, 'edit.ts'), 'export const v = 2;');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-m', 'commit on in-place branch');
+
+    const exec = createWorktreeExecutors({ worktreeDir: dir, projectFolderPath: dir });
+
+    // in_place with clean tree → false (falls back to working-tree check)
+    assert.equal(
+      await exec.hasGitDiff!('project'),
+      false,
+      'in_place with clean working tree returns false (working-tree check)',
+    );
+
+    // in_place with uncommitted edit → true
+    writeFileSync(join(dir, 'unsaved.ts'), 'export const pending = true;');
+    assert.equal(
+      await exec.hasGitDiff!('project'),
+      true,
+      'in_place with uncommitted change returns true',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

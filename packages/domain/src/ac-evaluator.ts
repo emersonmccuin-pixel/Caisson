@@ -61,6 +61,8 @@ export interface PredicateExecutors {
    *  For worktree dispatches (`cwd: 'worktree'`): returns true when the
    *  worktree branch has committed changes vs the provisioning base branch —
    *  working-tree dirtiness is intentionally ignored so a clean commit passes.
+   *  This is the fix for pc-pty-chat-207: a coder agent that commits cleanly
+   *  and leaves a clean working tree must NOT false-fail the predicate.
    *
    *  For in-place dispatches (`cwd: 'project'`): falls back to checking
    *  working-tree dirtiness (committed-only detection requires a stored
