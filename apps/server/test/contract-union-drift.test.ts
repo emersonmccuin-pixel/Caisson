@@ -61,12 +61,12 @@ test('EXTERNAL_SYSTEMS parity', () => {
   );
 });
 
-test('ACCEPTANCE_PREDICATE_KINDS invariant (13 members)', () => {
+test('ACCEPTANCE_PREDICATE_KINDS invariant (14 members)', () => {
   // @pc/contracts only exposes the AcceptancePredicate UNION (type-only,
   // erased at runtime) — there is NO value array to compare against. Pin the
-  // domain-side value list so adding a 14th predicate without updating the
+  // domain-side value list so adding a predicate without updating the
   // contracts mirror trips here.
-  assert.equal(Domain.ACCEPTANCE_PREDICATE_KINDS.length, 13);
+  assert.equal(Domain.ACCEPTANCE_PREDICATE_KINDS.length, 14);
   assert.deepEqual(
     [...Domain.ACCEPTANCE_PREDICATE_KINDS],
     [
@@ -83,6 +83,7 @@ test('ACCEPTANCE_PREDICATE_KINDS invariant (13 members)', () => {
       'tool_called',
       'pending_ask_created',
       'report_contains',
+      'min_length',
     ],
     'ACCEPTANCE_PREDICATE_KINDS changed — update the @pc/contracts AcceptancePredicate union mirror',
   );
