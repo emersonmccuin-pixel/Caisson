@@ -13,6 +13,9 @@
 //   - node / bash / python
 
 import { execFile } from 'node:child_process';
+import { existsSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { resolveClaudeBinary, type ClaudeBinarySource } from '@pc/runtime';
 
@@ -68,6 +71,22 @@ export interface DependencyProbe {
   note?: string;
 }
 
+export interface PlaywrightPreflight {
+  /** present = playwright binary found; chromium-missing = binary found but
+   *  browser not downloaded yet (`playwright install chromium` needed);
+   *  not-found = no playwright binary on PATH. */
+  status: 'ok' | 'chromium-missing' | 'not-found';
+  version: string | null;
+  /** Resolved platform-default browser cache root. */
+  browsersRoot: string;
+  /** true when at least one chromium-* directory exists in browsersRoot. */
+  chromiumInstalled: boolean;
+  /** Full path to the chromium binary, if found. */
+  chromiumPath: string | null;
+  /** install hint surfaced to onboarding UI / preflight report. */
+  installHint: string | null;
+}
+
 export interface PreflightReport {
   claude: ClaudePreflight;
   auth: AuthPreflight;
@@ -75,6 +94,8 @@ export interface PreflightReport {
   git: DependencyProbe;
   /** node / bash / python — SOFT deps (workflow code-nodes only). */
   soft: DependencyProbe[];
+  /** Playwright + chromium — SOFT dep (QA/browser-smoke workflow steps). */
+  playwright: PlaywrightPreflight;
   /** All hard deps satisfied and claude version acceptable. */
   ok: boolean;
 }
@@ -222,17 +243,98 @@ function pythonCandidates(): string[] {
   return ['python', 'python3', '/usr/bin/python3', '/opt/homebrew/bin/python3', '/usr/local/bin/python3'];
 }
 
+/** Resolve the Playwright browser cache root using the same logic as the
+ *  path-guard hook, so both agree on what "playwright cache" means. */
+function resolvePlaywrightBrowsersRoot(): string {
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) {
+    return resolve(process.env.PLAYWRIGHT_BROWSERS_PATH);
+  }
+  if (process.platform === 'win32') {
+    const localAppData =
+      process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local');
+    return join(localAppData, 'ms-playwright');
+  }
+  if (process.platform === 'darwin') {
+    return join(homedir(), 'Library', 'Caches', 'ms-playwright');
+  }
+  const xdgCache = process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache');
+  return join(xdgCache, 'ms-playwright');
+}
+
+/** Scan `browsersRoot` for any `chromium-*` directory and return the path to
+ *  the Chrome binary inside it, or null when absent. */
+function findChromiumBinary(browsersRoot: string): string | null {
+  if (!existsSync(browsersRoot)) return null;
+  let dirs: string[];
+  try {
+    dirs = readdirSync(browsersRoot);
+  } catch {
+    return null;
+  }
+  const chromiumDir = dirs.find((d) => d.startsWith('chromium-'));
+  if (!chromiumDir) return null;
+  // Binary location differs by platform.
+  const candidates =
+    process.platform === 'win32'
+      ? [join(browsersRoot, chromiumDir, 'chrome-win64', 'chrome.exe')]
+      : process.platform === 'darwin'
+        ? [
+            join(
+              browsersRoot,
+              chromiumDir,
+              'chrome-mac',
+              'Chromium.app',
+              'Contents',
+              'MacOS',
+              'Chromium',
+            ),
+          ]
+        : [join(browsersRoot, chromiumDir, 'chrome-linux', 'chrome')];
+  const found = candidates.find((c) => existsSync(c));
+  return found ?? null;
+}
+
+async function checkPlaywright(): Promise<PlaywrightPreflight> {
+  const browsersRoot = resolvePlaywrightBrowsersRoot();
+  // Try the system playwright binary first, then npx fallback.
+  const raw = (await runVersion('playwright')) ?? (await runVersion('npx', ['playwright', '--version']));
+  const version = raw ? parseVersion(raw) : null;
+
+  if (!version) {
+    return {
+      status: 'not-found',
+      version: null,
+      browsersRoot,
+      chromiumInstalled: false,
+      chromiumPath: null,
+      installHint: 'Run `pip install playwright` (or `npm install -g playwright`) then `playwright install chromium`.',
+    };
+  }
+
+  const chromiumPath = findChromiumBinary(browsersRoot);
+  const chromiumInstalled = chromiumPath !== null;
+  return {
+    status: chromiumInstalled ? 'ok' : 'chromium-missing',
+    version,
+    browsersRoot,
+    chromiumInstalled,
+    chromiumPath,
+    installHint: chromiumInstalled ? null : 'Run `playwright install chromium` to download the browser.',
+  };
+}
+
 export async function runPreflight(): Promise<PreflightReport> {
   const claude = await checkClaude();
-  const [auth, git, node, bash, python] = await Promise.all([
+  const [auth, git, node, bash, python, playwright] = await Promise.all([
     checkAuth(claude.path),
     probeBinary('git', 'hard', gitCandidates(), 'Required for project creation + agent worktrees.'),
     probeBinary('node', 'soft', nodeCandidates(), 'Workflow code-nodes only.'),
     probeBinary('bash', 'soft', bashCandidates(), 'Workflow code-nodes only.'),
     probeBinary('python', 'soft', pythonCandidates(), 'Workflow code-nodes only.'),
+    checkPlaywright(),
   ]);
 
   const ok = claude.status === 'ok' && git.present;
 
-  return { claude, auth, git, soft: [node, bash, python], ok };
+  return { claude, auth, git, soft: [node, bash, python], playwright, ok };
 }
