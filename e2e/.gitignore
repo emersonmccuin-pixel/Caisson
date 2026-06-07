@@ -1,0 +1,13 @@
+# QA agent scratch surface — transient files, never committed.
+# Specs written here by dispatched agents are ephemeral; commit curated
+# specs to a proper test directory, not here.
+qa-scratch/*.spec.py
+qa-scratch/*.spec.ts
+qa-scratch/*.spec.js
+
+# Screenshot / video evidence — large binaries; store externally or attach
+# via pc_attach_to_work_item.
+evidence/*.png
+evidence/*.jpg
+evidence/*.webm
+evidence/*.mp4
