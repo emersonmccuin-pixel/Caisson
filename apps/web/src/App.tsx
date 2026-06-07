@@ -67,8 +67,11 @@ export default function App() {
   const forceOnboarding = onboardingParam === 'force' || onboardingParam === 'sim';
   const onboardingSimMode = onboardingParam === 'sim';
   const [wizardDismissed, setWizardDismissed] = useState(false);
-  const [skipWarning, setSkipWarning] = useState(false);
-
+  // Auth banner: shown when the user is inside the app but Claude isn't signed
+  // in (e.g. the token expired). Checked once on mount, after onboarding.
+  // 'unknown' = not checked yet; 'authed' = fine; 'login-required' = show banner.
+  const [appAuthStatus, setAppAuthStatus] = useState<'unknown' | 'authed' | 'login-required'>('unknown');
+  const authCheckDoneRef = useRef(false);
 
   // Activity panel open/closed lives in settings_global.activity_panel.
   // `showAllProjects` field still in settings schema (additive — Section 7
@@ -91,6 +94,25 @@ export default function App() {
       /* best-effort — surfaces as gear icon disabled until next load */
     });
   }, []);
+
+  // Check auth status once after onboarding is dismissed (or on load if already
+  // completed). Shows a banner if the account isn't signed in — prevents a
+  // blank/broken app when the session expires after first-run.
+  useEffect(() => {
+    if (authCheckDoneRef.current) return;
+    if (!settings) return; // wait until settings load
+    if (!wizardDismissed && !forceOnboarding) return; // wizard still showing
+    if (onboardingSimMode) return; // sim mode — skip real auth check
+    authCheckDoneRef.current = true;
+    void settingsApi.getPreflight()
+      .then((p) => {
+        setAppAuthStatus(p.auth.status === 'authed' ? 'authed' : 'login-required');
+      })
+      .catch(() => {
+        // Transient failure — don't surface the banner (API may be starting).
+        setAppAuthStatus('authed');
+      });
+  }, [settings, wizardDismissed, forceOnboarding, onboardingSimMode]);
 
   // Apply the persisted fontScale to documentElement so every rem-based UI
   // size scales. The slider in AppSettingsModal updates the same variable
@@ -274,7 +296,6 @@ export default function App() {
 
   const finishOnboarding = useCallback(() => {
     setWizardDismissed(true);
-    setSkipWarning(false);
     setCreateOpen(true);
     if (!onboardingSimMode) {
       void settingsApi.patchSettings({ onboardingCompletedAt: new Date().toISOString() })
@@ -304,18 +325,6 @@ export default function App() {
     [],
   );
 
-  const skipOnboarding = useCallback(
-    (hardDepsMissing: boolean) => {
-      setWizardDismissed(true);
-      if (hardDepsMissing) setSkipWarning(true);
-      if (!onboardingSimMode) {
-        void settingsApi.patchSettings({ onboardingCompletedAt: new Date().toISOString() })
-          .then((r) => setSettings(r.settings))
-          .catch(() => {});
-      }
-    },
-    [onboardingSimMode],
-  );
 
   if (projects === null) {
     return (
@@ -342,7 +351,6 @@ export default function App() {
         onProjectsFolderChange={handleProjectsFolderChange}
         onDefaultSurfaceChange={handleDefaultSurfaceChange}
         onComplete={finishOnboarding}
-        onSkip={skipOnboarding}
       />
     );
   }
@@ -445,6 +453,19 @@ export default function App() {
       <BuildMarker />
       <HostHealthBanner />
       <ClaudeVersionBanner />
+      {appAuthStatus === 'login-required' && (
+        <div className="flex items-center justify-between gap-3 border-b border-destructive/60 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          <span>
+            Claude Code isn't signed in — chats and agents won't work until you sign in again.
+          </span>
+          <a
+            href="/?onboarding=force"
+            className="text-destructive underline-offset-2 hover:text-foreground hover:underline"
+          >
+            Open setup
+          </a>
+        </div>
+      )}
       {restartRequired && (
         <div className="flex items-center justify-between gap-3 border-b border-warning/60 bg-warning/10 px-3 py-1.5 text-xs text-warning">
           <span>
@@ -452,20 +473,6 @@ export default function App() {
           </span>
           <button
             onClick={() => setRestartRequired(false)}
-            className="text-warning hover:text-foreground"
-          >
-            dismiss
-          </button>
-        </div>
-      )}
-      {skipWarning && (
-        <div className="flex items-center justify-between gap-3 border-b border-warning/60 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-          <span>
-            Setup isn't finished — Claude Code or git is still missing, so chats and
-            projects won't work until you install them.
-          </span>
-          <button
-            onClick={() => setSkipWarning(false)}
             className="text-warning hover:text-foreground"
           >
             dismiss

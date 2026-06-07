@@ -9,6 +9,10 @@
 // preflight and fakes the install/auth actions so every screen is walkable on a
 // dev box that already has everything. `?onboarding=force` opens the gate with
 // the REAL preflight + REAL actions. See App.tsx for the gate logic.
+//
+// Hard gate: "Continue / Finish" stays DISABLED until BOTH Claude is
+// authenticated AND a valid project folder is selected. "Skip for now" is gone
+// — the user cannot reach a blank, unusable app.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -41,9 +45,6 @@ interface OnboardingWizardProps {
   onDefaultSurfaceChange: (surface: OrchestratorSurfacePreference) => void;
   /** Finish: persist the marker + drop into Create-your-first-project. */
   onComplete: () => void;
-  /** Skip-for-now escape hatch: persist the marker, close, leave a banner if a
-   *  hard dep is still missing (passed back so the app can warn). */
-  onSkip: (hardDepsMissing: boolean) => void;
 }
 
 /** The blank-machine preflight the sim switch starts from. */
@@ -80,7 +81,6 @@ export function OnboardingWizard({
   onProjectsFolderChange,
   onDefaultSurfaceChange,
   onComplete,
-  onSkip,
 }: OnboardingWizardProps) {
   const [preflight, setPreflight] = useState<PreflightReport | null>(
     simMode ? freshMachinePreflight() : null,
@@ -90,6 +90,11 @@ export function OnboardingWizard({
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string | null>(null);
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
+  const [loginMode, setLoginMode] = useState<'callback' | 'code-paste' | 'unknown'>('unknown');
+  const [codeInput, setCodeInput] = useState('');
+  const [codeSubmitting, setCodeSubmitting] = useState(false);
+  const [planFailure, setPlanFailure] = useState(false);
+  const [planFailureNote, setPlanFailureNote] = useState<string | null>(null);
   const [projectsFolder, setProjectsFolder] = useState(initialProjectsFolder);
   const [defaultSurface, setDefaultSurface] =
     useState<OrchestratorSurfacePreference>(initialDefaultSurface);
@@ -134,6 +139,10 @@ export function OnboardingWizard({
   const claudeOk = preflight?.claude.status === 'ok';
   const gitOk = preflight?.git.present === true;
   const authOk = preflight?.auth.status === 'authed';
+  const folderOk = projectsFolder.trim().length > 0;
+
+  // Hard gate: all prerequisites must be met before Finish is enabled.
+  const allDone = claudeOk && gitOk && authOk && folderOk;
 
   const satisfied = useCallback(
     (s: StepId): boolean => {
@@ -149,12 +158,12 @@ export function OnboardingWizard({
         case 'auth':
           return authOk;
         case 'projects':
-          return projectsFolder.trim().length > 0;
+          return folderOk;
         case 'done':
           return false;
       }
     },
-    [claudeOk, gitOk, authOk, projectsFolder, step],
+    [claudeOk, gitOk, authOk, folderOk, step],
   );
 
   // ── Install / auth actions ───────────────────────────────────────────────
@@ -217,12 +226,13 @@ export function OnboardingWizard({
     setBusy('auth');
     setError(null);
     setLoginUrl(null);
+    setLoginMode('unknown');
+    setPlanFailure(false);
+    setPlanFailureNote(null);
+    setCodeInput('');
     try {
       if (simMode) {
         await delay(800);
-        // Harmless placeholder — the real flow opens Claude's actual OAuth URL
-        // (printed by `claude auth login`, complete with client_id). Never
-        // point sim at a real claude.com URL: it 400s ("missing client_id").
         setLoginUrl(
           'data:text/html,<body style="font-family:sans-serif;background:%230a0a0a;color:%23f5e8c8;padding:3rem"><h2>Simulated sign-in</h2><p>In the real setup, this opens Claude%27s actual sign-in page.</p></body>',
         );
@@ -239,6 +249,14 @@ export function OnboardingWizard({
         void settingsApi.getOnboardingAuthState()
           .then((s) => {
             if (s.login.url) setLoginUrl(s.login.url);
+            if (s.login.mode && s.login.mode !== 'unknown') setLoginMode(s.login.mode);
+            if (s.login.planFailure) {
+              setPlanFailure(true);
+              setPlanFailureNote(s.login.planFailureNote ?? null);
+              if (pollRef.current) clearInterval(pollRef.current);
+              setBusy(null);
+              return;
+            }
             if (s.authed) {
               if (pollRef.current) clearInterval(pollRef.current);
               setPreflight((prev) =>
@@ -247,7 +265,7 @@ export function OnboardingWizard({
               setBusy(null);
             } else if (s.login.exited && s.login.exitCode !== 0) {
               if (pollRef.current) clearInterval(pollRef.current);
-              setError('Sign-in didn’t complete. Try again, or use Re-check if you finished in the browser.');
+              setError('Sign-in didn\'t complete. Try again, or use Re-check if you finished in the browser.');
               setBusy(null);
             }
           })
@@ -258,6 +276,22 @@ export function OnboardingWizard({
     } catch (e) {
       setError((e as Error).message);
       setBusy(null);
+    }
+  }
+
+  // Submit the authorization code when CC is in code-paste mode.
+  async function handleSubmitCode() {
+    const code = codeInput.trim();
+    if (!code || codeSubmitting) return;
+    setCodeSubmitting(true);
+    setError(null);
+    try {
+      await settingsApi.submitOnboardingCode(code);
+      // Polling is already running — it will detect auth success.
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCodeSubmitting(false);
     }
   }
 
@@ -279,6 +313,20 @@ export function OnboardingWizard({
     if (next) setStep(next);
   }
 
+  // Folder picker: use the native OS dialog on desktop, custom browser picker otherwise.
+  async function handleChooseFolder() {
+    const native = window.pcDesktop?.chooseFolder;
+    if (native) {
+      const chosen = await native();
+      if (chosen) {
+        setProjectsFolder(chosen);
+        onProjectsFolderChange(chosen);
+      }
+    } else {
+      setFolderPickerOpen(true);
+    }
+  }
+
   function handleSelectProjectsFolder(path: string) {
     setProjectsFolder(path);
     setFolderPickerOpen(false);
@@ -289,8 +337,6 @@ export function OnboardingWizard({
     setDefaultSurface(surface);
     onDefaultSurfaceChange(surface);
   }
-
-  const hardDepsMissing = !claudeOk || !gitOk;
 
   return (
     <div className="flex h-full w-full items-center justify-center bg-background p-6 text-foreground">
@@ -313,20 +359,13 @@ export function OnboardingWizard({
               />
             ))}
           </ol>
-          <div className="mt-auto pt-4">
-            <button
-              type="button"
-              onClick={() => onSkip(hardDepsMissing)}
-              className="text-[11px] text-[var(--fg-dim)] underline-offset-2 hover:text-foreground hover:underline"
-            >
-              Skip for now
-            </button>
-            {simMode && (
-              <p className="mt-2 text-[10px] uppercase tracking-wide text-warning">
+          {simMode && (
+            <div className="mt-auto pt-4">
+              <p className="text-[10px] uppercase tracking-wide text-warning">
                 sim mode — fake machine
               </p>
-            )}
-          </div>
+            </div>
+          )}
         </aside>
 
         {/* Content */}
@@ -348,11 +387,6 @@ export function OnboardingWizard({
               )}
 
               {step === 'claude' && (() => {
-                // Caisson ships a pinned, isolated Claude Code inside the app
-                // (resolver `source: 'bundled'`), so on a packaged build there is
-                // nothing for the user to install — reframe the step from
-                // "install it" to "it's already here". The install action stays
-                // for the dev/fallback case where no bundle resolves.
                 const bundled = preflight.claude.source === 'bundled';
                 const v = preflight.claude.version ?? '';
                 return (
@@ -408,6 +442,13 @@ export function OnboardingWizard({
                   busy={busy === 'auth'}
                   refreshing={busy === 'refresh'}
                   loginUrl={loginUrl}
+                  loginMode={loginMode}
+                  planFailure={planFailure}
+                  planFailureNote={planFailureNote}
+                  codeInput={codeInput}
+                  codeSubmitting={codeSubmitting}
+                  onCodeChange={setCodeInput}
+                  onSubmitCode={handleSubmitCode}
                   onSignIn={handleSignIn}
                   onRefresh={handleRefresh}
                   onNext={goNext}
@@ -417,7 +458,7 @@ export function OnboardingWizard({
               {step === 'projects' && (
                 <ProjectsFolderStep
                   folder={projectsFolder}
-                  onChoose={() => setFolderPickerOpen(true)}
+                  onChoose={() => void handleChooseFolder()}
                   onNext={goNext}
                 />
               )}
@@ -425,7 +466,8 @@ export function OnboardingWizard({
               {step === 'done' && (
                 <DoneStep
                   softDeps={preflight.soft}
-                  hardDepsMissing={hardDepsMissing}
+                  allDone={allDone}
+                  outstanding={buildOutstanding(claudeOk, gitOk, authOk, folderOk)}
                   defaultSurface={defaultSurface}
                   onComplete={onComplete}
                 />
@@ -458,6 +500,21 @@ export function OnboardingWizard({
       )}
     </div>
   );
+}
+
+/** Summarise what's still blocking completion for the "done" step gate label. */
+function buildOutstanding(
+  claudeOk: boolean,
+  gitOk: boolean,
+  authOk: boolean,
+  folderOk: boolean,
+): string[] {
+  const items: string[] = [];
+  if (!claudeOk) items.push('Claude Code not installed');
+  if (!gitOk) items.push('Git not installed');
+  if (!authOk) items.push('Not signed in to Claude');
+  if (!folderOk) items.push('Projects folder not set');
+  return items;
 }
 
 function StepRow({ title, active, done }: { title: string; active: boolean; done: boolean }) {
@@ -673,6 +730,13 @@ interface AuthStepProps {
   busy: boolean;
   refreshing: boolean;
   loginUrl: string | null;
+  loginMode: 'callback' | 'code-paste' | 'unknown';
+  planFailure: boolean;
+  planFailureNote: string | null;
+  codeInput: string;
+  codeSubmitting: boolean;
+  onCodeChange: (v: string) => void;
+  onSubmitCode: () => void;
   onSignIn: () => void;
   onRefresh: () => void;
   onNext: () => void;
@@ -683,10 +747,22 @@ function AuthStep({
   busy,
   refreshing,
   loginUrl,
+  loginMode,
+  planFailure,
+  planFailureNote,
+  codeInput,
+  codeSubmitting,
+  onCodeChange,
+  onSubmitCode,
   onSignIn,
   onRefresh,
   onNext,
 }: AuthStepProps) {
+  // Show the code-paste form when:
+  // 1. The mode is detected as code-paste by the server, OR
+  // 2. A URL was printed but we're still busy (browser may not have auto-opened).
+  const showCodeForm = busy && (loginMode === 'code-paste' || (loginUrl !== null && loginMode !== 'callback'));
+
   return (
     <div className="flex flex-1 flex-col">
       <h1 className="text-2xl font-semibold tracking-tight">Sign in to Claude</h1>
@@ -702,6 +778,24 @@ function AuthStep({
             <span>✓</span>
             <span>You're signed in.</span>
           </div>
+        ) : planFailure ? (
+          <div className="space-y-2">
+            <div className="bg-destructive/15 px-3 py-2 text-sm text-destructive">
+              <p className="font-medium">Sign-in requires a Claude plan.</p>
+              <p className="mt-1 text-xs">
+                {planFailureNote ??
+                  'Caisson needs a Claude Pro, Max, or Team plan (or API access). Set one up at claude.ai, then try again.'}
+              </p>
+            </div>
+            <a
+              href="https://claude.ai/upgrade"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-block text-xs text-primary underline underline-offset-2"
+            >
+              Set up a plan at claude.ai →
+            </a>
+          </div>
         ) : busy ? (
           <div className="bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
             Your browser is opening to sign in to Claude. Finish there and this
@@ -714,6 +808,7 @@ function AuthStep({
           </div>
         )}
 
+        {/* URL button — always visible while a login is in flight and a URL exists */}
         {!authed && busy && loginUrl && (
           <a
             href={loginUrl}
@@ -724,6 +819,36 @@ function AuthStep({
             Open the sign-in page
           </a>
         )}
+
+        {/* Code-paste fallback — visible when CC enters code-paste mode */}
+        {showCodeForm && (
+          <div className="mt-2 space-y-2">
+            <p className="text-xs text-muted-foreground">
+              If the browser opened, go to the sign-in page, complete sign-in,
+              and paste the authorization code here:
+            </p>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={codeInput}
+                onChange={(e) => onCodeChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    onSubmitCode();
+                  }
+                }}
+                placeholder="Paste authorization code…"
+                spellCheck={false}
+                autoComplete="off"
+                className="flex-1 bg-muted px-3 py-2 font-mono text-sm text-foreground outline-none focus:ring-1 focus:ring-ring"
+              />
+              <PrimaryButton onClick={onSubmitCode} disabled={!codeInput.trim() || codeSubmitting}>
+                {codeSubmitting ? 'Sending…' : 'Submit'}
+              </PrimaryButton>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="mt-auto flex items-center gap-3 pt-6">
@@ -731,9 +856,11 @@ function AuthStep({
           <PrimaryButton onClick={onNext}>Continue</PrimaryButton>
         ) : (
           <>
-            <PrimaryButton onClick={onSignIn} disabled={busy}>
-              {busy ? 'Waiting for sign-in…' : 'Sign in to Claude'}
-            </PrimaryButton>
+            {!planFailure && (
+              <PrimaryButton onClick={onSignIn} disabled={busy}>
+                {busy ? 'Waiting for sign-in…' : 'Sign in to Claude'}
+              </PrimaryButton>
+            )}
             <SecondaryButton onClick={onRefresh} disabled={refreshing}>
               {refreshing ? 'Checking…' : 'Re-check'}
             </SecondaryButton>
@@ -783,25 +910,50 @@ function ProjectsFolderStep({
 
 function DoneStep({
   softDeps,
-  hardDepsMissing,
+  allDone,
+  outstanding,
   defaultSurface,
   onComplete,
 }: {
   softDeps: PreflightReport['soft'];
-  hardDepsMissing: boolean;
+  allDone: boolean;
+  outstanding: string[];
   defaultSurface: OrchestratorSurfacePreference;
   onComplete: () => void;
 }) {
   const missingSoft = softDeps.filter((d) => !d.present).map((d) => d.name);
   return (
     <div className="flex flex-1 flex-col">
-      <h1 className="text-2xl font-semibold tracking-tight">You're all set</h1>
-      <p className="mt-3 max-w-lg text-sm leading-relaxed text-muted-foreground">
-        Everything Caisson needs is ready. Create your first project to get
-        going — Caisson's assistant will help you set it up.
-      </p>
+      <h1 className="text-2xl font-semibold tracking-tight">
+        {allDone ? 'You\'re all set' : 'Almost there'}
+      </h1>
+      {allDone ? (
+        <p className="mt-3 max-w-lg text-sm leading-relaxed text-muted-foreground">
+          Everything Caisson needs is ready. Create your first project to get
+          going — Caisson's assistant will help you set it up.
+        </p>
+      ) : (
+        <p className="mt-3 max-w-lg text-sm leading-relaxed text-muted-foreground">
+          Complete the steps above before continuing. Go back to the step that
+          still needs attention.
+        </p>
+      )}
 
-      {missingSoft.length > 0 && (
+      {!allDone && outstanding.length > 0 && (
+        <div className="mt-4 max-w-lg space-y-1">
+          {outstanding.map((item) => (
+            <div
+              key={item}
+              className="flex items-center gap-2 bg-warning/15 px-3 py-2 text-xs text-warning"
+            >
+              <span>!</span>
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {missingSoft.length > 0 && allDone && (
         <div className="mt-6 max-w-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           <span className="text-foreground">Optional:</span> {missingSoft.join(', ')}{' '}
           {missingSoft.length === 1 ? 'is' : 'are'} not installed. You only need
@@ -810,18 +962,20 @@ function DoneStep({
         </div>
       )}
 
-      <div className="mt-4 max-w-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-        Default view:{' '}
-        <span className="font-medium capitalize text-foreground">{defaultSurface}</span>
-      </div>
+      {allDone && (
+        <div className="mt-4 max-w-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          Default view:{' '}
+          <span className="font-medium capitalize text-foreground">{defaultSurface}</span>
+        </div>
+      )}
 
       <div className="mt-auto pt-6">
-        <PrimaryButton onClick={onComplete} disabled={hardDepsMissing}>
+        <PrimaryButton onClick={onComplete} disabled={!allDone}>
           Create your first project
         </PrimaryButton>
-        {hardDepsMissing && (
+        {!allDone && (
           <p className="mt-2 text-xs text-warning">
-            Finish the steps above first — Caisson can't run without Claude Code and git.
+            Finish the steps above first — Caisson can't run without Claude Code, git, and a sign-in.
           </p>
         )}
       </div>
