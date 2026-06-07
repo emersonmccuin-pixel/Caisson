@@ -16,6 +16,7 @@ import type {
   AcceptanceCriteria as AcceptanceCriteriaV2,
   AcceptancePredicate as AcceptancePredicateV2,
   ExpectedOutput as ExpectedOutputV2,
+  RepoCheck,
 } from './contract.ts';
 
 /** Side-effect kinds that must fail-closed on an empty derived AC. */
@@ -117,7 +118,15 @@ function deriveRepoV2(
   if (spec.require_diff !== false) {
     preds.push({ kind: 'git_diff_nonempty', cwd });
   }
-  for (const check of spec.checks ?? []) {
+  for (const rawCheck of spec.checks ?? []) {
+    // Normalize plain-string checks (e.g. "pnpm typecheck") to the object form
+    // { command: string }. At runtime, callers may pass strings even though the
+    // type declares RepoCheck[]; accepting them avoids a 500 on
+    // guessable-but-wrong input (pc-pty-chat-279).
+    const check: RepoCheck =
+      typeof (rawCheck as unknown) === 'string'
+        ? { command: rawCheck as unknown as string }
+        : (rawCheck as RepoCheck);
     if ('preset' in check) {
       preds.push({ kind: 'bash_exit_zero', command: `pnpm ${check.preset}`, cwd });
     } else {

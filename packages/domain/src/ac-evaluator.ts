@@ -53,7 +53,16 @@ export interface PredicateExecutors {
   /** Runs the bash command in either the worktree or the project root and
    *  resolves the process exit code. */
   runBash: (command: string, cwd: 'worktree' | 'project') => Promise<number>;
-  /** True when the git tree has uncommitted changes (tracked or untracked).
+  /** True when the git tree has relevant changes vs its base.
+   *
+   *  For worktree dispatches (`cwd: 'worktree'`): returns true when the
+   *  worktree branch has committed changes vs the provisioning base branch —
+   *  working-tree dirtiness is intentionally ignored so a clean commit passes.
+   *
+   *  For in-place dispatches (`cwd: 'project'`): falls back to checking
+   *  working-tree dirtiness (committed-only detection requires a stored
+   *  pre-dispatch HEAD, deferred).
+   *
    *  Powers `git_diff_nonempty`. Optional — absent ⇒ the predicate fails with
    *  a clear "no git executor" reason. */
   hasGitDiff?: (cwd: 'worktree' | 'project') => Promise<boolean>;
@@ -212,7 +221,20 @@ function matchCorpus(
     if (re.test(corpus)) return { pass: true };
     return { pass: false, reason: `${label} do not match /${pattern}/` };
   }
-  if (corpus.includes(pattern)) return { pass: true };
+  // Non-regex path: normalize before substring matching —
+  //   1. Remove whitespace around punctuation (so "a / b" matches "a/b").
+  //   2. Collapse remaining whitespace runs to a single space.
+  //   3. Lowercase.
+  // This lets section-heading predicates like "Where 228/267/270 each land"
+  // match documents that wrote "Where 228 / 267 / 270 each land"
+  // (pc-pty-chat-277). Regex path is unaffected (callers that need exact
+  // control use `regex: true`).
+  const norm = (s: string): string =>
+    s
+      .replace(/\s*([^\w\s])\s*/g, '$1') // strip spaces around punctuation
+      .replace(/\s+/g, ' ')              // collapse whitespace runs
+      .toLowerCase();
+  if (norm(corpus).includes(norm(pattern))) return { pass: true };
   return { pass: false, reason: `${label} do not contain "${pattern}"` };
 }
 

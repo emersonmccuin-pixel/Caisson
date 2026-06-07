@@ -477,33 +477,28 @@ export function createWorktreeExecutors(input: {
       });
     },
     async hasGitDiff(cwd) {
-      // True iff the tree has any change — tracked, staged, or untracked.
-      // `git status --porcelain` prints one line per change; empty = clean.
       const cwdAbs = cwd === 'project' ? input.projectFolderPath : input.worktreeDir;
-      return await new Promise<boolean>((resolveResult) => {
-        let settled = false;
-        let out = '';
-        const child = spawn('git', ['status', '--porcelain'], { cwd: cwdAbs });
-        const finish = (value: boolean) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolveResult(value);
-        };
-        const timer = setTimeout(() => {
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            /* best-effort */
-          }
-          finish(false);
-        }, bashTimeoutMs);
-        child.stdout?.on('data', (d) => {
-          out += String(d);
-        });
-        child.on('error', () => finish(false));
-        child.on('exit', () => finish(out.trim().length > 0));
-      });
+
+      if (cwd === 'worktree') {
+        // Worktree dispatches: assert COMMITTED changes vs the provisioning base.
+        // The worktree branch was created from a base branch (commonly dev, main,
+        // or master). Try each in order; the first that resolves determines the
+        // result. A count > 0 means committed changes exist — working-tree
+        // dirtiness is intentionally IGNORED so a clean commit does NOT
+        // false-fail the predicate (pc-pty-chat-281).
+        for (const base of ['dev', 'main', 'master', 'trunk']) {
+          const count = await countCommitsAhead(cwdAbs, base, bashTimeoutMs);
+          if (count !== null) return count > 0;
+        }
+        // No known base branch found (e.g., standalone test repo). Fall through
+        // to working-tree check as a last resort.
+      }
+
+      // Project (in-place) dispatches, or worktree with no detectable base:
+      // fall back to checking working-tree dirtiness (original behavior).
+      // Note: for in-place, a clean committed diff still false-fails — fixing
+      // that requires storing the pre-dispatch HEAD at contract creation time.
+      return workingTreeDirty(cwdAbs, bashTimeoutMs);
     },
   };
 }
@@ -514,4 +509,78 @@ function isInside(abs: string, root: string): boolean {
   const rel = relative(root, abs);
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return false;
   return true;
+}
+
+/**
+ * Count commits on the current branch in `cwd` that are NOT reachable from
+ * `base`. Returns null when `base` doesn't exist or git exits non-zero.
+ *
+ * Used by `hasGitDiff` to detect committed changes vs the provisioning base
+ * branch (e.g. `dev`, `main`, `master`) without inspecting the working tree.
+ */
+function countCommitsAhead(cwd: string, base: string, timeoutMs: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    let out = '';
+    let settled = false;
+    const child = spawn('git', ['rev-list', '--count', `${base}..HEAD`], { cwd });
+    const finish = (val: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(val);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* best-effort */
+      }
+      finish(null);
+    }, timeoutMs);
+    child.stdout?.on('data', (d) => {
+      out += String(d);
+    });
+    child.on('error', () => finish(null));
+    child.on('exit', (code) => {
+      if (code !== 0) {
+        // Base branch doesn't exist or git error — caller tries next candidate.
+        finish(null);
+      } else {
+        const n = parseInt(out.trim(), 10);
+        finish(isNaN(n) ? null : n);
+      }
+    });
+  });
+}
+
+/**
+ * True iff the working tree in `cwd` has any uncommitted change (tracked,
+ * staged, or untracked). Used as the fallback for `hasGitDiff` when committed-
+ * diff detection isn't applicable (in-place isolation or no detectable base).
+ */
+function workingTreeDirty(cwd: string, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let out = '';
+    let settled = false;
+    const child = spawn('git', ['status', '--porcelain'], { cwd });
+    const finish = (val: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(val);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* best-effort */
+      }
+      finish(false);
+    }, timeoutMs);
+    child.stdout?.on('data', (d) => {
+      out += String(d);
+    });
+    child.on('error', () => finish(false));
+    child.on('exit', () => finish(out.trim().length > 0));
+  });
 }
