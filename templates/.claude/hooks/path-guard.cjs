@@ -33,9 +33,33 @@
 // both Windows (`E:/…`, `E:\…`) and Git-Bash (`/e/…`) absolute path forms.
 
 const { readFileSync, writeFileSync, mkdirSync } = require('node:fs');
-const { dirname, resolve } = require('node:path');
+const { dirname, resolve, join } = require('node:path');
+const { homedir } = require('node:os');
 
 const BINDING_FILE = '{{PROJECT_DATA_DIR}}/current-task-binding.json';
+
+/** Playwright browser cache root — allowed for READ and BASH path references so
+ *  QA agents can inspect/run browser binaries without path-guard denials.
+ *  WRITE/EDIT to this path is still blocked (enforced separately per tool).
+ *  Resolution order: env var → platform default. */
+function getPlaywrightBrowsersRoot() {
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) {
+    return resolve(toWinPath(process.env.PLAYWRIGHT_BROWSERS_PATH));
+  }
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local');
+    return resolve(join(localAppData, 'ms-playwright'));
+  }
+  if (process.platform === 'darwin') {
+    return resolve(join(homedir(), 'Library', 'Caches', 'ms-playwright'));
+  }
+  // Linux / other POSIX
+  const xdgCache = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
+  return resolve(join(xdgCache, 'ms-playwright'));
+}
+
+// Computed once at load time — safe since env vars don't change during a hook run.
+const PLAYWRIGHT_BROWSERS_ROOT = getPlaywrightBrowsersRoot();
 
 /** git subcommands that cannot destroy or rewrite work. Everything NOT in this
  *  set counts as a WRITE and is fenced. Deliberately conservative: `branch`,
@@ -260,14 +284,28 @@ function enforce() {
 
   const violations = [];
 
-  function checkPath(p) {
-    if (!p || typeof p !== 'string') return;
-    if (!isInside(p, wt)) violations.push(p);
+  /** Path is inside the worktree OR inside the Playwright browser cache (read
+   *  exemption — QA agents need to inspect/execute browsers). Write/Edit use a
+   *  stricter check that excludes the Playwright exemption so the write boundary
+   *  is unchanged. */
+  function isAllowedReadPath(p) {
+    return isInside(p, wt) || isInside(p, PLAYWRIGHT_BROWSERS_ROOT);
   }
 
-  if (tool === 'Read' || tool === 'Write' || tool === 'Edit') checkPath(inp.file_path);
-  if (tool === 'NotebookEdit') checkPath(inp.notebook_path);
-  if ((tool === 'Glob' || tool === 'Grep') && inp.path) checkPath(inp.path);
+  function checkPath(p, allowPlaywrightRoot) {
+    if (!p || typeof p !== 'string') return;
+    const allowed = allowPlaywrightRoot ? isAllowedReadPath(p) : isInside(p, wt);
+    if (!allowed) violations.push(p);
+  }
+
+  // Read / Glob / Grep: playwright cache reads allowed (agents may inspect
+  // browser binary paths or read playwright output files).
+  if (tool === 'Read') checkPath(inp.file_path, true);
+  if ((tool === 'Glob' || tool === 'Grep') && inp.path) checkPath(inp.path, true);
+  // Write / Edit / NotebookEdit: strict — no playwright exemption; write
+  // boundary is unchanged.
+  if (tool === 'Write' || tool === 'Edit') checkPath(inp.file_path, false);
+  if (tool === 'NotebookEdit') checkPath(inp.notebook_path, false);
   if (tool === 'Bash') {
     const cmd = String(inp.command || '');
     // Best-effort: scan for absolute paths in BOTH Windows drive-letter form
@@ -277,7 +315,10 @@ function enforce() {
     let m;
     while ((m = re.exec(cmd)) !== null) {
       const path = m[1] || m[2] || m[3] || m[4];
-      if (path && !isInside(path, wt)) violations.push(path);
+      // Playwright cache paths are read-allowed: QA agents run `playwright
+      // install`, `dir <cache>`, or pass the browser executable path to the
+      // launcher — none of these require the write boundary to move.
+      if (path && !isAllowedReadPath(path)) violations.push(path);
     }
   }
 

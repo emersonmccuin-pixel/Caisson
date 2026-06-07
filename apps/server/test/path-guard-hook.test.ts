@@ -180,3 +180,84 @@ test('non-git bash outside paths: fence does not fire (only full confinement doe
   );
   assert.equal(r.denied, false, r.reason);
 });
+
+// ── 4. Playwright browser cache exemption (fleet-wide QA unblock) ─────────────
+
+/** The Playwright cache root the hook resolves on Windows (driven by
+ *  PLAYWRIGHT_BROWSERS_PATH env when set, else %LOCALAPPDATA%\ms-playwright). */
+const PW_CACHE = 'C:/Users/testuser/AppData/Local/ms-playwright';
+/** A path inside the cache — chromium binary. */
+const PW_CHROME = `${PW_CACHE}/chromium-1223/chrome-win64/chrome.exe`;
+
+function workflowEnvWithCache(): Record<string, string> {
+  return {
+    ...WORKFLOW_ENV,
+    // Override PLAYWRIGHT_BROWSERS_PATH so the hook uses our test path
+    // rather than the real machine's %LOCALAPPDATA%.
+    PLAYWRIGHT_BROWSERS_PATH: PW_CACHE,
+  };
+}
+
+test('playwright: Bash with playwright cache path in command passes (read-allowed)', () => {
+  // QA agent runs: dir "C:/Users/.../ms-playwright/chromium-1223"
+  const r = runEnforce(
+    bash(`dir "${PW_CACHE}"`, WT),
+    workflowEnvWithCache(),
+  );
+  assert.equal(r.denied, false, `playwright cache dir should be allowed but denied: ${r.reason}`);
+});
+
+test('playwright: Bash with chromium binary path in command passes', () => {
+  // QA agent passes the chromium executable directly to a launcher:
+  // playwright launch --executable-path "C:/.../chrome.exe"
+  const r = runEnforce(
+    bash(`playwright launch --executable-path "${PW_CHROME}"`, WT),
+    workflowEnvWithCache(),
+  );
+  assert.equal(r.denied, false, `chromium binary path should be allowed: ${r.reason}`);
+});
+
+test('playwright: Read inside playwright cache passes', () => {
+  const r = runEnforce(
+    { tool_name: 'Read', tool_input: { file_path: PW_CHROME }, cwd: WT, agent_type: 'code-writer' },
+    workflowEnvWithCache(),
+  );
+  assert.equal(r.denied, false, `Read from playwright cache should be allowed: ${r.reason}`);
+});
+
+test('security: Write to playwright cache still denied (write boundary unchanged)', () => {
+  const r = runEnforce(
+    { tool_name: 'Write', tool_input: { file_path: `${PW_CACHE}/injected.dll` }, cwd: WT, agent_type: 'code-writer' },
+    workflowEnvWithCache(),
+  );
+  assert.equal(r.denied, true, 'Write to playwright cache must still be denied');
+  assert.match(r.reason, /Out-of-worktree/);
+});
+
+test('security: Edit to playwright cache still denied (write boundary unchanged)', () => {
+  const r = runEnforce(
+    { tool_name: 'Edit', tool_input: { file_path: PW_CHROME }, cwd: WT, agent_type: 'code-writer' },
+    workflowEnvWithCache(),
+  );
+  assert.equal(r.denied, true, 'Edit inside playwright cache must still be denied');
+  assert.match(r.reason, /Out-of-worktree/);
+});
+
+test('security: arbitrary out-of-worktree Bash path still denied (git write fence unaffected)', () => {
+  // A path that is NOT inside the playwright cache should still be denied.
+  const r = runEnforce(
+    bash(`cat "C:/Users/testuser/secret.txt"`, WT),
+    workflowEnvWithCache(),
+  );
+  assert.equal(r.denied, true, 'non-playwright out-of-worktree path must still be denied');
+  assert.match(r.reason, /Out-of-worktree/);
+});
+
+test('security: git write fence is not widened by playwright exemption', () => {
+  // Writing git outside the fence is still denied even with playwright env set.
+  const r = runEnforce(
+    bash(`cd "${REPO}" && git reset HEAD~1`),
+    workflowEnvWithCache(),
+  );
+  assert.equal(r.denied, true, 'git write fence must still fire regardless of playwright exemption');
+});
