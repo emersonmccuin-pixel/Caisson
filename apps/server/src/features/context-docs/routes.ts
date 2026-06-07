@@ -83,6 +83,33 @@ export function registerContextDocRoutes(app: Hono, deps: ContextDocRoutesDeps):
     }
   });
 
+  // ── GET /api/projects/:projectId/context-docs/search?q=<query>&areaId=&scope=
+  // FTS5 search across the project's context docs.
+  // MUST be registered before the /:docId param route — Hono matches in
+  // registration order and the literal segment "search" would otherwise bind
+  // to :docId, returning "unknown context doc: search".
+  app.get('/api/projects/:projectId/context-docs/search', (c) => {
+    const projectId = c.req.param('projectId');
+    const runtime = deps.resolveProject(projectId);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+
+    const query = c.req.query('q') ?? '';
+    const areaId = c.req.query('areaId') as ULID | undefined;
+    const scopeKind = c.req.query('scope') as 'project' | 'area' | 'work-item' | undefined;
+
+    try {
+      const results = searchContextDocs({
+        projectId: runtime.project.id,
+        query,
+        ...(areaId ? { areaId } : {}),
+        ...(scopeKind ? { scopeKind } : {}),
+      });
+      return c.json({ ok: true, results });
+    } catch (err) {
+      return c.json({ ok: false, error: (err as Error).message }, 500);
+    }
+  });
+
   // ── GET /api/projects/:projectId/context-docs/:docId
   // Returns the full body of a single doc.
   app.get('/api/projects/:projectId/context-docs/:docId', (c) => {
@@ -166,27 +193,4 @@ export function registerContextDocRoutes(app: Hono, deps: ContextDocRoutesDeps):
     return c.json({ ok: true, doc });
   });
 
-  // ── GET /api/projects/:projectId/context-docs/search?q=<query>&areaId=&scope=
-  // FTS5 search across the project's context docs.
-  app.get('/api/projects/:projectId/context-docs/search', (c) => {
-    const projectId = c.req.param('projectId');
-    const runtime = deps.resolveProject(projectId);
-    if (!runtime) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
-
-    const query = c.req.query('q') ?? '';
-    const areaId = c.req.query('areaId') as ULID | undefined;
-    const scopeKind = c.req.query('scope') as 'project' | 'area' | 'work-item' | undefined;
-
-    try {
-      const results = searchContextDocs({
-        projectId: runtime.project.id,
-        query,
-        ...(areaId ? { areaId } : {}),
-        ...(scopeKind ? { scopeKind } : {}),
-      });
-      return c.json({ ok: true, results });
-    } catch (err) {
-      return c.json({ ok: false, error: (err as Error).message }, 500);
-    }
-  });
 }
