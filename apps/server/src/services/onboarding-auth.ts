@@ -6,20 +6,32 @@
 // stores a token — this is byte-for-byte the same sign-in a user does from a
 // terminal, just spawned by the wizard instead of typed. No API, no `-p`.
 //
-// The login command is long-running (it waits for the browser OAuth callback),
-// so we spawn it detached from the HTTP request and let the wizard poll
-// `claude auth status` (via probeAuth) for success. We also scrape the printed
-// "visit: <url>" line as a fallback button if the browser doesn't auto-open.
+// Primary path: browser-callback OAuth (CC opens the browser; wizard polls
+// `claude auth status` until success). No code paste needed.
+//
+// Fallback path: when CC prints an OAuth URL but the browser callback doesn't
+// complete (code-paste mode), the wizard surfaces the URL as a button AND
+// accepts the authorization code in the UI, which is piped to the login child's
+// stdin via submitCode(). The manual path must never be a dead end.
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 
 import { requireClaudeBinary } from '@pc/runtime';
 
-interface LoginState {
+export type LoginMode = 'callback' | 'code-paste' | 'unknown';
+
+export interface LoginState {
   /** A login process is currently running. */
   running: boolean;
   /** The OAuth URL CC printed (fallback if the browser didn't auto-open). */
   url: string | null;
+  /** Detected interaction mode. */
+  mode: LoginMode;
+  /** True when CC output indicates the account lacks a Pro/Max/Team plan. */
+  planFailure: boolean;
+  /** Short plain-English explanation when planFailure is true. */
+  planFailureNote: string | null;
   /** The login process exited. */
   exited: boolean;
   /** Exit code (0 = "Login successful"). */
@@ -28,9 +40,12 @@ interface LoginState {
   tail: string;
 }
 
-let proc: ChildProcessWithoutNullStreams | null = null;
+let proc: ChildProcess | null = null;
 let captured = '';
 let url: string | null = null;
+let mode: LoginMode = 'unknown';
+let planFailure = false;
+let planFailureNote: string | null = null;
 let exitCode: number | null = null;
 
 // CC prints "If the browser didn't open, visit: <url>"; also catch a bare
@@ -38,12 +53,42 @@ let exitCode: number | null = null;
 const VISIT_RE = /visit:\s*(https?:\/\/\S+)/i;
 const OAUTH_RE = /(https?:\/\/\S*(?:oauth|authorize)\S*)/i;
 
+// Code-paste mode: CC asks the user to paste an authorization code to stdin.
+const CODE_PASTE_RE =
+  /(?:paste|enter|type|provide)\s+(?:your\s+)?(?:authorization\s+)?code|authorization\s+code\s*:/i;
+
+// Plan-failure patterns: subscription required.
+const PLAN_FAILURE_RE =
+  /(?:not\s+subscribed|no\s+active\s+subscription|does\s+not\s+have\s+access|requires?\s+(?:a\s+)?(?:paid|pro|max|team)|Claude\s+(?:Pro|Max|Team)\s+(?:plan|subscription)|subscription\s+required)/i;
+
 function ingest(chunk: string): void {
   captured += chunk;
   if (captured.length > 16_000) captured = captured.slice(-16_000);
+
   if (!url) {
     const m = VISIT_RE.exec(captured) ?? OAUTH_RE.exec(captured);
-    if (m) url = m[1]!.trim();
+    if (m) {
+      url = m[1]!.trim();
+      // A localhost-callback URL means CC is handling the OAuth locally;
+      // the user just finishes in the browser. Any other URL = code-paste.
+      const isLocalCallback = /localhost|127\.0\.0\.1/.test(url);
+      if (mode === 'unknown') {
+        mode = isLocalCallback ? 'callback' : 'code-paste';
+      }
+    }
+  }
+
+  // If CC explicitly prompts for a code, override mode regardless.
+  if (mode !== 'code-paste' && CODE_PASTE_RE.test(chunk)) {
+    mode = 'code-paste';
+  }
+
+  // Detect plan-level auth failure.
+  if (!planFailure && PLAN_FAILURE_RE.test(captured)) {
+    planFailure = true;
+    planFailureNote =
+      'Caisson needs a Claude Pro, Max, or Team plan (or API access). ' +
+      'Set one up at claude.ai, then try signing in again.';
   }
 }
 
@@ -52,15 +97,21 @@ export function startLogin(): LoginState {
   if (proc) return getLoginState();
   captured = '';
   url = null;
+  mode = 'unknown';
+  planFailure = false;
+  planFailureNote = null;
   exitCode = null;
   const bin = requireClaudeBinary();
   // `--claudeai` = Claude subscription (the default; explicit for clarity).
+  // stdio: pipe keeps stdin writable so submitCode() can deliver the
+  // authorization code if CC enters code-paste mode.
   const child = spawn(bin, ['auth', 'login', '--claudeai'], {
     windowsHide: true,
-  }) as ChildProcessWithoutNullStreams;
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
   proc = child;
-  child.stdout.on('data', (b: Buffer) => ingest(b.toString()));
-  child.stderr.on('data', (b: Buffer) => ingest(b.toString()));
+  child.stdout?.on('data', (b: Buffer) => ingest(b.toString()));
+  child.stderr?.on('data', (b: Buffer) => ingest(b.toString()));
   child.on('exit', (code) => {
     exitCode = code;
     proc = null;
@@ -76,10 +127,23 @@ export function getLoginState(): LoginState {
   return {
     running: proc !== null,
     url,
+    mode,
+    planFailure,
+    planFailureNote,
     exited: proc === null && exitCode !== null,
     exitCode,
     tail: captured.slice(-500),
   };
+}
+
+/**
+ * Write the authorization code to the login child's stdin.
+ * Used when CC enters code-paste mode: the user pastes the code from claude.ai
+ * into the onboarding UI, which sends it here, which forwards it to the child.
+ */
+export function submitCode(code: string): void {
+  if (!proc?.stdin?.writable) return;
+  proc.stdin.write(`${code.trim()}\n`);
 }
 
 /** Kill an in-flight login (e.g. the user closed the wizard / cancelled). */

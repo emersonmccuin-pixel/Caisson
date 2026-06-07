@@ -29,6 +29,7 @@ import {
   cancelLogin as defaultCancelLogin,
   getLoginState as defaultGetLoginState,
   startLogin as defaultStartLogin,
+  submitCode as defaultSubmitCode,
 } from '../../services/onboarding-auth.ts';
 
 export const SHELL_CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR;
@@ -41,6 +42,7 @@ export interface SettingsOnboardingRouteDeps {
   startLogin?: typeof defaultStartLogin;
   getLoginState?: typeof defaultGetLoginState;
   cancelLogin?: typeof defaultCancelLogin;
+  submitCode?: typeof defaultSubmitCode;
   /** FD-15 — called after a PATCH persists, with the merged settings. The
    *  server uses this to push live config (e.g. agent concurrency cap) to the
    *  agent host. Fire-and-forget; must not block the response. */
@@ -152,6 +154,7 @@ export function registerSettingsOnboardingRoutes(
     startLogin: deps.startLogin ?? defaultStartLogin,
     getLoginState: deps.getLoginState ?? defaultGetLoginState,
     cancelLogin: deps.cancelLogin ?? defaultCancelLogin,
+    submitCode: deps.submitCode ?? defaultSubmitCode,
   };
 
   app.get('/api/settings', (c) => {
@@ -225,5 +228,19 @@ export function registerSettingsOnboardingRoutes(
   app.post('/api/onboarding/auth/cancel', (c) => {
     services.cancelLogin();
     return c.json({ ok: true });
+  });
+
+  // Submit the authorization code from the UI to the login child's stdin.
+  // Used when `claude auth login` enters code-paste mode (browser callback not
+  // available): the user copies the code from claude.ai, types it here, and we
+  // pipe it to the login process so it can complete.
+  app.post('/api/onboarding/auth/code', async (c) => {
+    const raw = await c.req.json().catch(() => ({})) as Record<string, unknown>;
+    const code = typeof raw['code'] === 'string' ? raw['code'].trim() : '';
+    if (!code) {
+      return c.json({ ok: false, error: 'code is required' }, 400);
+    }
+    services.submitCode(code);
+    return c.json({ ok: true, login: services.getLoginState() });
   });
 }

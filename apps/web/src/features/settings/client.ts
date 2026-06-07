@@ -38,6 +38,9 @@ export const settingsApi = {
   cancelOnboardingLogin: () =>
     postJson<{ ok: true }>('/api/onboarding/auth/cancel', {}),
 
+  submitOnboardingCode: (code: string) =>
+    postJson<{ ok: true; login: OnboardingLoginState }>('/api/onboarding/auth/code', { code }),
+
   getMcpStatus: (projectId?: string) =>
     getJson<{ alive: boolean; toolCount: number; tools: string[] }>(
       projectId
