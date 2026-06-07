@@ -23,6 +23,7 @@ import { projectChangedLiveEventFromUnknown } from '@/features/projects/live-eve
 import { useAllProjectsWs } from '@/hooks/use-all-projects-ws';
 import { useProjectUnread } from '@/hooks/use-project-unread';
 import { useProjectWs } from '@/hooks/use-project-ws';
+import { useDing } from '@/hooks/use-ding';
 import { useRichLinkInvalidator } from '@/hooks/use-rich-link-invalidator';
 import { useStatuslineSync } from '@/hooks/use-statusline-sync';
 import { useLiveGlobalSignature, useLiveStore } from '@/store/live-store';
@@ -125,6 +126,11 @@ export default function App() {
     activeProjectId: activeProject?.id ?? null,
     activeEvents: ws.events,
     backgroundEvents: backgroundWs.events,
+  });
+  useDing({
+    unreadProjectIds,
+    activeProjectId: activeProject?.id ?? null,
+    activeEvents: ws.events,
   });
   useRichLinkInvalidator(activeProject?.id ?? null);
   useStatuslineSync(activeProject?.id ?? null, ws.events);

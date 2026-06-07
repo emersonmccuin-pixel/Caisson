@@ -282,7 +282,7 @@ function observationsFromEnvelope(env: WsEnvelope): ObservationBatch {
   };
 }
 
-function isUnreadChatEvent(type: unknown, event: unknown): boolean {
+export function isUnreadChatEvent(type: unknown, event: unknown): boolean {
   if (!event || typeof event !== 'object') return false;
   const kind = eventKind(event);
   if (type === 'jsonl') {
