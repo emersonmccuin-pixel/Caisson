@@ -1,17 +1,17 @@
 // Section 19.8 — pure layout function for the v2 workflow visualizer.
 //
 // Takes a WorkflowV2.Workflow and returns positioned nodes + edges using
-// elkjs's `layered` algorithm with orthogonal routing. Top-to-bottom direction
-// matches the one-socket-per-side model (lock 6): top = in, bottom = out,
+// elkjs's `layered` algorithm. Top-to-bottom direction matches the
+// one-socket-per-side model (lock 6): top = in, bottom = out,
 // side (EAST) = reject back-edge socket on review nodes.
 //
 // Async because elkjs's layout is Promise-returning. Pure: no DOM access, no
 // React, no side effects. Safe to call from a useEffect.
 //
-// Authoring overlays (drag-to-move, manual positions) layer on top of the
-// elkjs result in the React component — the layout here is the auto baseline.
+// React Flow owns edge routing — only node x/y from elkjs is used. The
+// allManual path skips elkjs entirely and uses saved per-node positions.
 
-import ELK, { type ElkNode, type ElkExtendedEdge, type ElkExtendedEdge as ElkEdge } from 'elkjs/lib/elk.bundled.js';
+import ELK, { type ElkNode, type ElkExtendedEdge } from 'elkjs/lib/elk.bundled.js';
 import { WorkflowV2 } from '@pc/domain';
 
 const elk = new ELK();
@@ -29,11 +29,6 @@ export interface LayoutNode {
   height: number;
 }
 
-export interface LayoutEdgePoint {
-  x: number;
-  y: number;
-}
-
 export type EdgeKind = 'forward' | 'reject';
 
 export interface LayoutEdge {
@@ -41,9 +36,6 @@ export interface LayoutEdge {
   source: string;
   target: string;
   kind: EdgeKind;
-  /** Polyline bend points from elkjs (orthogonal routing). The first/last
-   *  points are anchored at the source/target ports. */
-  points: LayoutEdgePoint[];
 }
 
 export interface LayoutResult {
@@ -73,6 +65,12 @@ export async function layoutWorkflow(wf: WorkflowV2.Workflow): Promise<LayoutRes
     layoutOptions: { 'portConstraints': 'FIXED_SIDE' },
   }));
 
+  // Layering edges fed to elk: forward `next` edges + review→loop reject edges.
+  // We deliberately EXCLUDE the loop→back_to edges here — those are true
+  // backward edges and, if given to elk, its cycle-breaker scrambles the
+  // column order (loop/gate nodes get dragged to the front). elk only needs
+  // the forward DAG to position nodes start→end; the back-edges are still
+  // DRAWN by React Flow (see edgesFromWorkflow) so the loop stays visible.
   const elkEdges: ElkExtendedEdge[] = [];
   for (const n of wf.nodes) {
     for (const next of n.next ?? []) {
@@ -80,36 +78,25 @@ export async function layoutWorkflow(wf: WorkflowV2.Workflow): Promise<LayoutRes
         id: `e:${n.id}->${next}`,
         sources: [`${n.id}__out`],
         targets: [`${next}__in`],
-        labels: [{ id: `${n.id}-${next}-kind`, text: 'forward' }],
       });
     }
-    // FD-9: review reject → loop step, then loop → back_to. Both render as
-    // back-edge ('reject') styling.
     if (WorkflowV2.isReviewNode(n) && n.reject) {
       elkEdges.push({
         id: `r:${n.id}->${n.reject}`,
         sources: [`${n.id}__reject`],
         targets: [`${n.reject}__in`],
-        labels: [{ id: `${n.id}-reject-${n.reject}-kind`, text: 'reject' }],
-      });
-    }
-    if (WorkflowV2.isLoopNode(n)) {
-      elkEdges.push({
-        id: `r:${n.id}->${n.back_to}`,
-        sources: [`${n.id}__out`],
-        targets: [`${n.back_to}__in`],
-        labels: [{ id: `${n.id}-loopback-${n.back_to}-kind`, text: 'reject' }],
       });
     }
   }
 
+  // n8n-style left-to-right layered layout.
   const graph: ElkNode = {
     id: 'root',
     layoutOptions: {
       'elk.algorithm': 'layered',
-      'elk.direction': 'DOWN',
-      'elk.spacing.nodeNode': '60',
-      'elk.layered.spacing.nodeNodeBetweenLayers': '90',
+      'elk.direction': 'RIGHT',
+      'elk.spacing.nodeNode': '50',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '110',
       'elk.edgeRouting': 'ORTHOGONAL',
       'elk.portConstraints': 'FIXED_SIDE',
       // Keep reject back-edges visually distinct by letting elkjs route them
@@ -130,37 +117,37 @@ export async function layoutWorkflow(wf: WorkflowV2.Workflow): Promise<LayoutRes
     height: c.height ?? NODE_HEIGHT,
   }));
 
-  const edges: LayoutEdge[] = (result.edges ?? []).map((e: ElkEdge) => {
-    const kind: EdgeKind = e.labels?.[0]?.text === 'reject' ? 'reject' : 'forward';
-    const section = e.sections?.[0];
-    const points: LayoutEdgePoint[] = section
-      ? [
-          { x: section.startPoint.x, y: section.startPoint.y },
-          ...(section.bendPoints ?? []).map((p) => ({ x: p.x, y: p.y })),
-          { x: section.endPoint.x, y: section.endPoint.y },
-        ]
-      : [];
-    return {
-      id: e.id,
-      source: (e.sources?.[0] ?? '').split('__')[0]!,
-      target: (e.targets?.[0] ?? '').split('__')[0]!,
-      kind,
-      points,
-    };
-  });
-
+  // React Flow draws ALL edges (forward + reject + loop back-edges) from the
+  // workflow itself — independent of which subset elk used for layering.
   return {
     nodes,
-    edges,
+    edges: edgesFromWorkflow(wf),
     width: result.width ?? 0,
     height: result.height ?? 0,
   };
 }
 
-/** When every node carries `position`, skip elkjs and route edges as simple
- *  straight lines bottom-of-source → top-of-target. The user has taken over;
- *  the visualizer's job is to render their positions faithfully, not relayout
- *  on every drag. Reject back-edges route from EAST side → target NORTH. */
+/** Derive every render edge (forward / reject / loop back-edge) straight from
+ *  the workflow definition. Shared by the auto-layout and manual paths so both
+ *  draw the same edge set regardless of how node positions were produced. */
+function edgesFromWorkflow(wf: WorkflowV2.Workflow): LayoutEdge[] {
+  const edges: LayoutEdge[] = [];
+  for (const n of wf.nodes) {
+    for (const next of n.next ?? []) {
+      edges.push({ id: `e:${n.id}->${next}`, source: n.id, target: next, kind: 'forward' });
+    }
+    if (WorkflowV2.isReviewNode(n) && n.reject) {
+      edges.push({ id: `r:${n.id}->${n.reject}`, source: n.id, target: n.reject, kind: 'reject' });
+    }
+    if (WorkflowV2.isLoopNode(n)) {
+      edges.push({ id: `r:${n.id}->${n.back_to}`, source: n.id, target: n.back_to, kind: 'reject' });
+    }
+  }
+  return edges;
+}
+
+/** When every node carries `position`, skip elkjs and use the saved positions.
+ *  React Flow handles edge routing — we only produce source/target/kind info. */
 function layoutFromManualPositions(wf: WorkflowV2.Workflow): LayoutResult {
   const nodes: LayoutNode[] = wf.nodes.map((n) => ({
     id: n.id,
@@ -169,97 +156,31 @@ function layoutFromManualPositions(wf: WorkflowV2.Workflow): LayoutResult {
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
   }));
-  const byId = new Map(nodes.map((n) => [n.id, n]));
 
-  const edges: LayoutEdge[] = [];
-  for (const n of wf.nodes) {
-    const src = byId.get(n.id)!;
-    for (const next of n.next ?? []) {
-      const tgt = byId.get(next);
-      if (!tgt) continue;
-      edges.push({
-        id: `e:${n.id}->${next}`,
-        source: n.id,
-        target: next,
-        kind: 'forward',
-        points: straightVerticalEdge(src, tgt),
-      });
-    }
-    if (WorkflowV2.isReviewNode(n) && n.reject) {
-      const tgt = byId.get(n.reject);
-      if (!tgt) continue;
-      edges.push({
-        id: `r:${n.id}->${n.reject}`,
-        source: n.id,
-        target: n.reject,
-        kind: 'reject',
-        points: rejectSideEdge(src, tgt),
-      });
-    }
-    if (WorkflowV2.isLoopNode(n)) {
-      const tgt = byId.get(n.back_to);
-      if (!tgt) continue;
-      edges.push({
-        id: `r:${n.id}->${n.back_to}`,
-        source: n.id,
-        target: n.back_to,
-        kind: 'reject',
-        points: rejectSideEdge(src, tgt),
-      });
-    }
-  }
+  const edges: LayoutEdge[] = edgesFromWorkflow(wf);
 
   const width = Math.max(0, ...nodes.map((n) => n.x + n.width));
   const height = Math.max(0, ...nodes.map((n) => n.y + n.height));
   return { nodes, edges, width, height };
 }
 
-function straightVerticalEdge(src: LayoutNode, tgt: LayoutNode): LayoutEdgePoint[] {
-  const sx = src.x + src.width / 2;
-  const sy = src.y + src.height;
-  const tx = tgt.x + tgt.width / 2;
-  const ty = tgt.y;
-  // Orthogonal: vertical, horizontal at mid, vertical.
-  const midY = sy + Math.max(20, (ty - sy) / 2);
-  return [
-    { x: sx, y: sy },
-    { x: sx, y: midY },
-    { x: tx, y: midY },
-    { x: tx, y: ty },
-  ];
-}
-
-function rejectSideEdge(src: LayoutNode, tgt: LayoutNode): LayoutEdgePoint[] {
-  const sx = src.x + src.width;
-  const sy = src.y + src.height / 2;
-  const tx = tgt.x + tgt.width / 2;
-  const ty = tgt.y;
-  // Loop out to the right, up, then in to the top of target.
-  const outX = sx + 40;
-  return [
-    { x: sx, y: sy },
-    { x: outX, y: sy },
-    { x: outX, y: ty - 30 },
-    { x: tx, y: ty - 30 },
-    { x: tx, y: ty },
-  ];
-}
-
 function portsForNode(n: WorkflowV2.WorkflowNode): NonNullable<ElkNode['ports']> {
+  // Left-to-right flow (n8n style): input on the WEST edge, output on the
+  // EAST edge; review reject back-edge drops off the SOUTH edge.
   const base: NonNullable<ElkNode['ports']> = [
-    { id: `${n.id}__in`, layoutOptions: { 'port.side': 'NORTH' } },
-    { id: `${n.id}__out`, layoutOptions: { 'port.side': 'SOUTH' } },
+    { id: `${n.id}__in`, layoutOptions: { 'port.side': 'WEST' } },
+    { id: `${n.id}__out`, layoutOptions: { 'port.side': 'EAST' } },
   ];
   if (WorkflowV2.isReviewNode(n)) {
-    base.push({ id: `${n.id}__reject`, layoutOptions: { 'port.side': 'EAST' } });
+    base.push({ id: `${n.id}__reject`, layoutOptions: { 'port.side': 'SOUTH' } });
   }
   return base;
 }
 
 /** Port-anchor helper for the React renderer. Maps a port id back to a side. */
 export function portSideOf(portId: string): PortSide {
-  if (portId.endsWith('__in')) return 'NORTH';
-  if (portId.endsWith('__out')) return 'SOUTH';
-  if (portId.endsWith('__reject')) return 'EAST';
-  return 'NORTH';
+  if (portId.endsWith('__in')) return 'WEST';
+  if (portId.endsWith('__out')) return 'EAST';
+  if (portId.endsWith('__reject')) return 'SOUTH';
+  return 'WEST';
 }
