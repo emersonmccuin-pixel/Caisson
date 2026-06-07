@@ -2,6 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildDecisionContract,
+  decisionContractHeaderText,
+  isDecisionContract,
   isReviewPackage,
   isReviewWork,
   isReviewProvenance,
@@ -189,3 +192,137 @@ test('parseReviewPackage rejects invalid input', () => {
     false,
   );
 })
+
+// ---- Decision-contract (pc-pty-chat-221) ------------------------------------
+
+test('buildDecisionContract returns completed-work variant by default', () => {
+  const dc = buildDecisionContract({ lifecyclePosition: 'completed-work' });
+  assert.equal(dc.lifecyclePosition, 'completed-work');
+  assert.ok(dc.approveEffect.length > 0, 'approveEffect must be non-empty');
+  assert.ok(dc.rejectEffect.length > 0, 'rejectEffect must be non-empty');
+  assert.ok(dc.verificationGuidance.length > 0, 'verificationGuidance must be non-empty');
+});
+
+test('buildDecisionContract completed-work with maxRounds embeds count', () => {
+  const dc = buildDecisionContract({ lifecyclePosition: 'completed-work', maxRounds: 3 });
+  assert.ok(dc.rejectEffect.includes('3'), 'rejectEffect must mention max rounds when specified');
+});
+
+test('buildDecisionContract completed-work with null maxRounds omits count', () => {
+  const dc = buildDecisionContract({ lifecyclePosition: 'completed-work', maxRounds: null });
+  assert.ok(!dc.rejectEffect.includes('max'), 'rejectEffect must not mention max when null');
+});
+
+test('buildDecisionContract plan-awaiting variant', () => {
+  const dc = buildDecisionContract({ lifecyclePosition: 'plan-awaiting' });
+  assert.equal(dc.lifecyclePosition, 'plan-awaiting');
+  assert.ok(dc.approveEffect.length > 0);
+  assert.ok(dc.rejectEffect.length > 0);
+});
+
+test('buildDecisionContract respects verificationGuidance override', () => {
+  const dc = buildDecisionContract({
+    lifecyclePosition: 'completed-work',
+    verificationGuidance: 'Test it in your browser.',
+  });
+  assert.equal(dc.verificationGuidance, 'Test it in your browser.');
+});
+
+test('decisionContractHeaderText completed-work contains all four sections', () => {
+  const dc = buildDecisionContract({ lifecyclePosition: 'completed-work' });
+  const text = decisionContractHeaderText(dc);
+  assert.ok(text.includes('✅'), 'header must start with completed-work emoji');
+  assert.ok(text.includes('Work COMPLETE'), 'header must state lifecycle position');
+  assert.ok(text.includes('Approve:'), 'header must include Approve effect');
+  assert.ok(text.includes('Reject:'), 'header must include Reject effect');
+  assert.ok(text.includes('Verification:'), 'header must include verification guidance');
+});
+
+test('decisionContractHeaderText plan-awaiting uses plan emoji', () => {
+  const dc = buildDecisionContract({ lifecyclePosition: 'plan-awaiting' });
+  const text = decisionContractHeaderText(dc);
+  assert.ok(text.includes('📋'), 'plan-awaiting must use 📋 emoji');
+  assert.ok(text.includes('Plan awaiting'), 'plan-awaiting must state lifecycle position');
+});
+
+test('isDecisionContract accepts valid decision contract', () => {
+  const dc = buildDecisionContract({ lifecyclePosition: 'completed-work' });
+  assert.equal(isDecisionContract(dc), true);
+});
+
+test('isDecisionContract rejects malformed objects', () => {
+  assert.equal(isDecisionContract(null), false);
+  assert.equal(isDecisionContract({}), false);
+  assert.equal(isDecisionContract({ lifecyclePosition: 'unknown' }), false);
+  assert.equal(
+    isDecisionContract({
+      lifecyclePosition: 'completed-work',
+      approveEffect: 'ok',
+      // missing rejectEffect and verificationGuidance
+    }),
+    false,
+  );
+});
+
+test('makeReviewPackage with decisionContract round-trips through parseReviewPackage', () => {
+  const dc = buildDecisionContract({ lifecyclePosition: 'completed-work', maxRounds: 3 });
+  const pkg = makeReviewPackage({
+    id: 'rp-dc-1',
+    producer: 'agent-verification',
+    owner: 'human',
+    title: 'Review my work',
+    whatWasAsked: 'Write a plan',
+    acceptanceCriteria: '',
+    work: { kind: 'prose', text: 'Done.' },
+    provenance: {
+      agentRunId: 'run-1',
+      workItemId: 'wi-1',
+      workflowNodeId: null,
+      dispatchedAt: 1000,
+    },
+    decisionContract: dc,
+  });
+  // isReviewPackage must accept the new field
+  assert.equal(isReviewPackage(pkg), true, 'isReviewPackage must accept decisionContract');
+  // parseReviewPackage round-trips correctly
+  const result = parseReviewPackage(pkg);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.value.decisionContract?.lifecyclePosition, 'completed-work');
+    assert.ok(result.value.decisionContract?.rejectEffect.includes('3'), 'maxRounds preserved');
+  }
+});
+
+test('makeReviewPackage without decisionContract still passes isReviewPackage (backward compat)', () => {
+  const pkg = makeReviewPackage({
+    id: 'rp-nodc',
+    producer: 'workflow-gate',
+    owner: 'orchestrator',
+    title: 'Old envelope',
+    whatWasAsked: 'Review this',
+    acceptanceCriteria: '',
+    work: { kind: 'prose', text: 'Summary.' },
+    provenance: { agentRunId: null, workItemId: null, workflowNodeId: 'n1', dispatchedAt: 1 },
+  });
+  assert.equal(isReviewPackage(pkg), true);
+  const result = parseReviewPackage(pkg);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.value.decisionContract, undefined);
+  }
+});
+
+test('parseReviewPackage rejects invalid decisionContract field', () => {
+  const pkg = makeReviewPackage({
+    id: 'rp-bad-dc',
+    producer: 'agent-verification',
+    owner: 'human',
+    title: 'T',
+    whatWasAsked: 'Q',
+    acceptanceCriteria: '',
+    work: { kind: 'prose', text: 'x' },
+    provenance: { agentRunId: null, workItemId: null, workflowNodeId: null, dispatchedAt: 1 },
+  });
+  const result = parseReviewPackage({ ...pkg, decisionContract: { lifecyclePosition: 'bad' } });
+  assert.equal(result.ok, false, 'parseReviewPackage must reject invalid decisionContract');
+});

@@ -19,7 +19,14 @@ import {
 } from '@pc/db';
 import { AgentRunJsonlTailer, jsonlPathFor, type AgentRunJsonlEvent } from '@pc/runtime';
 import { ContractService } from '@pc/app-services';
-import { contractDeliverableText, makeReviewPackage, type Contract, type Deliverable } from '@pc/contracts';
+import {
+  buildDecisionContract,
+  contractDeliverableText,
+  decisionContractHeaderText,
+  makeReviewPackage,
+  type Contract,
+  type Deliverable,
+} from '@pc/contracts';
 
 import {
   buildAgentCompletedBody,
@@ -414,10 +421,15 @@ async function finishTerminalEffects(args: {
       : null;
     // Phase 1.1 — build the unified ReviewPackage envelope (additive: carried
     // alongside the existing payload fields, existing consumers unchanged).
+    // pc-pty-chat-221 — attach the decision-contract header so every review
+    // surface knows what it is deciding without relying on author prompt discipline.
     const verificationTitle = workItemTitle
       ? `Review needed: ${agentName} — ${workItemTitle}`
       : `Review needed: ${agentName} finished its work`;
+    const decisionContract = buildDecisionContract({ lifecyclePosition: 'completed-work' });
+    const headerText = decisionContractHeaderText(decisionContract);
     const verificationBody =
+      headerText + '\n\n' +
       `Agent ${agentName} handed in its work; the contract is waiting on YOUR review.\n` +
       (outcome.workItemId ? `Card: ${outcome.workItemId}\n` : '') +
       `Approve to accept the work (the card advances); reject with feedback to send it back.`;
@@ -435,6 +447,7 @@ async function finishTerminalEffects(args: {
         workflowNodeId: null,
         dispatchedAt: Date.now(),
       },
+      decisionContract,
     });
     deps.mailboxEnqueue({
       message: {
