@@ -11,7 +11,7 @@
 
 import '@xyflow/react/dist/style.css';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -42,6 +42,8 @@ import {
   Bot,
   Check,
   Eye,
+  Maximize2,
+  Minimize2,
   RotateCcw,
   ShieldCheck,
   X,
@@ -80,6 +82,76 @@ const STATE_BORDER: Record<WorkflowV2.NodeRunState, string> = {
   'awaiting-review': 'border-warning',
 };
 
+// --- Helpers -----------------------------------------------------------------
+
+/** Converts a hyphenated/underscored id to Title Case words. */
+function humanizeId(id: string): string {
+  return id.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Pure helper — friendly display label for any workflow node.
+ *  Exported so the logic is reused by the tile, the detail panel, and tests. */
+export function nodeLabel(node: WorkflowV2.WorkflowNode): {
+  title: string;
+  subtitle: string | null;
+} {
+  switch (node.kind) {
+    case 'agent':
+      return {
+        title: humanizeId(node.id),
+        subtitle: `Runs the ${node.agent} agent`,
+      };
+    case 'review':
+      return {
+        title: node.reviewer === 'human' ? 'You approve it' : 'Auto-review',
+        subtitle: humanizeId(node.id),
+      };
+    case 'move':
+      return { title: `Move card → ${humanizeId(node.stage)}`, subtitle: null };
+    case 'loop': {
+      const max =
+        node.max_iterations === null
+          ? 'unlimited retries'
+          : `up to ${String(node.max_iterations ?? 3)} times`;
+      return { title: 'If rejected, retry', subtitle: max };
+    }
+  }
+}
+
+/** Walk forward from loop.back_to until reaching the review that owns the loop.
+ *  Returns the set of node ids in the highlighted path. */
+function computeLoopHighlightIds(
+  loopId: string,
+  wf: WorkflowV2.Workflow,
+): Set<string> {
+  const loopNode = wf.nodes.find((n) => n.id === loopId);
+  if (!loopNode || !WorkflowV2.isLoopNode(loopNode)) return new Set();
+
+  const ownerReview = wf.nodes.find(
+    (n) => WorkflowV2.isReviewNode(n) && n.reject === loopId,
+  );
+  if (!ownerReview) return new Set();
+
+  const highlighted = new Set<string>([loopId]);
+  const visited = new Set<string>();
+  const queue: string[] = [loopNode.back_to];
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    if (visited.has(curr)) continue;
+    visited.add(curr);
+    highlighted.add(curr);
+    if (curr === ownerReview.id) break;
+    const node = wf.nodes.find((n) => n.id === curr);
+    if (!node) continue;
+    for (const next of node.next ?? []) {
+      if (!visited.has(next)) queue.push(next);
+    }
+  }
+
+  return highlighted;
+}
+
 // --- Internal React Flow data shapes ----------------------------------------
 
 interface WfNodeData extends Record<string, unknown> {
@@ -87,12 +159,17 @@ interface WfNodeData extends Record<string, unknown> {
   nodeState: WorkflowV2.NodeRunState | null;
   iteration: number | null;
   authoring: boolean;
-  onNodeClick?: ((node: WorkflowV2.WorkflowNode) => void) | undefined;
+  onLoopHover?: ((id: string | null) => void) | undefined;
+  dimmed?: boolean;
+  loopHighlighted?: boolean;
+  isStart?: boolean;
+  isEnd?: boolean;
 }
 
 interface WfEdgeData extends Record<string, unknown> {
   kind: EdgeKind;
   isActive: boolean;
+  dimmed?: boolean;
 }
 
 // --- Public contract (UNCHANGED) --------------------------------------------
@@ -106,8 +183,7 @@ export interface WorkflowGraphV2Props {
   authoring?: boolean;
   /** Required when `authoring` is true. Called with the next workflow value. */
   onChange?: (next: WorkflowV2.Workflow) => void;
-  /** Optional node-click callback (read-only mode only — authoring mouseup
-   *  on a node tile commits a drag, not a click). */
+  /** Optional node-click callback (read-only mode only). */
   onNodeClick?: (node: WorkflowV2.WorkflowNode) => void;
 }
 
@@ -122,8 +198,23 @@ export function WorkflowGraphV2({
   const rfInstanceRef = useRef<ReactFlowInstance<Node<WfNodeData>, Edge<WfEdgeData>> | null>(null);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node<WfNodeData>>([]);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState<Edge<WfEdgeData>>([]);
-  // Tracks the last structural key for which fitView was already scheduled.
   const prevStructureKeyRef = useRef<string | null>(null);
+
+  // Feature 1: selected node for detail panel
+  const [detailNode, setDetailNode] = useState<WorkflowV2.WorkflowNode | null>(null);
+  // Feature 2: loop hover highlight
+  const [hoveredLoopId, setHoveredLoopId] = useState<string | null>(null);
+  // Feature 4: fullscreen toggle
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Derived: active loop highlight (hover takes priority over panel selection).
+  const highlightedLoopId =
+    hoveredLoopId ?? (detailNode?.kind === 'loop' ? detailNode.id : null);
+
+  // Stable callback passed through node data for loop-node hover events.
+  const handleLoopHover = useCallback((id: string | null) => {
+    setHoveredLoopId(id);
+  }, []);
 
   // Structural key (excludes per-node positions) — triggers fitView on
   // connection/kind changes but not on position-only node drags.
@@ -181,17 +272,39 @@ export function WorkflowGraphV2({
   useEffect(() => {
     if (!layout || !workflow) return;
 
+    // Feature 3: nodes with no incoming forward edge = START candidates.
+    const incomingForwardTargets = new Set<string>();
+    for (const n of workflow.nodes) {
+      for (const next of n.next ?? []) {
+        incomingForwardTargets.add(next);
+      }
+    }
+
     setRfNodes(
       layout.nodes.flatMap((ln) => {
         const wfNode = workflow.nodes.find((n) => n.id === ln.id);
         if (!wfNode) return [];
         const nodeState = runState?.nodes[ln.id]?.state ?? null;
         const iteration = runState?.nodes[ln.id]?.iteration ?? null;
+        const isLoop = WorkflowV2.isLoopNode(wfNode);
+        // Exclude loop nodes from START/END — they are internal retry constructs.
+        const isStart = !isLoop && !incomingForwardTargets.has(ln.id);
+        const isEnd = !isLoop && (!wfNode.next || wfNode.next.length === 0);
         const rfNode: Node<WfNodeData> = {
           id: ln.id,
           type: 'workflow',
           position: { x: ln.x, y: ln.y },
-          data: { wfNode, nodeState, iteration, authoring, onNodeClick },
+          data: {
+            wfNode,
+            nodeState,
+            iteration,
+            authoring,
+            onLoopHover: handleLoopHover,
+            dimmed: false,
+            loopHighlighted: false,
+            isStart,
+            isEnd,
+          },
           draggable: authoring,
           connectable: authoring,
           selectable: authoring,
@@ -217,7 +330,7 @@ export function WorkflowGraphV2({
           sourceHandle: le.kind === 'reject' ? 'reject' : 'out',
           targetHandle: 'in',
           type: 'workflow',
-          data: { kind: le.kind, isActive },
+          data: { kind: le.kind, isActive, dimmed: false },
           selectable: authoring,
           deletable: authoring,
         };
@@ -236,7 +349,57 @@ export function WorkflowGraphV2({
       }, 50);
       return () => clearTimeout(timer);
     }
-  }, [layout, runState, authoring, onNodeClick, workflow, structureKey]);
+  }, [layout, runState, authoring, handleLoopHover, workflow, structureKey]);
+
+  // Feature 2: apply loop highlight / dim to nodes + edges.
+  useEffect(() => {
+    if (!workflow) return;
+    const highlightedIds = highlightedLoopId
+      ? computeLoopHighlightIds(highlightedLoopId, workflow)
+      : null;
+
+    setRfNodes((nodes) =>
+      nodes.map((n) => ({
+        ...n,
+        data: {
+          ...n.data,
+          dimmed: highlightedIds !== null && !highlightedIds.has(n.id),
+          loopHighlighted: highlightedIds !== null && highlightedIds.has(n.id),
+        },
+      })),
+    );
+
+    setRfEdges((edges) =>
+      edges.map((e) => ({
+        ...e,
+        data: {
+          ...(e.data as WfEdgeData),
+          dimmed:
+            highlightedIds !== null &&
+            (!highlightedIds.has(e.source) || !highlightedIds.has(e.target)),
+        },
+      })),
+    );
+  }, [highlightedLoopId, workflow]);
+
+  // Feature 4: fit view after entering fullscreen.
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const timer = setTimeout(() => {
+      rfInstanceRef.current?.fitView({ padding: 0.1 });
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [isFullscreen]);
+
+  // Feature 4: Escape exits fullscreen.
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsFullscreen(false);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isFullscreen]);
 
   // --- Event handlers -------------------------------------------------------
 
@@ -375,10 +538,12 @@ export function WorkflowGraphV2({
   );
 
   const handleNodeClick = useCallback(
-    (_evt: React.MouseEvent, rfNode: Node) => {
-      if (authoring || !onNodeClick || !workflow) return;
+    (_evt: unknown, rfNode: Node) => {
+      if (authoring || !workflow) return;
       const wfNode = workflow.nodes.find((n) => n.id === rfNode.id);
-      if (wfNode) onNodeClick(wfNode);
+      if (!wfNode) return;
+      onNodeClick?.(wfNode);
+      setDetailNode((prev) => (prev?.id === wfNode.id ? null : wfNode));
     },
     [authoring, onNodeClick, workflow],
   );
@@ -412,7 +577,13 @@ export function WorkflowGraphV2({
   // --- Canvas ---------------------------------------------------------------
 
   return (
-    <div className="h-full w-full bg-background">
+    <div
+      className={
+        isFullscreen
+          ? 'fixed inset-0 z-50 bg-background'
+          : 'relative h-full w-full bg-background'
+      }
+    >
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
@@ -442,16 +613,43 @@ export function WorkflowGraphV2({
           variant={BackgroundVariant.Dots}
           size={1}
           gap={20}
-          color="hsl(var(--muted-foreground))"
+          color="var(--muted-foreground)"
           style={{ opacity: 0.2 }}
         />
         <Controls showInteractive={false} />
         <MiniMap
-          nodeColor="hsl(var(--muted))"
-          bgColor="hsl(var(--background))"
+          nodeColor="var(--muted)"
+          bgColor="var(--background)"
           maskColor="rgba(0,0,0,0.35)"
         />
       </ReactFlow>
+
+      {/* Feature 4: fullscreen toggle */}
+      <button
+        type="button"
+        onClick={() => setIsFullscreen((f) => !f)}
+        className="absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center border border-border bg-background/80 text-muted-foreground hover:bg-muted hover:text-foreground"
+        title={isFullscreen ? 'Exit fullscreen (Esc)' : 'Expand to fullscreen'}
+        aria-label={isFullscreen ? 'Exit fullscreen' : 'Expand to fullscreen'}
+      >
+        {isFullscreen ? (
+          <Minimize2 className="h-3.5 w-3.5" />
+        ) : (
+          <Maximize2 className="h-3.5 w-3.5" />
+        )}
+      </button>
+
+      {/* Feature 3: kind legend */}
+      <KindLegend />
+
+      {/* Feature 1: node detail panel */}
+      {detailNode && !authoring && (
+        <NodeDetailPanel
+          node={detailNode}
+          workflow={workflow}
+          onClose={() => setDetailNode(null)}
+        />
+      )}
     </div>
   );
 }
@@ -470,35 +668,45 @@ const WORKFLOW_EDGE_TYPES: EdgeTypes = {
 // --- Custom node -------------------------------------------------------------
 
 function WfNodeTile({ data }: NodeProps) {
-  const { wfNode, nodeState, iteration, authoring, onNodeClick } =
-    data as unknown as WfNodeData;
+  const {
+    wfNode,
+    nodeState,
+    iteration,
+    authoring,
+    onLoopHover,
+    dimmed = false,
+    loopHighlighted = false,
+    isStart = false,
+    isEnd = false,
+  } = data as unknown as WfNodeData;
+
   const cfg = KIND_CONFIG[wfNode.kind];
   const Icon = cfg.icon;
-  const subtitle =
-    wfNode.kind === 'agent'
-      ? wfNode.agent
-      : wfNode.kind === 'move'
-        ? `→ ${wfNode.stage}`
-        : wfNode.kind === 'loop'
-          ? `↻ ${wfNode.back_to} · max ${wfNode.max_iterations === null ? '∞' : String(wfNode.max_iterations ?? 3)}`
-          : null;
-  const borderCls = nodeState ? STATE_BORDER[nodeState] : 'border-border';
+  const label = nodeLabel(wfNode);
   const isReview = WorkflowV2.isReviewNode(wfNode);
-  const clickable = !authoring && onNodeClick != null;
+  const isLoop = WorkflowV2.isLoopNode(wfNode);
+
+  // State-based border, overridden by loop highlight.
+  const borderCls = loopHighlighted
+    ? 'border-primary/70'
+    : nodeState
+      ? STATE_BORDER[nodeState]
+      : 'border-border';
 
   return (
     <div
-      role={clickable ? 'button' : undefined}
-      tabIndex={clickable ? 0 : undefined}
-      onClick={clickable ? () => onNodeClick!(wfNode) : undefined}
+      role={!authoring ? 'button' : undefined}
+      tabIndex={!authoring ? 0 : undefined}
+      onMouseEnter={isLoop ? () => onLoopHover?.(wfNode.id) : undefined}
+      onMouseLeave={isLoop ? () => onLoopHover?.(null) : undefined}
       className={
-        'border bg-card text-foreground shadow-sm overflow-hidden ' +
+        'border bg-card text-foreground shadow-sm overflow-hidden transition-opacity duration-150 ' +
         borderCls +
+        (loopHighlighted ? ' bg-primary/5' : '') +
+        (dimmed ? ' opacity-25' : '') +
         (authoring
           ? ' cursor-grab active:cursor-grabbing'
-          : clickable
-            ? ' cursor-pointer hover:border-primary/60'
-            : ' cursor-default')
+          : ' cursor-pointer hover:border-primary/60')
       }
       style={{ width: NODE_WIDTH, height: NODE_HEIGHT }}
     >
@@ -520,17 +728,39 @@ function WfNodeTile({ data }: NodeProps) {
             : { opacity: 0, width: 1, height: 1, pointerEvents: 'none', border: 'none' }
         }
       />
+
+      {/* Feature 3: colored kind band */}
       <div className={`h-1.5 w-full ${cfg.band}`} />
-      <div className="flex items-center gap-2 px-3 py-2">
-        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+
+      <div className="flex items-start gap-2 px-3 py-1.5">
+        <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="truncate text-sm font-medium">{wfNode.id}</div>
-          <div className="truncate text-xs text-muted-foreground">
-            {subtitle ?? cfg.label}
+          {/* Feature 5: friendly title + START/END badges */}
+          <div className="flex items-center gap-1">
+            <div className="truncate text-sm font-medium leading-tight">{label.title}</div>
+            {isStart && (
+              <span className="shrink-0 rounded-sm bg-success/25 px-1 py-px text-[8px] font-bold uppercase tracking-wider text-success">
+                START
+              </span>
+            )}
+            {isEnd && (
+              <span className="shrink-0 rounded-sm bg-muted/60 px-1 py-px text-[8px] font-bold uppercase tracking-wider text-muted-foreground">
+                END
+              </span>
+            )}
+          </div>
+          {/* Feature 5: subtitle */}
+          <div className="truncate text-xs text-muted-foreground leading-snug">
+            {label.subtitle ?? cfg.label}
+          </div>
+          {/* Feature 5: raw id demoted to tiny muted monospace tag */}
+          <div className="mt-0.5 truncate font-mono text-[9px] leading-none text-muted-foreground/40">
+            {wfNode.id}
           </div>
         </div>
         <StateBadge state={nodeState} iteration={iteration} />
       </div>
+
       <Handle
         type="source"
         position={Position.Right}
@@ -581,7 +811,7 @@ function WfEdgeTile({
   targetPosition,
   data,
 }: EdgeProps) {
-  const { kind = 'forward', isActive = false } =
+  const { kind = 'forward', isActive = false, dimmed = false } =
     (data as WfEdgeData | undefined) ?? {};
   const isReject = kind === 'reject';
 
@@ -604,7 +834,7 @@ function WfEdgeTile({
   const markerId = `wf-mk-${id.replace(/[^a-zA-Z0-9-]/g, '_')}`;
 
   return (
-    <>
+    <g style={{ opacity: dimmed ? 0.12 : 1, transition: 'opacity 0.15s ease' }}>
       <defs>
         <marker
           id={markerId}
@@ -632,7 +862,7 @@ function WfEdgeTile({
         markerEnd={`url(#${markerId})`}
         interactionWidth={12}
       />
-    </>
+    </g>
   );
 }
 
@@ -666,4 +896,189 @@ function StateBadge({
     return <span className="text-xs text-muted-foreground">skipped</span>;
   }
   return null;
+}
+
+// --- Feature 3: Kind legend --------------------------------------------------
+
+function KindLegend() {
+  return (
+    <div className="absolute left-2 top-2 z-10 border border-border bg-background/80 px-2 py-1.5 backdrop-blur-sm">
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+        {(
+          Object.entries(KIND_CONFIG) as [
+            WorkflowV2.WorkflowNodeKind,
+            KindConfig,
+          ][]
+        ).map(([kind, cfg]) => {
+          const Icon = cfg.icon;
+          return (
+            <div key={kind} className="flex items-center gap-1">
+              <div className={`h-2 w-2 shrink-0 rounded-sm ${cfg.band}`} />
+              <Icon className="h-3 w-3 shrink-0 text-muted-foreground/70" />
+              <span className="text-[10px] text-muted-foreground">{cfg.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// --- Feature 1: Node detail panel --------------------------------------------
+
+function NodeDetailPanel({
+  node,
+  workflow,
+  onClose,
+}: {
+  node: WorkflowV2.WorkflowNode;
+  workflow: WorkflowV2.Workflow;
+  onClose: () => void;
+}) {
+  const label = nodeLabel(node);
+  const cfg = KIND_CONFIG[node.kind];
+
+  return (
+    <aside className="absolute right-0 top-0 z-20 flex h-full w-72 shrink-0 flex-col overflow-hidden border-l border-border bg-background/95 backdrop-blur-sm">
+      <div className="flex items-start gap-2 border-b border-border px-3 py-2">
+        <div className={`mt-1 h-2 w-2 shrink-0 rounded-sm ${cfg.band}`} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="truncate text-sm font-medium leading-tight">{label.title}</div>
+          {label.subtitle && (
+            <div className="truncate text-xs text-muted-foreground">{label.subtitle}</div>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label="Close panel"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="flex-1 space-y-3 overflow-y-auto px-3 py-3 text-xs">
+        <div>
+          <code className="rounded bg-muted/40 px-1 py-px font-mono text-[10px] text-muted-foreground/70">
+            {node.id}
+          </code>
+        </div>
+        <NodeDetailBody node={node} workflow={workflow} />
+      </div>
+    </aside>
+  );
+}
+
+function NodeDetailBody({
+  node,
+  workflow,
+}: {
+  node: WorkflowV2.WorkflowNode;
+  workflow: WorkflowV2.Workflow;
+}) {
+  if (node.kind === 'agent') {
+    const inputEntries = node.input ? Object.entries(node.input) : [];
+    return (
+      <>
+        <DetailRow label="Agent" value={node.agent} />
+        {node.task && (
+          <DetailSection label="Task">
+            <p className="whitespace-pre-wrap break-words text-foreground/80">{node.task}</p>
+          </DetailSection>
+        )}
+        {node.expected_output && (
+          <DetailRow label="Produces" value={node.expected_output.kind} />
+        )}
+        {node.when && (
+          <DetailSection label="Condition">
+            <code className="break-all font-mono text-[10px] text-muted-foreground">{node.when}</code>
+          </DetailSection>
+        )}
+        {inputEntries.length > 0 && (
+          <DetailSection label="Inputs">
+            {inputEntries.map(([k, v]) => (
+              <div key={k} className="flex gap-1 font-mono text-[10px]">
+                <span className="shrink-0 text-primary/70">{k}</span>
+                <span className="text-muted-foreground">←</span>
+                <span className="break-all text-muted-foreground/80">{v}</span>
+              </div>
+            ))}
+          </DetailSection>
+        )}
+      </>
+    );
+  }
+
+  if (node.kind === 'review') {
+    const reviewer =
+      node.reviewer === 'human'
+        ? 'You (human approval required)'
+        : 'Project orchestrator (auto-review)';
+    const loopNode = node.reject
+      ? workflow.nodes.find((n) => n.id === node.reject)
+      : null;
+    const loopBack =
+      loopNode && WorkflowV2.isLoopNode(loopNode) ? loopNode.back_to : null;
+    return (
+      <>
+        <DetailRow label="Reviewed by" value={reviewer} />
+        {node.prompt && (
+          <DetailSection label="What to review">
+            <p className="whitespace-pre-wrap break-words text-foreground/80">{node.prompt}</p>
+          </DetailSection>
+        )}
+        {loopBack ? (
+          <DetailRow label="On reject" value={`Loops back to "${humanizeId(loopBack)}"`} />
+        ) : (
+          <DetailRow label="On reject" value="Fails the run (no retry configured)" />
+        )}
+      </>
+    );
+  }
+
+  if (node.kind === 'move') {
+    return <DetailRow label="Destination stage" value={humanizeId(node.stage)} />;
+  }
+
+  if (node.kind === 'loop') {
+    const max =
+      node.max_iterations === null ? 'Unlimited' : String(node.max_iterations ?? 3);
+    return (
+      <>
+        <DetailRow label="Loops back to" value={humanizeId(node.back_to)} />
+        <DetailRow label="Max retries" value={max} />
+      </>
+    );
+  }
+
+  return null;
+}
+
+function DetailRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className="text-foreground/90">{value}</div>
+    </div>
+  );
+}
+
+function DetailSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      {children}
+    </div>
+  );
 }
