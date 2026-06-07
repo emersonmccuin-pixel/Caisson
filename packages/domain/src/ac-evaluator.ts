@@ -30,9 +30,12 @@ export interface EvaluationContext {
   childWorkItems: ReadonlyArray<{ status: WorkItemStatus }>;
   // ── v2 additions (014a). Optional with documented defaults so existing
   //    construction sites stay valid until callers are updated. ──
-  /** The contract's free-text report to the orchestrator. `report_contains`
-   *  searches this (NOT the work-item body). Default ''. */
+  /** The contract's free-text report to the orchestrator. Default ''. */
   report?: string;
+  /** The submitted deliverable's inline text (answer.text / prose.text). Used
+   *  by `report_contains` (which searches the DELIVERABLE corpus, not just the
+   *  report) and `min_length` (which measures deliverable size). Default ''. */
+  deliverableText?: string;
   /** Tool-call names from the producing run's transcript. Powers `tool_called`.
    *  Default []. */
   toolCalls?: ReadonlyArray<{ name: string }>;
@@ -126,6 +129,8 @@ export async function evaluatePredicate(
       return evalExternalHandlePresent(ctx);
     case 'git_diff_nonempty':
       return await evalGitDiffNonempty(pred, executors);
+    case 'min_length':
+      return evalMinLength(pred, ctx);
   }
 }
 
@@ -273,11 +278,53 @@ function evalChildrenDone(
 
 // ── v2 pure predicates (014a) ──────────────────────────────────────────────
 
+/** Builds the deliverable corpus for `report_contains` and `min_length`:
+ *  the contract report + the deliverable's inline text + every attachment's
+ *  content. The work-item BODY is intentionally EXCLUDED — the body is the
+ *  human brief, not the agent's output. */
+function collectDeliverableCorpus(ctx: EvaluationContext): string {
+  const parts: string[] = [ctx.report ?? ''];
+  const dt = ctx.deliverableText ?? '';
+  if (dt.length > 0) parts.push(dt);
+  for (const a of ctx.attachments) {
+    if (typeof a.content === 'string' && a.content.length > 0) {
+      parts.push(`\n--- attachment: ${a.name} ---\n${a.content}`);
+    }
+  }
+  return parts.join('');
+}
+
 function evalReportContains(
   pred: Extract<AcceptancePredicate, { kind: 'report_contains' }>,
   ctx: EvaluationContext,
 ): { pass: boolean; reason?: string } {
-  return matchCorpus(ctx.report ?? '', pred.pattern, pred.regex, 'report');
+  // Searches the DELIVERABLE corpus (report + deliverableText + attachments),
+  // not just the report string. A token in the submitted answer text or in an
+  // attached document satisfies the predicate — the fix for the false-fail
+  // where a complete deliverable with its summary in an attachment failed
+  // `report_contains: 'summary'` (pc-pty-chat-265.1).
+  const corpus = collectDeliverableCorpus(ctx);
+  return matchCorpus(corpus, pred.pattern, pred.regex, 'deliverable');
+}
+
+function evalMinLength(
+  pred: Extract<AcceptancePredicate, { kind: 'min_length' }>,
+  ctx: EvaluationContext,
+): { pass: boolean; reason?: string } {
+  // Measures the deliverable content: deliverableText + attachment bodies.
+  // The report is intentionally EXCLUDED — it is orchestrator-facing free text,
+  // not part of the deliverable size (fix for min_chars-via-report false-fail,
+  // pc-pty-chat-265.1).
+  const dt = ctx.deliverableText ?? '';
+  let total = dt.length;
+  for (const a of ctx.attachments) {
+    if (typeof a.content === 'string') total += a.content.length;
+  }
+  if (total >= pred.min) return { pass: true };
+  return {
+    pass: false,
+    reason: `deliverable length ${total} < required ${pred.min}`,
+  };
 }
 
 function evalToolCalled(

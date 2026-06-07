@@ -138,7 +138,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "raw_acceptance_criteria": {
           "type": "array",
-          "description": "Escape hatch: override the derived AC predicate list. Rare-use; prefer expected_output. Each entry needs a 'kind' from: files_exist, fields_populated, field_matches, bash_exit_zero, attachments_present, body_contains, child_work_items_done, schema_valid, git_diff_nonempty, external_handle_present, tool_called, pending_ask_created, report_contains.",
+          "description": "Escape hatch: override the derived AC predicate list. Rare-use; prefer expected_output. Each entry needs a 'kind' from: files_exist, fields_populated, field_matches, bash_exit_zero, attachments_present, body_contains, child_work_items_done, schema_valid, git_diff_nonempty, external_handle_present, tool_called, pending_ask_created, report_contains, min_length.",
           "items": {
             "type": "object",
             "additionalProperties": true

@@ -144,7 +144,8 @@ export type AcceptancePredicate =
   | { kind: 'external_handle_present' } // external
   | { kind: 'tool_called'; name: string; min_count?: number } // action — reads the run transcript
   | { kind: 'pending_ask_created' } // action — durable side-effect of the ask tools
-  | { kind: 'report_contains'; pattern: string; regex?: boolean }; // answer (report text, not WI body)
+  | { kind: 'report_contains'; pattern: string; regex?: boolean } // answer (report text, not WI body)
+  | { kind: 'min_length'; min: number }; // deliverable length check (measures deliverable, not report)
 
 export const ACCEPTANCE_PREDICATE_KINDS = [
   'files_exist',
@@ -160,6 +161,7 @@ export const ACCEPTANCE_PREDICATE_KINDS = [
   'tool_called',
   'pending_ask_created',
   'report_contains',
+  'min_length',
 ] as const;
 export type AcceptancePredicateKind = (typeof ACCEPTANCE_PREDICATE_KINDS)[number];
 

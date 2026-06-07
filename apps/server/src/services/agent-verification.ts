@@ -237,15 +237,14 @@ export async function runVerificationOnTerminal(
     | { kind?: string; data?: unknown; handle?: string; text?: string }
     | null
     | undefined;
-  // Slice 014c — `report_contains` reads the contract report. For contract-home
-  // outputs (answer, and prose with store: 'contract') the submitted text lives
-  // on the deliverable, and a separate report is usually absent — fall back to
-  // the deliverable text so the content checks read what the agent submitted.
-  const reportText =
-    contract.report ??
-    (deliverable?.kind === 'answer' || deliverable?.kind === 'prose'
-      ? deliverable.text ?? ''
-      : '');
+  // pc-pty-chat-265.1 — report is the orchestrator-facing free-text note only.
+  // deliverableText carries the submitted answer/prose text and is the corpus
+  // that `report_contains` + `min_length` measure — NOT the report string.
+  const reportText = contract.report ?? '';
+  const deliverableText =
+    deliverable?.kind === 'answer' || deliverable?.kind === 'prose'
+      ? (deliverable.text ?? '')
+      : '';
   const evalCtx: EvaluationContext = {
     body: wi?.body ?? '',
     fields: wi?.fields ?? {},
@@ -255,6 +254,7 @@ export async function runVerificationOnTerminal(
     childWorkItems: children.map((c) => ({ status: c.status })),
     // Slice 014a — evidence sources for the v2 predicates.
     report: reportText,
+    deliverableText,
     toolCalls: (await deps.loadToolCalls?.(input)) ?? [],
     pendingAskCreated: (await deps.loadPendingAskCreated?.(input)) ?? false,
     payload: deliverable?.kind === 'payload' ? deliverable.data : undefined,

@@ -8,6 +8,7 @@ import {
   deriveAcceptanceCriteriaV2,
   evaluateAcceptance,
   KINDS_REQUIRING_EVIDENCE,
+  getPodDefaultExpectedOutput,
   type EvaluationContext,
   type PredicateExecutors,
 } from '../src/index.ts';
@@ -245,6 +246,130 @@ test('repo checks as plain strings (279 fix): normalize to command shape, no thr
     { kind: 'bash_exit_zero', command: 'pnpm --filter @pc/contracts typecheck', cwd: 'worktree' },
     { kind: 'bash_exit_zero', command: 'pnpm -r typecheck', cwd: 'worktree' },
   ]);
+});
+
+// ── 265.1 false-fail fixes ───────────────────────────────────────────────────
+
+test('(265.1-a) report_contains is case-insensitive in the deliverable corpus', async () => {
+  // Pattern uses uppercase "Summary"; deliverable text uses "## summary".
+  const crit: AcceptanceCriteria = [{ kind: 'report_contains', pattern: 'Summary' }];
+  // In report (mixed case) → passes
+  const inReport = await evaluateAcceptance(
+    crit,
+    ctx({ report: '## summary of the plan', deliverableText: '' }),
+    noExec,
+  );
+  assert.equal(inReport.pass, true, 'case-insensitive match in report must pass');
+  // In deliverableText (lower) → passes
+  const inDeliverable = await evaluateAcceptance(
+    crit,
+    ctx({ report: '', deliverableText: '## summary\nDetails here.' }),
+    noExec,
+  );
+  assert.equal(inDeliverable.pass, true, 'case-insensitive match in deliverableText must pass');
+  // Neither → fails
+  const nowhere = await evaluateAcceptance(
+    crit,
+    ctx({ report: '', deliverableText: 'No such heading here.' }),
+    noExec,
+  );
+  assert.equal(nowhere.pass, false);
+});
+
+test('(265.1-b) report_contains searches deliverable text + attachments, not just the report', async () => {
+  // Token lives only in an attachment — differently-worded report must still pass.
+  const crit: AcceptanceCriteria = [{ kind: 'report_contains', pattern: 'findings' }];
+  const inAttachment = await evaluateAcceptance(
+    crit,
+    ctx({
+      report: 'Done — see the attached document.',
+      deliverableText: '',
+      attachments: [{ name: 'report.md', content: '## Key findings\nAll went well.' }],
+    }),
+    noExec,
+  );
+  assert.equal(inAttachment.pass, true, 'token in attachment must pass report_contains');
+
+  // Token in deliverableText only (no report, no attachment) → passes.
+  const inDeliverableOnly = await evaluateAcceptance(
+    crit,
+    ctx({ report: '', deliverableText: 'Here are the key findings from the research.' }),
+    noExec,
+  );
+  assert.equal(inDeliverableOnly.pass, true, 'token in deliverableText must pass');
+
+  // Token only in the WI body → must NOT satisfy report_contains.
+  const inBodyOnly = await evaluateAcceptance(
+    crit,
+    ctx({ body: 'Task: summarize findings', report: '', deliverableText: '' }),
+    noExec,
+  );
+  assert.equal(inBodyOnly.pass, false, 'body-only token must not satisfy report_contains');
+});
+
+test('(265.1-c) min_chars passes on DELIVERABLE length; short report does not false-fail', async () => {
+  // A 1000-char deliverable with a 10-char report must pass min_chars: 200.
+  const longDeliverable = 'x'.repeat(1000);
+  const crit: AcceptanceCriteria = [{ kind: 'min_length', min: 200 }];
+
+  const longDelShortReport = await evaluateAcceptance(
+    crit,
+    ctx({ report: 'Done.', deliverableText: longDeliverable }),
+    noExec,
+  );
+  assert.equal(longDelShortReport.pass, true, 'long deliverable + short report must pass min_length');
+
+  // Short deliverable fails even if the report is long.
+  const shortDel = await evaluateAcceptance(
+    crit,
+    ctx({ report: 'x'.repeat(1000), deliverableText: 'short' }),
+    noExec,
+  );
+  assert.equal(shortDel.pass, false, 'short deliverable + long report must fail min_length');
+
+  // store: contract and store: attachment both derive { kind: 'min_length' }.
+  const contractDerived = deriveAcceptanceCriteriaV2({ kind: 'prose', store: 'contract', min_chars: 200 });
+  const attachmentDerived = deriveAcceptanceCriteriaV2({ kind: 'prose', store: 'attachment', min_chars: 200 });
+  // Both include exactly one min_length predicate with min: 200.
+  const contractMinLen = contractDerived.filter((p) => p.kind === 'min_length');
+  const attachmentMinLen = attachmentDerived.filter((p) => p.kind === 'min_length');
+  assert.equal(contractMinLen.length, 1, 'store:contract must derive one min_length predicate');
+  assert.equal(attachmentMinLen.length, 1, 'store:attachment must derive one min_length predicate');
+  assert.deepEqual(contractMinLen[0], { kind: 'min_length', min: 200 });
+  assert.deepEqual(attachmentMinLen[0], { kind: 'min_length', min: 200 });
+
+  // answer also derives min_length, not a report_contains regex.
+  const answerDerived = deriveAcceptanceCriteriaV2({ kind: 'answer', min_chars: 100 });
+  assert.deepEqual(answerDerived, [{ kind: 'min_length', min: 100 }]);
+});
+
+test('(265.1-d) planner default derives min_length (not literal tokens); valid plan passes', async () => {
+  const plannerSpec = getPodDefaultExpectedOutput('planner');
+  assert.ok(plannerSpec, 'planner must have a default expected output');
+  // No literal-token must_address fields on the planner default.
+  assert.ok(
+    !('must_address' in plannerSpec) ||
+      !(plannerSpec as { must_address?: string[] }).must_address?.length,
+    'planner must not use must_address (brittle literal-token match)',
+  );
+  // Derived AC is a single min_length check.
+  const ac = deriveAcceptanceCriteriaV2(plannerSpec);
+  assert.equal(ac.length, 1);
+  assert.equal(ac[0]!.kind, 'min_length');
+
+  // A valid 200+-char plan text passes.
+  const validPlan = 'Step 1: analyze the requirements.\n' + 'Step 2: design the solution.\n'.repeat(10);
+  const crit: AcceptanceCriteria = ac;
+  const pass = await evaluateAcceptance(
+    crit,
+    ctx({ deliverableText: validPlan }),
+    noExec,
+  );
+  assert.equal(pass.pass, true, 'a valid plan of sufficient length must pass planner AC');
+
+  // An empty deliverable fails.
+  const empty = await evaluateAcceptance(crit, ctx({ deliverableText: '' }), noExec);
+  assert.equal(empty.pass, false, 'empty plan must fail planner AC');
 });
 
 test('PROOF CASE: an action contract whose tool was never called FAILS', async () => {

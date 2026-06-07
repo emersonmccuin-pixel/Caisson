@@ -62,9 +62,10 @@ const POD_DEFAULTS: Record<string, PodDefault> = {
     },
   }),
 
-  // Planner returns an ordered plan as an answer addressing the steps + a
-  // summary. Lives on the contract.
-  planner: podDefault({ kind: 'answer', must_address: ['summary', 'steps'] }),
+  // Planner returns an ordered plan as an answer. Substance check (non-trivial
+  // plan passes); no literal-token dependency so different phrasings of a
+  // valid plan don't false-fail (pc-pty-chat-265.1). Lives on the contract.
+  planner: podDefault({ kind: 'answer', min_chars: 200 }),
 
   // Extractor's job IS structured — a payload matching the per-dispatch schema.
   // The default schema is a generic `extracted` object; orchestrator overrides.

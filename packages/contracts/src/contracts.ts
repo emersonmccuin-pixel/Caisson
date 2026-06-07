@@ -162,7 +162,8 @@ export type AcceptancePredicate =
   | { kind: 'external_handle_present' }
   | { kind: 'tool_called'; name: string; min_count?: number }
   | { kind: 'pending_ask_created' }
-  | { kind: 'report_contains'; pattern: string; regex?: boolean };
+  | { kind: 'report_contains'; pattern: string; regex?: boolean }
+  | { kind: 'min_length'; min: number };
 
 export type AcceptanceCriteria = AcceptancePredicate[];
 

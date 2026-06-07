@@ -47,10 +47,6 @@ export function deriveAcceptanceCriteriaV2(spec: ExpectedOutputV2): AcceptanceCr
   }
 }
 
-function minCharsRegex(minChars: number): string {
-  return `^[\\s\\S]{${minChars},}$`;
-}
-
 function deriveAnswerV2(
   spec: Extract<ExpectedOutputV2, { kind: 'answer' }>,
 ): AcceptancePredicateV2[] {
@@ -59,7 +55,9 @@ function deriveAnswerV2(
     preds.push({ kind: 'report_contains', pattern: topic });
   }
   if (typeof spec.min_chars === 'number' && spec.min_chars > 0) {
-    preds.push({ kind: 'report_contains', pattern: minCharsRegex(spec.min_chars), regex: true });
+    // min_length measures the DELIVERABLE (not the report) — the one-door fix
+    // for min_chars-via-report-regex false-fails (pc-pty-chat-265.1).
+    preds.push({ kind: 'min_length', min: spec.min_chars });
   }
   return preds;
 }
@@ -97,15 +95,17 @@ function deriveProseV2(
   if (spec.store === 'attachment') {
     preds.push({ kind: 'attachments_present', names: [proseAttachmentName(spec)] });
   }
-  const contains = (pattern: string, regex?: boolean): AcceptancePredicateV2 =>
-    useBody
-      ? { kind: 'body_contains', pattern, ...(regex ? { regex } : {}) }
-      : { kind: 'report_contains', pattern, ...(regex ? { regex } : {}) };
+  const contains = (pattern: string): AcceptancePredicateV2 =>
+    useBody ? { kind: 'body_contains', pattern } : { kind: 'report_contains', pattern };
   for (const section of spec.sections ?? []) {
     preds.push(contains(section));
   }
   if (typeof spec.min_chars === 'number' && spec.min_chars > 0) {
-    preds.push(contains(minCharsRegex(spec.min_chars), true));
+    // min_length measures the DELIVERABLE (not the report/body) — the one-door
+    // fix for min_chars-via-report-regex false-fails (pc-pty-chat-265.1).
+    // Both `store: contract` and `store: attachment` now derive the same
+    // min_length predicate — same intent, same mechanism.
+    preds.push({ kind: 'min_length', min: spec.min_chars });
   }
   return preds;
 }
