@@ -206,6 +206,47 @@ test('KINDS_REQUIRING_EVIDENCE is the side-effect set for fail-closed', () => {
 
 // ── the verification-defect proof case (unit level) ─────────────────────────
 
+// ── bug regressions ─────────────────────────────────────────────────────────
+
+test('body_contains (277 fix): normalizes whitespace — "a / b" matches "a/b" pattern', async () => {
+  const crit: AcceptanceCriteria = [{ kind: 'body_contains', pattern: 'Where 228/267/270 each land' }];
+  // Document wrote the heading with spaces around the slashes
+  const hit = await evaluateAcceptance(
+    crit,
+    ctx({ body: '## Where 228 / 267 / 270 each land\n\nDetails…' }),
+    noExec,
+  );
+  assert.equal(hit.pass, true, 'whitespace-normalized match must pass');
+});
+
+test('body_contains (277 fix): case-insensitive — "Goal" matches "goal" in body', async () => {
+  const crit: AcceptanceCriteria = [{ kind: 'body_contains', pattern: 'Implementation Plan' }];
+  const hit = await evaluateAcceptance(crit, ctx({ body: '## implementation plan\n\nDetails…' }), noExec);
+  assert.equal(hit.pass, true, 'case-insensitive match must pass');
+});
+
+test('body_contains (277 fix): regex path is NOT normalized (exact control preserved)', async () => {
+  const crit: AcceptanceCriteria = [{ kind: 'body_contains', pattern: '^hello$', regex: true }];
+  const miss = await evaluateAcceptance(crit, ctx({ body: 'HELLO' }), noExec);
+  assert.equal(miss.pass, false, 'regex path must remain case-sensitive');
+  const hit = await evaluateAcceptance(crit, ctx({ body: 'hello' }), noExec);
+  assert.equal(hit.pass, true);
+});
+
+test('repo checks as plain strings (279 fix): normalize to command shape, no throw', () => {
+  // Plain string checks must not 500 with "'preset' in <string>"
+  const result = deriveAcceptanceCriteriaV2({
+    kind: 'repo',
+    isolation: 'worktree',
+    checks: ['pnpm --filter @pc/contracts typecheck', 'pnpm -r typecheck'] as never,
+  });
+  assert.deepEqual(result, [
+    { kind: 'git_diff_nonempty', cwd: 'worktree' },
+    { kind: 'bash_exit_zero', command: 'pnpm --filter @pc/contracts typecheck', cwd: 'worktree' },
+    { kind: 'bash_exit_zero', command: 'pnpm -r typecheck', cwd: 'worktree' },
+  ]);
+});
+
 test('PROOF CASE: an action contract whose tool was never called FAILS', async () => {
   // "your FIRST action MUST be pc_ask_orchestrator" → derive the evidence predicates.
   const crit = deriveAcceptanceCriteriaV2({ kind: 'action', tool: 'pc_ask_orchestrator' });
