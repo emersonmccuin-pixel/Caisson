@@ -20,6 +20,7 @@ import {
 import {
   getWorkItem,
   moveWorkItemStage,
+  newId,
   resolveAgentForDispatch,
   workflowRunsV2Repo,
 } from '@pc/db';
@@ -31,7 +32,9 @@ import {
   WorkflowRunMutationGateway,
 } from '@pc/app-services';
 import {
+  classifyInboxItem,
   contractDeliverableText,
+  makeReviewPackage,
   type WorkflowReviewFlavor,
   type WorkflowReviewState,
 } from '@pc/contracts';
@@ -465,15 +468,36 @@ export function makeExecutorDeps(
     // Iteration-keyed idempotency: a loop kick-back's re-review is a NEW
     // message, not a dedupe no-op (FD-8 — pre-M8 the second prompt for the
     // same gate silently never delivered).
+    // Phase 1.1 — build the unified ReviewPackage envelope (additive: carried
+    // alongside the existing payload fields, existing consumers unchanged).
+    const { owner } = classifyInboxItem('workflow-review', flavor);
+    const title = reviewOpts.escalated
+      ? `Review needed (agent loop exhausted): ${workflow.name}`
+      : `Review needed: ${workflow.name}`;
+    const reviewPackage = makeReviewPackage({
+      id: newId(),
+      producer: 'workflow-gate',
+      owner,
+      title,
+      whatWasAsked: prompt,
+      acceptanceCriteria: '',
+      work: { kind: 'prose', text: summary || prompt },
+      provenance: {
+        agentRunId: null,
+        workItemId: run.workItemId ?? null,
+        workflowNodeId: node.id,
+        dispatchedAt: Date.now(),
+      },
+      attemptHistory: [{ attempt: reviewOpts.iteration + 1, submittedAt: Date.now() }],
+    });
+
     opts.deliverReview?.({
       projectId: opts.projectId,
       runId: run.id,
       nodeId: node.id,
       flavor,
       body,
-      subject: reviewOpts.escalated
-        ? `Review needed (agent loop exhausted): ${workflow.name}`
-        : `Review needed: ${workflow.name}`,
+      subject: title,
       payload: {
         runId: run.id,
         nodeId: node.id,
@@ -489,6 +513,8 @@ export function makeExecutorDeps(
         // decision so a stale pre-ceiling card cannot resolve the new escalated
         // gate (instance-mismatch guard in applyReviewDecision).
         instanceToken: deliveryInstanceToken,
+        // Phase 1.1 — unified ReviewPackage envelope (additive).
+        reviewPackage,
       },
       idempotencyKey:
         `workflow-review:${run.id}:${node.id}:i${String(reviewOpts.iteration)}` +
