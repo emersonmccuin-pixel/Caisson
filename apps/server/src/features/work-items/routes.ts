@@ -197,6 +197,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       body?: string;
       title?: string;
       areaId?: string | null;
+      parentId?: string | null;
     }>();
     const wiId = typeof body.id === 'string' ? body.id.trim() : '';
     const fields = body.fields && typeof body.fields === 'object' ? body.fields : null;
@@ -206,12 +207,15 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     // discriminate "present" via hasOwnProperty rather than a truthiness check.
     const areaIdProvided = Object.prototype.hasOwnProperty.call(body, 'areaId');
     const areaId = areaIdProvided ? (body.areaId === null ? null : (body.areaId as ULID)) : undefined;
+    // `parentId: null` is a meaningful value (detach from parent), so also use hasOwnProperty.
+    const parentIdProvided = Object.prototype.hasOwnProperty.call(body, 'parentId');
+    const parentId = parentIdProvided ? (body.parentId === null ? null : (body.parentId as ULID)) : undefined;
     if (!wiId) return c.json({ ok: false, error: 'id required' }, 400);
-    if (!fields && bodyText === undefined && titleText === undefined && !areaIdProvided) {
-      return c.json({ ok: false, error: 'at least one of fields, body, title, or areaId required' }, 400);
+    if (!fields && bodyText === undefined && titleText === undefined && !areaIdProvided && !parentIdProvided) {
+      return c.json({ ok: false, error: 'at least one of fields, body, title, areaId, or parentId required' }, 400);
     }
     try {
-      if (bodyText !== undefined || titleText !== undefined || areaIdProvided) {
+      if (bodyText !== undefined || titleText !== undefined || areaIdProvided || parentIdProvided) {
         const current = runtime.workItemService().get(wiId as ULID);
         if (!current) return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
         const patchInput: Parameters<ReturnType<typeof runtime.workItemService>['patch']>[1] = {
@@ -221,6 +225,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
         if (bodyText !== undefined) patchInput.body = bodyText;
         if (fields) patchInput.fields = fields;
         if (areaId !== undefined) patchInput.areaId = areaId;
+        if (parentId !== undefined) patchInput.parentId = parentId;
         // patch() announces internally — no separate broadcastTo call.
         const workItem = runtime.workItemService().patch(wiId as ULID, patchInput);
         return c.json({ ok: true, workItem });
