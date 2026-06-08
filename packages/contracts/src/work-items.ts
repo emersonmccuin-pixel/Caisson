@@ -49,6 +49,8 @@ export interface WorkItemDto {
   isWorkflowRoot: boolean;
   /** Slice 010 — Area bucket FK, or null for Uncaptured. */
   areaId: ULID | null;
+  /** Command focus — epoch-ms the planner starred this item; null = not in focus. */
+  focusedAt: number | null;
 }
 
 /** Reasons a work item changed durably. `verified`/`approved`/`rejected`/

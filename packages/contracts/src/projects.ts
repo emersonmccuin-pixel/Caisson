@@ -41,6 +41,9 @@ export interface ProjectDto {
   callsignSeq: number;
   /** pc-pty-chat-333 — per-project scratch notes. Null when none saved yet. */
   notes: string | null;
+  /** Command focus — epoch-ms the planner starred this project; null = not in
+   *  focus. Drives the LeftRail gold star. */
+  focusedAt: number | null;
 }
 
 export type CreateProjectMode = 'init-empty' | 'init-in-place' | 'attach-to-git';
@@ -227,7 +230,8 @@ export function isProjectDto(value: unknown): value is ProjectDto {
     (value.gitRemote === null || typeof value.gitRemote === 'string') &&
     isProjectSettingsDto(value.settings) &&
     typeof value.callsignSeq === 'number' &&
-    (value.notes === null || value.notes === undefined || typeof value.notes === 'string')
+    (value.notes === null || value.notes === undefined || typeof value.notes === 'string') &&
+    (value.focusedAt === null || value.focusedAt === undefined || typeof value.focusedAt === 'number')
   );
 }
 

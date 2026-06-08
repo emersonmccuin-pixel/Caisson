@@ -51,6 +51,7 @@ export function toWorkItemDto(wi: WorkItem): WorkItemDto {
     deletedAt: wi.deletedAt,
     isWorkflowRoot: wi.isWorkflowRoot ?? false,
     areaId: wi.areaId ?? null,
+    focusedAt: wi.focusedAt ?? null,
   };
 }
 

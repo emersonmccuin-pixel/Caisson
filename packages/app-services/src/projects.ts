@@ -214,6 +214,7 @@ export function toProjectDto(project: Project): ProjectDto {
     settings: toProjectSettingsDto(project.settings),
     callsignSeq: project.callsignSeq ?? 0,
     notes: project.notes ?? null,
+    focusedAt: project.focusedAt ?? null,
   };
 }
 
