@@ -186,7 +186,9 @@ export function Shell({
           </ErrorBoundary>
         )}
         {activeProject && <AttachmentLightboxMount projectId={activeProject.id} />}
-        {activeProject && <GlobalQuickAdd project={activeProject} />}
+        {projects.length > 0 && (
+          <GlobalQuickAdd projects={projects} activeProjectId={activeProject?.id ?? null} />
+        )}
         <RichLinkPreviewCard />
       </Group>
       {import.meta.env.DEV && <DevControls />}

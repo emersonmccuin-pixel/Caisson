@@ -1,10 +1,14 @@
 // Slice 2 — global quick-add. A dumb, fast capture: title (+ optional note),
-// Enter, gone. Defaults: intake stage, Uncaptured area — unless opened from an
-// area page (prefillAreaId set via the store). Deliberately minimal.
+// Enter, gone. Now carries a destination dropdown: capture from anywhere, pick
+// where it lands. Defaults to Command (the cross-cutting TODO) — unless opened
+// from an area page (prefillAreaId set via the store), in which case it stays
+// in the current project's area.
 //
 // Rendered once at the App level; opened via useGlobalQuickAdd().open(areaId?).
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+
+import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
 
 import type { Project } from '@/features/projects/client';
 import { workItemsApi } from '@/features/work-items/client';
@@ -16,17 +20,39 @@ function intakeStageId(stages: Project['stages']): string {
 }
 
 interface Props {
-  project: Project;
+  projects: Project[];
+  /** The project currently open in the shell — the prefill area belongs to it. */
+  activeProjectId: string | null;
   onCreated?: () => void;
 }
 
-export function GlobalQuickAdd({ project, onCreated }: Props) {
+export function GlobalQuickAdd({ projects, activeProjectId, onCreated }: Props) {
   const { isOpen, prefillAreaId, prefillAreaName, close } = useGlobalQuickAdd();
   const [title, setTitle] = useState('');
   const [note, setNote] = useState('');
+  const [destId, setDestId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+
+  const commandProject = useMemo(
+    () => projects.find((p) => p.slug === COMMAND_PROJECT_SLUG) ?? null,
+    [projects],
+  );
+  // Command first in the dropdown, then the rest in list order.
+  const orderedProjects = useMemo(() => {
+    const rest = projects.filter((p) => p.slug !== COMMAND_PROJECT_SLUG);
+    return commandProject ? [commandProject, ...rest] : rest;
+  }, [projects, commandProject]);
+
+  // Default destination: stay in the current project when capturing from an
+  // area (the area only makes sense there); otherwise default to Command.
+  const defaultDestId =
+    (prefillAreaId ? activeProjectId : null) ??
+    commandProject?.id ??
+    activeProjectId ??
+    orderedProjects[0]?.id ??
+    null;
 
   // Reset on open.
   useEffect(() => {
@@ -34,8 +60,11 @@ export function GlobalQuickAdd({ project, onCreated }: Props) {
       setTitle('');
       setNote('');
       setErr(null);
+      setDestId(defaultDestId);
       setTimeout(() => titleRef.current?.focus(), 10);
     }
+    // defaultDestId is derived from the open-time prefill; intentionally not a dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   // Escape to close.
@@ -50,17 +79,21 @@ export function GlobalQuickAdd({ project, onCreated }: Props) {
 
   if (!isOpen) return null;
 
-  const areaName = prefillAreaId ? (prefillAreaName ?? 'selected area') : 'Uncaptured';
+  const dest = orderedProjects.find((p) => p.id === destId) ?? null;
+  // The prefill area belongs to the active project; keep it only while the
+  // destination is still that project (switching destination drops the area).
+  const useArea = prefillAreaId != null && destId === activeProjectId;
+  const areaName = useArea ? (prefillAreaName ?? 'selected area') : 'Uncaptured';
 
   async function submit() {
     const t = title.trim();
-    if (!t || busy) return;
+    if (!t || busy || !dest) return;
     setBusy(true);
     setErr(null);
     try {
-      await workItemsApi.createWorkItem(project.id, t, intakeStageId(project.stages), {
+      await workItemsApi.createWorkItem(dest.id, t, intakeStageId(dest.stages), {
         ...(note.trim() ? { body: note.trim() } : {}),
-        ...(prefillAreaId ? { areaId: prefillAreaId } : {}),
+        ...(useArea && prefillAreaId ? { areaId: prefillAreaId } : {}),
       });
       close();
       onCreated?.();
@@ -88,7 +121,7 @@ export function GlobalQuickAdd({ project, onCreated }: Props) {
         >
           <div className="flex items-center justify-between">
             <span className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
-              Quick task · {areaName}
+              Quick task
             </span>
             <button
               type="button"
@@ -98,6 +131,26 @@ export function GlobalQuickAdd({ project, onCreated }: Props) {
             >
               ×
             </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <select
+              value={destId ?? ''}
+              onChange={(e) => setDestId(e.target.value)}
+              aria-label="Destination project"
+              className="min-w-0 flex-1 border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none"
+            >
+              {orderedProjects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.slug === COMMAND_PROJECT_SLUG ? `★ ${p.name}` : p.name}
+                </option>
+              ))}
+            </select>
+            {useArea && (
+              <span className="shrink-0 text-[11px] text-muted-foreground" title="Area">
+                → {areaName}
+              </span>
+            )}
           </div>
 
           <input
