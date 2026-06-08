@@ -72,4 +72,14 @@ export const projectsApi = {
       if (!r.ok) throw new Error(r.error);
       return r.projects;
     }),
+
+  updateProjectNotes: (projectId: ULID, text: string) =>
+    postJsonMethod<{ ok: true; notes: string | null } | { ok: false; error: string }>(
+      projectRoutes.notes(projectId),
+      { text },
+      'PATCH',
+    ).then((r) => {
+      if (!r.ok) throw new Error((r as { ok: false; error: string }).error);
+      return (r as { ok: true; notes: string | null }).notes;
+    }),
 };

@@ -4,6 +4,8 @@ import { projectsApi, type Project } from '@/features/projects/client';
 import { settingsApi, type GlobalSettings } from '@/features/settings/client';
 import { AppSettingsModal } from '@/components/AppSettingsModal';
 import { CreateProjectModal } from '@/components/CreateProjectModal';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { NotesPopover } from '@/components/NotesPopover';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { SessionSwitcher } from '@/components/SessionSwitcher';
 import { HostHealthPill } from '@/features/system/HostHealthPill';
@@ -43,11 +45,12 @@ export default function App() {
   const activeSlug = useActiveProject((s) => s.activeSlug);
   const setActiveSlug = useActiveProject((s) => s.setActiveSlug);
   const activeTab = useActiveCenterTab((s) => s.tab);
-  const telemetryModel = useOrchestratorTelemetry((s) => s.model);
   const sessionId = useOrchestratorTelemetry((s) => s.sessionId);
   const sessionLabel = useOrchestratorTelemetry((s) => s.sessionLabel);
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
   const sessionBreadcrumbRef = useRef<HTMLButtonElement | null>(null);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const notesButtonRef = useRef<HTMLButtonElement | null>(null);
   const projectChangedCursorRef = useRef<string | null>(readStoredProjectChangedCursor());
   const seenProjectChangedLiveIdsRef = useRef<Set<string>>(new Set());
   const replayInFlightRef = useRef(false);
@@ -430,14 +433,25 @@ export default function App() {
         )}
         <div className="ml-auto flex items-center gap-3 text-[10px] uppercase tracking-[0.04em]">
           <HostHealthPill />
-          {telemetryModel && (
-            <span className="flex items-center gap-1.5" title="Active orchestrator model">
-              <span className="text-[var(--fg-dim)]">model</span>
-              <span className="text-foreground">{telemetryModel}</span>
-            </span>
-          )}
         </div>
         <div className="flex items-center gap-1">
+          {/* pc-pty-chat-333 — per-project notes scratchpad. */}
+          {activeProject && (
+            <button
+              ref={notesButtonRef}
+              type="button"
+              onClick={() => setNotesOpen((v) => !v)}
+              title="Project notes"
+              aria-label="Project notes"
+              aria-expanded={notesOpen}
+              aria-haspopup="true"
+              className={`px-2 py-1 text-[11px] uppercase tracking-[0.06em] hover:bg-primary/10 ${
+                notesOpen ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Notes
+            </button>
+          )}
           {/* Slice 2 — global quick-add: always visible when a project is active. */}
           {activeProject && (
             <button
@@ -469,6 +483,17 @@ export default function App() {
         </div>
         </div>
       </header>
+      {notesOpen && activeProject && (
+        <ErrorBoundary label="notes" fallback={null}>
+          <NotesPopover
+            key={activeProject.id}
+            projectId={activeProject.id}
+            initialNotes={activeProject.notes ?? null}
+            anchorEl={notesButtonRef.current}
+            onClose={() => setNotesOpen(false)}
+          />
+        </ErrorBoundary>
+      )}
       <BuildMarker />
       <HostHealthBanner />
       <ClaudeVersionBanner />
