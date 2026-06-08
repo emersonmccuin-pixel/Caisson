@@ -28,7 +28,10 @@ import { useActiveCenterTab } from '@/store/active-center-tab';
 import { useActiveProject } from '@/store/active-project';
 import { useAgentTranscript } from '@/store/agent-transcript';
 import { useLiveEvents } from '@/store/live-store';
+import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
+
 import { ActivityPanel } from './ActivityPanel';
+import { CommandActivityPanel } from './CommandActivityPanel';
 import { AgentsList } from './AgentsList';
 import { ErrorBoundary } from './ErrorBoundary';
 import { AgentTranscriptModal } from './AgentTranscriptModal';
@@ -164,12 +167,20 @@ export function Shell({
           groupResizeBehavior="preserve-pixel-size"
         >
           <ErrorBoundary key={activeProject?.id ?? ''} label="activity panel">
-            <ActivityPanel
-              project={activeProject}
-              events={wsEvents}
-              expanded={activityPanelOpen}
-              onExpand={() => onToggleActivityPanelOpen(true)}
-            />
+            {activeProject?.slug === COMMAND_PROJECT_SLUG ? (
+              <CommandActivityPanel
+                projects={projects}
+                expanded={activityPanelOpen}
+                onExpand={() => onToggleActivityPanelOpen(true)}
+              />
+            ) : (
+              <ActivityPanel
+                project={activeProject}
+                events={wsEvents}
+                expanded={activityPanelOpen}
+                onExpand={() => onToggleActivityPanelOpen(true)}
+              />
+            )}
           </ErrorBoundary>
         </Panel>
         {activeProject && (
