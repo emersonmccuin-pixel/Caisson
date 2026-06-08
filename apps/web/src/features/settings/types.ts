@@ -30,6 +30,7 @@ export interface GlobalSettings {
   jsonl: JsonlSettings;
   hideCancelledStage: boolean;
   remoteControlEnabled: boolean;
+  showCommandSpace: boolean;
   onboardingCompletedAt: string | null;
 }
 

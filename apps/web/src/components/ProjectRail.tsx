@@ -31,6 +31,9 @@ interface ProjectRailProps {
   onProjectDeleted: (projectId: string) => void;
   onProjectReorder: (orderedIds: string[]) => void;
   unreadProjectIds: ReadonlySet<string>;
+  /** When false (the default), the Command space row is hidden — Command is an
+   *  opt-in cross-project planning surface toggled in App Settings. */
+  showCommandSpace: boolean;
 }
 
 const EMPTY_UNREAD: ReadonlySet<string> = new Set();
@@ -56,6 +59,7 @@ export function ProjectRail({
   onProjectDeleted,
   onProjectReorder,
   unreadProjectIds = EMPTY_UNREAD,
+  showCommandSpace,
 }: ProjectRailProps) {
   const activeSlug = useActiveProject((s) => s.activeSlug);
   const setActiveSlug = useActiveProject((s) => s.setActiveSlug);
@@ -68,8 +72,11 @@ export function ProjectRail({
   // own row below). The user-project list — filter, drag-reorder, counts —
   // operates on everything else.
   const commandProject = useMemo(
-    () => projects.find((p) => p.slug === COMMAND_PROJECT_SLUG) ?? null,
-    [projects],
+    () =>
+      showCommandSpace
+        ? projects.find((p) => p.slug === COMMAND_PROJECT_SLUG) ?? null
+        : null,
+    [projects, showCommandSpace],
   );
   const userProjects = useMemo(
     () => projects.filter((p) => p.slug !== COMMAND_PROJECT_SLUG),

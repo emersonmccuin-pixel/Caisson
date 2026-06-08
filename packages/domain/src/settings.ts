@@ -120,6 +120,13 @@ export interface GlobalSettings {
    *  app. Per-project `remoteControl` override wins (on / off / use-global).
    *  Dispatched agent/worker sessions are never remote-controlled. Default true. */
   remoteControlEnabled: boolean;
+  /** When true, the Command space — a cross-project planning project pinned at
+   *  the top of the project rail — is shown. Off by default: Command is an
+   *  advanced, opt-in surface for people juggling many projects, so a fresh
+   *  install keeps the rail focused on real projects until the user turns it
+   *  on in App Settings. Toggling this only shows/hides the rail entry; the
+   *  Command project and its data are untouched. */
+  showCommandSpace: boolean;
 }
 
 export const FONT_SCALE_MIN = 0.85;
@@ -165,6 +172,7 @@ export function defaultGlobalSettings(dataDir: string, homeDir: string): GlobalS
     },
     hideCancelledStage: false,
     remoteControlEnabled: true,
+    showCommandSpace: false,
   };
 }
 
@@ -249,6 +257,7 @@ export function withSettingsDefaults(
     },
     hideCancelledStage: stored.hideCancelledStage ?? defaults.hideCancelledStage,
     remoteControlEnabled: stored.remoteControlEnabled ?? defaults.remoteControlEnabled,
+    showCommandSpace: stored.showCommandSpace ?? defaults.showCommandSpace,
     jsonl: {
       retentionDays: normalizeJsonlRetention(
         stored.jsonl?.retentionDays ?? defaults.jsonl.retentionDays,

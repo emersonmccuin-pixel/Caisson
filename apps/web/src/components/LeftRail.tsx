@@ -22,6 +22,8 @@ interface LeftRailProps {
   onProjectDeleted: (projectId: string) => void;
   onProjectReorder: (orderedIds: string[]) => void;
   unreadProjectIds: ReadonlySet<string>;
+  /** When true, the Command space row is shown at the top of the project rail. */
+  showCommandSpace: boolean;
 }
 
 export function LeftRail({
@@ -33,6 +35,7 @@ export function LeftRail({
   onProjectDeleted,
   onProjectReorder,
   unreadProjectIds,
+  showCommandSpace,
 }: LeftRailProps) {
   const mode = useRailMode((s) => s.mode);
   const setMode = useRailMode((s) => s.setMode);
@@ -84,6 +87,7 @@ export function LeftRail({
       onProjectDeleted={onProjectDeleted}
       onProjectReorder={onProjectReorder}
       unreadProjectIds={unreadProjectIds}
+      showCommandSpace={showCommandSpace}
     />
   );
 }

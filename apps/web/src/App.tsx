@@ -521,6 +521,7 @@ export default function App() {
           wsDiagnostics={ws.diagnostics}
           applySessionTransition={ws.applySessionTransition}
           defaultOrchestratorSurface={settings?.defaultOrchestratorSurface ?? 'chat'}
+          showCommandSpace={settings?.showCommandSpace ?? false}
         />
       </div>
       {createOpen && (

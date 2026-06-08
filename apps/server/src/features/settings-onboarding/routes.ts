@@ -136,6 +136,10 @@ function mergeSettingsPatch(body: Partial<GlobalSettings>, current: GlobalSettin
         typeof body.remoteControlEnabled === 'boolean'
           ? body.remoteControlEnabled
           : current.remoteControlEnabled,
+      showCommandSpace:
+        typeof body.showCommandSpace === 'boolean'
+          ? body.showCommandSpace
+          : current.showCommandSpace,
     },
     getDataDir(),
     homedir(),

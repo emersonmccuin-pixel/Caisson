@@ -183,6 +183,7 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
     draft.fontScale !== settings.fontScale ||
     draft.hideCancelledStage !== settings.hideCancelledStage ||
     draft.remoteControlEnabled !== settings.remoteControlEnabled ||
+    draft.showCommandSpace !== settings.showCommandSpace ||
     draft.defaultOrchestratorSurface !== settings.defaultOrchestratorSurface ||
     draft.claudeConfigDir !== settings.claudeConfigDir ||
     draft.agentDispatch.maxConcurrent !== settings.agentDispatch.maxConcurrent;
@@ -199,6 +200,7 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
         fontScale: draft.fontScale,
         hideCancelledStage: draft.hideCancelledStage,
         remoteControlEnabled: draft.remoteControlEnabled,
+        showCommandSpace: draft.showCommandSpace,
         defaultOrchestratorSurface: draft.defaultOrchestratorSurface,
         claudeConfigDir: draft.claudeConfigDir,
         agentDispatch: draft.agentDispatch,
@@ -557,6 +559,20 @@ function GeneralTab({
             onChange={(e) => onDraftChange({ remoteControlEnabled: e.target.checked })}
           />
           <span>Enable remote control by default</span>
+        </label>
+      </FieldRow>
+
+      <FieldRow
+        label="Command space"
+        help="Command is a cross-project planning space that sits above all your projects — a single chat where you decide what matters across everything you're juggling, star the work to focus on, and capture loose to-dos. It's an advanced surface, so it's hidden by default. Turn it on to show the Command row at the top of the project list. Hiding it never deletes any Command data."
+      >
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={draft.showCommandSpace}
+            onChange={(e) => onDraftChange({ showCommandSpace: e.target.checked })}
+          />
+          <span>Show the Command space</span>
         </label>
       </FieldRow>
 

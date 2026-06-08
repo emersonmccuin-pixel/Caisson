@@ -74,6 +74,8 @@ interface ShellProps {
   wsDiagnostics: WsDiagnostics;
   applySessionTransition: (transition: SessionTransitionResponse) => void;
   defaultOrchestratorSurface: OrchestratorSurfacePreference;
+  /** When true, the Command space row is shown at the top of the project rail. */
+  showCommandSpace: boolean;
 }
 
 export function Shell({
@@ -94,6 +96,7 @@ export function Shell({
   wsDiagnostics,
   applySessionTransition,
   defaultOrchestratorSurface,
+  showCommandSpace,
 }: ShellProps) {
   const activityRef = usePanelRef();
   const activeSlug = useActiveProject((s) => s.activeSlug);
@@ -132,6 +135,7 @@ export function Shell({
             onProjectDeleted={onProjectDeleted}
             onProjectReorder={onProjectReorder}
             unreadProjectIds={unreadProjectIds}
+            showCommandSpace={showCommandSpace}
           />
         </Panel>
         {/* S8a (Emerson 2026-06-03): rails are fixed-width BY DESIGN — disabled
