@@ -4,6 +4,8 @@
 // the executable handler (the localhost-HTTP dispatch), which cannot live in a
 // browser-safe package.
 
+import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
+
 import type { ToolContext, ToolResult } from './context.ts';
 
 export async function handleWorkItemTool(
@@ -299,6 +301,84 @@ export async function handleWorkItemTool(
       } catch (err) {
         return {
           content: [{ type: 'text', text: `pc_log_bug failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
+    case 'pc_capture_todo': {
+      // Open-write side of the Command rule: any orchestrator can drop a
+      // cross-cutting to-do into Command on the user's behalf. Resolves Command
+      // by its reserved slug (no setting to configure), mirrors pc_log_bug's
+      // resolve-target + intake-stage + origin-note shape.
+      const title = typeof args.title === 'string' ? args.title.trim() : '';
+      const note = typeof args.note === 'string' ? args.note : '';
+      if (!title) {
+        return { content: [{ type: 'text', text: 'pc_capture_todo: title required' }], isError: true };
+      }
+      try {
+        const listRes = await ctx.getServer('/api/projects');
+        if (listRes.status < 200 || listRes.status >= 300) {
+          return {
+            content: [{ type: 'text', text: `pc_capture_todo: failed to list projects (${listRes.status}): ${listRes.body}` }],
+            isError: true,
+          };
+        }
+        const parsed = JSON.parse(listRes.body) as {
+          projects?: Array<{ id: string; name?: string; slug: string; stages?: Array<{ id: string; order?: number; isNew?: boolean }> }>;
+        };
+        const command = (parsed.projects ?? []).find((p) => p.slug === COMMAND_PROJECT_SLUG);
+        if (!command) {
+          return {
+            content: [{ type: 'text', text: 'pc_capture_todo: Command space not found — it is seeded at server boot.' }],
+            isError: true,
+          };
+        }
+        const stages = (command.stages ?? []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        const intakeStage = stages.find((s) => s.isNew)?.id ?? stages[0]?.id;
+        if (!intakeStage) {
+          return {
+            content: [{ type: 'text', text: 'pc_capture_todo: Command has no stages defined.' }],
+            isError: true,
+          };
+        }
+
+        let sourceName = ctx.projectId;
+        if (ctx.projectId) {
+          const sourceRes = await ctx.getServer(`/api/projects/${ctx.projectId}`);
+          if (sourceRes.status >= 200 && sourceRes.status < 300) {
+            try {
+              const source = JSON.parse(sourceRes.body) as { name?: string };
+              if (source.name) sourceName = source.name;
+            } catch {
+              /* fall back to id */
+            }
+          }
+        }
+        const prefixParts = [`Captured from project: ${sourceName ?? 'interactive'}`];
+        if (ctx.sessionId) prefixParts.push(`session: ${ctx.sessionId}`);
+        const prefix = prefixParts.join(' · ');
+        const body = note.trim() ? `${prefix}\n\n${note}` : prefix;
+
+        const createRes = await ctx.postServer(`/api/projects/${command.id}/work-items/create`, {
+          title,
+          stageId: intakeStage,
+          body,
+        });
+        if (createRes.status < 200 || createRes.status >= 300) {
+          return {
+            content: [{ type: 'text', text: `pc_capture_todo failed (${createRes.status}): ${createRes.body}` }],
+            isError: true,
+          };
+        }
+        const created = JSON.parse(createRes.body) as { workItem?: { id?: string; callsign?: string | null } };
+        const newId = created.workItem?.id ?? '?';
+        const callsign = created.workItem?.callsign ?? null;
+        const idDisplay = callsign ? `${callsign} (${newId})` : newId;
+        return ctx.withRichLinkHint(`Captured in Command (id: ${idDisplay}, stage: ${intakeStage}).`);
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_capture_todo failed: ${(err as Error).message}` }],
           isError: true,
         };
       }

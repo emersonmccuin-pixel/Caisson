@@ -212,6 +212,29 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
+    "name": "pc_capture_todo",
+    "family": "work-item",
+    "label": "Capture a to-do",
+    "description": "Capture a cross-cutting to-do into Command — the user's global planning space — no matter which project this chat is bound to. Resolves the Command project by its reserved slug, drops the new work item into Command's intake stage, and prefixes the body with 'Captured from project: <source-name> · session: <id>' so the to-do carries its origin. Use whenever the user asks you to remember / capture / jot a personal task or reminder that does NOT belong to the current project ('remind me to…', 'add a to-do', 'capture this for later'). For work that belongs to THIS project, use pc_create_work_item instead.",
+    "catalogDescription": "Capture a cross-cutting to-do into the Command planning space.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "short, scannable to-do title"
+        },
+        "note": {
+          "type": "string",
+          "description": "optional free-form detail. Optional."
+        }
+      },
+      "required": [
+        "title"
+      ]
+    }
+  },
+  {
     "name": "pc_move_work_item",
     "family": "work-item",
     "label": "Move work item to a stage",
@@ -2002,6 +2025,7 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_move_work_item: 'first-order',
   pc_resolve_work_item: 'first-order',
   pc_log_bug: 'first-order',
+  pc_capture_todo: 'first-order',
   pc_invoke_agent: 'first-order',
   pc_continue_agent: 'first-order',
   pc_list_my_runs: 'first-order',

@@ -150,6 +150,26 @@
       }
     },
     {
+      "name": "pc_capture_todo",
+      "description": "Capture a cross-cutting to-do into Command — the user's global planning space — no matter which project this chat is bound to. Resolves the Command project by its reserved slug, drops the new work item into Command's intake stage, and prefixes the body with 'Captured from project: <source-name> · session: <id>' so the to-do carries its origin. Use whenever the user asks you to remember / capture / jot a personal task or reminder that does NOT belong to the current project ('remind me to…', 'add a to-do', 'capture this for later'). For work that belongs to THIS project, use pc_create_work_item instead.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "short, scannable to-do title"
+          },
+          "note": {
+            "type": "string",
+            "description": "optional free-form detail. Optional."
+          }
+        },
+        "required": [
+          "title"
+        ]
+      }
+    },
+    {
       "name": "pc_move_work_item",
       "description": "Move a work item to a different stage. Pass EITHER `toStage` (an explicit stage slug) OR `toFlag` (one of 'done' | 'cancelled' | 'new' — the system resolves to whichever stage carries that flag, surviving renames). A move never starts a workflow — if a workflow should run on this card, fire it deliberately with pc_fire_workflow. Landing in an is_done stage flips status to `complete`; is_cancelled → `cancelled`. Use the optional `notes` to capture a reason (e.g. when cancelling) — lands on the card's move history. `id` accepts ULID or callsign (e.g. `pc-2.1`).",
       "inputSchema": {
@@ -1763,6 +1783,7 @@
     "mcp__pc-rig__pc_create_agent_work_item",
     "mcp__pc-rig__pc_resolve_work_item",
     "mcp__pc-rig__pc_log_bug",
+    "mcp__pc-rig__pc_capture_todo",
     "mcp__pc-rig__pc_move_work_item",
     "mcp__pc-rig__pc_update_work_item",
     "mcp__pc-rig__pc_create_agent",
@@ -1909,6 +1930,12 @@
       "slug": "mcp__pc-rig__pc_log_bug",
       "label": "Log a bug",
       "description": "File a bug to the user's PC dogfood tracker.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_capture_todo",
+      "label": "Capture a to-do",
+      "description": "Capture a cross-cutting to-do into the Command planning space.",
       "source": "pc-rig"
     },
     {
@@ -2295,6 +2322,9 @@
       "family": "work-item"
     },
     "pc_log_bug": {
+      "family": "work-item"
+    },
+    "pc_capture_todo": {
       "family": "work-item"
     },
     "pc_move_work_item": {

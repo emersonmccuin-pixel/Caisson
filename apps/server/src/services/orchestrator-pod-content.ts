@@ -439,6 +439,8 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     // Bug logging.
     'mcp__pc-rig__pc_log_bug',
+    // Cross-cutting to-do capture into the global Command planning space.
+    'mcp__pc-rig__pc_capture_todo',
     // Dispatch + comms — the offload mechanism + the ask/answer loop.
     'mcp__pc-rig__pc_invoke_agent',
     'mcp__pc-rig__pc_continue_agent',
