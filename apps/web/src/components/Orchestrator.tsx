@@ -34,7 +34,6 @@ import {
   ConversationHeaderButton,
 } from '@/components/ConversationHeader';
 import { OrchestratorLauncher } from '@/components/OrchestratorLauncher';
-import { StatusBar } from '@/components/StatusBar';
 import type { ULID } from '@/features/projects/types';
 
 interface OrchestratorProps {
@@ -224,7 +223,6 @@ export function Orchestrator({
   aggregates,
   send,
   wsStatus,
-  wsDiagnostics,
   applySessionTransition,
   defaultOrchestratorSurface,
 }: OrchestratorProps) {
@@ -673,17 +671,6 @@ export function Orchestrator({
 
   const bannerSlot = startupBannerSlot ?? sessionEndedBannerSlot ?? terminalInputFailureSlot;
 
-  const footerSlot = (
-    <StatusBar
-      projectId={project.id}
-      projectName={project.name}
-      wsStatus={wsStatus}
-      wsDiagnostics={wsDiagnostics}
-      runtimeHealth={runtimeHealth}
-      runtimeSnapshot={runtimeSnapshot}
-    />
-  );
-
   const emptyState = pastLoading ? (
     'Loading session…'
   ) : pastError ? (
@@ -714,7 +701,6 @@ export function Orchestrator({
             onResumeSession={onResumeFromHistory}
           />
         </div>
-        {footerSlot}
       </div>
     );
   }
@@ -745,7 +731,6 @@ export function Orchestrator({
       composerStatusMessage={composerStatusMessage}
       headerSlot={headerSlot}
       bannerSlot={bannerSlot}
-      footerSlot={footerSlot}
       emptyState={emptyState}
       wsStatus={wsStatus}
       remoteControlActive={remoteControlActive}

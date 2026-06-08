@@ -7,15 +7,12 @@ import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { NotesPopover } from '@/components/NotesPopover';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
-import { SessionSwitcher } from '@/components/SessionSwitcher';
-import { HostHealthPill } from '@/features/system/HostHealthPill';
 import { InboxBell } from '@/features/mailbox/InboxBell';
 import { useGlobalQuickAdd } from '@/store/global-quick-add';
 import { BuildMarker } from '@/features/system/BuildMarker';
 import { ClaudeVersionBanner } from '@/features/system/ClaudeVersionBanner';
 import { HostHealthBanner } from '@/features/system/HostHealthBanner';
 import { Shell } from '@/components/Shell';
-import { tabLabel } from '@/components/Tabs';
 import { liveEventsApi } from '@/features/live/client';
 import {
   readStoredProjectChangedCursor,
@@ -29,10 +26,8 @@ import { useDing } from '@/hooks/use-ding';
 import { useRichLinkInvalidator } from '@/hooks/use-rich-link-invalidator';
 import { useStatuslineSync } from '@/hooks/use-statusline-sync';
 import { useLiveGlobalSignature, useLiveStore } from '@/store/live-store';
-import { useActiveCenterTab } from '@/store/active-center-tab';
 import { useActiveProject } from '@/store/active-project';
 import { useAppSettingsModal } from '@/store/app-settings-modal';
-import { useOrchestratorTelemetry } from '@/store/orchestrator-telemetry';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -44,11 +39,6 @@ export default function App() {
   const [restartRequired, setRestartRequired] = useState(false);
   const activeSlug = useActiveProject((s) => s.activeSlug);
   const setActiveSlug = useActiveProject((s) => s.setActiveSlug);
-  const activeTab = useActiveCenterTab((s) => s.tab);
-  const sessionId = useOrchestratorTelemetry((s) => s.sessionId);
-  const sessionLabel = useOrchestratorTelemetry((s) => s.sessionLabel);
-  const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
-  const sessionBreadcrumbRef = useRef<HTMLButtonElement | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
   const notesButtonRef = useRef<HTMLButtonElement | null>(null);
   const projectChangedCursorRef = useRef<string | null>(readStoredProjectChangedCursor());
@@ -423,37 +413,7 @@ export default function App() {
           </button>
         </div>
         <div className="flex flex-1 items-center gap-3 pr-3">
-        {activeProject && (
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span className="text-foreground">{activeProject.name}</span>
-            <span className="text-[var(--fg-dim)]">›</span>
-            <span>{tabLabel(activeTab)}</span>
-            {sessionLabel && activeTab === 'orchestrator' && (
-              <>
-                <span className="text-[var(--fg-dim)]">·</span>
-                <button
-                  ref={sessionBreadcrumbRef}
-                  type="button"
-                  data-testid="session-switcher-trigger"
-                  onClick={() => setSessionSwitcherOpen((v) => !v)}
-                  className={`inline-flex items-center gap-1 italic hover:text-accent ${
-                    sessionSwitcherOpen ? 'text-accent' : ''
-                  }`}
-                  title="Switch sessions"
-                  aria-expanded={sessionSwitcherOpen}
-                  aria-haspopup="menu"
-                >
-                  <span className="max-w-[260px] truncate">{sessionLabel}</span>
-                  <span className="text-[var(--fg-dim)]">▾</span>
-                </button>
-              </>
-            )}
-          </div>
-        )}
-        <div className="ml-auto flex items-center gap-3 text-[10px] uppercase tracking-[0.04em]">
-          <HostHealthPill />
-        </div>
-        <div className="flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1">
           {/* pc-pty-chat-333 — per-project notes scratchpad. */}
           {activeProject && (
             <button
@@ -563,16 +523,6 @@ export default function App() {
           defaultOrchestratorSurface={settings?.defaultOrchestratorSurface ?? 'chat'}
         />
       </div>
-      {sessionSwitcherOpen && activeProject && (
-        <SessionSwitcher
-          projectId={activeProject.id}
-          projectSlug={activeProject.slug}
-          activeSessionId={sessionId}
-          anchorEl={sessionBreadcrumbRef.current}
-          onClose={() => setSessionSwitcherOpen(false)}
-          applySessionTransition={ws.applySessionTransition}
-        />
-      )}
       {createOpen && (
         <CreateProjectModal
           {...(settings?.projectsFolder ? { projectsFolder: settings.projectsFolder } : {})}
