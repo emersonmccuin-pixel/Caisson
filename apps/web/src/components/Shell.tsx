@@ -30,6 +30,7 @@ import { useAgentTranscript } from '@/store/agent-transcript';
 import { useLiveEvents } from '@/store/live-store';
 import { ActivityPanel } from './ActivityPanel';
 import { AgentsList } from './AgentsList';
+import { ErrorBoundary } from './ErrorBoundary';
 import { AgentTranscriptModal } from './AgentTranscriptModal';
 import { FilesViewer } from './FilesViewer';
 import { LeftRail } from './LeftRail';
@@ -162,21 +163,27 @@ export function Shell({
           collapsedSize={36}
           groupResizeBehavior="preserve-pixel-size"
         >
-          <ActivityPanel
-            project={activeProject}
-            events={wsEvents}
-            expanded={activityPanelOpen}
-            onExpand={() => onToggleActivityPanelOpen(true)}
-          />
+          <ErrorBoundary key={activeProject?.id ?? ''} label="activity panel">
+            <ActivityPanel
+              project={activeProject}
+              events={wsEvents}
+              expanded={activityPanelOpen}
+              onExpand={() => onToggleActivityPanelOpen(true)}
+            />
+          </ErrorBoundary>
         </Panel>
         {activeProject && (
-          <AgentTranscriptModalMount
-            project={activeProject}
-            events={wsEvents}
-          />
+          <ErrorBoundary key={activeProject.id}>
+            <AgentTranscriptModalMount
+              project={activeProject}
+              events={wsEvents}
+            />
+          </ErrorBoundary>
         )}
         {activeProject && (
-          <ChatWorkItemModalMount project={activeProject} />
+          <ErrorBoundary key={activeProject.id}>
+            <ChatWorkItemModalMount project={activeProject} />
+          </ErrorBoundary>
         )}
         {activeProject && <AttachmentLightboxMount projectId={activeProject.id} />}
         {activeProject && <GlobalQuickAdd project={activeProject} />}
@@ -266,19 +273,23 @@ function Center({
       <TabBar value={tab} onChange={setTab} />
       <div className="flex-1 overflow-hidden">
         {tab === 'work-items' ? (
-          <WorkItemsPage project={activeProject} events={wsEvents} />
+          <ErrorBoundary key={activeProject.id} label="work items">
+            <WorkItemsPage project={activeProject} events={wsEvents} />
+          </ErrorBoundary>
         ) : tab === 'orchestrator' ? (
-          <Orchestrator
-            project={activeProject}
-            events={wsEvents}
-            subscribeRawTerminal={wsSubscribeRawTerminal}
-            aggregates={wsAggregates}
-            send={wsSend}
-            wsStatus={wsStatus}
-            wsDiagnostics={wsDiagnostics}
-            applySessionTransition={applySessionTransition}
-            defaultOrchestratorSurface={defaultOrchestratorSurface}
-          />
+          <ErrorBoundary key={activeProject.id} label="chat">
+            <Orchestrator
+              project={activeProject}
+              events={wsEvents}
+              subscribeRawTerminal={wsSubscribeRawTerminal}
+              aggregates={wsAggregates}
+              send={wsSend}
+              wsStatus={wsStatus}
+              wsDiagnostics={wsDiagnostics}
+              applySessionTransition={applySessionTransition}
+              defaultOrchestratorSurface={defaultOrchestratorSurface}
+            />
+          </ErrorBoundary>
         ) : tab === 'workflows' ? (
           <WorkflowsList project={activeProject} events={wsEvents} />
         ) : tab === 'agents' ? (

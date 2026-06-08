@@ -41,6 +41,7 @@ import type { WsEnvelope } from '@/features/runtime/ws-types';
 import type { WorkItemStatus } from '@/features/work-items/types';
 import { useProjectAreas } from '@/hooks/use-project-areas';
 import { useProjectWorkItems } from '@/hooks/use-project-work-items';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AreaDetailModal } from './AreaDetailModal';
 
 interface Props {
@@ -281,26 +282,30 @@ export function AreasTab({ project, events }: Props) {
       </DndContext>
 
       {detailArea && (
-        <AreaDetailModal
-          project={project}
-          area={detailArea}
-          workItems={workItems}
-          openCount={countsByArea.byArea.get(detailArea.id)?.open ?? 0}
-          doneCount={countsByArea.byArea.get(detailArea.id)?.done ?? 0}
-          onClose={() => setDetailId(null)}
-          onChanged={refetch}
-        />
+        <ErrorBoundary key={detailArea.id} label="area detail">
+          <AreaDetailModal
+            project={project}
+            area={detailArea}
+            workItems={workItems}
+            openCount={countsByArea.byArea.get(detailArea.id)?.open ?? 0}
+            doneCount={countsByArea.byArea.get(detailArea.id)?.done ?? 0}
+            onClose={() => setDetailId(null)}
+            onChanged={refetch}
+          />
+        </ErrorBoundary>
       )}
 
       {showUncategorized && (
-        <AreaDetailModal
-          project={project}
-          workItems={workItems}
-          openCount={countsByArea.uncaptured.open}
-          doneCount={countsByArea.uncaptured.done}
-          onClose={() => setShowUncategorized(false)}
-          onChanged={refetch}
-        />
+        <ErrorBoundary key="uncategorized" label="area detail">
+          <AreaDetailModal
+            project={project}
+            workItems={workItems}
+            openCount={countsByArea.uncaptured.open}
+            doneCount={countsByArea.uncaptured.done}
+            onClose={() => setShowUncategorized(false)}
+            onChanged={refetch}
+          />
+        </ErrorBoundary>
       )}
     </div>
   );
