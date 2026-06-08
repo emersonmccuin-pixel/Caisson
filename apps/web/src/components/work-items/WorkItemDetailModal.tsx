@@ -799,7 +799,7 @@ function BodyField({
   return (
     <div className="flex flex-col gap-1">
       <div className="min-h-[2rem] max-h-96 overflow-auto border border-border bg-background px-2 py-1.5">
-        {value.trim() ? (
+        {value && value.trim() ? (
           <Markdown text={value} className="text-xs" />
         ) : (
           <span className="text-xs italic text-muted-foreground">No body.</span>

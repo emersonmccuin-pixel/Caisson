@@ -97,10 +97,14 @@ export const workItemsApi = {
     return data.note;
   },
 
+  // includeBody=1: the web UI's list feeds the detail modal (which edits body),
+  // so it needs the full WorkItem shape. The slim projection (pc-pty-chat-254)
+  // is for the MCP tool, not this route — without body the modal's BodyField
+  // crashes on value.trim() and blanks the app.
   workItems: (projectId: ULID) =>
-    getJson<{ workItems: WorkItem[] }>(`/api/projects/${projectId}/work-items`).then(
-      (r) => r.workItems,
-    ),
+    getJson<{ workItems: WorkItem[] }>(
+      `/api/projects/${projectId}/work-items?includeBody=1`,
+    ).then((r) => r.workItems),
 
   getWorkItem: (projectId: ULID, wiId: ULID) =>
     getJson<{ ok: true; workItem: WorkItem }>(
