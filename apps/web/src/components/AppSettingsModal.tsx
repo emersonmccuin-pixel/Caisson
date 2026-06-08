@@ -481,6 +481,21 @@ function GeneralTab({
       </FieldRow>
 
       <FieldRow
+        label="Setup"
+        help="Re-run the first-time setup wizard (Claude sign-in + projects folder). Use this if the app opened without onboarding, or to re-check your sign-in."
+      >
+        <button
+          type="button"
+          onClick={() => {
+            window.location.href = '/?onboarding=force';
+          }}
+          className="self-start border border-border bg-card px-2 py-1 text-xs text-foreground hover:bg-muted"
+        >
+          Re-run setup…
+        </button>
+      </FieldRow>
+
+      <FieldRow
         label="Default orchestrator surface"
         help="Choose what new live project sessions open to when there is no session-specific override."
       >

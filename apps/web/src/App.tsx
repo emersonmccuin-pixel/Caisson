@@ -106,13 +106,32 @@ export default function App() {
       // Any missing auth or unset folder → wizard, regardless of prior "skipped" state.
       if (!forceOnboarding && !onboardingSimMode) {
         const folderOk = (s.projectsFolder ?? '').trim().length > 0;
-        void settingsApi.getPreflight()
-          .then((p) => { setBootReady(p.auth.status === 'authed' && folderOk); })
-          .catch(() => { setBootReady(true); }); // transient API error → let through
+        const everCompleted = Boolean(s.onboardingCompletedAt);
+        // pc-pty-chat-337: on a fresh packaged launch the in-process API may not
+        // be ready when this fires, so getPreflight() can THROW. The old catch
+        // set bootReady=true (fail OPEN) → onboarding silently SKIPPED on fresh
+        // installs. Retry a few times, then FAIL CLOSED: only let a user through
+        // on persistent error if there's evidence they already set up (folder +
+        // completed marker); otherwise show the wizard (the safe fresh-machine
+        // default).
+        const tryPreflight = (attempt: number) => {
+          void settingsApi.getPreflight()
+            .then((p) => { setBootReady(p.auth.status === 'authed' && folderOk); })
+            .catch(() => {
+              if (attempt < 4) {
+                window.setTimeout(() => tryPreflight(attempt + 1), 500);
+              } else {
+                setBootReady(folderOk && everCompleted);
+              }
+            });
+        };
+        tryPreflight(0);
       }
     }).catch(() => {
-      /* best-effort — surfaces as gear icon disabled until next load */
-      if (!forceOnboarding && !onboardingSimMode) setBootReady(true);
+      // Settings couldn't load at all — do NOT fail open. Leaving bootReady null
+      // keeps the wizard showing (the likely fresh-machine case); a returning
+      // user re-completing setup is harmless. (Was: setBootReady(true) — the
+      // same fail-open class as the preflight bug, pc-pty-chat-337.)
     });
   }, [forceOnboarding, onboardingSimMode]);
 
