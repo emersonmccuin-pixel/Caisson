@@ -57,6 +57,8 @@ export interface WorkItem {
   callsign: string | null;
   /** Slice 010 — Area bucket FK, or null for Uncaptured. */
   areaId: ULID | null;
+  /** Command focus — epoch-ms the planner starred this item; null = not in focus. */
+  focusedAt: number | null;
 }
 
 /** Slim projection returned by pc_list_work_items by default (pc-pty-chat-254).
@@ -74,6 +76,8 @@ export interface WorkItemSlim {
   areaId: ULID | null;
   parentId: ULID | null;
   updatedAt: number;
+  /** Command focus — epoch-ms the planner starred this item; null = not in focus. */
+  focusedAt: number | null;
 }
 
 /** Append-only event log written by mutation paths in the repo + by the

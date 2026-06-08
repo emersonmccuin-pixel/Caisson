@@ -64,6 +64,10 @@ export const projects = sqliteTable(
     /** pc-pty-chat-333 — per-project scratch notes. Plain text, nullable.
      *  Persisted in the DB so they survive reload and reinstall. */
     notes: text('notes'),
+    /** Command focus — epoch-ms when the planner last starred this project;
+     *  NULL = not in focus. Binary on/off in practice (the timestamp is a
+     *  free sort key for "most-recently focused"). */
+    focusedAt: integer('focused_at'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     deletedAt: integer('deleted_at'),
@@ -166,6 +170,9 @@ export const workItems = sqliteTable(
     isWorkflowRoot: integer('is_workflow_root', { mode: 'boolean' }).notNull().default(false),
     /** Slice 010 — Area bucket FK (no DB FK; app-enforced), null = Uncaptured. */
     areaId: text('area_id').$type<ULID | null>(),
+    /** Command focus — epoch-ms when the planner starred this item; NULL = not
+     *  in focus. */
+    focusedAt: integer('focused_at'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     deletedAt: integer('deleted_at'),
@@ -196,6 +203,9 @@ export const areas = sqliteTable(
     summary: text('summary').notNull().default(''),
     sortOrder: integer('sort_order').notNull().default(0),
     version: integer('version').notNull().default(1),
+    /** Command focus — epoch-ms when the planner starred this area; NULL = not
+     *  in focus. */
+    focusedAt: integer('focused_at'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     deletedAt: integer('deleted_at'),

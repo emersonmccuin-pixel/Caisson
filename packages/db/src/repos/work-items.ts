@@ -48,6 +48,7 @@ interface WorkItemRow {
   isWorkflowRoot: boolean;
   callsign: string | null;
   areaId: ULID | null;
+  focusedAt: number | null;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
@@ -74,6 +75,7 @@ function toDomain(row: WorkItemRow): WorkItem {
     isWorkflowRoot: row.isWorkflowRoot,
     callsign: row.callsign,
     areaId: row.areaId ?? null,
+    focusedAt: row.focusedAt ?? null,
   };
 }
 
@@ -129,6 +131,7 @@ export function toSlimWorkItem(wi: WorkItem): WorkItemSlim {
     areaId: wi.areaId,
     parentId: wi.parentId,
     updatedAt: wi.updatedAt,
+    focusedAt: wi.focusedAt,
   };
 }
 
@@ -382,6 +385,7 @@ export function createWorkItem(input: CreateWorkItemInput): WorkItem {
       isWorkflowRoot: input.isWorkflowRoot ?? false,
       callsign,
       areaId: input.areaId ?? null,
+      focusedAt: null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -389,6 +393,28 @@ export function createWorkItem(input: CreateWorkItemInput): WorkItem {
     tx.insert(workItems).values(row).run();
     return toDomain(row);
   });
+}
+
+/** Command focus — star/unstar a work item. `focused` true stamps `focused_at`
+ *  with now; false clears it. Bumps version + updatedAt so live deltas refresh.
+ *  Returns the updated WorkItem, or null if no such (live) item. */
+export function setWorkItemFocus(id: ULID, focused: boolean): WorkItem | null {
+  const db = getDb();
+  const existing = db
+    .select()
+    .from(workItems)
+    .where(and(eq(workItems.id, id), isNull(workItems.deletedAt)))
+    .get() as WorkItemRow | undefined;
+  if (!existing) return null;
+  const now = Date.now();
+  const focusedAt = focused ? now : null;
+  const version = existing.version + 1;
+  db
+    .update(workItems)
+    .set({ focusedAt, updatedAt: now, version })
+    .where(eq(workItems.id, id))
+    .run();
+  return toDomain({ ...existing, focusedAt, updatedAt: now, version });
 }
 
 /** Section 35 — look up a work item by its callsign (`pc-2`, `pc-2.1`, …)

@@ -124,4 +124,7 @@ export interface Project {
   callsignSeq: number;
   /** pc-pty-chat-333 — per-project scratch notes. Null when none saved yet. */
   notes: string | null;
+  /** Command focus — epoch-ms the planner starred this project; null = not in
+   *  focus. Drives the gold star in the LeftRail. */
+  focusedAt: number | null;
 }

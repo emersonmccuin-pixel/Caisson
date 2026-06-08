@@ -34,6 +34,7 @@ interface ProjectRow {
   callsignSeq: number;
   stagesRev: number;
   notes: string | null;
+  focusedAt: number | null;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
@@ -50,6 +51,7 @@ function toDomain(row: ProjectRow): Project {
     settings: withProjectSettingsDefaults(row.settings as Partial<ProjectSettings>),
     callsignSeq: row.callsignSeq ?? 0,
     notes: row.notes ?? null,
+    focusedAt: row.focusedAt ?? null,
   };
 }
 
@@ -150,6 +152,7 @@ export function createProjectInDb(db: DbExecutor, input: CreateProjectInput): Pr
     settings: withProjectSettingsDefaults(input.settings as Partial<ProjectSettings> | undefined),
     callsignSeq: 0,
     notes: null,
+    focusedAt: null,
   };
 }
 
@@ -250,6 +253,22 @@ export function updateProjectMeta(id: ULID, input: UpdateProjectMetaInput): Proj
  *  empty string to clear (stored as '', not NULL). */
 export function updateProjectNotes(id: ULID, text: string): Project | null {
   return updateProjectNotesInDb(getDb(), id, text);
+}
+
+/** Command focus — star/unstar a project. `focused` true stamps `focused_at`
+ *  with now; false clears it. Returns the updated Project, or null if no such
+ *  (live) project. */
+export function setProjectFocus(id: ULID, focused: boolean): Project | null {
+  const db = getDb();
+  const existing = getProjectByIdInDb(db, id);
+  if (!existing) return null;
+  const now = Date.now();
+  db
+    .update(projects)
+    .set({ focusedAt: focused ? now : null, updatedAt: now })
+    .where(and(eq(projects.id, id), isNull(projects.deletedAt)))
+    .run();
+  return getProjectByIdInDb(db, id);
 }
 
 export function updateProjectNotesInDb(db: DbExecutor, id: ULID, text: string): Project | null {
