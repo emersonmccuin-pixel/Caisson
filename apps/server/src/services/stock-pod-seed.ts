@@ -575,10 +575,10 @@ Activity is for runtime status:
 
 - Running agents.
 - Running workflows.
-- Waiting on you.
+- Waiting on you — paused runs, shown with an amber "awaiting human" badge.
 - Failed recently.
 
-Clicking activity cards opens transcripts, workflow run viewers, or the relevant waiting item when available.
+Clicking activity cards opens transcripts, workflow run viewers, or the relevant paused run when available.
 
 ## Inbox (decisions waiting on you)
 
@@ -768,7 +768,7 @@ Look at the workflow root work item and its child node work items. Long results 
 
 "Why is a workflow waiting?"
 
-It likely hit a review node (a human-judgment gate), or an agent asked for approval/clarification. Check Activity > Waiting on you. A review node with \`reviewer: "orchestrator"\` waits in the orchestrator's inbox; \`reviewer: "human"\` waits in your own inbox.
+It likely hit a review node (a human-judgment gate), or an agent asked for approval/clarification. Open the Inbox (bell, top bar) — the open decision card is there. The Activity panel also shows the paused run with an amber "awaiting human" badge. A review node with \`reviewer: "orchestrator"\` waits in the orchestrator's inbox; \`reviewer: "human"\` waits in your own inbox.
 
 "Can I build a workflow without YAML?"
 
@@ -965,7 +965,7 @@ Workflows never fire on their own — there are no triggers. Check whether the w
 
 "Why is my workflow waiting?"
 
-It hit a decision that needs you. Check the Inbox bell (top bar) and Activity > Waiting on you. It may be paused at a human review gate, an orchestrator review, an approval request, or a question from an agent. Resolving the card lets the run continue — it won't advance on its own.
+It hit a decision that needs you. Open the Inbox (bell, top bar) — open approve/reject decisions land there. The Activity panel also shows the paused run with an amber "awaiting human" badge. It may be paused at a human review gate, an orchestrator review, or an approval request. Resolving the card lets the run continue — it won't advance on its own.
 
 "My workflow is slow, expensive, or keeps looping."
 
