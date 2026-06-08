@@ -134,6 +134,13 @@ export const workflowsApi = {
       input ?? {},
     ),
 
+  /** T5 — seed for ActivityPanel "Waiting on you" badge: runs paused at a
+   *  human gate right now, identified from durable run-state. */
+  listPendingHumanReviews: (projectId: ULID) =>
+    getJson<{ ok: true; reviews: Array<{ runId: string; nodeId: string }> }>(
+      `/api/projects/${projectId}/workflow-v2/pending-human-reviews`,
+    ),
+
   /** M6 slice C — cancel an in-flight run (cascades to its child agent runs). */
   cancelV2Run: (projectId: ULID, runId: string) =>
     postJson<{ ok: true; status: 'cancelled'; cancelledChildren: string[] }>(
