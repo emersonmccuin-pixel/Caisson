@@ -20,7 +20,8 @@ You are the **planner** for Command — the user's single space for planning acr
 
 ## What makes you different
 - **You see across all projects.** A project's own chat only sees that one project. You see them all. Use \`pc_list_projects\` to get every project, then \`pc_list_work_items\` and \`pc_list_areas\` with \`targetProjectId\` to pull any project's work. This cross-project view is the whole point of Command.
-- **You plan; you don't build.** You do not write code, dispatch agents, or run workflows. When the user decides to actually *do* a piece of work, that happens in the relevant project's chat — you hand it off ("that lives in the HAAS project — open it and its chat will pick it up"). Staying out of the doing is deliberate.
+- **You run your own agents.** Command has its own helpers — agents that pull in the outside world (calendar, Jira, email) and planning helpers. Dispatch them with \`pc_invoke_agent\` and track them with \`pc_list_my_runs\` / \`pc_inspect_agent_run\`. Use their findings to inform planning (they typically surface things that become to-dos).
+- **But you don't do a project's building for it.** You don't write a project's code or fire its build workflows. When the user decides to actually *do* a piece of project work, that happens in that project's own chat — you hand it off ("that lives in the HAAS project — open it and its chat will pick it up"). You plan and steer across projects; the doing of project work stays in the projects.
 - **You own the general to-do list.** Command has its own work items — the user's cross-cutting to-dos that don't belong to any single project (a reply to send, a follow-up, an errand). They land here (the + capture box defaults to Command, and any project chat can drop one in for the user). Manage them like a to-do list: create, update, move to done. Capture new ones with \`pc_create_work_item\` (here in Command) or read them with \`pc_list_work_items\`.
 
 ## The planning conversation
@@ -43,10 +44,10 @@ export const COMMAND_PLANNER_POD_CONTENT: CreateAgentInput = {
   origin: 'stock',
   prompt: COMMAND_PLANNER_PROMPT.trim(),
   // Planner surface: cross-project READS + manage Command's own to-dos +
-  // orientation/context + the on-demand door. Deliberately NO build/dispatch
-  // tools (pc_invoke_agent, pc_create_agent_work_item, pc_fire_workflow,
-  // pc_complete_node) and no project-mutation beyond Command's own items —
-  // doing lives in the project chats.
+  // run Command's OWN agents (gather/planning) + orientation/context + the
+  // on-demand door. The line is "no doing of a PROJECT's build work" — so
+  // pc_fire_workflow / pc_complete_node (project workflows) stay OFF, but the
+  // planner CAN dispatch its own agents (pc_invoke_agent) and manage them.
   tools: [
     // Read-only local orientation (notes/docs); no Edit/Write/Bash — planner
     // never touches code.
@@ -67,6 +68,15 @@ export const COMMAND_PLANNER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_capture_todo',
     'mcp__pc-rig__pc_create_area',
     'mcp__pc-rig__pc_update_area',
+    // Run Command's OWN agents — gather-agents (calendar / Jira / email) and
+    // planning helpers. NOT a project's build work (no pc_fire_workflow here).
+    'mcp__pc-rig__pc_list_agents',
+    'mcp__pc-rig__pc_invoke_agent',
+    'mcp__pc-rig__pc_continue_agent',
+    'mcp__pc-rig__pc_create_agent_work_item',
+    'mcp__pc-rig__pc_list_my_runs',
+    'mcp__pc-rig__pc_inspect_agent_run',
+    'mcp__pc-rig__pc_kill_agent_run',
     // Context docs + search.
     'mcp__pc-rig__pc_list_context',
     'mcp__pc-rig__pc_get_context_doc',
