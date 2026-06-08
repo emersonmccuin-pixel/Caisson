@@ -1,6 +1,7 @@
 // M4b (FD-8) — stale-ask watchdog: an open pc_ask_* past the threshold mints
-// ONE actionable user-inbox `agent-ask-escalated` card through the mailbox
-// (idempotency `ask-stale:<askId>`); fresher asks are untouched.
+// ONE `agent-ask-escalated` message addressed to the active-orchestrator
+// (idempotency `ask-stale:<askId>`); fresher asks are untouched. Agents never
+// reach the human directly (pc-pty-chat-317 / doctrine).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -57,7 +58,7 @@ function harness(stale: PendingAskRow[]) {
   return { deps, enqueued, cutoffs };
 }
 
-test('a stale ask mints one agent-ask-escalated user-inbox card with the ask payload', () => {
+test('a stale ask mints one agent-ask-escalated orchestrator message with the ask payload', () => {
   const h = harness([ask()]);
   const escalated = sweepStalePendingAsks(h.deps);
   assert.equal(escalated, 1);
@@ -76,9 +77,11 @@ test('a stale ask mints one agent-ask-escalated user-inbox card with the ask pay
     { label: 'US', value: 'us' },
     { label: 'EU', value: 'eu' },
   ]);
+  // Doctrine (pc-pty-chat-317): agents never reach the human directly —
+  // escalated asks go to the orchestrator, NOT to the user inbox.
   const recipient = h.enqueued[0]!.recipients[0]!;
-  assert.equal(recipient.addressKind, 'user-inbox');
-  assert.equal(recipient.channel, 'ui-inbox');
+  assert.equal(recipient.addressKind, 'active-orchestrator');
+  assert.equal(recipient.channel, 'orchestrator-turn');
 });
 
 test('the sweep queries with now - threshold as the cutoff', () => {
