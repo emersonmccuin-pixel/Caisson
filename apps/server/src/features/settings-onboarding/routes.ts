@@ -207,9 +207,11 @@ export function registerSettingsOnboardingRoutes(
     }
   });
 
-  app.post('/api/onboarding/auth/login', (c) => {
+  app.post('/api/onboarding/auth/login', async (c) => {
     try {
-      return c.json({ ok: true, login: services.startLogin() });
+      const raw = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+      const method = raw['method'] === 'code' ? 'code' : 'browser';
+      return c.json({ ok: true, login: services.startLogin(method) });
     } catch (e) {
       return c.json({ ok: false, error: (e as Error).message }, 500);
     }

@@ -27,8 +27,8 @@ export const settingsApi = {
       {},
     ),
 
-  startOnboardingLogin: () =>
-    postJson<{ ok: true; login: OnboardingLoginState }>('/api/onboarding/auth/login', {}),
+  startOnboardingLogin: (method: 'browser' | 'code' = 'browser') =>
+    postJson<{ ok: true; login: OnboardingLoginState }>('/api/onboarding/auth/login', { method }),
 
   getOnboardingAuthState: () =>
     getJson<{ ok: true } & OnboardingAuthState>(

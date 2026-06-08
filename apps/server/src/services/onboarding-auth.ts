@@ -92,20 +92,32 @@ function ingest(chunk: string): void {
   }
 }
 
-/** Start (or no-op if already running) `claude auth login`. */
-export function startLogin(): LoginState {
+/** Which sign-in flow to drive. */
+export type LoginMethod = 'browser' | 'code';
+
+/** Start (or no-op if already running) a Claude sign-in.
+ *  - 'browser' (default): `claude auth login --claudeai` — CC's OAuth with a
+ *    localhost browser-callback round-trip.
+ *  - 'code': `claude setup-token` — the headless paste-a-code flow. CC prints
+ *    an authorize URL and reads the resulting code/token from stdin, with NO
+ *    localhost callback. This is the escape for environments where the
+ *    browser→localhost redirect fails (pc-pty-chat-338). */
+export function startLogin(method: LoginMethod = 'browser'): LoginState {
   if (proc) return getLoginState();
   captured = '';
   url = null;
-  mode = 'unknown';
+  // Seed the code flow's mode so the UI shows the paste box immediately,
+  // independent of how setup-token formats its URL output.
+  mode = method === 'code' ? 'code-paste' : 'unknown';
   planFailure = false;
   planFailureNote = null;
   exitCode = null;
   const bin = requireClaudeBinary();
-  // `--claudeai` = Claude subscription (the default; explicit for clarity).
-  // stdio: pipe keeps stdin writable so submitCode() can deliver the
-  // authorization code if CC enters code-paste mode.
-  const child = spawn(bin, ['auth', 'login', '--claudeai'], {
+  // browser: `--claudeai` = Claude subscription (the default; explicit).
+  // code: `setup-token` reads the pasted code/token from stdin. Both keep
+  // stdio piped so submitCode() can deliver the code.
+  const args = method === 'code' ? ['setup-token'] : ['auth', 'login', '--claudeai'];
+  const child = spawn(bin, args, {
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
   });

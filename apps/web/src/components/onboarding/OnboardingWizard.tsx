@@ -90,7 +90,9 @@ export function OnboardingWizard({
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string | null>(null);
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
-  const [loginMode, setLoginMode] = useState<'callback' | 'code-paste' | 'unknown'>('unknown');
+  // Which sign-in flow the user is driving: 'browser' (OAuth localhost callback)
+  // or 'code' (setup-token paste flow — the escape when the callback fails).
+  const [loginMethod, setLoginMethod] = useState<'browser' | 'code'>('browser');
   const [codeInput, setCodeInput] = useState('');
   const [codeSubmitting, setCodeSubmitting] = useState(false);
   const [planFailure, setPlanFailure] = useState(false);
@@ -222,11 +224,16 @@ export function OnboardingWizard({
 
   // Auth drive — runs CC's own `claude auth login` (it opens the browser +
   // writes its own credentials), then polls `claude auth status` for success.
-  async function handleSignIn() {
+  async function handleSignIn(method: 'browser' | 'code' = 'browser') {
+    // Switching method (or retrying) must not collide with a login already in
+    // flight — startLogin no-ops while a proc is alive, so cancel it first.
+    if (busy === 'auth') {
+      try { await settingsApi.cancelOnboardingLogin(); } catch { /* best-effort */ }
+    }
     setBusy('auth');
     setError(null);
     setLoginUrl(null);
-    setLoginMode('unknown');
+    setLoginMethod(method);
     setPlanFailure(false);
     setPlanFailureNote(null);
     setCodeInput('');
@@ -242,14 +249,13 @@ export function OnboardingWizard({
         setBusy(null);
         return;
       }
-      await settingsApi.startOnboardingLogin();
+      await settingsApi.startOnboardingLogin(method);
       // Poll until CC reports signed-in (or the login process fails).
       if (pollRef.current) clearInterval(pollRef.current);
       pollRef.current = setInterval(() => {
         void settingsApi.getOnboardingAuthState()
           .then((s) => {
             if (s.login.url) setLoginUrl(s.login.url);
-            if (s.login.mode && s.login.mode !== 'unknown') setLoginMode(s.login.mode);
             if (s.login.planFailure) {
               setPlanFailure(true);
               setPlanFailureNote(s.login.planFailureNote ?? null);
@@ -442,7 +448,7 @@ export function OnboardingWizard({
                   busy={busy === 'auth'}
                   refreshing={busy === 'refresh'}
                   loginUrl={loginUrl}
-                  loginMode={loginMode}
+                  loginMethod={loginMethod}
                   planFailure={planFailure}
                   planFailureNote={planFailureNote}
                   codeInput={codeInput}
@@ -730,14 +736,14 @@ interface AuthStepProps {
   busy: boolean;
   refreshing: boolean;
   loginUrl: string | null;
-  loginMode: 'callback' | 'code-paste' | 'unknown';
+  loginMethod: 'browser' | 'code';
   planFailure: boolean;
   planFailureNote: string | null;
   codeInput: string;
   codeSubmitting: boolean;
   onCodeChange: (v: string) => void;
   onSubmitCode: () => void;
-  onSignIn: () => void;
+  onSignIn: (method?: 'browser' | 'code') => void;
   onRefresh: () => void;
   onNext: () => void;
 }
@@ -747,7 +753,7 @@ function AuthStep({
   busy,
   refreshing,
   loginUrl,
-  loginMode,
+  loginMethod,
   planFailure,
   planFailureNote,
   codeInput,
@@ -758,10 +764,11 @@ function AuthStep({
   onRefresh,
   onNext,
 }: AuthStepProps) {
-  // Show the code-paste form when:
-  // 1. The mode is detected as code-paste by the server, OR
-  // 2. A URL was printed but we're still busy (browser may not have auto-opened).
-  const showCodeForm = busy && (loginMode === 'code-paste' || (loginUrl !== null && loginMode !== 'callback'));
+  // ALWAYS show the paste box while a login is in flight. Claude may emit an
+  // authorization code in ANY mode (even when we detected a localhost callback),
+  // so the user must never be in a state where a code appears with nowhere to
+  // put it. (pc-pty-chat-338)
+  const showCodeForm = busy;
 
   return (
     <div className="flex flex-1 flex-col">
@@ -798,8 +805,9 @@ function AuthStep({
           </div>
         ) : busy ? (
           <div className="bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-            Your browser is opening to sign in to Claude. Finish there and this
-            will update automatically.
+            {loginMethod === 'code'
+              ? 'A sign-in page will open. Approve, copy the code it gives you, and paste it below.'
+              : 'Your browser is opening to sign in to Claude. Finish there and this will update automatically. If the page shows an error, use “Use a sign-in code” below.'}
           </div>
         ) : (
           <div className="flex items-center gap-2 bg-warning/15 px-3 py-2 text-sm text-warning">
@@ -824,8 +832,9 @@ function AuthStep({
         {showCodeForm && (
           <div className="mt-2 space-y-2">
             <p className="text-xs text-muted-foreground">
-              If the browser opened, go to the sign-in page, complete sign-in,
-              and paste the authorization code here:
+              {loginMethod === 'code'
+                ? 'Open the sign-in page, approve, then paste the code it gives you here:'
+                : 'If the browser opened, complete sign-in there and paste the authorization code here:'}
             </p>
             <div className="flex items-center gap-2">
               <input
@@ -857,9 +866,14 @@ function AuthStep({
         ) : (
           <>
             {!planFailure && (
-              <PrimaryButton onClick={onSignIn} disabled={busy}>
+              <PrimaryButton onClick={() => onSignIn('browser')} disabled={busy}>
                 {busy ? 'Waiting for sign-in…' : 'Sign in to Claude'}
               </PrimaryButton>
+            )}
+            {!planFailure && (
+              <SecondaryButton onClick={() => onSignIn('code')}>
+                {loginMethod === 'code' && busy ? 'Restart with a code' : 'Use a sign-in code'}
+              </SecondaryButton>
             )}
             <SecondaryButton onClick={onRefresh} disabled={refreshing}>
               {refreshing ? 'Checking…' : 'Re-check'}
