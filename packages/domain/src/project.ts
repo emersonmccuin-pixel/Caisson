@@ -122,4 +122,6 @@ export interface Project {
    *  numbering. Highest assigned root number. Surfaced for forensic /
    *  debug use; UI doesn't read it directly. */
   callsignSeq: number;
+  /** pc-pty-chat-333 — per-project scratch notes. Null when none saved yet. */
+  notes: string | null;
 }

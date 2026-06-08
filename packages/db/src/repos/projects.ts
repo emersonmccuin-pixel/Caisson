@@ -29,6 +29,7 @@ interface ProjectRow {
   gitRemote: string | null;
   callsignSeq: number;
   stagesRev: number;
+  notes: string | null;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
@@ -44,6 +45,7 @@ function toDomain(row: ProjectRow): Project {
     gitRemote: row.gitRemote,
     settings: withProjectSettingsDefaults(row.settings as Partial<ProjectSettings>),
     callsignSeq: row.callsignSeq ?? 0,
+    notes: row.notes ?? null,
   };
 }
 
@@ -140,6 +142,7 @@ export function createProjectInDb(db: DbExecutor, input: CreateProjectInput): Pr
     gitRemote,
     settings: withProjectSettingsDefaults(input.settings as Partial<ProjectSettings> | undefined),
     callsignSeq: 0,
+    notes: null,
   };
 }
 
@@ -233,6 +236,28 @@ export interface UpdateProjectMetaInput {
  *  the updated Project, or null if no such project (or soft-deleted). */
 export function updateProjectMeta(id: ULID, input: UpdateProjectMetaInput): Project | null {
   return updateProjectMetaInDb(getDb(), id, input);
+}
+
+/** Save the scratch notes for a project. Returns the updated Project, or null
+ *  if no such project (or soft-deleted). `text` is stored as-is; pass an
+ *  empty string to clear (stored as '', not NULL). */
+export function updateProjectNotes(id: ULID, text: string): Project | null {
+  return updateProjectNotesInDb(getDb(), id, text);
+}
+
+export function updateProjectNotesInDb(db: DbExecutor, id: ULID, text: string): Project | null {
+  const existing = db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.id, id), isNull(projects.deletedAt)))
+    .get() as ProjectRow | undefined;
+  if (!existing) return null;
+  db
+    .update(projects)
+    .set({ notes: text, updatedAt: Date.now() })
+    .where(and(eq(projects.id, id), isNull(projects.deletedAt)))
+    .run();
+  return toDomain({ ...existing, notes: text, updatedAt: Date.now() });
 }
 
 export function updateProjectMetaInDb(

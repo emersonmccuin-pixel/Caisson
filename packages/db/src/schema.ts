@@ -61,6 +61,9 @@ export const projects = sqliteTable(
      *  every time the stages JSON is replaced; the new value is stamped into
      *  each Stage.rev so the frontend can discard stale WS deltas. */
     stagesRev: integer('stages_rev').notNull().default(0),
+    /** pc-pty-chat-333 — per-project scratch notes. Plain text, nullable.
+     *  Persisted in the DB so they survive reload and reinstall. */
+    notes: text('notes'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     deletedAt: integer('deleted_at'),

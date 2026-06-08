@@ -18,6 +18,8 @@ export {
   softDeleteProjectInDb,
   updateProjectMeta,
   updateProjectMetaInDb,
+  updateProjectNotes,
+  updateProjectNotesInDb,
   updateProjectStages,
 } from './repos/projects.ts';
 export type {
