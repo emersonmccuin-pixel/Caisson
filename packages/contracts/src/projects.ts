@@ -32,6 +32,8 @@ export interface ProjectDto {
   gitRemote: string | null;
   settings: ProjectSettingsDto;
   callsignSeq: number;
+  /** pc-pty-chat-333 — per-project scratch notes. Null when none saved yet. */
+  notes: string | null;
 }
 
 export type CreateProjectMode = 'init-empty' | 'init-in-place' | 'attach-to-git';
@@ -74,6 +76,7 @@ export const projectRoutes = {
   create: '/api/projects',
   reorder: '/api/projects/reorder',
   detail: (projectId: ULID) => `/api/projects/${encodeURIComponent(projectId)}`,
+  notes: (projectId: ULID) => `/api/projects/${encodeURIComponent(projectId)}/notes`,
 } as const;
 
 export type ProjectMutationReason =
@@ -216,7 +219,8 @@ export function isProjectDto(value: unknown): value is ProjectDto {
     typeof value.folderPath === 'string' &&
     (value.gitRemote === null || typeof value.gitRemote === 'string') &&
     isProjectSettingsDto(value.settings) &&
-    typeof value.callsignSeq === 'number'
+    typeof value.callsignSeq === 'number' &&
+    (value.notes === null || value.notes === undefined || typeof value.notes === 'string')
   );
 }
 
