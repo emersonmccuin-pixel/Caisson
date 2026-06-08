@@ -21,6 +21,7 @@ import {
   listProjectsInDb,
   reorderProjects as defaultReorderProjects,
   reorderProjectsInDb,
+  setProjectFocusInDb,
   softDeleteProject as defaultSoftDeleteProject,
   softDeleteProjectInDb,
   updateProjectMeta as defaultUpdateProjectMeta,
@@ -189,6 +190,20 @@ export function reorderProjectsWithLiveEvent(
     reorderProjectsInDb(tx, request.orderedIds as DomainULID[]);
     const projects = listProjectsInDb(tx).map(toProjectDto);
     return { ok: true, projects, ...projectChanged('reordered', undefined, tx) };
+  });
+}
+
+/** Command focus — star/unstar a project + emit the `project.changed` live
+ *  event in the same txn (the relay fans it; the LeftRail star updates live). */
+export function setProjectFocusWithLiveEvent(
+  projectId: ContractULID,
+  focused: boolean,
+): ProjectMutationResult<{ project: ProjectDto }> {
+  return getDb().transaction((tx) => {
+    const updated = setProjectFocusInDb(tx, projectId as DomainULID, focused);
+    if (!updated) return notFound(projectId);
+    const project = toProjectDto(updated);
+    return { ok: true, project, ...projectChanged('metadata-updated', project, tx) };
   });
 }
 

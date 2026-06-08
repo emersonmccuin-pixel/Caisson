@@ -235,6 +235,38 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
+    "name": "pc_set_focus",
+    "family": "work-item",
+    "label": "Set focus (Command)",
+    "description": "Command planner only: star (or unstar) a project or work item to mark it as in-focus for the current plan. Sets a gold star the user sees. `kind:'project'` + the project id stars a whole project in the LeftRail; `kind:'work_item'` + the work item id stars a single item (any project — you don't need its project id). `focused:false` clears the star. This is the planner's one write across the project boundary — it does NOT start or change the work itself, only marks what's in focus. Get ids from pc_list_projects / pc_list_work_items.",
+    "catalogDescription": "Star/unstar a project or work item as in-focus (Command planner).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "project",
+            "work_item"
+          ],
+          "description": "what to focus: a whole 'project' or a single 'work_item'"
+        },
+        "id": {
+          "type": "string",
+          "description": "the project id (kind=project) or work item id (kind=work_item)"
+        },
+        "focused": {
+          "type": "boolean",
+          "description": "true (default) to star/add to focus; false to clear the star"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    }
+  },
+  {
     "name": "pc_move_work_item",
     "family": "work-item",
     "label": "Move work item to a stage",
@@ -2046,6 +2078,7 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_resolve_work_item: 'first-order',
   pc_log_bug: 'first-order',
   pc_capture_todo: 'first-order',
+  pc_set_focus: 'first-order',
   pc_invoke_agent: 'first-order',
   pc_continue_agent: 'first-order',
   pc_list_my_runs: 'first-order',

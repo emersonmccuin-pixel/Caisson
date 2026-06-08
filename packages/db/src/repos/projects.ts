@@ -259,7 +259,10 @@ export function updateProjectNotes(id: ULID, text: string): Project | null {
  *  with now; false clears it. Returns the updated Project, or null if no such
  *  (live) project. */
 export function setProjectFocus(id: ULID, focused: boolean): Project | null {
-  const db = getDb();
+  return setProjectFocusInDb(getDb(), id, focused);
+}
+
+export function setProjectFocusInDb(db: DbExecutor, id: ULID, focused: boolean): Project | null {
   const existing = getProjectByIdInDb(db, id);
   if (!existing) return null;
   const now = Date.now();

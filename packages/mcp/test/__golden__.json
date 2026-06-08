@@ -170,6 +170,35 @@
       }
     },
     {
+      "name": "pc_set_focus",
+      "description": "Command planner only: star (or unstar) a project or work item to mark it as in-focus for the current plan. Sets a gold star the user sees. `kind:'project'` + the project id stars a whole project in the LeftRail; `kind:'work_item'` + the work item id stars a single item (any project — you don't need its project id). `focused:false` clears the star. This is the planner's one write across the project boundary — it does NOT start or change the work itself, only marks what's in focus. Get ids from pc_list_projects / pc_list_work_items.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "project",
+              "work_item"
+            ],
+            "description": "what to focus: a whole 'project' or a single 'work_item'"
+          },
+          "id": {
+            "type": "string",
+            "description": "the project id (kind=project) or work item id (kind=work_item)"
+          },
+          "focused": {
+            "type": "boolean",
+            "description": "true (default) to star/add to focus; false to clear the star"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ]
+      }
+    },
+    {
       "name": "pc_move_work_item",
       "description": "Move a work item to a different stage. Pass EITHER `toStage` (an explicit stage slug) OR `toFlag` (one of 'done' | 'cancelled' | 'new' — the system resolves to whichever stage carries that flag, surviving renames). A move never starts a workflow — if a workflow should run on this card, fire it deliberately with pc_fire_workflow. Landing in an is_done stage flips status to `complete`; is_cancelled → `cancelled`. Use the optional `notes` to capture a reason (e.g. when cancelling) — lands on the card's move history. `id` accepts ULID or callsign (e.g. `pc-2.1`).",
       "inputSchema": {
@@ -1801,6 +1830,7 @@
     "mcp__pc-rig__pc_resolve_work_item",
     "mcp__pc-rig__pc_log_bug",
     "mcp__pc-rig__pc_capture_todo",
+    "mcp__pc-rig__pc_set_focus",
     "mcp__pc-rig__pc_move_work_item",
     "mcp__pc-rig__pc_update_work_item",
     "mcp__pc-rig__pc_create_agent",
@@ -1954,6 +1984,12 @@
       "slug": "mcp__pc-rig__pc_capture_todo",
       "label": "Capture a to-do",
       "description": "Capture a cross-cutting to-do into the Command planning space.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_set_focus",
+      "label": "Set focus (Command)",
+      "description": "Star/unstar a project or work item as in-focus (Command planner).",
       "source": "pc-rig"
     },
     {
@@ -2349,6 +2385,9 @@
       "family": "work-item"
     },
     "pc_capture_todo": {
+      "family": "work-item"
+    },
+    "pc_set_focus": {
       "family": "work-item"
     },
     "pc_move_work_item": {

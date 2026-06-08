@@ -384,6 +384,35 @@ export async function handleWorkItemTool(
       }
     }
 
+    case 'pc_set_focus': {
+      // Command focus — star/unstar a project or work item. Single unified
+      // route resolves the owning project server-side for work items.
+      const kind = args.kind === 'project' || args.kind === 'work_item' ? args.kind : '';
+      const id = typeof args.id === 'string' ? args.id.trim() : '';
+      const focused = args.focused !== false;
+      if (!kind || !id) {
+        return {
+          content: [{ type: 'text', text: "pc_set_focus: kind ('project' | 'work_item') and id required" }],
+          isError: true,
+        };
+      }
+      try {
+        const res = await ctx.postServer('/api/focus', { kind, id, focused });
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `pc_set_focus failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_set_focus failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
     case 'pc_move_work_item': {
       const ref = typeof args.id === 'string' ? args.id : '';
       const toStage = typeof args.toStage === 'string' ? args.toStage : '';

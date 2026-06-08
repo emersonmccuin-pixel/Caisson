@@ -38,6 +38,7 @@ import {
   listWorkItems as dbListWorkItems,
   moveWorkItemStage,
   patchWorkItem as dbPatchWorkItem,
+  setWorkItemFocus as dbSetWorkItemFocus,
   restoreWorkItem as dbRestoreWorkItem,
   softDeleteWorkItem as dbSoftDeleteWorkItem,
   WorkItemVersionConflictError,
@@ -350,6 +351,24 @@ export class WorkItemService {
       },
     });
     return patched;
+  }
+
+  /** Command focus — star/unstar a work item. Routes through the one write
+   *  door so a `work-item.changed` receipt + live event fire (the gold star
+   *  updates live). No version check — focus is a lightweight planner flag. */
+  setFocus(id: ULID, focused: boolean): WorkItem {
+    let result!: WorkItem;
+    this.gateway.commitWorkItemChange({
+      projectId: this.opts.projectId,
+      reason: 'patched',
+      mutate: () => {
+        const row = dbSetWorkItemFocus(id, focused);
+        if (!row) throw new Error(`unknown work item: ${id}`);
+        result = row;
+        return row;
+      },
+    });
+    return result;
   }
 
   /** Version-checked stage move + optional explicit position. Does NOT fire
