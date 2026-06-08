@@ -8,6 +8,13 @@ import { parseErr, parseOk, type ApiResult, type ParseResult, type ULID } from '
 
 export type { ApiResult, ParseResult, ULID } from './shared.ts';
 
+/** Command — the reserved, global planning/steering space. It is a normal
+ *  project row identified by this locked slug; the create flow uniques any
+ *  user project away from it. Server seeds it at boot; the LeftRail pins it
+ *  above the project list. Both server and web key off this one constant. */
+export const COMMAND_PROJECT_SLUG = 'command';
+export const COMMAND_PROJECT_NAME = 'Command';
+
 export interface ProjectStageDto {
   id: string;
   name: string;

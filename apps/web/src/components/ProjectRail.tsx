@@ -12,6 +12,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
+
 import { projectsApi, type Project } from '@/features/projects/client';
 import { runtimeApi } from '@/features/runtime/client';
 import { useActiveCenterTab } from '@/store/active-center-tab';
@@ -62,6 +64,17 @@ export function ProjectRail({
     () => projects.find((p) => p.slug === activeSlug) ?? null,
     [projects, activeSlug],
   );
+  // Command is a reserved project pinned above the list (and rendered as its
+  // own row below). The user-project list — filter, drag-reorder, counts —
+  // operates on everything else.
+  const commandProject = useMemo(
+    () => projects.find((p) => p.slug === COMMAND_PROJECT_SLUG) ?? null,
+    [projects],
+  );
+  const userProjects = useMemo(
+    () => projects.filter((p) => p.slug !== COMMAND_PROJECT_SLUG),
+    [projects],
+  );
   const activeSnapshot = useStatuslineStore((s) =>
     activeProject ? s.byProject[activeProject.id] ?? null : null,
   );
@@ -80,11 +93,11 @@ export function ProjectRail({
   // 5+.3 (D89): rail-local, transient, name-only substring filter.
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return projects;
-    return projects.filter((p) => p.name.toLowerCase().includes(q));
-  }, [projects, filter]);
+    if (!q) return userProjects;
+    return userProjects.filter((p) => p.name.toLowerCase().includes(q));
+  }, [userProjects, filter]);
 
-  const dragEnabled = filter.trim() === '' && projects.length > 1;
+  const dragEnabled = filter.trim() === '' && userProjects.length > 1;
 
   useEffect(() => {
     if (!menu) return;
@@ -165,11 +178,11 @@ export function ProjectRail({
     setDraggingId(null);
     setDragOverId(null);
     if (!srcId || srcId === target.id) return;
-    const srcIdx = projects.findIndex((p) => p.id === srcId);
-    const tgtIdx = projects.findIndex((p) => p.id === target.id);
+    const srcIdx = userProjects.findIndex((p) => p.id === srcId);
+    const tgtIdx = userProjects.findIndex((p) => p.id === target.id);
     if (srcIdx < 0 || tgtIdx < 0) return;
     const insertAt = dragOverPos === 'after' ? tgtIdx + 1 : tgtIdx;
-    const next = projects.slice();
+    const next = userProjects.slice();
     const [moved] = next.splice(srcIdx, 1);
     if (!moved) return;
     const adjusted = srcIdx < insertAt ? insertAt - 1 : insertAt;
@@ -184,6 +197,26 @@ export function ProjectRail({
 
   return (
     <div className="flex h-full flex-col border-r border-border bg-card text-foreground">
+      {commandProject && (
+        <button
+          onClick={() => setActiveSlug(commandProject.slug)}
+          title="Command — plan across all projects"
+          aria-label="Command — plan across all projects"
+          className={
+            'flex w-full items-center gap-2 border-b-2 border-border px-3 py-2 text-left text-sm hover:bg-muted ' +
+            (commandProject.slug === activeSlug
+              ? 'bg-muted text-primary '
+              : 'text-foreground/90 ')
+          }
+        >
+          <span aria-hidden="true" className="shrink-0 text-base leading-none text-amber-400">
+            ★
+          </span>
+          <span className="min-w-0 flex-1 truncate font-medium tracking-wide">
+            {commandProject.name}
+          </span>
+        </button>
+      )}
       <div className="flex items-center justify-between border-b border-border px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">
         <span>Projects</span>
         <button
@@ -195,7 +228,7 @@ export function ProjectRail({
           +
         </button>
       </div>
-      {projects.length > 0 && (
+      {userProjects.length > 0 && (
         <div className="border-b border-border px-2 py-1.5">
           <input
             type="text"
@@ -207,7 +240,7 @@ export function ProjectRail({
         </div>
       )}
       <div className="flex-1 overflow-y-auto">
-        {projects.length === 0 ? (
+        {userProjects.length === 0 ? (
           <div className="px-3 py-3 text-xs text-muted-foreground">No projects yet.</div>
         ) : filtered.length === 0 ? (
           <div className="px-3 py-3 text-xs text-muted-foreground">No matches.</div>

@@ -17,6 +17,10 @@ export interface CreateProjectInput {
   folderPath: string;
   gitRemote?: string | null;
   settings?: Record<string, unknown>;
+  /** Explicit sort position. Omit for the normal "append at max+1" behaviour;
+   *  pass a sentinel (e.g. a negative value) to pin a reserved row like the
+   *  Command space above every user project. */
+  position?: number;
 }
 
 interface ProjectRow {
@@ -113,11 +117,14 @@ export function createProjectInDb(db: DbExecutor, input: CreateProjectInput): Pr
   // rows still count toward `max(position)` so the position space stays gap-
   // free across the lifetime of a project (cheaper than re-compacting on
   // soft-delete).
-  const maxPos = db
-    .select({ v: sql<number | null>`max(${projects.position})` })
-    .from(projects)
-    .get() as { v: number | null } | undefined;
-  const position = (maxPos?.v ?? -1) + 1;
+  let position = input.position;
+  if (position === undefined) {
+    const maxPos = db
+      .select({ v: sql<number | null>`max(${projects.position})` })
+      .from(projects)
+      .get() as { v: number | null } | undefined;
+    position = (maxPos?.v ?? -1) + 1;
+  }
   db
     .insert(projects)
     .values({

@@ -109,6 +109,7 @@ import { cleanupLegacyProjectRuntimeFiles } from './services/legacy-runtime-clea
 import { resetStockPodToDefault } from './services/stock-pod-reset.ts';
 import { detectStockPodDrift, listCanonicalStockPodNames } from './services/pod-drift.ts';
 import { seedStockPods } from './services/stock-pod-seed.ts';
+import { ensureCommandProject } from './services/command-seed.ts';
 import { scrubDeadToolGrants } from './services/agent-tools-scrub.ts';
 import { migrateStoredWorkflowDefsToV3 } from './services/workflow-def-migrate-v3.ts';
 import { cancelWorkflowRunCascade } from './services/workflow-run-cancel.ts';
@@ -367,6 +368,12 @@ const projectRegistry = new ProjectRegistry({
     actionRecipients: (ids, now) => mailboxService.actionRecipients(ids, now),
   },
 });
+// Command space — ensure the reserved global planning project exists before
+// loadAll() so its runtime hydrates like any other project.
+{
+  const r = ensureCommandProject(DATA);
+  console.log(`[command] project ${r.action} (${r.projectId})`);
+}
 projectRegistry.loadAll();
 
 const projectCreate = new ProjectCreate(projectScaffold, projectRegistry);
