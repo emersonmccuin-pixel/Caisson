@@ -339,13 +339,12 @@ export class MailboxService {
         recipients: [
           {
             id: this.newId(),
-            addressKind: 'user-inbox',
+            addressKind: 'active-orchestrator',
             addressJson: {
-              kind: 'user-inbox',
-              userId: 'local-user',
-              ...(message.projectId === null ? {} : { projectId: message.projectId }),
+              kind: 'active-orchestrator',
+              projectId: message.projectId,
             },
-            channel: 'ui-inbox',
+            channel: 'orchestrator-turn',
             deliveryId: this.newId(),
           },
         ],

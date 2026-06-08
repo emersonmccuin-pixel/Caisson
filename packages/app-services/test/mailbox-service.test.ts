@@ -223,7 +223,7 @@ test('T3.1 — message-fact and delivery frames for the same message use DISTINC
 
 // ── M4b (FD-8) — a dead letter is never silent ───────────────────────────────
 
-test('M4b — dead-lettering a delivery mints ONE user-inbox system-notice in the same tx', () => {
+test('M4b — dead-lettering a delivery mints ONE active-orchestrator system-notice in the same tx', () => {
   const h = mailboxHarness();
   const d = h.service.deadLetterDelivery({
     deliveryId: 'd1' as never,
@@ -243,8 +243,8 @@ test('M4b — dead-lettering a delivery mints ONE user-inbox system-notice in th
   assert.match(notice.message.subject ?? '', /could not be delivered/);
   assert.match(notice.message.body, /non-retryable: orchestrator session does not exist/);
   assert.equal(notice.recipients.length, 1);
-  assert.equal(notice.recipients[0]!.addressKind, 'user-inbox');
-  assert.equal(notice.recipients[0]!.channel, 'ui-inbox');
+  assert.equal(notice.recipients[0]!.addressKind, 'active-orchestrator');
+  assert.equal(notice.recipients[0]!.channel, 'orchestrator-turn');
   // Two facts: the delivery frame + the notice's message fact.
   assert.equal(h.inserted.length, 2);
   assert.equal(h.inserted[0]!.type, 'mailbox.delivery.changed');
