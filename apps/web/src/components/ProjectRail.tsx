@@ -296,6 +296,15 @@ export function ProjectRail({
                     {initials(p.name)}
                   </span>
                   <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                  {p.focusedAt != null && (
+                    <span
+                      aria-hidden="true"
+                      className="shrink-0 text-sm leading-none text-amber-400"
+                      title="In focus"
+                    >
+                      ★
+                    </span>
+                  )}
                 </button>
                 {showLineAfter && (
                   <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-10 h-0.5 bg-primary" />

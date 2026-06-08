@@ -76,6 +76,8 @@ export interface WorkItem {
   deletedAt: number | null;
   history: WorkItemHistoryEntry[];
   callsign: string | null;
+  /** Command focus — epoch-ms the planner starred this item; null = not in focus. */
+  focusedAt: number | null;
 }
 
 /** Slim projection returned by the work-item list endpoint when `includeBody`
@@ -97,6 +99,8 @@ export interface WorkItemSummary {
   statusReason: string | null;
   callsign: string | null;
   updatedAt: number;
+  /** Command focus — epoch-ms the planner starred this item; null = not in focus. */
+  focusedAt: number | null;
 }
 
 export type FieldSchemaType = 'text' | 'number' | 'boolean' | 'enum' | 'date';
