@@ -286,29 +286,19 @@ function MailboxInboxRow({
           </div>
         </button>
 
-        {/* Mark-read / Dismiss for review cards — separate click targets, not inside the modal-open button */}
-        {isReview && projectId && (unread || recipient.dismissedAt === null) && (
+        {/* Mark-read for review cards — separate click target, not inside the modal-open button.
+            Dismiss is intentionally absent: review items leave the inbox only by approve/reject
+            (per doctrine). */}
+        {isReview && projectId && unread && (
           <div className="flex items-center gap-3 border-t border-border/30 px-2 py-1">
-            {unread && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void act(() => mailboxApi.markRead(projectId, recipient.id))}
-                className="text-[9px] text-muted-foreground/60 hover:text-muted-foreground disabled:opacity-50"
-              >
-                Mark read
-              </button>
-            )}
-            {recipient.dismissedAt === null && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void act(() => mailboxApi.dismiss(projectId, recipient.id))}
-                className="text-[9px] text-muted-foreground/60 hover:text-muted-foreground disabled:opacity-50"
-              >
-                Dismiss
-              </button>
-            )}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void act(() => mailboxApi.markRead(projectId, recipient.id))}
+              className="text-[9px] text-muted-foreground/60 hover:text-muted-foreground disabled:opacity-50"
+            >
+              Mark read
+            </button>
           </div>
         )}
 

@@ -44,11 +44,15 @@ export function useMailboxInbox(
   const allMsgSig = useLiveEntitySignatureAllProjects(all ? 'mailbox-message' : null);
 
   const refetch = useCallback(() => {
+    // actionableOnly=true: the inbox shows only open, unactioned, undismissed
+    // actionable items (the approve/reject decisions). Historical/actioned/
+    // dismissed items are excluded at the server; the inbox is not a history
+    // view.
     const promise = all
-      ? mailboxApi.listAllInbox()
+      ? mailboxApi.listAllInbox({ actionableOnly: true })
       : projectId
-        ? mailboxApi.listProjectInbox(projectId)
-        : mailboxApi.listGlobalInbox();
+        ? mailboxApi.listProjectInbox(projectId, { actionableOnly: true })
+        : mailboxApi.listGlobalInbox({ actionableOnly: true });
     setLoading(true);
     promise
       .then((next) => setItems(next))
@@ -63,8 +67,8 @@ export function useMailboxInbox(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, all, msgSig, globalMsgSig, allMsgSig]);
 
-  // Exclude dismissed rows client-side so they vanish immediately on dismiss
-  // and stay gone after the next refetch (the server returns them with a
-  // dismissedAt timestamp but no excludeDismissed query param exists yet).
-  return { items: items.filter((i) => i.recipient.dismissedAt === null), loading, refetch };
+  // Server already excludes actioned/dismissed rows via actionableOnly=true.
+  // The client filter guards against any race where a stale response sneaks
+  // through before the next refetch clears it.
+  return { items: items.filter((i) => i.recipient.dismissedAt === null && i.recipient.actionedAt === null), loading, refetch };
 }
