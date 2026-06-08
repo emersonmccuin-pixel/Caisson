@@ -43,6 +43,12 @@ interface WorkItemsViewState {
   /** "Parent items only" toggle (kept for potential future surfaces). */
   showTopLevelOnly: boolean;
   setShowTopLevelOnly: (value: boolean) => void;
+  /** Top-level Work tab view: Areas grid or Tasks (table/kanban). Default: areas. */
+  workView: 'areas' | 'tasks';
+  setWorkView: (view: 'areas' | 'tasks') => void;
+  /** Within Tasks: active surface. Default: table. */
+  taskView: 'table' | 'kanban';
+  setTaskView: (view: 'table' | 'kanban') => void;
   /** Slice 010 — Area filter for the Work page. */
   areaFilter: AreaFilter;
   setAreaFilter: (filter: AreaFilter) => void;
@@ -58,6 +64,10 @@ export const useWorkItemsView = create<WorkItemsViewState>()(
     (set, get) => ({
       showTopLevelOnly: false,
       setShowTopLevelOnly: (showTopLevelOnly) => set({ showTopLevelOnly }),
+      workView: 'areas',
+      setWorkView: (workView) => set({ workView }),
+      taskView: 'table',
+      setTaskView: (taskView) => set({ taskView }),
       areaFilter: null,
       setAreaFilter: (areaFilter) => set({ areaFilter }),
       filters: DEFAULT_FILTERS,
