@@ -30,7 +30,10 @@ import {
   jsonlPathFor,
 } from '@pc/runtime';
 
+import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
+
 import { preparePodSpawn, type PodSpawnPrep } from './pod-spawn.ts';
+import { COMMAND_PLANNER_POD_NAME } from './command-planner-pod-content.ts';
 import { WorktreeService } from './worktree.ts';
 import { importV2WorkflowsFromDisk } from './workflow-import.ts';
 import {
@@ -457,10 +460,14 @@ export class ProjectRuntime {
       globalSettings.remoteControlEnabled,
     );
 
+    // Command's chat is the planner pod, not the build orchestrator. Every
+    // other project uses the orchestrator. (See command-planner-pod-content.)
+    const chatPodName = this.orchestratorPodName();
+
     let podPrep: PodSpawnPrep;
     try {
       const prep = preparePodSpawn({
-        agentName: 'orchestrator',
+        agentName: chatPodName,
         projectId: this.project.id,
         worktreeDir: this.project.folderPath,
         scratchDir: sessionDir,
@@ -508,7 +515,7 @@ export class ProjectRuntime {
         pcSessionId: session.row.id,
         providerSessionId: session.providerSessionId,
         projectId: this.project.id,
-        podDefinition: { name: podPrep.agentCliName, logicalName: 'orchestrator' },
+        podDefinition: { name: podPrep.agentCliName, logicalName: chatPodName },
         worktreePath: this.project.folderPath,
         env: {
           ...(process.env as Record<string, string | undefined>),
@@ -715,8 +722,16 @@ export class ProjectRuntime {
    * agents pick up new pod content on their next dispatch, which is the safer
    * default.
    */
+  /** Logical pod name for THIS project's chat: the planner for Command, the
+   *  orchestrator for every other project. */
+  private orchestratorPodName(): string {
+    return this.project.slug === COMMAND_PROJECT_SLUG ? COMMAND_PLANNER_POD_NAME : 'orchestrator';
+  }
+
   restartIfOrchestratorPod(podName: string): boolean {
-    if (podName !== 'orchestrator') return false;
+    // Restart only when the EDITED pod is the one driving this runtime's chat
+    // (Command restarts on command-planner edits; others on orchestrator edits).
+    if (podName !== this.orchestratorPodName()) return false;
     if (!this.pty) return false;
     if (this.pty.getState() === 'exited') return false;
     try { this.pty.kill(); } catch { /* best-effort */ }

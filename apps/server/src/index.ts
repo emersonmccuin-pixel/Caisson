@@ -105,6 +105,7 @@ import {
 import { registerPodRoutes } from './routes/pod-routes.ts';
 import { registerWorkflowRoutes } from './routes/workflow-routes.ts';
 import { seedOrchestratorPodIfMissing } from './services/orchestrator-pod-seed.ts';
+import { seedCommandPlannerPodIfMissing } from './services/command-planner-pod-seed.ts';
 import { cleanupLegacyProjectRuntimeFiles } from './services/legacy-runtime-cleanup.ts';
 import { resetStockPodToDefault } from './services/stock-pod-reset.ts';
 import { detectStockPodDrift, listCanonicalStockPodNames } from './services/pod-drift.ts';
@@ -171,6 +172,29 @@ applyClaudeRuntimeSettings(readSettings());
     case 'skipped-user-edited':
       console.warn(
         `[pc] orchestrator pod has drifted from ORCHESTRATOR_POD_CONTENT on fields [${result.reseededFields.join(', ')}] but the row has user-authored audit rows — leaving it alone. Apply the latest seed manually via the Pod UI (17d) or by clearing user edits.`,
+      );
+      break;
+    case 'unchanged':
+      break;
+  }
+}
+
+// Command planner pod — Command's chat (the global planning space). Seeded
+// like the orchestrator; idempotent + drift-reseed on non-user-edited rows.
+{
+  const result = seedCommandPlannerPodIfMissing();
+  switch (result.action) {
+    case 'inserted':
+      console.log(`[command] planner pod seeded (id=${result.agentId})`);
+      break;
+    case 'reseeded':
+      console.log(
+        `[command] planner pod auto-reseeded (id=${result.agentId}, fields=[${result.reseededFields.join(', ')}])`,
+      );
+      break;
+    case 'skipped-user-edited':
+      console.warn(
+        `[command] planner pod drifted from COMMAND_PLANNER_POD_CONTENT on [${result.reseededFields.join(', ')}] but has user edits — leaving it alone.`,
       );
       break;
     case 'unchanged':

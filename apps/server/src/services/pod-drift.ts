@@ -18,6 +18,7 @@
 import type { CreateAgentInput } from '@pc/db';
 import type { PodAgentRow } from '@pc/domain';
 import { ORCHESTRATOR_POD_CONTENT } from './orchestrator-pod-content.ts';
+import { COMMAND_PLANNER_POD_CONTENT } from './command-planner-pod-content.ts';
 import { collectDriftedFields } from './pod-seed-with-drift.ts';
 import { STOCK_POD_CONTENT } from './stock-pod-seed.ts';
 
@@ -28,6 +29,7 @@ function getCanonicalContentByName(): Map<string, CreateAgentInput> {
   if (canonicalByName) return canonicalByName;
   const m = new Map<string, CreateAgentInput>();
   m.set(ORCHESTRATOR_POD_CONTENT.name, ORCHESTRATOR_POD_CONTENT);
+  m.set(COMMAND_PLANNER_POD_CONTENT.name, COMMAND_PLANNER_POD_CONTENT);
   for (const c of STOCK_POD_CONTENT) m.set(c.name, c);
   canonicalByName = m;
   return m;
