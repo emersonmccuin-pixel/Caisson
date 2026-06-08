@@ -7,8 +7,11 @@
 // Panel's passive list. FD-17's stall ladder deliberately excludes paused
 // runs (a pause is intentional silence), so this is the missing complement:
 //
-//   open pending_ask older than the threshold → ONE user-inbox
-//   `agent-ask-escalated` card (idempotency `ask-stale:<askId>`), actionable —
+//   open pending_ask older than the threshold → ONE `agent-ask-escalated`
+//   message addressed to the project orchestrator (active-orchestrator), so
+//   the orchestrator relays it in chat — NOT a UI inbox card (doctrine: agents
+//   never reach the human directly; pc-pty-chat-317). The idempotency key
+//   `ask-stale:<askId>` ensures it is minted once per ask, ever.
 //   answer/cancel ride the EXISTING pending-ask doors. A decision through ANY
 //   door clears the card: the doors resolve-by-source on ('agent', askId), the
 //   same source the orchestrator ask envelope uses.
@@ -81,9 +84,9 @@ export function sweepStalePendingAsks(deps: PendingAskWatchdogDeps): number {
       recipients: [
         {
           id: newId(),
-          addressKind: 'user-inbox',
-          addressJson: { kind: 'user-inbox', userId: 'local-user', projectId: ask.projectId },
-          channel: 'ui-inbox',
+          addressKind: 'active-orchestrator',
+          addressJson: { kind: 'active-orchestrator', projectId: ask.projectId },
+          channel: 'orchestrator-turn',
           deliveryId: newId(),
         },
       ],
