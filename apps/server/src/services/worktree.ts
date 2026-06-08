@@ -7,15 +7,21 @@
 // dead — every worktree lives under the data dir, namespaced by project slug,
 // so multiple projects don't fight for the same `worktrees/` dir and so
 // nothing leaks into the user's actual repo.
+//
+// Provisioning: every worktree is fully dep-installed (pnpm install
+// --frozen-lockfile) BEFORE being returned to any caller. This guarantees
+// typecheck / build commands inside the worktree have a complete node_modules
+// and never false-fail with "Cannot find module" errors (pc-pty-chat-305).
 
 import { resolve } from 'node:path';
+import { spawn } from 'node:child_process';
 
 import {
-  attachWorktree,
-  createWorktree,
-  destroyWorktree,
-  listWorktrees,
-  pruneWorktrees,
+  attachWorktree as _attachWorktree,
+  createWorktree as _createWorktree,
+  destroyWorktree as _destroyWorktree,
+  listWorktrees as _listWorktrees,
+  pruneWorktrees as _pruneWorktrees,
   type WorktreeEntry,
 } from '@pc/runtime';
 import { markWorktreeDestroyed, upsertWorktree } from '@pc/db';
@@ -25,22 +31,93 @@ export interface WorktreeRegistry {
   worktrees: WorktreeEntry[];
 }
 
+/**
+ * Dep-injection seam for WorktreeService. All fields optional; defaults are
+ * the real implementations. Pass overrides in tests to avoid spawning actual
+ * git or pnpm processes.
+ */
+export interface WorktreeServiceDeps {
+  /**
+   * Run dependency install in a freshly created/attached worktree directory.
+   * Default: `pnpm install --frozen-lockfile` (shell: true so pnpm.cmd
+   * resolves on Windows).
+   */
+  installRunner?: (cwd: string) => Promise<void>;
+  createWorktree?: (
+    workspaceDir: string,
+    wtPath: string,
+    branchName: string,
+  ) => Promise<WorktreeEntry>;
+  attachWorktree?: (
+    workspaceDir: string,
+    wtPath: string,
+    branchName: string,
+  ) => Promise<WorktreeEntry>;
+  listWorktrees?: (workspaceDir: string) => Promise<WorktreeEntry[]>;
+  pruneWorktrees?: (workspaceDir: string) => Promise<void>;
+  destroyWorktree?: (
+    workspaceDir: string,
+    wtPath: string,
+    opts?: { force?: boolean },
+  ) => Promise<void>;
+}
+
+/**
+ * Default install runner: `pnpm install --frozen-lockfile` inside the
+ * worktree. Uses shell: true so the pnpm.cmd shim resolves on Windows
+ * (mirrors the pattern in scripts/dev-staging.mjs).
+ */
+function defaultInstallRunner(cwd: string): Promise<void> {
+  return new Promise((res, rej) => {
+    const child = spawn('pnpm install --frozen-lockfile', {
+      shell: true,
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    const stderrChunks: Buffer[] = [];
+    child.stderr?.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+
+    child.on('error', rej);
+    child.on('close', (code) => {
+      if (code === 0) {
+        res();
+      } else {
+        const stderr = Buffer.concat(stderrChunks).toString().trim();
+        rej(
+          new Error(
+            `pnpm install --frozen-lockfile failed (exit ${code}) in ${cwd}` +
+              (stderr ? `:\n${stderr}` : ''),
+          ),
+        );
+      }
+    });
+  });
+}
+
 export class WorktreeService {
   private cache: WorktreeRegistry = { updatedAt: new Date(0).toISOString(), worktrees: [] };
+  private readonly deps: WorktreeServiceDeps;
 
   /**
    * @param workspaceDir Absolute path to the project's git repo (cwd for git ops).
    * @param baseDir Absolute path under which this project's worktrees live —
-   *   `<data_dir>/worktrees/<slug>/` per `the multi-tenancy design` §4. Each
+   *   `<data_dir>/worktrees/<slug>/` per the multi-tenancy design §4. Each
    *   worktree directory becomes `<baseDir>/<name>/`.
+   * @param deps Optional overrides for git primitives and the install runner
+   *   (for testing without real git or pnpm processes).
    */
   constructor(
     private readonly workspaceDir: string,
     private readonly baseDir: string,
-  ) {}
+    deps: WorktreeServiceDeps = {},
+  ) {
+    this.deps = deps;
+  }
 
   async list(): Promise<WorktreeEntry[]> {
-    const entries = await listWorktrees(this.workspaceDir);
+    const listFn = this.deps.listWorktrees ?? _listWorktrees;
+    const entries = await listFn(this.workspaceDir);
     this.cache = { updatedAt: new Date().toISOString(), worktrees: entries };
     // Reconcile DB rows with git's view. Main repo (entries[0]) is the
     // workspace itself; don't track it. Filter to entries under this project's
@@ -56,7 +133,10 @@ export class WorktreeService {
 
   async create(name: string): Promise<WorktreeEntry> {
     const wtPath = resolve(this.baseDir, name);
-    const entry = await createWorktree(this.workspaceDir, wtPath, name);
+    const createFn = this.deps.createWorktree ?? _createWorktree;
+    const entry = await createFn(this.workspaceDir, wtPath, name);
+    // Provision BEFORE returning — callers must never see a half-built worktree.
+    await this.provision(entry.path);
     upsertWorktree({ name, path: entry.path });
     await this.refresh();
     return entry;
@@ -64,7 +144,8 @@ export class WorktreeService {
 
   async destroy(target: string, force = false): Promise<void> {
     const wtPath = isAbsolutePath(target) ? target : resolve(this.baseDir, target);
-    await destroyWorktree(this.workspaceDir, wtPath, { force });
+    const destroyFn = this.deps.destroyWorktree ?? _destroyWorktree;
+    await destroyFn(this.workspaceDir, wtPath, { force });
     const name = nameFromPath(wtPath);
     if (name) markWorktreeDestroyed(name);
     await this.refresh();
@@ -76,11 +157,15 @@ export class WorktreeService {
    * entry if the dir is already attached, else try a fresh create, falling
    * back to `git worktree add` (no `-b`) if the branch already exists from a
    * previous failed dispatch.
+   *
+   * Both the create and attach paths call provision() before returning.
    */
   async ensureWorktree(name: string): Promise<WorktreeEntry> {
-    await pruneWorktrees(this.workspaceDir);
+    const pruneFn = this.deps.pruneWorktrees ?? _pruneWorktrees;
+    const listFn = this.deps.listWorktrees ?? _listWorktrees;
+    await pruneFn(this.workspaceDir);
     const wtPath = resolve(this.baseDir, name);
-    const existing = await listWorktrees(this.workspaceDir);
+    const existing = await listFn(this.workspaceDir);
     const match = existing.find((e) => normalize(e.path) === normalize(wtPath));
     if (match) {
       this.cache = { updatedAt: new Date().toISOString(), worktrees: existing };
@@ -94,7 +179,11 @@ export class WorktreeService {
       if (!/already exists|already used by worktree|already checked out/i.test(msg)) {
         throw err;
       }
-      const entry = await attachWorktree(this.workspaceDir, wtPath, name);
+      // Orphan-recovery: branch exists but worktree dir was gone.
+      const attachFn = this.deps.attachWorktree ?? _attachWorktree;
+      const entry = await attachFn(this.workspaceDir, wtPath, name);
+      // Provision BEFORE returning — same guarantee as the create path.
+      await this.provision(entry.path);
       upsertWorktree({ name, path: entry.path });
       await this.refresh();
       return entry;
@@ -104,6 +193,15 @@ export class WorktreeService {
   /** Cached read for polling endpoints. Empty until the first list() / mutate(). */
   readCached(): WorktreeRegistry {
     return this.cache;
+  }
+
+  /**
+   * Run the dep-install step in the worktree. Throws on failure — a broken
+   * install must not silently hand back a half-provisioned worktree.
+   */
+  private async provision(wtPath: string): Promise<void> {
+    const runner = this.deps.installRunner ?? defaultInstallRunner;
+    await runner(wtPath);
   }
 
   private async refresh(): Promise<void> {
