@@ -35,6 +35,31 @@ export function NotesPopover({
     savedRef.current = initialNotes ?? '';
   }, [projectId, initialNotes]);
 
+  // Reopen-freshness: the initialNotes prop can be stale — a save earlier in
+  // this session does NOT refresh the parent's activeProject, so reopening
+  // would otherwise paint the pre-save value (looks like data loss on a
+  // scratchpad). Fetch the current notes on open and adopt them IF the field
+  // is still pristine (never clobber in-progress edits). Falls back silently
+  // to the instant-paint initialNotes on fetch failure.
+  useEffect(() => {
+    let cancelled = false;
+    projectsApi
+      .project(projectId)
+      .then((p) => {
+        if (cancelled) return;
+        const fresh = p.notes ?? '';
+        const prevBaseline = savedRef.current; // capture before mutating
+        savedRef.current = fresh;
+        setText((current) => (current === prevBaseline ? fresh : current));
+      })
+      .catch(() => {
+        /* keep instant-paint initialNotes */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
   const persist = useCallback(
     (value: string) => {
       if (value === savedRef.current) return;

@@ -15,9 +15,11 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
 const mockUpdateNotes = vi.fn();
+const mockGetProject = vi.fn();
 vi.mock('@/features/projects/client', () => ({
   projectsApi: {
     updateProjectNotes: (...args: unknown[]) => mockUpdateNotes(...args),
+    project: (...args: unknown[]) => mockGetProject(...args),
   },
 }));
 
@@ -40,10 +42,15 @@ function renderPopover(initialNotes: string | null = null) {
 beforeEach(() => {
   vi.useFakeTimers();
   mockUpdateNotes.mockResolvedValue('');
+  // Default: freshness fetch is a no-op (rejects) so the instant-paint
+  // initialNotes is preserved — isolates the local-behavior tests below.
+  // The adoption test overrides this with a resolved server value.
+  mockGetProject.mockRejectedValue(new Error('not-mocked'));
 });
 afterEach(() => {
   vi.useRealTimers();
   mockUpdateNotes.mockReset();
+  mockGetProject.mockReset();
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -110,6 +117,40 @@ describe('NotesPopover', () => {
     );
     expect(screen.getByTestId('notes-popover')).toBeInTheDocument();
     expect(screen.queryByTestId('error-boundary-fallback')).not.toBeInTheDocument();
+  });
+
+  test('adopts the saved server value on open over a stale initial prop', async () => {
+    // Reopen-freshness: the parent's initialNotes prop can be stale after an
+    // in-session save. The popover fetches the current notes on open and
+    // adopts them when the field is pristine — so reopening shows what was
+    // actually saved, not the stale prop (no apparent data loss).
+    mockGetProject.mockResolvedValue({ notes: 'saved on the server' });
+    await act(async () => {
+      renderPopover('stale prop value');
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const ta = screen.getByTestId('notes-textarea') as HTMLTextAreaElement;
+    expect(ta.value).toBe('saved on the server');
+  });
+
+  test('does not clobber in-progress edits with the fetched value', async () => {
+    let resolveFetch: (v: { notes: string | null }) => void = () => {};
+    mockGetProject.mockReturnValue(
+      new Promise<{ notes: string | null }>((r) => {
+        resolveFetch = r;
+      }),
+    );
+    renderPopover('initial');
+    const ta = screen.getByTestId('notes-textarea') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'user typing' } });
+    // Fetch resolves AFTER the user started typing — must not overwrite.
+    await act(async () => {
+      resolveFetch({ notes: 'server value' });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(ta.value).toBe('user typing');
   });
 
   test('shows saved indicator after successful save', async () => {
