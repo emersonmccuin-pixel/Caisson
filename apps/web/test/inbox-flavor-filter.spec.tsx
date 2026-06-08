@@ -1,7 +1,13 @@
-// pc-pty-chat-267 — MailboxInbox hides orchestrator-flavor workflow-review gates.
-// Renders the REAL component; injects fixture items via the hook mock.
-// Verifies the flavor-aware filter: orchestrator gates are invisible, human
-// gates and other human-actionable kinds are shown.
+// pc-pty-chat-316 — address-driven inbox: MailboxInbox renders what the server returns.
+//
+// The server pre-filters every inbox route to user-inbox recipients; the client
+// renders exactly what the hook delivers — no second kind-based re-classification.
+//
+// These tests inject fixture items via the hook mock and assert render outcomes:
+//   - known human-actionable kinds show
+//   - an UNKNOWN / future kind addressed to user-inbox STILL shows (no silent drop)
+//   - orchestrator-flavor workflow-review never reaches the hook in production
+//     (server-filtered), and if it somehow did, it would show rather than vanish
 
 import { render, screen } from '@testing-library/react';
 import { test, expect, vi, beforeEach } from 'vitest';
@@ -69,13 +75,21 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-test('orchestrator-flavor workflow-review gate does NOT appear in the inbox', () => {
+// Key acceptance criterion: unknown/future kinds addressed to user-inbox must
+// show rather than silently drop. The server has already done the visibility
+// gate (address filter); the client must not add a second gate.
+test('unknown kind addressed to user-inbox STILL shows (no silent drop)', () => {
   mockHook.items = [
-    item('workflow-review', { flavor: 'orchestrator', runId: 'r1', nodeId: 'n1' }, 'Push to origin'),
+    // Use a type assertion to simulate a future kind not yet in the union.
+    item('system-notice' as MailboxInboxItem['message']['kind'], {}, 'Future kind message'),
   ];
+  // Directly override kind to a value not in KIND_ORDER to simulate a truly unknown kind.
+  const unknownItem = { ...mockHook.items[0] };
+  unknownItem.message = { ...mockHook.items[0].message, kind: 'some-future-kind' as MailboxInboxItem['message']['kind'] };
+  mockHook.items = [unknownItem];
   render(<MailboxInbox scope={{ projectId: 'p1' }} />);
-  expect(screen.queryByText('Push to origin')).not.toBeInTheDocument();
-  expect(screen.getByText('No messages.')).toBeInTheDocument();
+  // Must show — not silently dropped.
+  expect(screen.getByText('Future kind message')).toBeInTheDocument();
 });
 
 test('human-flavor workflow-review gate DOES appear in the inbox', () => {
@@ -86,7 +100,7 @@ test('human-flavor workflow-review gate DOES appear in the inbox', () => {
   expect(screen.getByText('Human review needed')).toBeInTheDocument();
 });
 
-test('workflow-review without flavor defaults to human-visible', () => {
+test('workflow-review without flavor shows (server decided it belongs here)', () => {
   mockHook.items = [
     item('workflow-review', { runId: 'r1', nodeId: 'n1' }, 'Untagged review'),
   ];
@@ -94,14 +108,36 @@ test('workflow-review without flavor defaults to human-visible', () => {
   expect(screen.getByText('Untagged review')).toBeInTheDocument();
 });
 
-test('inbox shows human-actionable kinds and hides orchestrator-only kinds', () => {
+test('verification-review shows in the inbox', () => {
+  mockHook.items = [
+    item('verification-review', { contractId: 'c1' }, 'Agent deliverable ready'),
+  ];
+  render(<MailboxInbox scope={{ projectId: 'p1' }} />);
+  expect(screen.getByText('Agent deliverable ready')).toBeInTheDocument();
+});
+
+test('agent-ask-escalated shows in the inbox', () => {
   mockHook.items = [
     item('agent-ask-escalated', { pendingAskId: 'ask-1', options: [] }, 'Escalated ask'),
-    item('agent-question', {}, 'Raw question — orchestrator only'),
-    item('system-notice', {}, 'System notice — hidden'),
   ];
   render(<MailboxInbox scope={{ projectId: 'p1' }} />);
   expect(screen.getByText('Escalated ask')).toBeInTheDocument();
-  expect(screen.queryByText('Raw question — orchestrator only')).not.toBeInTheDocument();
-  expect(screen.queryByText('System notice — hidden')).not.toBeInTheDocument();
+});
+
+test('all items returned by the hook are rendered (no client kind filter)', () => {
+  mockHook.items = [
+    item('agent-ask-escalated', { pendingAskId: 'ask-1', options: [] }, 'Escalated ask'),
+    item('verification-review', { contractId: 'c1' }, 'Deliverable ready'),
+    item('workflow-review', { flavor: 'human', runId: 'r1', nodeId: 'n1' }, 'Workflow gate'),
+  ];
+  render(<MailboxInbox scope={{ projectId: 'p1' }} />);
+  expect(screen.getByText('Escalated ask')).toBeInTheDocument();
+  expect(screen.getByText('Deliverable ready')).toBeInTheDocument();
+  expect(screen.getByText('Workflow gate')).toBeInTheDocument();
+});
+
+test('empty hook result shows "No messages."', () => {
+  mockHook.items = [];
+  render(<MailboxInbox scope={{ projectId: 'p1' }} />);
+  expect(screen.getByText('No messages.')).toBeInTheDocument();
 });
