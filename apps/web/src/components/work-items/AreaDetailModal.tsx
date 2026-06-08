@@ -457,6 +457,15 @@ export function AreaDetailModal({
                       <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">
                         {wi.title}
                       </span>
+                      {wi.focusedAt != null && (
+                        <span
+                          aria-hidden="true"
+                          className="shrink-0 text-[11px] leading-none text-amber-400"
+                          title="In focus"
+                        >
+                          ★
+                        </span>
+                      )}
                       {wi.callsign && (
                         <span className="shrink-0 text-[10px] text-[var(--fg-dim)]">
                           {wi.callsign}

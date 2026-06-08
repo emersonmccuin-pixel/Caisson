@@ -75,6 +75,9 @@ export function ProjectRail({
     () => projects.filter((p) => p.slug !== COMMAND_PROJECT_SLUG),
     [projects],
   );
+  const commandActive = commandProject?.slug === activeSlug;
+  const commandUnread =
+    !!commandProject && !commandActive && unreadProjectIds.has(commandProject.id);
   const activeSnapshot = useStatuslineStore((s) =>
     activeProject ? s.byProject[activeProject.id] ?? null : null,
   );
@@ -200,16 +203,29 @@ export function ProjectRail({
       {commandProject && (
         <button
           onClick={() => setActiveSlug(commandProject.slug)}
-          title="Command — plan across all projects"
-          aria-label="Command — plan across all projects"
+          title={
+            commandUnread
+              ? 'Command — plan across all projects\nUnread chat activity'
+              : 'Command — plan across all projects'
+          }
+          aria-label={
+            commandUnread ? 'Command has unread chat activity' : 'Command — plan across all projects'
+          }
           className={
-            'flex w-full items-center gap-2 border-b-2 border-border px-3 py-2 text-left text-sm hover:bg-muted ' +
-            (commandProject.slug === activeSlug
-              ? 'bg-muted text-primary '
-              : 'text-foreground/90 ')
+            'flex w-full items-center gap-2 border-b-2 border-border px-3 py-1.5 text-left text-sm hover:bg-muted ' +
+            (commandActive
+              ? 'border-l-2 border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary '
+              : 'border-l-2 border-transparent text-foreground/80 ')
           }
         >
-          <span aria-hidden="true" className="shrink-0 text-base leading-none text-amber-400">
+          <span
+            aria-hidden="true"
+            className={
+              'pc-project-tile pc-project-tile-row shrink-0 ' +
+              (commandActive ? 'pc-project-tile-active' : 'pc-project-tile-inactive') +
+              (commandUnread ? ' pc-project-tile-unread' : '')
+            }
+          >
             ★
           </span>
           <span className="min-w-0 flex-1 truncate font-medium tracking-wide">
