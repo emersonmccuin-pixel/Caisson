@@ -77,16 +77,18 @@ const POD_DEFAULTS: Record<string, PodDefault> = {
 
   // agent-designer holds a design conversation and uses pc_create_agent to
   // produce a pod. The "report" is the chat trail itself; the answer is the
-  // degenerate deliverable.
-  'agent-designer': podDefault({ kind: 'answer' }),
+  // degenerate deliverable. trust_end_turn: the work is the side-effect (the new
+  // pod), so an empty acceptance set is intended to auto-accept, not escalate.
+  'agent-designer': podDefault({ kind: 'answer', trust_end_turn: true }),
 
   // workflow-builder holds a design conversation and calls pc_publish_workflow
   // to produce a v2 workflow. The chat trail is the report; answer deliverable.
-  'workflow-builder': podDefault({ kind: 'answer' }),
+  'workflow-builder': podDefault({ kind: 'answer', trust_end_turn: true }),
 
   // caisson is the in-app PC specialist — answers questions + mutates config.
-  // Free-form answer; no work-item home.
-  caisson: podDefault({ kind: 'answer' }),
+  // Free-form answer; no work-item home. trust_end_turn: a Q&A turn has no
+  // structural criteria to check.
+  caisson: podDefault({ kind: 'answer', trust_end_turn: true }),
 };
 
 /** Lookup a pod's full default (expected output + Decision-4 WI requirement).

@@ -200,12 +200,23 @@ export async function runVerificationOnTerminal(
   // external / repo) that derived to ZERO predicates must NOT auto-pass: an
   // auto-verifier with nothing to check on a side-effect contract escalates to
   // review instead of passing open.
-  const specKind = (contract.expectedOutput as { kind?: unknown } | null | undefined)?.kind;
+  const specObj = contract.expectedOutput as
+    | { kind?: unknown; trust_end_turn?: unknown }
+    | null
+    | undefined;
+  const specKind = specObj?.kind;
   const requiresEvidence =
     ContractV2.isExpectedOutputKind(specKind) &&
     (KINDS_REQUIRING_EVIDENCE as readonly string[]).includes(specKind);
-  if (criteria.length === 0 && requiresEvidence) {
-    const notes = `"${specKind}" output requires evidence but no acceptance criteria were derived — escalated to review`;
+  // 2026-06-07 empty-contract fix — a bare `answer` (no must_address/min_chars)
+  // must NOT silently auto-pass. It escalates to review unless the spec opts in
+  // via `trust_end_turn` (the degenerate-answer stock pods set it). Other
+  // structural kinds (prose/binary, external opt-out) keep trusting an empty set.
+  const answerWithoutTrust = specKind === 'answer' && specObj?.trust_end_turn !== true;
+  if (criteria.length === 0 && (requiresEvidence || answerWithoutTrust)) {
+    const notes = requiresEvidence
+      ? `"${specKind}" output requires evidence but no acceptance criteria were derived — escalated to review`
+      : '"answer" output declared no acceptance criteria (no must_address / min_chars / trust_end_turn) — escalated to review';
     service.setVerification({
       id: input.contractId,
       verificationStatus: 'pending',

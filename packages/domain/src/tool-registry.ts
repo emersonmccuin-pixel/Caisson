@@ -1495,7 +1495,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "expected_output": {
           "type": "object",
-          "description": "optional contract-first output spec authored directly onto the dispatch's contract. `{ kind }` is one of answer | prose | payload | repo | external | binary | action. Kinds that must land in a work item (prose unless store='contract', and repo) REQUIRE a workItemId — dispatching without one returns 422."
+          "description": "contract-first output spec authored directly onto the dispatch's contract. `{ kind }` is one of answer | prose | payload | repo | external | binary | action. Optional ONLY for stock pods that carry a default (researcher, writer, code-writer, reviewer, planner, extractor, …); a pod with no stored/stock default is REJECTED without it (an empty contract that checks nothing). A bare `{ kind: 'answer' }` with no must_address/min_chars escalates to review unless you set `trust_end_turn: true`. Kinds that must land in a work item (prose unless store='contract', and repo) REQUIRE a workItemId — dispatching without one returns 422."
         }
       },
       "required": [

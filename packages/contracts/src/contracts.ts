@@ -79,7 +79,10 @@ export const EXTERNAL_SYSTEMS = ['email', 'calendar', 'chat', 'ticket', 'crm', '
 export type ExternalSystem = (typeof EXTERNAL_SYSTEMS)[number];
 
 export type ExpectedOutput =
-  | { kind: 'answer'; must_address?: string[]; min_chars?: number }
+  // `trust_end_turn`: opt-in to auto-accept on an EMPTY acceptance set. Without
+  // it a bare `answer` escalates to review instead of passing silently. Mirror
+  // of @pc/domain contract.ts (the 2026-06-07 empty-contract finding).
+  | { kind: 'answer'; must_address?: string[]; min_chars?: number; trust_end_turn?: boolean }
   | {
       kind: 'prose';
       doc_type?: ProseDocType;

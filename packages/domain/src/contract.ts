@@ -44,7 +44,13 @@ export type JsonSchema = {
 
 // ── ExpectedOutput: the spec the orchestrator authors ──
 export type ExpectedOutput =
-  | { kind: 'answer'; must_address?: string[]; min_chars?: number }
+  // `trust_end_turn`: explicit opt-in to auto-accept on an EMPTY acceptance set
+  // (no must_address / min_chars). Without it, a bare `answer` escalates to
+  // review instead of silently passing — closes the empty-contract auto-pass
+  // (the 2026-06-07 spec-less-dispatch finding). The degenerate-answer stock
+  // pods (agent-designer / workflow-builder / caisson) set it; everything else
+  // must declare real criteria or accept the review gate.
+  | { kind: 'answer'; must_address?: string[]; min_chars?: number; trust_end_turn?: boolean }
   | {
       kind: 'prose';
       doc_type?: ProseDocType;

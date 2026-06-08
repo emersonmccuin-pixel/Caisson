@@ -139,6 +139,58 @@ test('the WI roll-up fires exactly once on accept', async () => {
   assert.equal(after.status, 'complete');
 });
 
+// ── 2026-06-07 empty-contract fix: bare `answer` no longer silently passes ────
+
+test('bare answer (empty AC, no trust_end_turn) escalates to review, not passed', async () => {
+  const p = mkProject('bare-answer');
+  const contract = new ContractService().create({
+    projectId: p.id as ULID,
+    workItemId: null,
+    podName: 'snowflake-expert',
+    expectedOutput: { kind: 'answer' },
+    acceptanceCriteria: [],
+    verificationTier: 'auto',
+  });
+
+  const outcome = await runVerificationOnTerminal({
+    contractId: contract.id as ULID,
+    terminalStatus: 'completed',
+    failureReason: null,
+    projectFolderPath: tmpDir,
+    worktreeDir: tmpDir,
+    project: p,
+  });
+
+  assert.ok(outcome);
+  assert.equal(outcome!.verificationStatus, 'pending', 'escalated, not auto-passed');
+  assert.equal(getContract(contract.id as ULID)!.status, 'verifying');
+});
+
+test('answer with trust_end_turn:true (empty AC) auto-accepts', async () => {
+  const p = mkProject('trusted-answer');
+  const contract = new ContractService().create({
+    projectId: p.id as ULID,
+    workItemId: null,
+    podName: 'caisson',
+    expectedOutput: { kind: 'answer', trust_end_turn: true },
+    acceptanceCriteria: [],
+    verificationTier: 'auto',
+  });
+
+  const outcome = await runVerificationOnTerminal({
+    contractId: contract.id as ULID,
+    terminalStatus: 'completed',
+    failureReason: null,
+    projectFolderPath: tmpDir,
+    worktreeDir: tmpDir,
+    project: p,
+  });
+
+  assert.ok(outcome);
+  assert.equal(outcome!.verificationStatus, 'passed');
+  assert.equal(getContract(contract.id as ULID)!.status, 'accepted');
+});
+
 // ── contract-only reject flips the contract; no WI write ──────────────────────
 
 test('failed terminal rejects the contract with no WI', async () => {

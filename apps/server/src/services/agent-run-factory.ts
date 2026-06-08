@@ -451,14 +451,22 @@ export async function dispatchFreshAgent(
     podName: input.agentName,
     contractService: deps.contractService,
     expectedOutput: input.expectedOutput,
+    // Fresh dispatch: refuse to mint a spec-less (and therefore unverifiable)
+    // contract. The chain is inline spec → pod-row default → stock default.
+    requireExpectedOutput: true,
   });
 
-  // Contract invariant: every run MUST have a contract before it spawns. If
-  // resolveContractForDispatch returned null (it caught an internal error and
-  // logged it), abort NOW — mark the already-inserted row terminal-failed and
-  // return a typed refusal. Never spawn contract-less.
+  // Contract invariant: every run MUST have a contract before it spawns. A null
+  // here is one of: the resolution chain yielded NO expected_output (a dispatch
+  // to a pod with no default + no inline spec — the empty-contract case), or an
+  // internal error (logged inside resolveContractForDispatch). Either way, abort
+  // NOW — mark the already-inserted row terminal-failed and return a typed
+  // refusal. Never spawn contract-less.
   if (!contractId) {
-    const reason = 'contract resolution failed — dispatch aborted (contract is mandatory)';
+    const reason =
+      `no expected_output could be resolved for pod "${input.agentName}" — ` +
+      'pass an explicit expected_output (this pod has no stored or stock default), ' +
+      'or check server logs for a contract-resolution error';
     markAgentRunTerminal({
       id: agentRunId,
       status: 'failed',
@@ -1080,6 +1088,12 @@ export function resolveContractForDispatch(
     acceptanceCriteria?: Parameters<ContractService['create']>[0]['acceptanceCriteria'];
     verificationTier?: Parameters<ContractService['create']>[0]['verificationTier'];
     worktreePath?: string | null;
+    /** Fresh dispatch sets this. When the resolution chain (inline spec → pod-row
+     *  default → stock default) yields NO expected_output, abort instead of
+     *  minting a spec-less contract — the empty-contract auto-pass fix
+     *  (2026-06-07). Continuations leave it false: they reuse/carry the parent's
+     *  contract and must not hard-fail on a missing inline spec. */
+    requireExpectedOutput?: boolean;
   },
   deps: ResolveContractForDispatchDeps = {},
 ): ULID | null {
@@ -1140,6 +1154,14 @@ export function resolveContractForDispatch(
           expectedOutput = { ...expectedOutput, isolation: 'worktree' };
         }
       }
+      // Empty-contract guard (2026-06-07). A fresh dispatch whose resolution
+      // chain produced no spec would mint a contract that checks nothing and
+      // auto-passes. Abort instead — the caller gets a typed `expected-output-
+      // required` refusal. Continuations (requireExpectedOutput falsy) stay
+      // lenient: they reuse the parent's contract above and rarely reach here.
+      if (!expectedOutput && args.requireExpectedOutput) {
+        return null;
+      }
       const acceptanceCriteria =
         args.acceptanceCriteria ??
         (expectedOutput ? deriveAcceptanceCriteriaV2(expectedOutput) : null);
@@ -1149,7 +1171,9 @@ export function resolveContractForDispatch(
         podName: args.podName,
         expectedOutput,
         acceptanceCriteria,
-        verificationTier: args.verificationTier ?? null,
+        // Tier is written explicitly (not left to a verify-time null→auto
+        // fallback) so every dispatched contract carries who signs it off.
+        verificationTier: args.verificationTier ?? 'auto',
         worktreePath: args.worktreePath ?? null,
       });
       contractId = created.id as ULID;

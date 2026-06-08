@@ -134,6 +134,58 @@ test('[303] explicit expectedOutput + WI has undispatched contract → still min
   assert.equal(created[0].expectedOutput.kind, 'repo');
 });
 
+// ── 2026-06-07 empty-contract guard ───────────────────────────────────────────
+
+test('requireExpectedOutput: pod with no default + no inline spec → null (abort, no create)', () => {
+  // A custom pod (not in the stock default table) dispatched with no spec must
+  // NOT mint a spec-less contract — resolveContractForDispatch returns null so
+  // the fresh-dispatch path aborts with a typed refusal.
+  const { service, created } = fakeService();
+  const id = resolveContractForDispatch(
+    {
+      projectId: 'P1' as any,
+      workItemId: null,
+      agentRunId: 'R1' as any,
+      podName: 'snowflake-expert',
+      contractService: service,
+      requireExpectedOutput: true,
+    },
+    {
+      listContractsForWorkItem: (() => []) as any,
+      getWorkItem: (() => null) as any,
+      setAgentRunContractId: (() => {}) as any,
+      // No stored pod-row default — forces the chain to end in null.
+      getPodRowExpectedOutput: (() => null) as any,
+    },
+  );
+  assert.equal(id, null, 'no resolvable spec → null');
+  assert.equal(created.length, 0, 'must not create a spec-less contract');
+});
+
+test('requireExpectedOutput: explicit inline spec on a custom pod → still creates', () => {
+  const { service, created } = fakeService();
+  const id = resolveContractForDispatch(
+    {
+      projectId: 'P1' as any,
+      workItemId: null,
+      agentRunId: 'R1' as any,
+      podName: 'snowflake-expert',
+      contractService: service,
+      expectedOutput: { kind: 'answer', must_address: ['summary'] } as any,
+      requireExpectedOutput: true,
+    },
+    {
+      listContractsForWorkItem: (() => []) as any,
+      getWorkItem: (() => null) as any,
+      setAgentRunContractId: (() => {}) as any,
+      getPodRowExpectedOutput: (() => null) as any,
+    },
+  );
+  assert.equal(id, 'C-NEW');
+  assert.equal(created.length, 1);
+  assert.equal(created[0].verificationTier, 'auto', 'tier written explicitly, not left null');
+});
+
 test('[303] no explicit expectedOutput + WI has dispatched contract → reuse (continuation path unchanged)', () => {
   // pc_continue_agent passes no expectedOutput — must still reuse.
   const { service, created } = fakeService();
