@@ -515,8 +515,15 @@ export async function handleWorkItemTool(
       if (typeof args.area_id === 'string' && args.area_id) q.set('areaId', args.area_id);
       const query = q.toString();
       const suffix = `work-items${query ? `?${query}` : ''}`;
+      // Cross-project read (Command planner): targetProjectId overrides the
+      // session's PC_PROJECT_ID. Same project-scoped route, different id.
+      const listTargetPid =
+        typeof args.targetProjectId === 'string' && args.targetProjectId.trim()
+          ? args.targetProjectId.trim()
+          : null;
+      const listPath = listTargetPid ? `/api/projects/${listTargetPid}/${suffix}` : ctx.projectPath(suffix);
       try {
-        const res = await ctx.client.listWorkItems(ctx.projectPath(suffix));
+        const res = await ctx.client.listWorkItems(listPath);
         if (res.status >= 200 && res.status < 300) {
           return ctx.withRichLinkHint(res.body);
         }
@@ -566,9 +573,34 @@ export async function handleWorkItemTool(
       }
     }
 
-    case 'pc_list_areas': {
+    case 'pc_list_projects': {
+      // Cross-project read for the Command planner: every project in the
+      // workspace, so it can then pull each one's work items / areas by id.
       try {
-        const res = await ctx.client.listAreas(ctx.projectPath('areas'));
+        const res = await ctx.getServer('/api/projects');
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `pc_list_projects failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_list_projects failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
+    case 'pc_list_areas': {
+      const areasTargetPid =
+        typeof args.targetProjectId === 'string' && args.targetProjectId.trim()
+          ? args.targetProjectId.trim()
+          : null;
+      const areasPath = areasTargetPid ? `/api/projects/${areasTargetPid}/areas` : ctx.projectPath('areas');
+      try {
+        const res = await ctx.client.listAreas(areasPath);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }

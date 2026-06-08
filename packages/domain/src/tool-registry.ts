@@ -929,6 +929,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "cursor": {
           "type": "string",
           "description": "optional: pagination cursor from a previous response's nextCursor"
+        },
+        "targetProjectId": {
+          "type": "string",
+          "description": "optional: read another project's work items by its ULID (cross-project read; default = this session's project). Used by the Command planner to see across every project."
         }
       }
     }
@@ -966,11 +970,16 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_list_areas",
     "family": "work-item",
     "label": "List areas",
-    "description": "List the project's Areas — first-class buckets a work item can belong to (or none, \"Uncaptured\"). Use this to discover Area ids before filing/assigning a work item to an Area. Returns { areas: [{ id, name, summary, sortOrder, ... }, ...] } ordered by sortOrder. No arguments; PC_PROJECT_ID env is the implicit scope.",
-    "catalogDescription": "List the project's Areas (focus buckets) + their work-item counts.",
+    "description": "List a project's Areas — first-class buckets a work item can belong to (or none, \"Uncaptured\"). Use this to discover Area ids before filing/assigning a work item to an Area. Returns { areas: [{ id, name, summary, sortOrder, ... }, ...] } ordered by sortOrder. Defaults to this session's project (PC_PROJECT_ID); pass targetProjectId to read another project's Areas (cross-project read, used by the Command planner).",
+    "catalogDescription": "List a project's Areas (focus buckets) + their work-item counts.",
     "inputSchema": {
       "type": "object",
-      "properties": {}
+      "properties": {
+        "targetProjectId": {
+          "type": "string",
+          "description": "optional: read another project's Areas by its ULID (default = this session's project)"
+        }
+      }
     }
   },
   {
@@ -1068,6 +1077,17 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "label": "List project stages",
     "description": "List the project's stages live from the server. Use this BEFORE writing any stage id into a workflow step's `move` field or a work-item create/move. Returns { ok: true, stages: [{ id, name, order, isDone?, isCancelled?, isNew? }, ...] }. Always use the stage `id`, never the name. Use `isDone` / `isCancelled` / `isNew` for semantic stage roles instead of guessing from labels. No arguments; PC_PROJECT_ID env is the implicit scope.",
     "catalogDescription": "List the project's stages by id + label.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "pc_list_projects",
+    "family": "project",
+    "label": "List all projects",
+    "description": "List every project in this Caisson workspace (id, slug, name, stages). The cross-project read for the Command planner: call this first to discover project ids, then pass each id as targetProjectId to pc_list_work_items / pc_list_areas to see that project's work. Returns { projects: [{ id, slug, name, stages, ... }, ...] }. No arguments.",
+    "catalogDescription": "List every project in the workspace (ids, slugs, stages).",
     "inputSchema": {
       "type": "object",
       "properties": {}
@@ -2036,6 +2056,7 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_complete_node: 'first-order',
   pc_list_agents: 'first-order',
   pc_list_stages: 'first-order',
+  pc_list_projects: 'first-order',
   pc_list_workflows: 'first-order',
   pc_list_field_schemas: 'first-order',
   pc_list_areas: 'first-order',
