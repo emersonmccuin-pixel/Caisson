@@ -3,10 +3,14 @@
 // live here (the client owns them); no raw event parsing in the view (the live
 // helper owns it). M8 slice C grows this into the actionable decision-card
 // Human Inbox (approve/reject via the existing decision doors).
+//
+// pc-pty-chat-316: visibility is server-driven (address-based), not re-derived
+// from message kind. The server already filters every inbox route to
+// addressKinds:['user-inbox'], so the client renders exactly what it receives.
 
 import { useEffect, useState } from 'react';
 
-import { classifyInboxItem, isActionableMailboxKind, type MailboxMessageKind, type WorkflowReviewFlavor } from '@pc/contracts';
+import { isActionableMailboxKind, type MailboxMessageKind, type WorkflowReviewFlavor } from '@pc/contracts';
 import { mailboxApi } from './client';
 import { ReviewModal } from './ReviewModal';
 import { useMailboxInbox } from '@/hooks/use-mailbox-inbox';
@@ -24,7 +28,7 @@ export interface MailboxInboxProps {
   projectNames?: Record<string, string>;
 }
 
-const KIND_LABELS: Record<MailboxMessageKind, string> = {
+const KIND_LABELS: Partial<Record<MailboxMessageKind, string>> = {
   'agent-ask-escalated': 'Agents Waiting on You',
   'agent-question':   'Agent Questions',
   'agent-approval':   'Agent Approvals',
@@ -67,33 +71,18 @@ export function readReviewFlavor(
   return undefined;
 }
 
-/** Whether this inbox item is visible to the human user. Delegates to the
- *  shared classifier (inbox-classifier.ts) so the panel, the bell badge, and
- *  any future surface all agree. Replaces the old HIDDEN_KINDS kind-only check
- *  which couldn't distinguish orchestrator-flavor workflow-review gates. */
-export function isInboxItemHumanVisible(item: MailboxInboxItem): boolean {
-  return classifyInboxItem(item.message.kind, readReviewFlavor(item.message)).humanVisible;
-}
-
-/** Thin kind-only compatibility shim — callers that already know the kind but
- *  not the full item can use this; for full accuracy prefer isInboxItemHumanVisible. */
-export function isInboxVisibleKind(kind: MailboxMessageKind): boolean {
-  // Workflow-review without flavor defaults to human-visible (safe fallback).
-  return classifyInboxItem(kind).humanVisible;
-}
-
 export function MailboxInbox({ scope, onVisibleCount, onActionableCount, projectNames }: MailboxInboxProps) {
   const { items, loading, refetch } = useMailboxInbox(scope);
 
-  // Drop orchestrator-owned / non-human-visible items before anything counts,
-  // groups, or renders. Uses the full classifier (kind + flavor) so an
-  // orchestrator-flavor workflow-review gate is correctly excluded.
-  const visibleItems = items.filter((item) => isInboxItemHumanVisible(item));
+  // The server already filters every inbox route to addressKinds:['user-inbox'],
+  // so all items here are already user-inbox addressed. No client re-derivation
+  // of visibility — the address is the single door (pc-pty-chat-316).
+  const visibleItems = items;
 
-  // Actionable = visible item that still needs a decision.
+  // Actionable = item that still needs a decision.
   const actionableCount = visibleItems.filter(
     (item) =>
-      classifyInboxItem(item.message.kind, readReviewFlavor(item.message)).actionable &&
+      isActionableMailboxKind(item.message.kind) &&
       item.recipient.actionedAt === null,
   ).length;
 
@@ -116,24 +105,33 @@ export function MailboxInbox({ scope, onVisibleCount, onActionableCount, project
     );
   }
 
-  // Group the visible items by kind.
-  const grouped = new Map<MailboxMessageKind, MailboxInboxItem[]>();
+  // Group by kind.
+  const grouped = new Map<string, MailboxInboxItem[]>();
   for (const item of visibleItems) {
     const k = item.message.kind;
     if (!grouped.has(k)) grouped.set(k, []);
     grouped.get(k)!.push(item);
   }
 
+  // Render order: known kinds first (in KIND_ORDER sequence), then any unknown
+  // kinds that aren't in KIND_ORDER. Unknown kinds must render rather than
+  // silently disappear — the whole point of the address-driven model (pc-pty-chat-316).
+  const renderOrder: string[] = [
+    ...KIND_ORDER.filter((k) => grouped.has(k)),
+    ...Array.from(grouped.keys()).filter((k) => !KIND_ORDER.includes(k as MailboxMessageKind)),
+  ];
+
   return (
     <div className="space-y-3">
-      {KIND_ORDER.map((kind) => {
+      {renderOrder.map((kind) => {
         const group = grouped.get(kind);
         if (!group || group.length === 0) return null;
+        const label = KIND_LABELS[kind as MailboxMessageKind] ?? kind;
         return (
           <div key={kind}>
             <div className="mb-1 flex items-center justify-between">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {KIND_LABELS[kind]}
+                {label}
               </span>
               <span className="bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
                 {group.length}
@@ -174,12 +172,12 @@ function rowTitle(message: MailboxInboxItem['message']): string {
     if (markerKind === 'agent-completed') return 'Agent completed';
     if (markerKind === 'agent-failed') return 'Agent failed';
     if (markerKind === 'agent-queued-started') return 'Agent started';
-    return KIND_LABELS[message.kind];
+    return KIND_LABELS[message.kind] ?? message.kind;
   }
   // Otherwise the first non-empty, non-bracket-marker line is the human title.
   const humanLine = lines.find((l) => !l.startsWith('['));
   if (humanLine) return humanLine;
-  return KIND_LABELS[message.kind];
+  return KIND_LABELS[message.kind] ?? message.kind;
 }
 
 /** Is this a review kind that should show the Review button + modal? */

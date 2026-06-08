@@ -6,12 +6,15 @@
 //
 // Explicit close only (no backdrop/Escape dismissal — the reject form hosts
 // typed feedback that an accidental dismiss would destroy).
+//
+// pc-pty-chat-316: the server filters every inbox route to user-inbox recipients;
+// allItems is already the correct set. No client-side kind re-classification.
 
 import { useMemo, useState } from 'react';
 import { Bell, Download } from 'lucide-react';
 
-import { classifyInboxItem } from '@pc/contracts';
-import { MailboxInbox, isInboxItemHumanVisible, readReviewFlavor } from './MailboxInbox';
+import { isActionableMailboxKind } from '@pc/contracts';
+import { MailboxInbox } from './MailboxInbox';
 import { UpdateBellCard, isUpdatePending } from './UpdateBellCard';
 import { useMailboxInbox } from '@/hooks/use-mailbox-inbox';
 import { useDesktopUpdates } from '@/hooks/use-desktop-updates';
@@ -26,32 +29,28 @@ export function InboxBell({ projectNames }: { projectNames: Record<string, strin
   const updates = useDesktopUpdates();
   const updatePending = isUpdatePending(updates);
 
-  // Only count what the inbox panel actually SHOWS — uses the full classifier
-  // (kind + flavor) so orchestrator-flavor workflow-review gates don't light
-  // the badge when there's nothing for the human to open or dismiss.
-  const items = useMemo(
-    () => allItems.filter((i) => isInboxItemHumanVisible(i)),
+  // The server pre-filters to user-inbox recipients — allItems is already the
+  // correct set for the human inbox. Badge counts are derived directly.
+
+  // The badge tracks UNREAD (anything you haven't opened or dismissed).
+  const unread = useMemo(
+    () =>
+      allItems.filter(
+        (i) => i.recipient.readAt === null && i.recipient.dismissedAt === null,
+      ).length,
     [allItems],
   );
 
-  // The badge tracks UNREAD (anything you haven't opened or dismissed). The
-  // count of those that also need a decision rides the tooltip.
-  const unread = useMemo(
-    () =>
-      items.filter(
-        (i) => i.recipient.readAt === null && i.recipient.dismissedAt === null,
-      ).length,
-    [items],
-  );
+  // The tooltip shows how many items require an explicit decision.
   const actionable = useMemo(
     () =>
-      items.filter(
+      allItems.filter(
         (i) =>
-          classifyInboxItem(i.message.kind, readReviewFlavor(i.message)).actionable &&
+          isActionableMailboxKind(i.message.kind) &&
           i.recipient.actionedAt === null &&
           i.recipient.dismissedAt === null,
       ).length,
-    [items],
+    [allItems],
   );
 
   const title =
