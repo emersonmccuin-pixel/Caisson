@@ -145,6 +145,37 @@ export function registerWorkflowCompatRoutes(app: Hono, deps: WorkflowCompatRout
     return c.json({ ok: true, runs });
   });
 
+  /** T5 — seed for the ActivityPanel "Waiting on you" run-state signal.
+   *  Returns every (runId, nodeId) pair where the run is paused at a human
+   *  review gate.  The frozen yaml snapshot (workflowYamlSnapshot) knows the
+   *  node's reviewer flavor; dagState.nodes knows which nodes are
+   *  awaiting-review.  Only paused runs are checked — other statuses can never
+   *  have live review gates. */
+  app.get('/api/projects/:projectId/workflow-v2/pending-human-reviews', (c) => {
+    const id = c.req.param('projectId');
+    const runtime = deps.resolveProject(id);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    const runs = services.workflowRunsV2Repo.listRunsByProject(runtime.project.id);
+    const reviews: Array<{ runId: string; nodeId: string }> = [];
+    for (const run of runs) {
+      if (run.status !== 'paused') continue;
+      let wf: { nodes?: Array<{ id: string; kind: string; reviewer?: string }> };
+      try {
+        wf = JSON.parse(run.workflowYamlSnapshot) as typeof wf;
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(wf.nodes)) continue;
+      for (const [nodeId, nodeRec] of Object.entries(run.dagState.nodes as Record<string, { state: string }>)) {
+        if (nodeRec.state !== 'awaiting-review') continue;
+        const wfNode = wf.nodes.find((n) => n.id === nodeId);
+        if (!wfNode || wfNode.kind !== 'review' || wfNode.reviewer !== 'human') continue;
+        reviews.push({ runId: run.id, nodeId });
+      }
+    }
+    return c.json({ ok: true, reviews });
+  });
+
   app.post('/api/projects/:projectId/workflow-v2/review', async (c) => {
     const id = c.req.param('projectId');
     const runtime = deps.resolveProject(id);

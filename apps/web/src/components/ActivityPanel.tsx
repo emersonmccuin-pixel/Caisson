@@ -5,10 +5,14 @@
 //   4. Failed recently (collapsed, 7-day window, very bottom)
 //
 // Section 32.3 — when collapsed, renders a 36px badge gutter instead of
-// hiding the panel. Auto-swells when "inbox actionable" or "failed recently"
-// transitions from 0 → non-zero (running counts don't auto-swell — they
-// resolve themselves). The old "Waiting on you" region (paused-runs list)
-// is removed — the inbox is the single home for human decisions (pc-pty-chat-267).
+// hiding the panel. Auto-swells when "waiting on you" (human gate) or
+// "failed recently" transitions from 0 → non-zero (running counts don't
+// auto-swell — they resolve themselves).
+//
+// T5 (pc-pty-chat-318) — "Waiting on you" is now backed by live run-state:
+// the count and badge come from workflow.review.changed events (human flavor,
+// pending state), NOT the inbox delivery. A paused run with no delivered
+// inbox message still surfaces here.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -22,6 +26,7 @@ import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { MailboxInbox } from '@/features/mailbox/MailboxInbox';
 import { useProjectAgentRuns } from '@/hooks/use-project-agent-runs';
 import { useProjectWorkflowV2Runs } from '@/hooks/use-project-workflow-v2-runs';
+import { useProjectWorkflowHumanReviews } from '@/hooks/use-project-workflow-human-reviews';
 import { useActiveCenterTab } from '@/store/active-center-tab';
 import { useAgentTranscript } from '@/store/agent-transcript';
 import { useWorkflowsListNav } from '@/store/workflows-list-nav';
@@ -60,6 +65,17 @@ export function ActivityPanel({
   );
   const { runs: agentRuns } = useProjectAgentRuns(project, events);
 
+  // T5 — run-state-backed "Waiting on you": counts runs paused at a human
+  // gate regardless of whether an inbox message was delivered/dismissed.
+  const humanReviewRunIds = useProjectWorkflowHumanReviews(project);
+  // Intersect with active runs so a cancelled run that raced the seed fetch
+  // is never counted.
+  const humanGateCount = useMemo(
+    () =>
+      activeRuns.filter((r) => r.status === 'paused' && humanReviewRunIds.has(r.id)).length,
+    [activeRuns, humanReviewRunIds],
+  );
+
   const sevenDaysAgoMsEpoch = nowMs - 7 * 24 * 60 * 60 * 1000;
   const dismissedRunIds = useDismissedRunIds(project);
   const recentFailedRuns = useMemo(
@@ -78,35 +94,33 @@ export function ActivityPanel({
         }),
     [runs, sevenDaysAgoMsEpoch, dismissedRunIds],
   );
-  // Section 32.3 — auto-swell on first non-zero "inbox actionable" or
-  // "failed". Running counts don't auto-swell (they resolve themselves).
-  // inboxActionableCount is fed up from MailboxRegion via onActionableCount.
-  const [inboxActionableCount, setInboxActionableCount] = useState(0);
+  // Section 32.3 — auto-swell on first non-zero "human gate" or "failed".
+  // Running counts don't auto-swell (they resolve themselves).
   const failedCount = recentFailedRuns.length;
-  const prevInboxActionable = useRef(inboxActionableCount);
+  const prevHumanGate = useRef(humanGateCount);
   const prevFailed = useRef(failedCount);
   useEffect(() => {
     if (expanded) {
-      prevInboxActionable.current = inboxActionableCount;
+      prevHumanGate.current = humanGateCount;
       prevFailed.current = failedCount;
       return;
     }
     if (
-      (inboxActionableCount > 0 && prevInboxActionable.current === 0) ||
+      (humanGateCount > 0 && prevHumanGate.current === 0) ||
       (failedCount > 0 && prevFailed.current === 0)
     ) {
       onExpand();
     }
-    prevInboxActionable.current = inboxActionableCount;
+    prevHumanGate.current = humanGateCount;
     prevFailed.current = failedCount;
-  }, [inboxActionableCount, failedCount, expanded, onExpand]);
+  }, [humanGateCount, failedCount, expanded, onExpand]);
 
   if (!expanded) {
     return (
       <ActivityGutter
         agentsCount={agentRuns.length}
         workflowsCount={activeRuns.length}
-        waitingCount={inboxActionableCount}
+        waitingCount={humanGateCount}
         failedCount={failedCount}
         onExpand={onExpand}
       />
@@ -122,7 +136,7 @@ export function ActivityPanel({
         </div>
       ) : (
         <div className="flex flex-1 flex-col overflow-y-auto">
-          <MailboxRegion project={project} onActionableCount={setInboxActionableCount} />
+          <MailboxRegion project={project} />
           <RunningAgentsRegion
             runs={agentRuns}
             nowMs={nowMs}
@@ -132,6 +146,7 @@ export function ActivityPanel({
             project={project}
             runs={activeRuns}
             nowMs={nowMs}
+            humanReviewRunIds={humanReviewRunIds}
           />
           <div className="mt-auto">
             <FailedRecentlyRegion
@@ -255,10 +270,12 @@ function EmptyRegion({ text }: { text: string }) {
 function RunningWorkflowsRegion({
   runs,
   nowMs,
+  humanReviewRunIds,
 }: {
   project: Project;
   runs: V2RunSummary[];
   nowMs: number;
+  humanReviewRunIds: ReadonlySet<string>;
 }) {
   return (
     <RegionShell title="Running workflows" badge={String(runs.length)}>
@@ -267,7 +284,12 @@ function RunningWorkflowsRegion({
       ) : (
         <ul className="divide-y divide-border/50">
           {runs.map((run) => (
-            <RunningWorkflowCard key={run.id} run={run} nowMs={nowMs} />
+            <RunningWorkflowCard
+              key={run.id}
+              run={run}
+              nowMs={nowMs}
+              awaitingHuman={run.status === 'paused' && humanReviewRunIds.has(run.id)}
+            />
           ))}
         </ul>
       )}
@@ -278,9 +300,12 @@ function RunningWorkflowsRegion({
 function RunningWorkflowCard({
   run,
   nowMs,
+  awaitingHuman,
 }: {
   run: V2RunSummary;
   nowMs: number;
+  /** T5 — true when the run is paused at a human review gate. */
+  awaitingHuman: boolean;
 }) {
   // 19.12 — cancel button removed; v2 has no run-cancel endpoint yet (the
   // v1 endpoint died with the v1 routes). Re-add when the v2 cancel ships.
@@ -292,11 +317,13 @@ function RunningWorkflowCard({
   const startedAt = run.startedAt ?? run.createdAt;
   const elapsed = formatElapsed(nowMs - startedAt);
   const statusLabel =
-    run.status === 'paused'
-      ? 'paused'
-      : run.status === 'pending'
-        ? 'starting…'
-        : 'running';
+    awaitingHuman
+      ? 'awaiting your review'
+      : run.status === 'paused'
+        ? 'paused'
+        : run.status === 'pending'
+          ? 'starting…'
+          : 'running';
 
   return (
     <li>
@@ -316,21 +343,23 @@ function RunningWorkflowCard({
             {elapsed}
           </div>
         </div>
-        <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-          {statusLabel}
+        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span className="truncate">{statusLabel}</span>
+          {awaitingHuman && (
+            <span
+              title="This workflow is paused waiting for your review decision."
+              className="shrink-0 border border-amber-500/40 bg-amber-500/10 px-1 py-px text-[9px] uppercase tracking-wider text-amber-600 dark:text-amber-400"
+            >
+              awaiting human
+            </span>
+          )}
         </div>
       </button>
     </li>
   );
 }
 
-function MailboxRegion({
-  project,
-  onActionableCount,
-}: {
-  project: Project;
-  onActionableCount?: (n: number) => void;
-}) {
+function MailboxRegion({ project }: { project: Project }) {
   const [expanded, setExpanded] = useState(true);
   const [count, setCount] = useState(0);
 
@@ -358,7 +387,6 @@ function MailboxRegion({
         <MailboxInbox
           scope={{ projectId: project.id }}
           onVisibleCount={setCount}
-          onActionableCount={onActionableCount}
         />
       </div>
     </section>
