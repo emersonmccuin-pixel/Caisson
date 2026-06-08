@@ -78,10 +78,12 @@ function deriveKnowledgeName(content: string): string {
   return slug || `knowledge-${Date.now()}`;
 }
 
-/** Resolve a pod by either { id } or { name }. Name lookup hits the global
- *  list endpoint. Used by every pc_*_agent / pc_*_knowledge MCP tool so the
- *  orchestrator can refer to pods by their human name without needing to
- *  juggle ULIDs across turns. */
+/** Resolve a pod by either { id } or { name }. Name lookup searches the
+ *  project's visible pods first (project-scope + stock globals) then the full
+ *  global list, so pods of ANY scope — project, stock-global, or
+ *  global-user-created — resolve by name. Used by every pc_*_agent /
+ *  pc_*_knowledge MCP tool so the orchestrator can refer to pods by their
+ *  human name without juggling ULIDs across turns. */
 async function resolvePodId(
   args: Record<string, unknown>,
   ctx: ToolContext,
@@ -93,18 +95,42 @@ async function resolvePodId(
   if (!name) {
     return { ok: false, error: 'either id or name required' };
   }
-  const res = await ctx.getServer('/api/agents/pods');
-  if (res.status < 200 || res.status >= 300) {
-    return { ok: false, error: `pod-list lookup failed (${res.status}): ${res.body}` };
+  // Name lookup must cover BOTH the project's pods (project-scope rows + stock
+  // globals, returned only with ?projectId) AND global user-created pods (the
+  // project view deliberately excludes those). Search project-visible first so
+  // a project pod wins over a same-named global (override semantics), then fall
+  // back to the full global list. Without the projectId pass, project-scoped
+  // pods (e.g. a project's build-qa-tester) were unresolvable by name at all.
+  const listPods = async (
+    path: string,
+  ): Promise<
+    | { ok: true; pods: Array<{ id: string; name: string }> }
+    | { ok: false; error: string }
+  > => {
+    const res = await ctx.getServer(path);
+    if (res.status < 200 || res.status >= 300) {
+      return { ok: false, error: `pod-list lookup failed (${res.status}): ${res.body}` };
+    }
+    try {
+      const parsed = JSON.parse(res.body) as { pods?: Array<{ id: string; name: string }> };
+      return { ok: true, pods: parsed.pods ?? [] };
+    } catch (err) {
+      return { ok: false, error: `pod-list parse failed: ${(err as Error).message}` };
+    }
+  };
+
+  const projList = await listPods(
+    `/api/agents/pods?projectId=${encodeURIComponent(ctx.projectId)}`,
+  );
+  if (!projList.ok) return projList;
+  let pod = projList.pods.find((p) => p.name === name);
+  if (!pod) {
+    const globalList = await listPods('/api/agents/pods');
+    if (!globalList.ok) return globalList;
+    pod = globalList.pods.find((p) => p.name === name);
   }
-  try {
-    const parsed = JSON.parse(res.body) as { pods?: Array<{ id: string; name: string }> };
-    const pod = (parsed.pods ?? []).find((p) => p.name === name);
-    if (!pod) return { ok: false, error: `no pod named '${name}'` };
-    return { ok: true, id: pod.id };
-  } catch (err) {
-    return { ok: false, error: `pod-list parse failed: ${(err as Error).message}` };
-  }
+  if (!pod) return { ok: false, error: `no pod named '${name}'` };
+  return { ok: true, id: pod.id };
 }
 
 // Slice 011 (11E) — pod-CRUD responses are LEFT RAW. `@pc/contracts/pods.ts`
