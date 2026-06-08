@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 import type { Hono } from 'hono';
 import type { Project, ULID as DomainULID } from '@pc/domain';
-import { getProjectById, listProjects } from '@pc/db';
+import { getProjectById, listProjects, updateProjectNotes } from '@pc/db';
 import type {
   ProjectChangedLiveEvent,
   ProjectChangedRefetchEnvelope,
@@ -150,6 +150,18 @@ export function registerProjectRoutes(app: Hono, deps: ProjectRoutesDeps): void 
       }
     }
     return c.json({ ok: true, removed, skipped });
+  });
+
+  app.patch('/api/projects/:projectId/notes', async (c) => {
+    const id = c.req.param('projectId') as DomainULID;
+    const body = await c.req.json<unknown>();
+    if (typeof (body as Record<string, unknown>).text !== 'string') {
+      return c.json({ ok: false, error: 'text must be a string' }, 400);
+    }
+    const text = (body as Record<string, unknown>).text as string;
+    const updated = updateProjectNotes(id, text);
+    if (!updated) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    return c.json({ ok: true, notes: updated.notes });
   });
 
   app.post('/api/projects/:projectId/reveal', (c) => {
