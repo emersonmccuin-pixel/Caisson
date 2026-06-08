@@ -200,39 +200,6 @@ export function ProjectRail({
 
   return (
     <div className="flex h-full flex-col border-r border-border bg-card text-foreground">
-      {commandProject && (
-        <button
-          onClick={() => setActiveSlug(commandProject.slug)}
-          title={
-            commandUnread
-              ? 'Command — plan across all projects\nUnread chat activity'
-              : 'Command — plan across all projects'
-          }
-          aria-label={
-            commandUnread ? 'Command has unread chat activity' : 'Command — plan across all projects'
-          }
-          className={
-            'flex w-full items-center gap-2 border-b-2 border-border px-3 py-1.5 text-left text-sm hover:bg-muted ' +
-            (commandActive
-              ? 'border-l-2 border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary '
-              : 'border-l-2 border-transparent text-foreground/80 ')
-          }
-        >
-          <span
-            aria-hidden="true"
-            className={
-              'pc-project-tile pc-project-tile-row shrink-0 ' +
-              (commandActive ? 'pc-project-tile-active' : 'pc-project-tile-inactive') +
-              (commandUnread ? ' pc-project-tile-unread' : '')
-            }
-          >
-            ★
-          </span>
-          <span className="min-w-0 flex-1 truncate font-medium tracking-wide">
-            {commandProject.name}
-          </span>
-        </button>
-      )}
       <div className="flex items-center justify-between border-b border-border px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">
         <span>Projects</span>
         <button
@@ -256,6 +223,42 @@ export function ProjectRail({
         </div>
       )}
       <div className="flex-1 overflow-y-auto">
+        {commandProject && (
+          <button
+            onClick={() => setActiveSlug(commandProject.slug)}
+            title={
+              commandUnread
+                ? 'Command — plan across all projects\nUnread chat activity'
+                : 'Command — plan across all projects'
+            }
+            aria-label={
+              commandUnread ? 'Command has unread chat activity' : 'Command — plan across all projects'
+            }
+            className={
+              'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted ' +
+              (commandActive
+                ? 'border-l-2 border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary '
+                : 'border-l-2 border-transparent text-foreground/80 ')
+            }
+          >
+            <span
+              aria-hidden="true"
+              className={
+                'pc-project-tile pc-project-tile-row shrink-0 ' +
+                (commandActive ? 'pc-project-tile-active' : 'pc-project-tile-inactive') +
+                (commandUnread ? ' pc-project-tile-unread' : '')
+              }
+            >
+              <span className="text-[1.25rem] leading-none">★</span>
+            </span>
+            <span className="min-w-0 flex-1 truncate font-medium tracking-wide">
+              {commandProject.name}
+            </span>
+          </button>
+        )}
+        {commandProject && (
+          <div aria-hidden="true" className="my-1 border-t-2 border-border" />
+        )}
         {userProjects.length === 0 ? (
           <div className="px-3 py-3 text-xs text-muted-foreground">No projects yet.</div>
         ) : filtered.length === 0 ? (

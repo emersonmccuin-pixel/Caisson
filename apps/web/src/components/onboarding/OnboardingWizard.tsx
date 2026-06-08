@@ -620,7 +620,7 @@ function SurfaceChoice({
       type="button"
       onClick={() => onSelect(surface)}
       className={
-        'border px-3 py-3 text-left transition-colors ' +
+        'border-2 px-3 py-3 text-left transition-colors ' +
         (selected
           ? 'border-primary bg-primary/10 text-foreground'
           : 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground')
@@ -635,7 +635,7 @@ function SurfaceChoice({
 function SurfacePreview({ surface }: { surface: OrchestratorSurfacePreference }) {
   if (surface === 'terminal') {
     return (
-      <div className="flex min-h-0 flex-col border border-border bg-background p-3">
+      <div className="flex min-h-0 flex-col border-2 border-border bg-background p-3">
         <div className="mb-2 flex items-center justify-between text-[10px] uppercase tracking-wide text-muted-foreground">
           <span>Terminal</span>
           <span>120x30</span>
@@ -654,7 +654,7 @@ function SurfacePreview({ surface }: { surface: OrchestratorSurfacePreference })
   }
 
   return (
-    <div className="flex min-h-0 flex-col border border-border bg-background p-3">
+    <div className="flex min-h-0 flex-col border-2 border-border bg-background p-3">
       <div className="mb-2 text-[10px] uppercase tracking-wide text-muted-foreground">Chat</div>
       <div className="flex flex-1 flex-col gap-3 overflow-hidden">
         <div className="ml-auto max-w-[70%] border border-primary/40 bg-primary/10 px-3 py-2 text-xs">

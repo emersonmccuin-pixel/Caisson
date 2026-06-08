@@ -71,7 +71,7 @@ export function OrchestratorLauncher({
         <button
           onClick={onStartChat}
           disabled={busy}
-          className="rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          className="rounded-lg border-2 border-primary bg-primary px-8 py-3 text-base font-semibold text-primary-foreground shadow-lg shadow-primary/30 ring-2 ring-primary/20 ring-offset-2 ring-offset-background transition-all hover:bg-primary/90 hover:shadow-primary/40 disabled:opacity-50"
         >
           {starting ? 'Starting…' : 'Start Chat'}
         </button>
