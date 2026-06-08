@@ -4,6 +4,7 @@ import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
 import { TranscriptViewer } from '@/components/TranscriptViewer';
+import { mermaidCodeOverride } from '@/components/MermaidBlock';
 import { agentRunsApi } from '@/features/agent-runs/client';
 import {
   agentTranscriptEmptyMessage,
@@ -407,7 +408,9 @@ export function TaskEndBubble({ event }: { event: TaskEndEvent }) {
       </div>
       {text ? (
         <div className="markdown-body">
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={{ code: mermaidCodeOverride }}>
+            {text}
+          </ReactMarkdown>
         </div>
       ) : (
         <div className="text-sm italic text-muted-foreground">(no result text)</div>

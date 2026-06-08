@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 
 import { ExternalLink } from '@/components/ExternalLink';
 import { LiveRichLink } from '@/components/LiveRichLink';
+import { mermaidCodeOverride } from '@/components/MermaidBlock';
 import type {
   AssistantEvent,
   ChatEvent,
@@ -560,7 +561,7 @@ export function AssistantBubble({ event, projectId }: { event: AssistantEvent; p
           // link never materialises. Pass through any pc:// + the safe
           // defaults; everything else falls back to react-markdown's behavior.
           urlTransform={passthroughPcUrlTransform}
-          components={{ a: Anchor }}
+          components={{ a: Anchor, code: mermaidCodeOverride }}
         >
           {text}
         </ReactMarkdown>
