@@ -54,12 +54,13 @@ import { createHostConnection, toHostHealthSnapshot } from './services/host-conn
 import { announceHostHealth } from './services/host-health-writer.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
 import { backfillStageFlags } from './services/stage-flags-backfill.ts';
+import { seedClaudeFirstRun } from './services/claude-firstrun-seed.ts';
 import { ProjectCreate } from './services/project-create.ts';
 import { ProjectRegistry } from './services/project-registry.ts';
 import type { ProjectRuntime } from './services/project-runtime.ts';
 import { ProjectScaffold } from './services/project-scaffold.ts';
 import { registerFileRoutes } from './features/files/routes.ts';
-import { setBundledClaudeExe } from '@pc/runtime';
+import { resolveClaudeBinary, setBundledClaudeExe } from '@pc/runtime';
 import {
   applyClaudeRuntimeSettings,
   readSettings,
@@ -443,6 +444,24 @@ const projectCreate = new ProjectCreate(projectScaffold, projectRegistry);
     console.warn(`[pc] stage-flags-backfill failed: ${(err as Error).message}`);
   }
 }
+
+// Gap B (pc-pty-chat-338) — pre-seed CC's first-run config so spawned claude
+// processes skip the interactive theme-picker + "press enter" dialogs on a
+// fresh machine. Runs after applyClaudeRuntimeSettings (so CLAUDE_CONFIG_DIR
+// is already resolved) and before the first claude spawn (which only happens
+// on user interaction). Fire-and-forget: never blocks boot.
+void seedClaudeFirstRun(resolveClaudeBinary().path ?? 'claude')
+  .then((r) => {
+    if (r.written) {
+      console.log(
+        `[pc] claude-firstrun-seed: wrote ${r.configPath}` +
+          (r.claudeVersion ? ` (version=${r.claudeVersion})` : ''),
+      );
+    }
+  })
+  .catch((err) => {
+    console.warn(`[pc] claude-firstrun-seed failed: ${(err as Error).message}`);
+  });
 
 
 // ── Slice 009 — mailbox value bindings RELOCATED above the boot handlers ──
