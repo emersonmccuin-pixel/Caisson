@@ -202,9 +202,11 @@ export const workItemsApi = {
       {},
     ).then((r) => r.workItem),
 
+  // includeBody=1: the archived list displays deletedAt and may be passed to
+  // detail views; request the full shape so the type annotation is honest.
   listArchivedWorkItems: (projectId: ULID) =>
     getJson<{ items: WorkItem[]; nextCursor: ULID | null }>(
-      `/api/projects/${projectId}/work-items?includeArchived=1&limit=500`,
+      `/api/projects/${projectId}/work-items?includeArchived=1&limit=500&includeBody=1`,
     ).then((r) => r.items),
 
   replaceStages: async (

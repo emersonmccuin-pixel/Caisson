@@ -78,6 +78,27 @@ export interface WorkItem {
   callsign: string | null;
 }
 
+/** Slim projection returned by the work-item list endpoint when `includeBody`
+ *  is NOT set (mirrors the server's `toSlimWorkItem` / `WorkItemSlim` in
+ *  `@pc/domain`). Lacks `body`, `history`, `fields`, and other bulky columns.
+ *
+ *  Use this type for any fetch that omits `?includeBody=1`. It is structurally
+ *  incompatible with `WorkItem` (no required `body` field) so the compiler goes
+ *  red if a slim object is passed to something that expects the full shape. */
+export interface WorkItemSummary {
+  id: ULID;
+  projectId: ULID;
+  parentId: ULID | null;
+  areaId: ULID | null;
+  stageId: string;
+  title: string;
+  type: WorkItemType;
+  status: WorkItemStatus;
+  statusReason: string | null;
+  callsign: string | null;
+  updatedAt: number;
+}
+
 export type FieldSchemaType = 'text' | 'number' | 'boolean' | 'enum' | 'date';
 
 export interface FieldSchema {
