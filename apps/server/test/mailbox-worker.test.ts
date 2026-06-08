@@ -208,6 +208,10 @@ test('a thrown enqueue error → retrying with backoff (then dead-letter at max 
 
 test('M4a: no active orchestrator yet → DEFERRED (no attempt burned), then delivers when one exists', () => {
   const projectId = realProject();
+  // Isolation: drain any deliveries left pending by prior tests in this shared
+  // DB (e.g. dead-letter notices, which are now addressed active-orchestrator)
+  // so this worker pass counts ONLY the delivery created below.
+  db.getRawDb().exec('DELETE FROM mailbox_deliveries');
   const addr: MailboxAddress = { kind: 'active-orchestrator', projectId };
   const { deliveryId } = makeDelivery('orchestrator-turn', addr, projectId);
   const { svc, calls } = fakeSendService();
