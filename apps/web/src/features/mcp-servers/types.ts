@@ -40,3 +40,21 @@ export interface PatchMcpServerInput {
   description?: string;
   transport?: McpTransport;
 }
+
+// ── Agent MCP Attachments (P3) ────────────────────────────────────────────────
+
+/** Links an agent to a registry MCP server with a per-tool selection.
+ *  `enabledTools === '*'` = all discovered tools; array = specific subset. */
+export interface AgentMcpAttachment {
+  id: string;
+  agentId: string;
+  mcpServerId: string;
+  /** `'*'` = all tools; string array = chosen subset. */
+  enabledTools: string[] | '*';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpsertMcpAttachmentInput {
+  enabledTools: string[] | '*';
+}

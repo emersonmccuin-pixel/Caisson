@@ -406,6 +406,16 @@ export type {
   SetMcpServerDiscoveryInput,
 } from './repos/mcp-servers.ts';
 
+// pc-pty-chat-359 P3 — Agent MCP Attachments repo.
+export {
+  deleteMcpAttachmentByPair,
+  getMcpAttachment,
+  getMcpAttachmentByPair,
+  listMcpAttachmentsForAgent,
+  upsertMcpAttachment,
+} from './repos/mcp-attachments.ts';
+export type { UpsertMcpAttachmentInput } from './repos/mcp-attachments.ts';
+
 // Slice 007 — mailbox repos. (☠ M8/FD-7: pending-interaction repo — the
 // write-only AskShadow side-table; archived in migration 0045.)
 export {

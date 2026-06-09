@@ -34,12 +34,15 @@ import {
   deleteKnowledge,
   deleteMcpServer,
   deleteSecret,
+  deleteMcpAttachmentByPair,
   getAgentById,
   getKnowledge,
   getMcpServer,
+  getMcpServerRegistry,
   getSecret,
   listAgentAudit,
   listAgents,
+  listMcpAttachmentsForAgent,
   listProjectVisibleAgents,
   listKnowledge,
   listMcpServers,
@@ -48,9 +51,11 @@ import {
   softDeleteAgent,
   updateAgent,
   updateKnowledge,
+  upsertMcpAttachment,
 } from '@pc/db';
 import type {
   AgentEffort,
+  AgentMcpAttachmentRow,
   AgentModel,
   PodAgentRow,
   PodAuditActor,
@@ -849,4 +854,71 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     deps.onPodChanged?.(agent.name, 'updated');
     return c.json({ ok: true });
   });
+
+  // --- registry mcp attachments (pc-pty-chat-359 P3) -------------------------
+  //
+  // Links an agent to a registered MCP server (mcp_servers) with a per-tool
+  // selection. These are distinct from the inline agent_mcp_servers rows above.
+  // Routes: GET list · PUT upsert · DELETE detach.
+
+  /** List all registry server attachments for this agent. */
+  app.get('/api/agents/pods/:id/mcp-attachments', (c) => {
+    const id = c.req.param('id') as ULID;
+    if (!getAgentById(id)) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
+    const attachments: AgentMcpAttachmentRow[] = listMcpAttachmentsForAgent(id);
+    return c.json({ ok: true, attachments });
+  });
+
+  /** Attach a registry server to this agent, or update its tool selection.
+   *  Body: `{ enabledTools: '*' | string[] }`.
+   *  Idempotent — re-PUT with different tool selection updates in-place. */
+  app.put('/api/agents/pods/:id/mcp-attachments/:mcpServerId', async (c) => {
+    const id = c.req.param('id') as ULID;
+    const mcpServerId = c.req.param('mcpServerId') as ULID;
+    const agent = getAgentById(id);
+    if (!agent) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
+    const registryServer = getMcpServerRegistry(mcpServerId);
+    if (!registryServer) {
+      return c.json({ ok: false, error: `unknown registry server: ${mcpServerId}` }, 404);
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      return c.json({ ok: false, error: 'invalid JSON body' }, 400);
+    }
+    let enabledTools: string[] | '*';
+    try {
+      enabledTools = asEnabledTools(body.enabledTools);
+    } catch (err) {
+      return c.json({ ok: false, error: (err as Error).message }, 400);
+    }
+    const attachment = upsertMcpAttachment({ agentId: id, mcpServerId, enabledTools });
+    bumpAgentRev(id);
+    announcePod(id, 'updated');
+    deps.onPodChanged?.(agent.name, 'updated');
+    return c.json({ ok: true, attachment });
+  });
+
+  /** Detach a registry server from this agent. Idempotent — 200 even if no
+   *  attachment existed. */
+  app.delete('/api/agents/pods/:id/mcp-attachments/:mcpServerId', (c) => {
+    const id = c.req.param('id') as ULID;
+    const mcpServerId = c.req.param('mcpServerId') as ULID;
+    const agent = getAgentById(id);
+    if (!agent) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
+    deleteMcpAttachmentByPair(id, mcpServerId);
+    bumpAgentRev(id);
+    announcePod(id, 'updated');
+    deps.onPodChanged?.(agent.name, 'updated');
+    return c.json({ ok: true });
+  });
+}
+
+// ── Helpers (attachment) ──────────────────────────────────────────────────────
+
+function asEnabledTools(v: unknown): string[] | '*' {
+  if (v === '*') return '*';
+  if (Array.isArray(v) && v.every((x) => typeof x === 'string')) return v as string[];
+  throw new Error('enabledTools must be "*" or a string[]');
 }
