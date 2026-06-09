@@ -26,17 +26,20 @@ That is the work now — not a ground-up rebuild.
 
 ### Guardrails the loop depends on
 
-These were decided this session and are the safety rails for the bug push. **Two are still being
-fixed in TOP PRIORITIES — describe the target loop, but don't trust the loop as safe until they
-land:**
+These are the safety rails for the bug push:
 
-- **Every dispatch has a contract + isolation, via one path** ([pc-pty-chat-273](pc://work-item/pc-pty-chat-273)).
-  No dispatch should run without a machine-checkable contract and a provisioned isolation
-  (worktree). This is being made structural — enforced in code, not by convention.
-- **Git is orchestrator-owned and verified** ([pc-pty-chat-270](pc://work-item/pc-pty-chat-270)).
-  The build workflow's merge/restart/push steps are honor-system gate prompts today — approving
-  them performs NO git, so a run can "complete" without merging/testing/pushing. Until fixed, the
-  orchestrator owns and verifies git directly; don't assume a green workflow shipped anything.
+- **Every dispatch has a contract + isolation, via one path** ([pc-pty-chat-273](pc://work-item/pc-pty-chat-273))
+  — **LANDED** (commit 3207818d). No dispatch runs without a machine-checkable contract;
+  `isolation: worktree` provisions a real worktree or refuses loudly. Enforced structurally in code
+  with a guard test (`apps/server/test/dispatch-invariant.test.ts`). (Residual edge — resolving the
+  pod/stock-default spec before the isolation check — being closed in
+  [pc-pty-chat-353](pc://work-item/pc-pty-chat-353).)
+- **Git is orchestrator-owned and verified** ([pc-pty-chat-270](pc://work-item/pc-pty-chat-270)) —
+  **NOT YET BUILT.** The build workflow's merge/restart/push steps are still honor-system gate
+  prompts — approving them performs NO git, so a run can "complete" without merging/testing/pushing.
+  Until the verified-engine-git rebuild lands, the orchestrator owns and verifies git directly;
+  don't assume a green workflow shipped anything. Design + plan:
+  `docs/build-ship-pipeline-design-2026-06-08.md`.
 
 ## Core principles (non-negotiable)
 
@@ -58,17 +61,24 @@ land:**
 
 ## Current priority
 
-The **TOP PRIORITIES** area is the ordered, do-this-first sequence. As of this writing:
+The **TOP PRIORITIES** area is the ordered, do-this-first sequence. As of 2026-06-08:
 
-1. **[pc-pty-chat-273](pc://work-item/pc-pty-chat-273)** — enforce contract + isolation on every
-   dispatch (structural, in code).
-2. **[pc-pty-chat-270](pc://work-item/pc-pty-chat-270)** — orchestrator-owned git / fix the build
-   workflow's shipping steps.
-3. **[pc-pty-chat-272](pc://work-item/pc-pty-chat-272)** — fix the dev-stack `PC_ROOT` leak so
-   fixes can be tested cleanly.
-4. **Release** — ship the above plus the already-merged terminal/scroll/Playwright fixes to the
-   packaged app.
-5. **The big bug-fixing push** — run the dogfooding loop at full tilt.
+- ✅ **[pc-pty-chat-273](pc://work-item/pc-pty-chat-273)** — contract + isolation enforced
+  structurally (done; residual edge being closed in [pc-pty-chat-353](pc://work-item/pc-pty-chat-353)).
+- ✅ **[pc-pty-chat-272](pc://work-item/pc-pty-chat-272)** — dev-stack `PC_ROOT` leak fixed; a
+  dev/test stack can no longer boot half-packaged.
+- ✅ **CI floor** — CI runs typecheck + unit + e2e + web build smoke; branch protection on `main`
+  blocks merging red. Runbook: `docs/dev-workflow.md`.
+
+Remaining, in order:
+
+1. **[pc-pty-chat-270](pc://work-item/pc-pty-chat-270)** — git = verified engine action + durable
+   conflict gate (the build workflow cannot actually ship without this). Hold for a working
+   session — its push-to-origin is irreversible. Design: `docs/build-ship-pipeline-design-2026-06-08.md`.
+2. **Hardened build→ship pipeline** ([pc-pty-chat-352](pc://work-item/pc-pty-chat-352)) — pipeline
+   stages/fields, Promote-to-Staging + Release workflows.
+3. **Release** — ship to the packaged app.
+4. **The big bug-fixing push** — run the dogfooding loop at full tilt.
 
 Check the TOP PRIORITIES area for the live list; it's authoritative over this snapshot.
 
