@@ -145,6 +145,22 @@ test('merge throws conflict error: returns conflict', async () => {
   assert.ok(events.some((e) => e.type === 'git_conflict'));
 });
 
+test('guard violation (non-conflict error from mergeBranchIntoDev): returns failed, not conflict', async () => {
+  const events: Array<{ type: string }> = [];
+  const fn = makeMergeToDev('agent-GGGG1234', {
+    mergeState: async () => ({ alreadyMerged: false, mergeInProgress: false, pushed: false }),
+    mergeBranchIntoDev: async () => {
+      // Precondition guard in WorktreeService.mergeBranchIntoDev throws this:
+      throw new Error('MERGE GUARD: dev merge worktree is on branch "main", expected "dev" — refusing to merge');
+    },
+    pushDev: async () => {},
+  }, events);
+  const result = await fn(mergeNode);
+  assert.equal(result.outcome, 'failed', 'guard violation must return failed, not conflict');
+  assert.match(result.error ?? '', /MERGE GUARD/, 'error message carries the guard detail');
+  assert.ok(!events.some((e) => e.type === 'git_conflict'), 'no conflict event for a guard violation');
+});
+
 test('alreadyMerged but not pushed: pushes and verifies receipt', async () => {
   let pushed = false;
   let stateCallCount = 0;
