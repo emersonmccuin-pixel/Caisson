@@ -215,3 +215,29 @@ test('record carries policy + turnState', async () => {
   assert.equal(record.policy, 'persistent-interactive');
   assert.equal(record.turnState, 'ready');
 });
+
+// Issue 1 fix — deferred kill for `completed`
+// ─────────────────────────────────────────────────────────────────────────────
+// toTerminal('completed') must NOT kill the PTY synchronously. An immediate
+// kill injects \x03 via ConPTY in ~μs while the HTTP tool-result response
+// travels over TCP in ~ms; \x03 wins and CC sees its own correct submit as
+// "[Request interrupted by user]". The kill is deferred 2 s with .unref() so
+// the HTTP response arrives first. failed/cancelled still kill immediately.
+
+test('Issue 1 fix: toTerminal(completed) does NOT kill spawn immediately', async () => {
+  const { run, spawn } = makeRun({});
+  run.start();
+  await awaitState(run, 'running');
+  run.complete('result text');
+  // State reaches completed synchronously, but the kill must be deferred.
+  assert.equal(run.getState(), 'completed');
+  assert.equal(spawn.killed, false, 'completed must NOT kill the PTY immediately');
+});
+
+test('Issue 1 fix: toTerminal(failed) kills spawn immediately', async () => {
+  const { run, spawn } = makeRun({ wallClockMs: 20 });
+  run.start();
+  await awaitState(run, 'running');
+  await awaitState(run, 'failed');
+  assert.equal(spawn.killed, true, 'failed must kill the PTY immediately');
+});
