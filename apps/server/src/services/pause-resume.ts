@@ -553,6 +553,11 @@ export interface ContinueAgentPlan {
   /** The verbatim input the caller passed. The wrapper will type this as
    *  the first user turn after the resume gate opens. */
   input: string;
+  /** The cwd the continuation MUST spawn in — parent.worktreeDir resolved
+   *  against project.folderPath for legacy rows. CC locates a --resume
+   *  session by slugifying its working directory, so the cwd must match
+   *  exactly what the original dispatch used. */
+  worktreeDir: string;
 }
 
 export type ContinueAgentResult =
@@ -678,6 +683,9 @@ export function continueAgent(
       podRevisionAtDispatch,
       parentInvokeDepth: parent.parentInvokeDepth,
       input: input.input,
+      // Use the resolved cwd (same fallback already used for the JSONL guard
+      // above) so dispatchContinueAgent never needs a caller-supplied value.
+      worktreeDir: jsonlCwd,
     },
   };
 }

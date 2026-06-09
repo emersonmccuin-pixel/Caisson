@@ -263,7 +263,6 @@ export async function rejectAgentWorkItem(
   const continuation = await dispatch(
     {
       projectId: input.project.id,
-      worktreeDir: input.project.folderPath,
       parentAgentRunId: contract.agentRunId as ULID,
       input: continuationInput,
       dispatcherSessionId,
@@ -404,7 +403,6 @@ export async function rejectAgentContract(
   const continuation = await dispatch(
     {
       projectId: input.project.id,
-      worktreeDir: input.project.folderPath,
       parentAgentRunId: contract.agentRunId as ULID,
       input: continuationInput,
       dispatcherSessionId,
