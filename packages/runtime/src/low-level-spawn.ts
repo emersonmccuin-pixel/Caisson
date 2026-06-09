@@ -172,6 +172,7 @@ export class LowLevelSpawn extends EventEmitter {
   private resumeSummaryConfirmSent = false;
   private onboardingThemeSent = false;
   private onboardingSecuritySent = false;
+  private bypassPermissionsConfirmSent = false;
   private readonly input: LowLevelSpawnInput;
   private readonly gate: ReadyGate;
   private tailer: JsonlTailer | null = null;
@@ -492,6 +493,22 @@ export class LowLevelSpawn extends EventEmitter {
       }
     }
 
+    // Auto-accept CC's bypass-permissions warning dialog (introduced in CC
+    // v2.1.170+). When CC is spawned with --dangerously-skip-permissions it
+    // shows a WARNING dialog with a menu: "1. No, exit" (default) / "2. Yes,
+    // I accept". A bare Enter selects option 1 and exits — so we must first
+    // send a DOWN arrow (\x1b[B) to move to option 2, then Enter to confirm.
+    // Without this, every agent run fails immediately on macOS with a fresh
+    // Claude Code install. CC source: src/components/BypassPermissionsWarning.tsx
+    if (!this.bypassPermissionsConfirmSent && looksLikeBypassPermissionsWarning(this.rawBuffer)) {
+      this.bypassPermissionsConfirmSent = true;
+      try {
+        this.child?.write('\x1b[B\r');
+      } catch {
+        /* exited mid-press */
+      }
+    }
+
     this.gate.feedChunk(data);
   }
 
@@ -635,6 +652,18 @@ export function looksLikeOnboardingSecurityStep(rawBuffer: string): boolean {
     .replace(/\s+/g, '')
     .toLowerCase();
   return compact.includes('pressentertocontinue');
+}
+
+/** True when the raw PTY buffer is showing CC's bypass-permissions warning
+ *  dialog (introduced in CC v2.1.170+). The dialog presents a menu with
+ *  "No, exit" pre-selected; we detect it by the unique combination of the
+ *  warning header and the accept option text.
+ *  CC source: src/components/BypassPermissionsWarning.tsx */
+export function looksLikeBypassPermissionsWarning(rawBuffer: string): boolean {
+  const compact = collapseAnsiToWhitespace(rawBuffer)
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  return compact.includes('bypasspermissionsmode') && compact.includes('yesiaccept');
 }
 
 export function buildLowLevelSpawnArgs(
