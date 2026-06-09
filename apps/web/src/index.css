@@ -882,9 +882,11 @@ button:disabled {
 /* pc-pty-chat-261 — the left rail + right activity-panel dividers are fixed-width
    by design and rendered as DISABLED react-resizable-panels separators. A disabled
    separator still paints a `not-allowed` (🚫) cursor; force the normal arrow so the
-   non-draggable rail edges don't signal a forbidden drag. !important beats the
-   library's inline/injected cursor. */
-[data-separator][data-disabled] {
+   non-draggable rail edges don't signal a forbidden drag. react-resizable-panels
+   renders a DISABLED handle as `data-separator="disabled"` (the attribute VALUE,
+   not a separate data-disabled attr) with an inline `style.cursor: not-allowed`;
+   this rule's !important beats that inline style. */
+[data-separator="disabled"] {
   cursor: default !important;
 }
 
