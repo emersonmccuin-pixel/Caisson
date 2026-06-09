@@ -46,6 +46,16 @@ export const workflowsApi = {
       `/api/workflows/${encodeURIComponent(id)}`,
     ).then((r) => r.workflow),
 
+  /** pc-pty-chat-358.2 — resolve a workflow by slug for the rich-link pill.
+   *  Project-scope row wins over a global row with the same slug; pass
+   *  projectId when the caller has a project context (e.g. from chat). */
+  getWorkflowBySlug: (slug: string, projectId?: string | null) => {
+    const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+    return getJson<{ ok: true; workflow: WorkflowRow }>(
+      `/api/workflows/by-slug/${encodeURIComponent(slug)}${qs}`,
+    ).then((r) => r.workflow);
+  },
+
   createWorkflowRow: (input: {
     def: unknown;
     projectId?: ULID | null;

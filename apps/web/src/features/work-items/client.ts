@@ -111,6 +111,13 @@ export const workItemsApi = {
       `/api/projects/${projectId}/work-items/${wiId}`,
     ).then((r) => r.workItem),
 
+  /** pc-pty-chat-356 — cross-project lookup by ULID or callsign. Resolves
+   *  regardless of which project the current view is scoped to. */
+  getWorkItemGlobal: (ref: string) =>
+    getJson<{ ok: true; workItem: WorkItem }>(
+      `/api/work-items/resolve/${encodeURIComponent(ref)}`,
+    ).then((r) => r.workItem),
+
   createWorkItem: async (
     projectId: ULID,
     title: string,

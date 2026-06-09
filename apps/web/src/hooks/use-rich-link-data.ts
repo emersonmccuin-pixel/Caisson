@@ -18,12 +18,14 @@ import { useSyncExternalStore } from 'react';
 import type { ULID } from '@/features/projects/client';
 import { filesApi, type FilePreview } from '@/features/files/client';
 import { workItemsApi, type Attachment, type WorkItem } from '@/features/work-items/client';
+import { workflowsApi, type WorkflowRow } from '@/features/workflows/client';
 import type { RichLinkKind } from '@/lib/parse-chat-text';
 
 export type RichLinkData =
   | { kind: 'work-item'; workItem: WorkItem }
   | { kind: 'file'; path: string; preview: FilePreview }
-  | { kind: 'attachment'; attachment: Attachment };
+  | { kind: 'attachment'; attachment: Attachment }
+  | { kind: 'workflow'; workflow: WorkflowRow };
 
 export type RichLinkStatus = 'idle' | 'loading' | 'ok' | 'not-found' | 'error';
 
@@ -56,7 +58,7 @@ export function parsePcUrl(url: string): { kind: RichLinkKind; ref: string } | n
   const m = url.match(PC_URL_RE);
   if (!m) return null;
   const k = m[1];
-  if (k !== 'work-item' && k !== 'file' && k !== 'attachment' && k !== 'inbox') return null;
+  if (k !== 'work-item' && k !== 'file' && k !== 'attachment' && k !== 'inbox' && k !== 'workflow') return null;
   return { kind: k, ref: decodeURIComponent(m[2] ?? '') };
 }
 
@@ -69,7 +71,10 @@ async function fetchData(projectId: ULID, url: string): Promise<void> {
   setEntry(url, { status: 'loading' });
   try {
     if (parsed.kind === 'work-item') {
-      const wi = await workItemsApi.getWorkItem(projectId, parsed.ref as ULID);
+      // pc-pty-chat-356: use the global (cross-project) resolver so a link
+      // created in Command or any other context resolves even when the work
+      // item lives in a different project than the current view.
+      const wi = await workItemsApi.getWorkItemGlobal(parsed.ref);
       setEntry(url, { status: 'ok', data: { kind: 'work-item', workItem: wi } });
       return;
     }
@@ -81,6 +86,12 @@ async function fetchData(projectId: ULID, url: string): Promise<void> {
     if (parsed.kind === 'attachment') {
       const att = await workItemsApi.getAttachmentById(projectId, parsed.ref as ULID);
       setEntry(url, { status: 'ok', data: { kind: 'attachment', attachment: att } });
+      return;
+    }
+    if (parsed.kind === 'workflow') {
+      // pc-pty-chat-358.2: resolve by slug, project-scope first then global.
+      const wf = await workflowsApi.getWorkflowBySlug(parsed.ref, projectId);
+      setEntry(url, { status: 'ok', data: { kind: 'workflow', workflow: wf } });
       return;
     }
     // inbox — Section 7 will land it.

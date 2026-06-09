@@ -452,8 +452,14 @@ function makeMarkdownAnchor(projectId: string) {
     if (href.startsWith('pc://')) {
       const m = href.match(/^pc:\/\/([\w-]+)\/(.+)$/);
       if (m) {
-        const kind = m[1] as 'work-item' | 'file' | 'attachment' | 'inbox';
-        if (kind === 'work-item' || kind === 'file' || kind === 'attachment' || kind === 'inbox') {
+        const kind = m[1] as 'work-item' | 'file' | 'attachment' | 'inbox' | 'workflow';
+        if (
+          kind === 'work-item' ||
+          kind === 'file' ||
+          kind === 'attachment' ||
+          kind === 'inbox' ||
+          kind === 'workflow'
+        ) {
           const ref = decodeURIComponent(m[2] ?? '');
           const text = typeof children === 'string' ? children : '';
           return (
