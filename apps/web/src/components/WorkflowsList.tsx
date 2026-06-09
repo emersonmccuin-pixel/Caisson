@@ -847,7 +847,7 @@ function DetailPane({
       </nav>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {tab === 'graph' && <GraphTab row={row} />}
+        {tab === 'graph' && <GraphTab row={row} projectId={project.id} />}
         {tab === 'runs' && (
           <RunsTab
             project={project}
@@ -890,7 +890,7 @@ function TabButton({
 
 // ── Tabs ─────────────────────────────────────────────────────────────────
 
-function GraphTab({ row }: { row: WorkflowRow }) {
+function GraphTab({ row, projectId }: { row: WorkflowRow; projectId: string }) {
   if (row.status === 'invalid' || !row.parsedDefinition) {
     return (
       <div className="p-6">
@@ -912,7 +912,7 @@ function GraphTab({ row }: { row: WorkflowRow }) {
   const wf = row.parsedDefinition as unknown as WorkflowV2.Workflow;
   return (
     <div className="h-full">
-      <WorkflowGraphV2 workflow={wf} />
+      <WorkflowGraphV2 workflow={wf} projectId={projectId} />
     </div>
   );
 }
@@ -1204,7 +1204,7 @@ function RunInlineDetail({
         ) : (
           <>
             <div className="min-w-0 flex-1 overflow-hidden">
-              <WorkflowGraphV2 workflow={def} runState={liveDag} />
+              <WorkflowGraphV2 workflow={def} runState={liveDag} projectId={project.id} />
             </div>
             <RunDiary diary={diary} />
           </>
