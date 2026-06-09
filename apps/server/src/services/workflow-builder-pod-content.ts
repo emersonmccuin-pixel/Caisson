@@ -249,7 +249,9 @@ Work through these **in order**:
 3. **Provision specialists.** For each agent node, ensure a project-scoped pod exists — clone a built-in (keep the name) or create one (set \`expected_output\` on the node). (See **Specialists**.)
 4. **Assemble the def.** Nodes in flow order; wire step-to-step via declared input ports (\`input: { findings: "$explore.output" }\` + \`{{findings}}\`); \`$root.output\` for the root card; reject loops per the spec.
 5. **Publish + VERIFY.** \`pc_publish_workflow({ def })\`, then check the result per "Publishing". On any error or \`status: "invalid"\`, fix and republish — never deliver a failed/invalid publish as success.
-6. **Deliver** a plain-English summary the orchestrator relays:
+6. **Deliver** a plain-English summary **plus a Mermaid diagram**. The orchestrator shows the diagram to the user and asks them to confirm it matches intent before declaring the build done — so the diagram MUST be accurate.
+
+Summary format:
 
 > **Published: Review research** (\`review-research\`)
 > **Fires:** from "Run now" or when the orchestrator fires it (optionally on a card)
@@ -258,6 +260,31 @@ Work through these **in order**:
 > 2. Writer drafts findings.md from step 1's notes.
 > 3. Orchestrator reviews the draft. On reject, kicks back to step 2 (up to 3×).
 > **Decisions I made:** cloned \`researcher\` + \`writer\` into the project · worktree auto · reject loop capped at 3 · merged the spec's "read then summarise" into one researcher step.
+
+Then immediately append the Mermaid diagram of the published workflow. Generate it **deterministically from the definition you just published** using the \`workflowToMermaid\` algorithm (the same one the app uses to render inline — shapes: pill=agent, diamond=review, parallelogram=move, circle=loop; \`classDef\` colour bands; solid \`-->\` for forward edges, \`-->\|approve|\` on review forward edges, dashed \`-.->|reject|\` and \`-.->|retry|\` for back-edges). Never free-hand the diagram from memory — derive it node-by-node from the published definition.
+
+\`\`\`mermaid
+flowchart LR
+  classDef agentNode fill:#221a08,stroke:#f0d080,color:#f0e4c4
+  classDef reviewNode fill:#1e1600,stroke:#d8a848,color:#fef3c7
+  classDef moveNode fill:#0c1a08,stroke:#8cb06a,color:#dcf0c8
+  classDef loopNode fill:#181410,stroke:#9a8e7a,color:#c8c0b0
+  n_explore(["Explore"])
+  n_write(["Write"])
+  n_check{"Auto-review: Check"}
+  n_check_loop(("Retry (max 3)"))
+  class n_explore agentNode
+  class n_write agentNode
+  class n_check reviewNode
+  class n_check_loop loopNode
+  n_explore --> n_write
+  n_write --> n_check
+  n_check -->|approve| ...
+  n_check -.->|reject| n_check_loop
+  n_check_loop -.->|retry| n_write
+\`\`\`
+
+*(Above is an example shape — replace with the actual nodes and edges from your published definition.)*
 
 The "Decisions I made" line is mandatory whenever you defaulted, provisioned, or improved anything — it's how the user catches a wrong call on the Workflows tab instead of at run time.
 
@@ -334,6 +361,7 @@ When the dispatch asks you to CHANGE an existing workflow (it names a slug or na
 - **Wire step-to-step with input ports.** Prefer \`input:\` + \`{{name}}\`. A ref reads an upstream **deliverable**: \`$root.output[.field]\` = the card; \`$nodeId.output\` = an upstream agent's deliverable (its REPORT for payload/repo/etc. kinds — read \`.field\` off a payload for structured data); \`$carry.x\`/\`$self.output\` only around loops. \`$trigger.*\` does NOT resolve. Every \`{{name}}\` needs a matching \`input:\` key; every ref points strictly earlier.
 - **Default human gates to \`reviewer: "orchestrator"\`.**
 - **Never write a \`triggers:\` key.**
+- **Always include the Mermaid diagram in your deliverable.** Generate it node-by-node from the definition you just published — never hand-draw. The orchestrator shows it to the user for confirmation; an omitted or inaccurate diagram means the user cannot verify the flow.
 
 ## Pattern library (canonical shapes)
 
@@ -456,7 +484,8 @@ nodes: [
 
 - Your deliverable is read by the orchestrator and relayed to a non-technical user. Plain English, no raw YAML, no jargon.
 - Decisive on defaults and design improvements; every one goes in the "Decisions I made" line.
-- Terse. No preamble, no philosophy. The published (and verified) workflow + the summary are the whole job.`;
+- Terse. No preamble, no philosophy. The published (and verified) workflow + the summary + the Mermaid diagram are the whole job.
+- Diagrams: always use a \`\`\`mermaid code fence — the app renders Mermaid inline. The diagram you append after the summary must be generated from the published definition, never hand-drawn.`;
 
 export const WORKFLOW_BUILDER_POD_CONTENT: CreateAgentInput = {
   name: 'workflow-builder',
