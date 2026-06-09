@@ -407,6 +407,20 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
     return c.json({ ok: true, workflows: rows });
   });
 
+  // ── pc-pty-chat-358.2: resolve a workflow by slug for the rich-link pill.
+  // Resolution order: project-scope (when ?projectId= is supplied) → global.
+  // MUST be registered before /api/workflows/:id so "by-slug" isn't treated
+  // as a ULID.
+  app.get('/api/workflows/by-slug/:slug', (c) => {
+    const slug = c.req.param('slug');
+    if (!slug) return c.json({ ok: false, error: 'slug required' }, 400);
+    const projectIdRaw = c.req.query('projectId');
+    const projectId = projectIdRaw ? (projectIdRaw as ULID) : undefined;
+    const row = workflowsRepo.resolveWorkflowForDispatch(slug, projectId ?? null);
+    if (!row) return c.json({ ok: false, error: `unknown workflow: ${slug}` }, 404);
+    return c.json({ ok: true, workflow: row });
+  });
+
   /** Full row for the detail pane. Returns 404 when soft-deleted (use
    *  GET `/api/workflows/:id?includeDeleted=1` to read archived rows). */
   app.get('/api/workflows/:id', (c) => {
