@@ -201,6 +201,11 @@ export class LowLevelSpawn extends EventEmitter {
       this.readyResolve = resolve;
       this.readyReject = reject;
     });
+    // Prevent unhandled rejection if the run is killed before awaitReady() is
+    // ever called (e.g. agent-host restart kills an in-flight session whose
+    // caller hasn't reached the await yet). The caller's try/catch handles the
+    // real error path; this just suppresses the process-crashing side-effect.
+    this.readyPromise.catch(() => {});
   }
 
   /** Begin the lifecycle. Spawns the pty child. Must be called exactly once. */
