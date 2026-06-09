@@ -142,7 +142,7 @@ export function NotesPopover({
     >
       <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
         <span className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
-          project notes
+          scratchpad
         </span>
         <span className="text-[9px] text-muted-foreground/60">
           {saveState === 'saving' && 'saving…'}

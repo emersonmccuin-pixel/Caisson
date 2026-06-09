@@ -429,15 +429,15 @@ export default function App() {
               ref={notesButtonRef}
               type="button"
               onClick={() => setNotesOpen((v) => !v)}
-              title="Project notes"
-              aria-label="Project notes"
+              title="Project scratchpad"
+              aria-label="Project scratchpad"
               aria-expanded={notesOpen}
               aria-haspopup="true"
               className={`px-2 py-1 text-[11px] uppercase tracking-[0.06em] hover:bg-primary/10 ${
                 notesOpen ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
-              Notes
+              Scratchpad
             </button>
           )}
           {/* Slice 2 — global quick-add: always visible when a project is active. */}
