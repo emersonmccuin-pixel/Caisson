@@ -71,6 +71,79 @@ test('attach-to-git adopts the repo without writing or committing anything', asy
   assert.equal(existsSync(join(repoDir, '.project-companion')), false);
 });
 
+test('init-empty commits even when git has NO identity configured (fresh-machine fallback)', async () => {
+  const repoDir = join(tmpDir, 'fresh-no-identity');
+  mkdirSync(repoDir, { recursive: true });
+
+  const templatesDir = join(tmpDir, 'templates-fresh');
+  mkdirSync(templatesDir, { recursive: true });
+  writeFileSync(join(templatesDir, 'README.template.md'), '# {{PROJECT_NAME}}\n', 'utf-8');
+
+  const scaffold = new ProjectScaffold({
+    trunkPath: tmpDir,
+    templatesDir,
+    dataDir: tmpDir,
+    serverPort: 4040,
+  });
+  const registry = { register() {} } as unknown as ProjectRegistry;
+
+  // Simulate a fresh machine: no usable git identity anywhere. Strip the
+  // GIT_AUTHOR/COMMITTER env this file sets globally, and point git at empty
+  // global/system config so the dev box's real identity can't leak in.
+  const saved = {
+    an: process.env.GIT_AUTHOR_NAME,
+    ae: process.env.GIT_AUTHOR_EMAIL,
+    cn: process.env.GIT_COMMITTER_NAME,
+    ce: process.env.GIT_COMMITTER_EMAIL,
+    cg: process.env.GIT_CONFIG_GLOBAL,
+    cs: process.env.GIT_CONFIG_SYSTEM,
+    ns: process.env.GIT_CONFIG_NOSYSTEM,
+  };
+  const emptyCfg = join(tmpDir, 'empty-gitconfig');
+  writeFileSync(emptyCfg, '', 'utf-8');
+  delete process.env.GIT_AUTHOR_NAME;
+  delete process.env.GIT_AUTHOR_EMAIL;
+  delete process.env.GIT_COMMITTER_NAME;
+  delete process.env.GIT_COMMITTER_EMAIL;
+  process.env.GIT_CONFIG_GLOBAL = emptyCfg;
+  process.env.GIT_CONFIG_SYSTEM = emptyCfg;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  try {
+    // Precondition: git genuinely has no identity now → a plain commit WOULD
+    // fail with "Please tell me who you are" without the fallback.
+    let identityResolvable = true;
+    try {
+      execFileSync('git', ['config', 'user.email'], { cwd: tmpDir, stdio: 'pipe' });
+    } catch {
+      identityResolvable = false;
+    }
+    assert.equal(identityResolvable, false, 'precondition: no git identity configured');
+
+    const created = await new ProjectCreate(scaffold, registry).create({
+      name: 'Fresh No Identity',
+      folderPath: repoDir,
+      mode: 'init-empty',
+    });
+
+    assert.ok(created.project.id, 'project created');
+    // A commit landed despite no configured identity → the fallback worked.
+    assert.equal(gitOutput(['log', '-1', '--pretty=%s'], repoDir).trim(), 'Initial commit');
+    assert.equal(gitOutput(['log', '-1', '--pretty=%an'], repoDir).trim(), 'Caisson');
+  } finally {
+    const restore = (k: string, v: string | undefined) => {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    };
+    restore('GIT_AUTHOR_NAME', saved.an);
+    restore('GIT_AUTHOR_EMAIL', saved.ae);
+    restore('GIT_COMMITTER_NAME', saved.cn);
+    restore('GIT_COMMITTER_EMAIL', saved.ce);
+    restore('GIT_CONFIG_GLOBAL', saved.cg);
+    restore('GIT_CONFIG_SYSTEM', saved.cs);
+    restore('GIT_CONFIG_NOSYSTEM', saved.ns);
+  }
+});
+
 function git(args: string[], cwd: string): void {
   execFileSync('git', args, { cwd, stdio: 'pipe' });
 }
