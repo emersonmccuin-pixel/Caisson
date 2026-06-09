@@ -1,12 +1,38 @@
 /* Vendored from emersonmccuin-pixel/project-companion @ 1e843cc (MIT)
    Source: apps/web/src/styles.css
-   Adapted for Caisson: added @fontsource/jetbrains-mono import;
+   Adapted for Caisson: added @fontsource font imports;
    dropped tw-animate-css + dark-variant scaffolding (single locked look). */
 
+/* ── Sans-serif options ── */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-sans/700.css';
+/* Atkinson Hyperlegible ships only 400 + 700 */
+@import '@fontsource/atkinson-hyperlegible/400.css';
+@import '@fontsource/atkinson-hyperlegible/700.css';
+/* ── Serif option ── */
+@import '@fontsource/source-serif-4/400.css';
+@import '@fontsource/source-serif-4/500.css';
+@import '@fontsource/source-serif-4/600.css';
+@import '@fontsource/source-serif-4/700.css';
+/* ── Mono options ── */
 @import '@fontsource/jetbrains-mono/400.css';
 @import '@fontsource/jetbrains-mono/500.css';
 @import '@fontsource/jetbrains-mono/600.css';
 @import '@fontsource/jetbrains-mono/700.css';
+@import '@fontsource/fira-code/400.css';
+@import '@fontsource/fira-code/500.css';
+@import '@fontsource/fira-code/600.css';
+@import '@fontsource/fira-code/700.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+@import '@fontsource/ibm-plex-mono/700.css';
 @import 'tailwindcss';
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -23,7 +49,14 @@
    ────────────────────────────────────────────────────────────────────── */
 
 @theme {
+  /* Four per-surface font tokens. JS in App.tsx overrides these on
+     documentElement to apply user font selections live. */
+  --font-chat: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  --font-content: 'Inter', 'Helvetica Neue', Arial, sans-serif;
   --font-ui: 'JetBrains Mono', 'Cascadia Mono', 'Fira Code', Consolas, ui-monospace, monospace;
+  --font-code: 'JetBrains Mono', 'Cascadia Mono', 'Fira Code', Consolas, ui-monospace, monospace;
+  /* --font-mono keeps backward compat for font-mono Tailwind utility classes;
+     it defers to --font-code at runtime so changing the code font propagates. */
   --font-mono: 'JetBrains Mono', 'Cascadia Mono', 'Fira Code', Consolas, ui-monospace, monospace;
 
   /* Core semantic colors → utility classes */
@@ -142,9 +175,16 @@
   /* shadcn radius token — collapsed to 0 for Vellum */
   --radius: 0;
 
-  /* Typography — JetBrains Mono throughout */
+  /* Typography — four per-surface font tokens. JS sets these on
+     documentElement to apply user font choices live; the values here are the
+     CSS defaults used before settings load (and as SSR fallbacks). */
+  --font-chat: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  --font-content: 'Inter', 'Helvetica Neue', Arial, sans-serif;
   --font-ui: 'JetBrains Mono', 'Cascadia Mono', 'Fira Code', Consolas, ui-monospace, monospace;
-  --font-mono: 'JetBrains Mono', 'Cascadia Mono', 'Fira Code', Consolas, ui-monospace, monospace;
+  --font-code: 'JetBrains Mono', 'Cascadia Mono', 'Fira Code', Consolas, ui-monospace, monospace;
+  /* font-mono TW class → resolves through --font-code so changing the code
+     font propagates to all font-mono utility usages automatically. */
+  --font-mono: var(--font-code);
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -341,7 +381,7 @@ button:disabled {
    ────────────────────────────────────────────────────────────────────── */
 
 .markdown-body {
-  font-family: var(--font-ui);
+  font-family: var(--font-chat);
   font-size: 0.875rem;
   line-height: 1.65;
   color: var(--foreground);
@@ -484,7 +524,7 @@ button:disabled {
 }
 
 .markdown-body code {
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 0.8rem;
   background: color-mix(in srgb, var(--primary) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
@@ -928,7 +968,7 @@ button:disabled {
   padding: 2px 4px;
   background: transparent;
   border: none;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-code);
   font-size: 10px;
   color: var(--tech-green);
   letter-spacing: 0.02em;
@@ -952,4 +992,11 @@ button:disabled {
 .pc-remote-id {
   color: rgba(95, 232, 143, 0.55);
   font-size: 9px;
+}
+
+/* Work-item surface wrapper — kanban board, work-item detail modals, areas.
+   Add .pc-work-content to the root element of those components so text
+   inherits --font-content instead of the default --font-ui chrome font. */
+.pc-work-content {
+  font-family: var(--font-content);
 }
