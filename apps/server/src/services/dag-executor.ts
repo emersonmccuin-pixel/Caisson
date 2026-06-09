@@ -59,6 +59,15 @@ export interface DagExecutorDeps {
   /** Move the run-root card to `stage` — the body of a `move` STEP (FD-9: a
    *  drawn step, not a hidden property). A failed move fails the step. */
   moveCard(stage: string): Promise<{ ok: boolean; error?: string }>;
+  /** Execute the git merge for a `merge` node (pc-pty-chat-270 Chunk B).
+   *  Reads git state first (idempotent reconcile), then merge+verify+push+verify.
+   *  `merged`   → node completes, advance proceeds;
+   *  `conflict` → arm a review gate via requestReview, pause the run;
+   *  `failed`   → fail the node (hard git or infra error). */
+  mergeToDev(
+    node: WorkflowV2.MergeNode,
+    ctx: DagNodeContext,
+  ): Promise<{ outcome: 'merged' | 'conflict' | 'failed'; error?: string }>;
   /** Post the review gate (orchestrator mailbox turn / Human Inbox card).
    *  `opts.iteration` = the owning loop's reject count (keys the delivery's
    *  idempotency so a re-review after a loop kick-back delivers AGAIN — FD-8);
@@ -193,7 +202,15 @@ export class DagExecutor {
           this.deps.persist(this.state, 'cancelled' as RunStatus, { lastReason: 'cancelled' });
           return 'cancelled' as RunStatus;
         }
-        this.persistRun(computeRunStatus(this.workflow, this.state));
+        const layerStatus = computeRunStatus(this.workflow, this.state);
+        // pc-pty-chat-270 Chunk B step 5: a merge node armed a conflict gate
+        // inside runLayer — persist and return now instead of continuing the
+        // advance loop (which would fall through to finalize and persist twice).
+        if (layerStatus === 'awaiting-review') {
+          this.deps.persist(this.state, 'awaiting-review');
+          return 'awaiting-review';
+        }
+        this.persistRun(layerStatus);
         continue; // re-evaluate (a review may now be ready)
       }
 
@@ -232,12 +249,14 @@ export class DagExecutor {
         this.state = markRunning(this.state, id);
         this.deps.event({ type: 'node_started', nodeId: id });
       }
+      // `null` outcome = merge conflict: the batch function arms the gate state;
+      // the settle loop posts the review gate and skips settleNode.
       const outcomes = await Promise.all(
-        batch.map(async (id) => {
+        batch.map(async (id): Promise<{ id: string; outcome: NodeOutcome | null }> => {
           const node = this.byId.get(id)!;
           try {
             // runLayer sees non-review, non-loop ready nodes (reviews pause via
-            // requestReview; loops never dispatch). Two run kinds: agent + move.
+            // requestReview; loops never dispatch). Run kinds: agent, move, merge.
             if (node.kind === 'move') {
               const res = await this.deps.moveCard(node.stage);
               this.deps.event({
@@ -251,6 +270,20 @@ export class DagExecutor {
               return res.ok
                 ? { id, outcome: { state: 'completed' as const } }
                 : { id, outcome: { state: 'failed' as const, error: `card move to "${node.stage}" failed: ${res.error ?? 'unknown error'}` } };
+            }
+            // pc-pty-chat-270 Chunk B step 5: merge node — THREE outcomes.
+            // This is the ONE non-review node that can pause the run, kept
+            // NARROW: only merge nodes, only via the existing requestReview door.
+            if (node.kind === 'merge') {
+              const r = await this.deps.mergeToDev(node, this.ctx(resolve));
+              if (r.outcome === 'merged') {
+                return { id, outcome: { state: 'completed' as const } };
+              }
+              if (r.outcome === 'failed') {
+                return { id, outcome: { state: 'failed' as const, error: r.error ?? 'merge failed' } };
+              }
+              // conflict: signal the settle loop to arm a review gate below.
+              return { id, outcome: null };
             }
             if (node.kind !== 'agent') {
               return { id, outcome: { state: 'failed' as const, error: `unexpected node kind "${node.kind}" in run layer` } };
@@ -267,6 +300,27 @@ export class DagExecutor {
         })
       );
       for (const { id, outcome } of outcomes) {
+        if (outcome === null) {
+          // Merge conflict: arm a review gate via the existing requestReview door
+          // (same path as review nodes). ONE door — no parallel pause path.
+          const mergeNode = this.byId.get(id) as WorkflowV2.MergeNode;
+          const reviewer: WorkflowV2.Reviewer = mergeNode.conflict_reviewer ?? 'orchestrator';
+          const iteration = 0;
+          this.state = markAwaitingReview(this.state, id, `i${iteration}`);
+          const syntheticReview: WorkflowV2.ReviewNode = {
+            kind: 'review',
+            id: mergeNode.id,
+            reviewer,
+            prompt: `Merge conflict: resolve the conflict in the run's worktree, commit the result, then approve to retry the merge step.`,
+            next: mergeNode.next,
+          };
+          await this.deps.requestReview(syntheticReview, this.ctx(resolve), [], {
+            iteration,
+            escalated: false,
+          });
+          this.deps.event({ type: 'review_requested', nodeId: id, data: { conflict: true } });
+          continue;
+        }
         this.state = settleNode(this.state, id, outcome);
         this.deps.event({
           type: outcome.state === 'completed' ? 'node_completed' : 'node_failed',

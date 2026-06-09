@@ -6,6 +6,7 @@
 // test/dag-run-service.test.ts); the live claude.exe smoke is 19.14.
 
 import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
 import type { ExpectedOutput, Project, ULID, WorkflowV2 } from '@pc/domain';
 import {
   substituteRefs,
@@ -446,6 +447,130 @@ export function makeExecutorDeps(
     return { ok: true };
   };
 
+  // pc-pty-chat-270 Chunk B step 6 — engine-executed, verified git merge.
+  // Idempotent: reads git state FIRST so a re-entry (after conflict resolution,
+  // or after a mid-merge crash + boot reconcile re-drive) handles every case
+  // without re-doing work already done.
+  const mergeToDev = async (
+    node: WorkflowV2.MergeNode,
+    _ctx: DagNodeContext,
+  ): Promise<{ outcome: 'merged' | 'conflict' | 'failed'; error?: string }> => {
+    if (!run.worktreePath) {
+      return { outcome: 'failed', error: 'run has no worktree — cannot merge' };
+    }
+    // Branch name = last segment of the worktree path (set by ensureWorktree).
+    const branch = basename(run.worktreePath);
+    if (!branch) {
+      return { outcome: 'failed', error: `cannot derive branch name from worktree path: ${run.worktreePath}` };
+    }
+
+    const emitConflict = (): void => {
+      // Board visibility: move card to on_conflict_stage (documented side-effect
+      // of the merge node — FD-9 exception, per the build decisions).
+      if (node.on_conflict_stage) {
+        moveCard(node.on_conflict_stage).catch(() => { /* best-effort visibility */ });
+      }
+      runGateway.appendRunEvent({
+        projectId: opts.projectId,
+        runId: run.id,
+        type: 'git_conflict',
+        nodeId: node.id,
+        data: { branch },
+      });
+    };
+
+    try {
+      // Idempotent reconcile — read actual git state before doing anything.
+      const state = await opts.worktrees.mergeState(branch);
+
+      if (state.mergeInProgress) {
+        // MERGE_HEAD present: a prior (interrupted) merge attempt left a conflict.
+        emitConflict();
+        return { outcome: 'conflict' };
+      }
+
+      if (state.alreadyMerged) {
+        // Branch tip is already an ancestor of dev — skip the merge itself.
+        if (!state.pushed) {
+          // Push + positive receipt #2.
+          try {
+            await opts.worktrees.pushDev();
+          } catch (pushErr) {
+            const msg = (pushErr as Error).message ?? '';
+            if (/rejected|non-fast-forward/i.test(msg)) {
+              emitConflict();
+              return { outcome: 'conflict' };
+            }
+            return { outcome: 'failed', error: `push to origin/dev failed: ${msg}` };
+          }
+          const afterPush = await opts.worktrees.mergeState(branch);
+          if (!afterPush.pushed) {
+            return { outcome: 'failed', error: 'push to origin/dev completed but origin/dev != dev' };
+          }
+        }
+        runGateway.appendRunEvent({
+          projectId: opts.projectId,
+          runId: run.id,
+          type: 'git_merged',
+          nodeId: node.id,
+          data: { branch, idempotent: true },
+        });
+        return { outcome: 'merged' };
+      }
+
+      // Fresh merge: merge → positive receipt #1 → push → positive receipt #2.
+      await opts.worktrees.mergeBranchIntoDev(branch);
+
+      // Positive receipt #1: branch tip must now be an ancestor of dev.
+      const afterMerge = await opts.worktrees.mergeState(branch);
+      if (!afterMerge.alreadyMerged) {
+        return {
+          outcome: 'failed',
+          error: 'merge ran but branch tip is not an ancestor of dev — merge commit not found',
+        };
+      }
+
+      // Push to origin/dev.
+      try {
+        await opts.worktrees.pushDev();
+      } catch (pushErr) {
+        const msg = (pushErr as Error).message ?? '';
+        if (/rejected|non-fast-forward/i.test(msg)) {
+          emitConflict();
+          return { outcome: 'conflict' };
+        }
+        return { outcome: 'failed', error: `push to origin/dev failed: ${msg}` };
+      }
+
+      // Positive receipt #2: origin/dev must equal local dev.
+      const afterPush = await opts.worktrees.mergeState(branch);
+      if (!afterPush.pushed) {
+        return {
+          outcome: 'failed',
+          error: 'push to origin/dev completed but origin/dev != dev',
+        };
+      }
+
+      runGateway.appendRunEvent({
+        projectId: opts.projectId,
+        runId: run.id,
+        type: 'git_merged',
+        nodeId: node.id,
+        data: { branch },
+      });
+      return { outcome: 'merged' };
+
+    } catch (err) {
+      const msg = (err as Error).message ?? 'unknown error';
+      // Conflict thrown by mergeBranchIntoDev (git exits non-zero on conflict).
+      if (/conflict|CONFLICT|Automatic merge failed/i.test(msg)) {
+        emitConflict();
+        return { outcome: 'conflict' };
+      }
+      return { outcome: 'failed', error: msg };
+    }
+  };
+
   const requestReview = async (
     node: WorkflowV2.ReviewNode,
     ctx: DagNodeContext,
@@ -576,6 +701,7 @@ export function makeExecutorDeps(
     resolveRef,
     dispatchAgent,
     moveCard,
+    mergeToDev,
     requestReview,
     persist,
     // M3a — every executor diary line through THE door: event row +

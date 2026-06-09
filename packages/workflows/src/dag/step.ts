@@ -277,7 +277,15 @@ export function applyReviewDecision(
   if (decision.kind === 'approve') {
     // Clear the instance token: this gate's decision slot is consumed.
     const { openReviewInstance: _consumed, ...rest } = next.nodes[reviewNodeId] ?? {};
-    next.nodes[reviewNodeId] = { ...rest, state: 'completed', endedAt: at };
+    // pc-pty-chat-270 Chunk B step 8: approving a `merge` node's conflict gate
+    // resets the node to `pending` so the idempotent merge step re-runs against
+    // actual git state. Setting it `completed` would advance without verifying
+    // the merge actually happened — approving WITHOUT resolving must re-arm
+    // the gate, not fake success.
+    const isMergeConflictGate = node?.kind === 'merge';
+    next.nodes[reviewNodeId] = isMergeConflictGate
+      ? { ...rest, state: 'pending' }
+      : { ...rest, state: 'completed', endedAt: at };
     return { state: next, kickedBack: null, heldForHuman: false };
   }
 

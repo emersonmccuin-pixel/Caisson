@@ -348,6 +348,12 @@ export const WORKFLOW_EVENT_TYPES = [
   'run_resumed',
   /** A move STEP fired (FD-9 — card-move is a drawn step since M6 slice B). */
   'card_moved',
+  /** pc-pty-chat-270: the engine ran `git merge --no-ff` into dev, verified
+   *  the commit landed, pushed, and verified origin/dev == dev. */
+  'git_merged',
+  /** pc-pty-chat-270: the engine attempted a merge but hit a conflict (or a
+   *  rejected push). The run is paused at a review gate pending resolution. */
+  'git_conflict',
 ] as const;
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 

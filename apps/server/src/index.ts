@@ -12,6 +12,7 @@ import { SERVER_ROOT } from './server-root.ts';
 import type {
   Project,
   ULID,
+  WorkflowV2,
 } from '@pc/domain';
 import { parseMailboxAddress } from '@pc/contracts';
 import {
@@ -37,6 +38,7 @@ import {
   MailboxService,
   reconcileWorkflowRunsOnBoot,
   RECONCILE_SCAN_STATUSES,
+  WORKFLOW_INTERRUPTED_ON_BOOT_REASON,
   WorkflowRunMutationGateway,
   type MailboxEnqueuePublication,
 } from '@pc/app-services';
@@ -584,10 +586,58 @@ try {
           data: { reason },
         });
       },
+      // pc-pty-chat-270 Chunk B step 10: re-drive merge-in-progress runs via
+      // the idempotent merge step instead of fail-closing them. Fail-close first
+      // (clean state for resumeV2Run), then resume through the canonical door.
+      reDriveMerge: (run) => {
+        // 1. Fail-close (provides the `failed` status that resumeV2Run requires).
+        workflowRunGateway.commitRunChange({
+          projectId: run.projectId,
+          reason: 'reconciled',
+          mutate: () => {
+            workflowRunsV2Repo.setStatus(run.id, 'failed', {
+              lastReason: WORKFLOW_INTERRUPTED_ON_BOOT_REASON,
+            });
+            return workflowRunsV2Repo.getRun(run.id);
+          },
+        });
+        workflowRunGateway.appendRunEvent({
+          projectId: run.projectId,
+          runId: run.id,
+          type: 'run_interrupted',
+          data: { reason: WORKFLOW_INTERRUPTED_ON_BOOT_REASON, mergeRetry: true },
+        });
+        // 2. Re-drive via the canonical resumeV2Run door (resets merge node to
+        // pending → advance → idempotent mergeState check handles all git outcomes).
+        let wf: WorkflowV2.Workflow | null = null;
+        try {
+          wf = JSON.parse(run.workflowYamlSnapshot) as WorkflowV2.Workflow;
+        } catch {
+          console.warn(`[boot-reconcile] merge re-drive: bad workflow snapshot for run ${run.id}`);
+          return;
+        }
+        const runtime = projectRegistry.ensure(run.projectId as ULID);
+        if (!runtime) {
+          console.warn(`[boot-reconcile] merge re-drive: no runtime for project ${run.projectId} (run ${run.id})`);
+          return;
+        }
+        runtime.resumeV2Run(run.id as ULID, wf).then((res) => {
+          if (!res.ok) {
+            console.warn(`[boot-reconcile] merge re-drive failed for run ${run.id}: ${res.error}`);
+          } else {
+            console.log(
+              `[boot-reconcile] merge re-drive: run ${run.id} re-driven` +
+              (res.resetNodes.length > 0 ? ` (reset: ${res.resetNodes.join(', ')})` : ''),
+            );
+          }
+        }).catch((err: Error) => {
+          console.error(`[boot-reconcile] merge re-drive async error for run ${run.id}:`, err.message);
+        });
+      },
     });
-    if (wfResult.failed > 0) {
+    if (wfResult.failed > 0 || wfResult.reDriven > 0) {
       console.log(
-        `[workflow-runs] boot reconcile: failed-closed=${wfResult.failed}, skippedPaused=${wfResult.skippedPaused}, scanned=${wfResult.scanned}`,
+        `[workflow-runs] boot reconcile: failed-closed=${wfResult.failed}, re-driven=${wfResult.reDriven}, skippedPaused=${wfResult.skippedPaused}, scanned=${wfResult.scanned}`,
       );
     }
   } catch (err) {
