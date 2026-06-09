@@ -183,6 +183,8 @@ export type {
 } from './agent-file.ts';
 export { parseAgentFile, serializeAgentFile } from './agent-file.ts';
 export type {
+  McpDiscoveryStatus,
+  McpServerRegistryRow,
   PodAgentRow,
   PodAuditActor,
   PodAuditField,
@@ -196,7 +198,13 @@ export type {
   PodSecretRow,
   PodSpawnBundle,
 } from './pod.ts';
-export { POD_AUDIT_ACTORS, POD_AUDIT_FIELDS, POD_KNOWLEDGE_KINDS, POD_SCOPES } from './pod.ts';
+export {
+  MCP_DISCOVERY_STATUSES,
+  POD_AUDIT_ACTORS,
+  POD_AUDIT_FIELDS,
+  POD_KNOWLEDGE_KINDS,
+  POD_SCOPES,
+} from './pod.ts';
 export type { SubagentFailureCause, SubagentFailureSignal } from './subagent-failure.ts';
 export type { ToolCatalogEntry, ToolCatalogSource } from './tool-catalog.ts';
 export {

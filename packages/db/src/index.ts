@@ -390,6 +390,20 @@ export type {
   RecordDeliveredOrchestratorSendInput,
 } from './repos/orchestrator-send-queue.ts';
 
+// pc-pty-chat-359 P1 — MCP Server Registry repo.
+export {
+  createMcpServerRegistry,
+  getMcpServerRegistry,
+  listMcpServersRegistry,
+  patchMcpServerRegistry,
+  softDeleteMcpServerRegistry,
+} from './repos/mcp-servers.ts';
+export type {
+  CreateMcpServerRegistryInput,
+  ListMcpServersRegistryOptions,
+  PatchMcpServerRegistryInput,
+} from './repos/mcp-servers.ts';
+
 // Slice 007 — mailbox repos. (☠ M8/FD-7: pending-interaction repo — the
 // write-only AskShadow side-table; archived in migration 0045.)
 export {

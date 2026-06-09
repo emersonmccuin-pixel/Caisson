@@ -372,6 +372,13 @@
       "when": 1782173700000,
       "tag": "0052_command_focus",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1782980314749,
+      "tag": "0053_mcp_servers_registry",
+      "breakpoints": true
     }
   ]
 }

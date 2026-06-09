@@ -109,6 +109,7 @@ import {
 } from './services/pending-ask-watchdog.ts';
 import { registerPodRoutes } from './routes/pod-routes.ts';
 import { registerWorkflowRoutes } from './routes/workflow-routes.ts';
+import { registerMcpServerRoutes } from './features/mcp-servers/routes.ts';
 import { seedOrchestratorPodIfMissing } from './services/orchestrator-pod-seed.ts';
 import { seedCommandPlannerPodIfMissing } from './services/command-planner-pod-seed.ts';
 import { cleanupLegacyProjectRuntimeFiles } from './services/legacy-runtime-cleanup.ts';
@@ -1163,6 +1164,8 @@ registerWorkflowRoutes(app, {
     return runtime.fireV2Workflow(def, rootWorkItemId);
   },
 });
+
+registerMcpServerRoutes(app, { resolveProject });
 
 registerPodRoutes(app, {
   resetStockPodToDefault: (name, reason) => {
