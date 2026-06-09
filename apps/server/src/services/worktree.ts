@@ -20,8 +20,12 @@ import {
   attachWorktree as _attachWorktree,
   createWorktree as _createWorktree,
   destroyWorktree as _destroyWorktree,
+  gitMergeState as _gitMergeState,
   listWorktrees as _listWorktrees,
+  mergeBranchIntoDev as _mergeBranchIntoDev,
   pruneWorktrees as _pruneWorktrees,
+  pushBranch as _pushBranch,
+  type GitMergeState,
   type WorktreeEntry,
 } from '@pc/runtime';
 import { markWorktreeDestroyed, upsertWorktree } from '@pc/db';
@@ -60,6 +64,12 @@ export interface WorktreeServiceDeps {
     wtPath: string,
     opts?: { force?: boolean },
   ) => Promise<void>;
+  /** Override for `mergeBranchIntoDev` (avoids real git in tests). */
+  mergeBranchIntoDev?: (workspaceDir: string, branch: string) => Promise<void>;
+  /** Override for `pushBranch` (avoids real git in tests). */
+  pushBranch?: (workspaceDir: string, ref: string) => Promise<void>;
+  /** Override for `gitMergeState` (avoids real git in tests). */
+  gitMergeState?: (workspaceDir: string, branch: string) => Promise<GitMergeState>;
 }
 
 /**
@@ -194,6 +204,36 @@ export class WorktreeService {
   readCached(): WorktreeRegistry {
     return this.cache;
   }
+
+  // ── Merge / push wrappers (pc-pty-chat-270, Chunk A) ──────────────────────
+
+  /**
+   * Merge `branch` into dev (`--no-ff`) in the workspace dir. Throws on
+   * conflict or failure — callers should call `mergeState` first for idempotency.
+   */
+  async mergeBranchIntoDev(branch: string): Promise<void> {
+    const fn = this.deps.mergeBranchIntoDev ?? _mergeBranchIntoDev;
+    await fn(this.workspaceDir, branch);
+  }
+
+  /**
+   * Push the local `dev` branch to `origin/dev`. Call after a verified merge.
+   */
+  async pushDev(): Promise<void> {
+    const fn = this.deps.pushBranch ?? _pushBranch;
+    await fn(this.workspaceDir, 'dev');
+  }
+
+  /**
+   * Read-only inspection of merge / push state for `branch` relative to `dev`.
+   * All checks are non-destructive.
+   */
+  async mergeState(branch: string): Promise<GitMergeState> {
+    const fn = this.deps.gitMergeState ?? _gitMergeState;
+    return fn(this.workspaceDir, branch);
+  }
+
+  // ── private ───────────────────────────────────────────────────────────────
 
   /**
    * Run the dep-install step in the worktree. Throws on failure — a broken

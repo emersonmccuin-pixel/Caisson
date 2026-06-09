@@ -42,6 +42,7 @@ import {
   Bot,
   Check,
   Eye,
+  GitMerge,
   Maximize2,
   Minimize2,
   RotateCcw,
@@ -70,6 +71,7 @@ const KIND_CONFIG: Record<WorkflowV2.WorkflowNode['kind'], KindConfig> = {
   review: { label: 'review', icon: ShieldCheck, band: 'bg-warning' },
   move: { label: 'move card', icon: ArrowRightCircle, band: 'bg-success/70' },
   loop: { label: 'loop', icon: RotateCcw, band: 'bg-muted-foreground/60' },
+  merge: { label: 'merge', icon: GitMerge, band: 'bg-info/70' },
 };
 
 // Border + animation classes per lock 9 (runtime overlay vocabulary).
@@ -115,6 +117,8 @@ export function nodeLabel(node: WorkflowV2.WorkflowNode): {
           : `up to ${String(node.max_iterations ?? 3)} times`;
       return { title: 'If rejected, retry', subtitle: max };
     }
+    case 'merge':
+      return { title: 'Merge into dev', subtitle: humanizeId(node.id) };
   }
 }
 

@@ -117,6 +117,85 @@ export async function attachWorktree(
   return entry;
 }
 
+// ---------------------------------------------------------------------------
+// Merge / push primitives (pc-pty-chat-270 — verified engine git action)
+// ---------------------------------------------------------------------------
+
+export interface GitMergeState {
+  /** Branch tip is already an ancestor of dev (branch already merged). */
+  alreadyMerged: boolean;
+  /** `.git/MERGE_HEAD` is present — a merge is in progress or conflicted. */
+  mergeInProgress: boolean;
+  /** `origin/dev` points at the same commit as local `dev`. */
+  pushed: boolean;
+}
+
+/**
+ * Read-only inspection of merge / push state for `branch` relative to `dev`.
+ * All checks are non-destructive. Returns `false` conservatively when a ref
+ * lookup fails (e.g. no origin configured yet, or branch unknown).
+ */
+export async function gitMergeState(
+  workspaceDir: string,
+  branch: string,
+): Promise<GitMergeState> {
+  assertBranchName(branch);
+  const cwd = resolve(workspaceDir);
+
+  // alreadyMerged: exit 0 = is ancestor; non-zero = not (NOT an error condition)
+  let alreadyMerged = false;
+  try {
+    await exec('git', ['merge-base', '--is-ancestor', branch, 'dev'], { cwd });
+    alreadyMerged = true;
+  } catch {
+    /* non-zero = not an ancestor, or branch unknown — both map to false */
+  }
+
+  // mergeInProgress: MERGE_HEAD present ⇒ a merge was started but not committed
+  let mergeInProgress = false;
+  try {
+    await exec('git', ['rev-parse', '--verify', 'MERGE_HEAD'], { cwd });
+    mergeInProgress = true;
+  } catch {
+    /* absent → no merge in progress */
+  }
+
+  // pushed: origin/dev resolves to the same SHA as local dev
+  let pushed = false;
+  try {
+    const [localRes, remoteRes] = await Promise.all([
+      exec('git', ['rev-parse', 'dev'], { cwd }),
+      exec('git', ['rev-parse', 'origin/dev'], { cwd }),
+    ]);
+    pushed = localRes.stdout.trim() === remoteRes.stdout.trim();
+  } catch {
+    /* no origin/dev (no remote, or not yet pushed) → false */
+  }
+
+  return { alreadyMerged, mergeInProgress, pushed };
+}
+
+/**
+ * Merge `branch` into the current HEAD (expected: `dev`) with `--no-ff`.
+ * Throws on conflict or any other failure. Callers must check `gitMergeState`
+ * for idempotency before calling (if `alreadyMerged` is true, skip this).
+ */
+export async function mergeBranchIntoDev(
+  workspaceDir: string,
+  branch: string,
+): Promise<void> {
+  assertBranchName(branch);
+  await exec('git', ['merge', '--no-ff', branch], { cwd: resolve(workspaceDir) });
+}
+
+/**
+ * Push `ref` to `origin`. Typically called with `'dev'` after a verified merge.
+ */
+export async function pushBranch(workspaceDir: string, ref: string): Promise<void> {
+  assertBranchName(ref);
+  await exec('git', ['push', 'origin', ref], { cwd: resolve(workspaceDir) });
+}
+
 function parsePorcelain(stdout: string): WorktreeEntry[] {
   const out: WorktreeEntry[] = [];
   let cur: Partial<WorktreeEntry> = {};
