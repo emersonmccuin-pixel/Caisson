@@ -83,8 +83,10 @@ function enqueueNoDeliverableNotify(
 ): void {
   const body =
     `Agent ${row.podName} (run ${row.id}) ended a turn without submitting a ` +
-    `deliverable TWICE — a reminder was injected after the first time. It is ` +
-    `still running and has NOT been killed. Likely causes: the brief is ` +
+    `deliverable TWICE — a reminder was injected after the first time. It ` +
+    `appears to still be running and has NOT been killed (verify the run's ` +
+    `live status before acting — this notice is stamped at fire time and may ` +
+    `arrive after the run has since resolved). Likely causes: the brief is ` +
     `degenerate or unclear, or the agent believes it is already done. ` +
     `Decide: pc_inspect_agent_run for the transcript tail, pc_kill_agent_run ` +
     `+ re-dispatch with a clearer brief, or wait if it looks mid-correction.`;

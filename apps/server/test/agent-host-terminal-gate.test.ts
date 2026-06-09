@@ -345,6 +345,55 @@ test('completed contract dispatch with empty result surfaces the submitted deliv
   assert.ok(!body.includes('(no output)'), 'must not read (no output) when a deliverable exists');
 });
 
+// Issue 3 (near-term) — onMailboxEnqueued callback is fired after the terminal
+// envelope is enqueued so the caller can drain the worker immediately.
+test('Issue 3: terminal envelope triggers onMailboxEnqueued immediately after enqueue', async () => {
+  const { runId, projectId } = seedRun(`htg-drain-signal-${Date.now()}`);
+  const mb = fakeMailbox();
+  const drainCalls: number[] = [];
+
+  applyAgentRunTerminalEffects(
+    {
+      runId,
+      ccSessionId: 'cc-1',
+      podName: 'builder',
+      projectId,
+      dispatcherSessionId: lastDispatcherId,
+      parentWorkItemId: null,
+      worktreeDir: join(tmpDir, 'wt'),
+      status: 'completed',
+      result: 'done',
+    },
+    {
+      mailboxEnqueue: mb.port,
+      broadcast: () => {},
+      onMailboxEnqueued: () => drainCalls.push(Date.now()),
+    },
+  );
+  // Wait for the async finishTerminalEffects tail.
+  await new Promise((r) => setTimeout(r, 150));
+
+  assert.equal(mb.calls.length, 1, 'terminal envelope was enqueued');
+  assert.equal(drainCalls.length, 1, 'onMailboxEnqueued fired exactly once');
+});
+
+test('Issue 3: onMailboxEnqueued is threaded through applyHostTerminalSnapshot', async () => {
+  const { runId, projectId } = seedRun(`htg-drain-thread-${Date.now()}`);
+  const mb = fakeMailbox();
+  const drainCalls: number[] = [];
+
+  applyHostTerminalSnapshot(terminalSnapshot(runId, projectId), {
+    mailboxEnqueue: mb.port,
+    broadcast: () => {},
+    terminalCleanup: () => {},
+    onMailboxEnqueued: () => drainCalls.push(Date.now()),
+  });
+  await new Promise((r) => setTimeout(r, 150));
+
+  assert.equal(mb.calls.length, 1, 'terminal envelope was enqueued');
+  assert.equal(drainCalls.length, 1, 'onMailboxEnqueued reached through applyHostTerminalSnapshot');
+});
+
 // S3 — a terminal run whose notify tail threw (no orchestrator envelope ever
 // enqueued) is recovered by the replay pass: exactly ONE envelope, and a second
 // pass is a no-op once the idempotency key exists.

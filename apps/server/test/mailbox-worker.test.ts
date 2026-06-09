@@ -247,3 +247,140 @@ test('M4a: a pinned orchestrator-session that does NOT exist dead-letters non-re
   assert.equal(listDeadLettersForMessage(messageId).length, 1);
   assert.equal(calls.length, 0);
 });
+
+// ── Issue 2 — stale-run staleness guard ──────────────────────────────────────
+
+/** Enqueue an agent-stalled message so the staleness guard has the right kind
+ *  and sourceKind='agent'. Returns { messageId, recipientId, deliveryId }. */
+function makeAgentStalledDelivery(addr: MailboxAddress, projectId: ULID, runId: string) {
+  const messageId = newId();
+  const recipientId = newId();
+  const deliveryId = newId();
+  enqueueMailboxMessage({
+    message: {
+      id: messageId,
+      projectId,
+      kind: 'agent-stalled',
+      body: 'It is still running and has NOT been killed.',
+      sourceKind: 'agent',
+      sourceId: runId,
+      idempotencyKey: `agent-no-deliverable:${runId}-${messageId}`,
+    },
+    recipients: [{ id: recipientId, addressKind: addr.kind, addressJson: addr as unknown as Record<string, unknown>, channel: 'orchestrator-turn', deliveryId }],
+    now: Date.now(),
+  });
+  return { messageId, recipientId, deliveryId };
+}
+
+test('Issue 2: agent-stalled message for an already-terminal run is relabelled with a [NOTE] prefix, not dropped', () => {
+  // Isolate: clear any pending deliveries left by earlier tests in the shared DB.
+  db.getRawDb().exec('DELETE FROM mailbox_deliveries');
+
+  const projectId = realProject();
+  const addr = realSessionAddress(projectId);
+  const runId = `run-stale-${newId()}`;
+
+  const { deliveryId } = makeAgentStalledDelivery(addr, projectId, runId);
+  const { svc, calls } = fakeSendService();
+
+  const deliveredBodies: string[] = [];
+  const adapter = new MailboxOrchestratorTurnAdapter(svc as never);
+  const realDeliver = adapter.deliver.bind(adapter);
+  const patchedAdapter = {
+    deliver(input: Parameters<typeof realDeliver>[0]) {
+      deliveredBodies.push(input.text);
+      return realDeliver(input);
+    },
+  };
+
+  const service = new MailboxService();
+  const w = new MailboxWorker({
+    service,
+    orchestratorTurn: patchedAdapter as never,
+    getRecipientAddress: () => addr,
+    getMessageBody: () => 'It is still running and has NOT been killed.',
+    getMessageKind: () => 'agent-stalled',
+    // Source resolves to a terminal run.
+    getMessageSource: () => ({ sourceId: runId, sourceKind: 'agent' }),
+    getAgentRunStatus: () => 'completed',
+    maxAttempts: 2,
+  });
+
+  const res = w.runOnce();
+  assert.equal(res.accepted, 1, 'message is still delivered (not dropped)');
+  assert.equal(deliveredBodies.length, 1);
+  assert.match(
+    deliveredBodies[0]!,
+    /^\[NOTE: this run has since finalized — status: completed; the advice below may be moot\]/,
+    'body prefixed with stale-run note',
+  );
+  assert.ok(deliveredBodies[0]!.includes('still running'), 'original body still included');
+  assert.equal(calls.length, 1, 'one turn enqueued');
+});
+
+test('Issue 2: agent-stalled message for a STILL-RUNNING run is delivered verbatim (no note)', () => {
+  const projectId = realProject();
+  const addr = realSessionAddress(projectId);
+  const runId = `run-live-${newId()}`;
+
+  const { deliveryId } = makeAgentStalledDelivery(addr, projectId, runId);
+  const deliveredBodies: string[] = [];
+  const { svc } = fakeSendService();
+
+  const adapter = new MailboxOrchestratorTurnAdapter(svc as never);
+  const realDeliver = adapter.deliver.bind(adapter);
+  const patchedAdapter = {
+    deliver(input: Parameters<typeof realDeliver>[0]) {
+      deliveredBodies.push(input.text);
+      return realDeliver(input);
+    },
+  };
+
+  const service = new MailboxService();
+  const w = new MailboxWorker({
+    service,
+    orchestratorTurn: patchedAdapter as never,
+    getRecipientAddress: () => addr,
+    getMessageBody: () => 'It is still running and has NOT been killed.',
+    getMessageKind: () => 'agent-stalled',
+    getMessageSource: () => ({ sourceId: runId, sourceKind: 'agent' }),
+    getAgentRunStatus: () => 'running',
+    maxAttempts: 2,
+  });
+
+  w.runOnce();
+  assert.equal(deliveredBodies.length, 1);
+  assert.ok(!deliveredBodies[0]!.startsWith('[NOTE:'), 'no prefix for a live run');
+});
+
+test('Issue 2: non-agent-stalled messages are unaffected by the staleness guard', () => {
+  const addr = realSessionAddress(realProject());
+  const { deliveryId } = makeDelivery('orchestrator-turn', addr, 'p1' as ULID);
+  const deliveredBodies: string[] = [];
+  const { svc } = fakeSendService();
+
+  const adapter = new MailboxOrchestratorTurnAdapter(svc as never);
+  const realDeliver = adapter.deliver.bind(adapter);
+  const patchedAdapter = {
+    deliver(input: Parameters<typeof realDeliver>[0]) {
+      deliveredBodies.push(input.text);
+      return realDeliver(input);
+    },
+  };
+
+  const service = new MailboxService();
+  const w = new MailboxWorker({
+    service,
+    orchestratorTurn: patchedAdapter as never,
+    getRecipientAddress: () => addr,
+    getMessageBody: () => 'deliver me',
+    getMessageKind: () => 'agent-terminal',
+    getMessageSource: () => ({ sourceId: 'some-run', sourceKind: 'agent' }),
+    getAgentRunStatus: () => 'completed',
+    maxAttempts: 2,
+  });
+
+  w.runOnce();
+  assert.equal(deliveredBodies.length, 1);
+  assert.ok(!deliveredBodies[0]!.startsWith('[NOTE:'), 'agent-terminal bodies untouched');
+});

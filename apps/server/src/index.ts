@@ -17,6 +17,7 @@ import { parseMailboxAddress } from '@pc/contracts';
 import {
   getActiveOrchestratorSession,
   getLatestLiveEventForEntity,
+  getAgentRunRow,
   getMailboxMessage,
   getMailboxRecipient,
   insertPostTurnSummary,
@@ -511,6 +512,12 @@ const mailboxWorker = new MailboxWorker({
   },
   getMessageBody: (messageId) => getMailboxMessage(messageId)?.body ?? null,
   getMessageKind: (messageId) => getMailboxMessage(messageId)?.kind ?? null,
+  // Issue 2 — staleness guard for agent-stalled messages.
+  getMessageSource: (messageId) => {
+    const msg = getMailboxMessage(messageId);
+    return msg ? { sourceId: msg.sourceId ?? null, sourceKind: msg.sourceKind } : null;
+  },
+  getAgentRunStatus: (runId) => getAgentRunRow(runId)?.status ?? null,
 });
 
 // Slice 015b — the enqueue writes the canonical `mailbox.message.changed`
@@ -533,6 +540,16 @@ const agentRunReconciler = createAgentRunReconciler({
   activeRunRegistry: getActiveRunRegistry(),
   broadcast: broadcastTo,
   mailboxEnqueue: enqueueMailboxAndFanout,
+  // Issue 3 (near-term) — drain the mailbox immediately after the terminal
+  // envelope is enqueued so the orchestrator learns about completion within
+  // ms, not at the next 1s tick. The tick + S3 replay are the durable backstops.
+  onMailboxEnqueued: () => {
+    try {
+      mailboxWorker.runOnce();
+    } catch (err) {
+      console.warn('[mailbox] immediate drain failed:', (err as Error).message);
+    }
+  },
 });
 try {
   await agentRunReconciler.boot();
