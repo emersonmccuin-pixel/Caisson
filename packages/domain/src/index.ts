@@ -138,6 +138,7 @@ export {
 export type { Worktree, WorktreeStatus } from './worktree.ts';
 
 // Slice 1 (Areas + context model) — roll-up decision engine.
+export { workflowToMermaid } from './workflow-mermaid.ts';
 export {
   decideContractCompletion,
   planRollUp,
