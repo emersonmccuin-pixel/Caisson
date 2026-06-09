@@ -424,6 +424,10 @@ $savedEnv = @{
   # `require('electron').app` is undefined → "Cannot read properties of
   # undefined (reading 'setName')". Clear it before launch; restore after.
   ELECTRON_RUN_AS_NODE = $env:ELECTRON_RUN_AS_NODE
+  # Give staging its own Electron profile + single-instance lock + taskbar
+  # identity ("Caisson Staging") so it never collides with a dev instance, which
+  # is also DEV_LABEL and would otherwise share the "Caisson Dev" profile.
+  PC_APP_LABEL         = $env:PC_APP_LABEL
 }
 
 $electronProc = $null
@@ -441,6 +445,7 @@ try {
   $env:PC_CHILD_NODE  = $nodeExe
   $env:PC_DESKTOP_URL = "http://127.0.0.1:$WEB_PORT"
   $env:PC_DESKTOP_DEV = '1'
+  $env:PC_APP_LABEL   = 'Staging'
   Remove-Item Env:PC_ROOT              -ErrorAction SilentlyContinue
   Remove-Item Env:CLAUDE_CONFIG_DIR    -ErrorAction SilentlyContinue
   # Critical: a leaked ELECTRON_RUN_AS_NODE makes electron.exe behave as Node.
