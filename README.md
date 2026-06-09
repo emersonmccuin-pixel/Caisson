@@ -4,9 +4,14 @@
 
 [![Latest release](https://img.shields.io/github/v/release/emersonmccuin-pixel/Caisson?label=download&sort=semver)](https://github.com/emersonmccuin-pixel/Caisson/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)](https://github.com/emersonmccuin-pixel/Caisson/releases/latest)
+[![Platform: Windows · macOS](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS-0078D6)](https://github.com/emersonmccuin-pixel/Caisson/releases/latest)
 
-> ⬇️ **Just want to use it?** Grab the Windows installer from the [latest release](https://github.com/emersonmccuin-pixel/Caisson/releases/latest). It's not code-signed yet, so SmartScreen will warn you — click **More info → Run anyway**.
+> ### ⬇️ Download — latest release **v0.3.13**
+>
+> - **Windows:** [Caisson-0.3.13-win-x64.exe](https://github.com/emersonmccuin-pixel/Caisson/releases/download/v0.3.13/Caisson-0.3.13-win-x64.exe) — not code-signed yet, so SmartScreen will warn you; click **More info → Run anyway**.
+> - **macOS (Apple Silicon):** [Caisson-0.3.13-mac-arm64.dmg](https://github.com/emersonmccuin-pixel/Caisson/releases/download/v0.3.13/Caisson-0.3.13-mac-arm64.dmg) — not notarized yet; if Gatekeeper blocks it, right-click the app → **Open**.
+>
+> Always-current list: the [latest release page](https://github.com/emersonmccuin-pixel/Caisson/releases/latest).
 
 ---
 
@@ -94,7 +99,7 @@ First published release — pre-1.0, under active development.
 
 - ✅ **Live now:** the project chat, the board, conversational workflow building, the specialist roster, the tool layer, agent dispatch with verified contracts, and the packaged Windows app.
 - 🔜 **Maturing:** the external-integration surface (bringing more systems under specialists' control), schedule and event triggers, and full human-in-the-loop review gates — these exist in the model and are being wired into the interface.
-- 🪟 **Windows-first.** The macOS build path exists but isn't part of this release.
+- 🖥️ **Windows + macOS (Apple Silicon).** Both installers ship with every release; neither is code-signed/notarized yet.
 
 Schemas and APIs may still change between releases.
 
