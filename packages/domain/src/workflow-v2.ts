@@ -23,17 +23,20 @@ import type { VerificationTier } from './contract.ts';
 // Node kinds
 // ---------------------------------------------------------------------------
 
-/** Node kinds — FD-9 (M6 slice B): exactly FOUR visible step kinds, each doing
- *  one thing. `agent` (hand a job to an agent) · `review` (human-judgment gate;
- *  `reviewer` = human | orchestrator) · `move` (move the run-root card — a step
- *  drawn in the graph, NOT a hidden property) · `loop` (the one retry
- *  construct: a review's reject target; counts iterations up to a ceiling).
+/** Node kinds — FD-9 (M6 slice B) + pc-pty-chat-270: five visible step kinds,
+ *  each doing one thing. `agent` (hand a job to an agent) · `review`
+ *  (human-judgment gate; `reviewer` = human | orchestrator) · `move` (move the
+ *  run-root card — a step drawn in the graph, NOT a hidden property) · `loop`
+ *  (the one retry construct: a review's reject target; counts iterations up to a
+ *  ceiling) · `merge` (engine-executed git merge into dev, positive-receipt
+ *  verified; conflict parks the run at a durable review gate).
  *  What the graph shows = what happens. */
 export const WORKFLOW_NODE_KINDS = [
   'agent',
   'review',
   'move',
   'loop',
+  'merge',
 ] as const;
 export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
 
@@ -188,7 +191,29 @@ export interface LoopNode {
   timeout?: never;
 }
 
-export type WorkflowNode = AgentNode | ReviewNode | MoveNode | LoopNode;
+/** Engine-executed git merge into `dev` (pc-pty-chat-270). The engine runs
+ *  `git merge --no-ff <run-branch>`, asserts the branch tip is an ancestor of
+ *  dev (positive receipt #1), pushes, and asserts `origin/dev == dev` (positive
+ *  receipt #2). A conflict parks the run at a durable review gate (reviewer =
+ *  `conflict_reviewer`, default `'orchestrator'`) — approving re-runs the step
+ *  idempotently. The run never advances on an unverified side-effect.
+ *
+ *  Requires the workflow to have `worktree: 'auto'` (or no `worktree` field,
+ *  which defaults to `'auto'`). Validated at save time. */
+export interface MergeNode extends WorkflowNodeBase {
+  kind: 'merge';
+  /** The only valid merge target. Reserved for future multi-branch support. */
+  target: 'dev';
+  /** Who reviews if there's a merge conflict. Defaults to `'orchestrator'`.
+   *  `'orchestrator'` keeps the gate off the user's clickable inbox
+   *  (pc-pty-chat-267). `'human'` surfaces it there directly. */
+  conflict_reviewer?: 'orchestrator' | 'human';
+  /** Stage id to move the run-root card to on conflict — board visibility only,
+   *  never a trigger (stage-entry firing is deleted). Optional. */
+  on_conflict_stage?: string;
+}
+
+export type WorkflowNode = AgentNode | ReviewNode | MoveNode | LoopNode | MergeNode;
 
 // Type guards
 export function isReviewNode(n: WorkflowNode): n is ReviewNode {
@@ -199,6 +224,9 @@ export function isMoveNode(n: WorkflowNode): n is MoveNode {
 }
 export function isLoopNode(n: WorkflowNode): n is LoopNode {
   return n.kind === 'loop';
+}
+export function isMergeNode(n: WorkflowNode): n is MergeNode {
+  return n.kind === 'merge';
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +348,12 @@ export const WORKFLOW_EVENT_TYPES = [
   'run_resumed',
   /** A move STEP fired (FD-9 — card-move is a drawn step since M6 slice B). */
   'card_moved',
+  /** pc-pty-chat-270: the engine ran `git merge --no-ff` into dev, verified
+   *  the commit landed, pushed, and verified origin/dev == dev. */
+  'git_merged',
+  /** pc-pty-chat-270: the engine attempted a merge but hit a conflict (or a
+   *  rejected push). The run is paused at a review gate pending resolution. */
+  'git_conflict',
 ] as const;
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 

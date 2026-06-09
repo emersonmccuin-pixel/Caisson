@@ -58,6 +58,7 @@ export {
   createWorkItem,
   getWorkItem,
   getWorkItemByCallsign,
+  getWorkItemByCallsignGlobal,
   getWorkItemIncludingArchived,
   listArchivedWorkItems,
   listChildWorkItems,

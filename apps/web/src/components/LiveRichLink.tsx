@@ -60,6 +60,12 @@ export function LiveRichLink({
       }
       return;
     }
+    if (kind === 'workflow') {
+      // pc-pty-chat-358.2: navigate to the Workflows tab. The tab renders the
+      // full list and the user can then click into the specific workflow.
+      useActiveCenterTab.getState().setTab('workflows');
+      return;
+    }
     // inbox — Section 7
   };
   return (

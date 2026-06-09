@@ -12,6 +12,11 @@
 import '@xyflow/react/dist/style.css';
 
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { agentsApi, type Pod } from '@/features/agents/client';
+import { PodDetailModal } from '@/components/agents/PodDetailModal';
+import { resolveAgentPod } from '@/lib/workflow-agent-pod';
+
+export { resolveAgentPod } from '@/lib/workflow-agent-pod';
 import {
   ReactFlow,
   Background,
@@ -42,6 +47,7 @@ import {
   Bot,
   Check,
   Eye,
+  GitMerge,
   Maximize2,
   Minimize2,
   RotateCcw,
@@ -70,6 +76,7 @@ const KIND_CONFIG: Record<WorkflowV2.WorkflowNode['kind'], KindConfig> = {
   review: { label: 'review', icon: ShieldCheck, band: 'bg-warning' },
   move: { label: 'move card', icon: ArrowRightCircle, band: 'bg-success/70' },
   loop: { label: 'loop', icon: RotateCcw, band: 'bg-muted-foreground/60' },
+  merge: { label: 'merge', icon: GitMerge, band: 'bg-info/70' },
 };
 
 // Border + animation classes per lock 9 (runtime overlay vocabulary).
@@ -115,6 +122,8 @@ export function nodeLabel(node: WorkflowV2.WorkflowNode): {
           : `up to ${String(node.max_iterations ?? 3)} times`;
       return { title: 'If rejected, retry', subtitle: max };
     }
+    case 'merge':
+      return { title: 'Merge into dev', subtitle: humanizeId(node.id) };
   }
 }
 
@@ -185,6 +194,9 @@ export interface WorkflowGraphV2Props {
   onChange?: (next: WorkflowV2.Workflow) => void;
   /** Optional node-click callback (read-only mode only). */
   onNodeClick?: (node: WorkflowV2.WorkflowNode) => void;
+  /** When provided, clicking an agent node resolves node.agent → the
+   *  project-visible pod and opens the PodDetailModal for inspection. */
+  projectId?: string;
 }
 
 export function WorkflowGraphV2({
@@ -193,6 +205,7 @@ export function WorkflowGraphV2({
   authoring = false,
   onChange,
   onNodeClick,
+  projectId,
 }: WorkflowGraphV2Props) {
   const [layout, setLayout] = useState<LayoutResult | null>(null);
   const rfInstanceRef = useRef<ReactFlowInstance<Node<WfNodeData>, Edge<WfEdgeData>> | null>(null);
@@ -206,6 +219,10 @@ export function WorkflowGraphV2({
   const [hoveredLoopId, setHoveredLoopId] = useState<string | null>(null);
   // Feature 4: fullscreen toggle
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Agent-node click → PodDetailModal
+  const [agentPod, setAgentPod] = useState<Pod | null>(null);
+  const [agentPodErr, setAgentPodErr] = useState<string | null>(null);
+  const [agentPodLoading, setAgentPodLoading] = useState(false);
 
   // Derived: active loop highlight (hover takes priority over panel selection).
   const highlightedLoopId =
@@ -215,6 +232,29 @@ export function WorkflowGraphV2({
   const handleLoopHover = useCallback((id: string | null) => {
     setHoveredLoopId(id);
   }, []);
+
+  // Open the PodDetailModal for the agent named by an agent node.
+  const openAgentPod = useCallback(
+    async (agentName: string) => {
+      if (agentPodLoading || !projectId) return;
+      setAgentPodLoading(true);
+      setAgentPodErr(null);
+      try {
+        const pods = await agentsApi.listPods(projectId);
+        const match = resolveAgentPod(pods, agentName);
+        if (!match) {
+          setAgentPodErr(`No agent named "${agentName}" found in this project.`);
+        } else {
+          setAgentPod(match);
+        }
+      } catch (err) {
+        setAgentPodErr(`Couldn't open agent: ${(err as Error).message}`);
+      } finally {
+        setAgentPodLoading(false);
+      }
+    },
+    [agentPodLoading, projectId],
+  );
 
   // Structural key (excludes per-node positions) — triggers fitView on
   // connection/kind changes but not on position-only node drags.
@@ -543,9 +583,15 @@ export function WorkflowGraphV2({
       const wfNode = workflow.nodes.find((n) => n.id === rfNode.id);
       if (!wfNode) return;
       onNodeClick?.(wfNode);
+      // Agent nodes with a known project: open PodDetailModal, skip side panel.
+      if (wfNode.kind === 'agent' && projectId) {
+        setDetailNode(null);
+        void openAgentPod(wfNode.agent);
+        return;
+      }
       setDetailNode((prev) => (prev?.id === wfNode.id ? null : wfNode));
     },
-    [authoring, onNodeClick, workflow],
+    [authoring, onNodeClick, workflow, projectId, openAgentPod],
   );
 
   const handleIsValidConnection = useCallback<IsValidConnection>(
@@ -648,6 +694,31 @@ export function WorkflowGraphV2({
           node={detailNode}
           workflow={workflow}
           onClose={() => setDetailNode(null)}
+        />
+      )}
+
+      {/* Agent-click error toast */}
+      {agentPodErr && (
+        <div className="absolute bottom-2 left-1/2 z-30 -translate-x-1/2 border border-destructive/60 bg-background/95 px-3 py-1.5 text-xs text-destructive backdrop-blur-sm">
+          {agentPodErr}
+          <button
+            type="button"
+            onClick={() => setAgentPodErr(null)}
+            className="ml-2 underline"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Agent-node → PodDetailModal */}
+      {agentPod && (
+        <PodDetailModal
+          pod={agentPod}
+          readOnly={agentPod.origin === 'stock'}
+          onClose={() => setAgentPod(null)}
+          onDeleted={() => setAgentPod(null)}
         />
       )}
     </div>

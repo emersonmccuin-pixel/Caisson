@@ -5,6 +5,8 @@ import { ContractService } from '@pc/app-services';
 import {
   countWorkItemsInStage,
   getProjectById,
+  getWorkItem as dbGetWorkItem,
+  getWorkItemByCallsignGlobal,
   listChildWorkItems,
   listContractsForWorkItem,
   listWorkItems as dbListWorkItems,
@@ -92,6 +94,23 @@ function verificationDecisionStatus(code: ReviewDecisionErrorCode): 400 | 404 | 
 }
 
 export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): void {
+  // ── pc-pty-chat-356: cross-project work-item resolver for rich-link hover.
+  // Resolves by ULID (globally) or callsign (globally, first live match).
+  // Read-only; no project scope required.  MUST be registered before
+  // /api/projects/:projectId/… routes so the literal segment doesn't bind.
+  app.get('/api/work-items/resolve/:ref', (c) => {
+    const ref = c.req.param('ref').trim();
+    if (!ref) return c.json({ ok: false, error: 'ref required' }, 400);
+    let wi;
+    if (looksLikeUlid(ref)) {
+      wi = dbGetWorkItem(ref as ULID);
+    } else {
+      wi = getWorkItemByCallsignGlobal(ref);
+    }
+    if (!wi) return c.json({ ok: false, error: `unknown work item: ${ref}` }, 404);
+    return c.json({ ok: true, workItem: wi });
+  });
+
   // ── pc-pty-chat-254: work-item search (FTS5). MUST be registered BEFORE the
   // /:wiId param route so the literal segment "search" doesn't bind to :wiId.
   app.get('/api/projects/:projectId/work-items/search', (c) => {

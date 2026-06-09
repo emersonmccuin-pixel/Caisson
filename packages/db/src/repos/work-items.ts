@@ -436,6 +436,26 @@ export function getWorkItemByCallsign(projectId: ULID, callsign: string): WorkIt
   return row ? toDomain(row) : null;
 }
 
+/** Cross-project callsign lookup — resolves `pc-pty-chat-356` regardless of
+ *  which project the caller is operating in. Since callsigns embed a
+ *  project-specific prefix (e.g. `pc-pty-chat`), collisions across projects
+ *  are extremely unlikely, but the function returns the first live match to
+ *  handle the edge case gracefully. Used exclusively by the rich-link resolver
+ *  (hover preview) which is a read-only, non-mutating path. */
+export function getWorkItemByCallsignGlobal(callsign: string): WorkItem | null {
+  const row = getDb()
+    .select()
+    .from(workItems)
+    .where(
+      and(
+        eq(workItems.callsign, callsign),
+        isNull(workItems.deletedAt),
+      ),
+    )
+    .get() as WorkItemRow | undefined;
+  return row ? toDomain(row) : null;
+}
+
 /** Move a work item to a new stage, appending a 'move' history entry.
  *  Returns the updated WorkItem, or null if the id isn't found.
  *  Section 27 — `targetStatus` lets the caller pin the post-move status

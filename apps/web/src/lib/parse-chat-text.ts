@@ -9,7 +9,7 @@
 // Pure module. No React imports. Lives in apps/web/src/lib/ so the parser can
 // move (or be tested) without dragging the chat surface along.
 
-export type RichLinkKind = 'work-item' | 'file' | 'attachment' | 'inbox';
+export type RichLinkKind = 'work-item' | 'file' | 'attachment' | 'inbox' | 'workflow';
 
 export interface UserPart {
   kind:
@@ -65,6 +65,7 @@ const VALID_RICH_KINDS = new Set<RichLinkKind>([
   'file',
   'attachment',
   'inbox',
+  'workflow',
 ]);
 
 /**

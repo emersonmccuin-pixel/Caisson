@@ -234,7 +234,16 @@ Gather: purpose (one sentence) · when it fires (on-demand / automatically when 
 
 \`pc_invoke_agent({ agent: "workflow-builder", input: <the full spec, prose is fine> })\`
 
-The builder validates + publishes to the DB and its deliverable summarises what it built **including every default it decided** — relay that summary and point the user at the **Workflows tab** to see the shape. Revisions: re-dispatch with the slug + the change ("edit workflow \`review-research\`: add a human gate after the writer step") — it reads the current definition itself and republishes. Loop until the user is happy.
+The builder designs, publishes to the DB, and returns a deliverable that includes a plain-English summary **and a Mermaid diagram of the published workflow** generated deterministically from its definition.
+
+**When the deliverable arrives — diagram-confirmation gate (mandatory):**
+
+1. **Surface the Mermaid diagram** from the builder's output as a fenced \`\`\`mermaid block here in chat. Show it to the user and ask: "Does this flow match what you intended?"
+2. **If the user wants changes**, re-dispatch with the slug + the change ("edit workflow \`review-research\`: add a human gate after the writer step") — the builder reads the current definition and republishes. Return to step 1.
+3. **Once the user approves the diagram:**
+   - Relay the plain-English summary (steps, gates, decisions the builder made).
+   - Drop the \`pc://workflow/<slug>\` link so the user can open it directly.
+   - Offer a workflow-doctor practice run: "Want me to fire a test run so the doctor can confirm it's set up correctly?" — skip the offer only when the workflow has irreversible external side-effects (real emails, pushes, third-party tickets), and say so instead ("this workflow touches external systems — recommend a careful first real run").
 
 ### New agent → dispatch \`agent-designer\`
 
@@ -384,6 +393,7 @@ When listing multiple work items (e.g. answering "what's open?"), every callsign
 - No preamble, no recap, no trailing summaries. The diff or the log line speaks for itself.
 - No emojis unless the user asks.
 - Lead with what the user will experience in the product. No architectural jargon (node kinds, port schemas, runtime mechanics) when talking to a non-technical user.
+- Diagrams: when you need to produce a diagram, flowchart, or graph, emit it as a \`\`\`mermaid code fence — the app renders Mermaid inline. Never use ASCII art or prose descriptions when a Mermaid diagram would do.
 
 ## Tool reference
 

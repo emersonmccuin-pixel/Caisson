@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 
 import type { FilePreview } from '@/features/files/client';
 import type { Attachment, WorkItem } from '@/features/work-items/client';
+import type { WorkflowRow } from '@/features/workflows/client';
 import { useRichLinkData, type RichLinkData } from '@/hooks/use-rich-link-data';
 import {
   cancelRichLinkHide,
@@ -122,6 +123,7 @@ function PreviewBody({ projectId, url }: { projectId: string; url: string }) {
 function KindBody({ data }: { data: RichLinkData }) {
   if (data.kind === 'work-item') return <WorkItemPreview workItem={data.workItem} />;
   if (data.kind === 'file') return <FilePreviewBody path={data.path} preview={data.preview} />;
+  if (data.kind === 'workflow') return <WorkflowPreview workflow={data.workflow} />;
   return <AttachmentPreview attachment={data.attachment} />;
 }
 
@@ -201,6 +203,32 @@ function FilePreviewBody({ path, preview }: { path: string; preview: FilePreview
       {(preview.kind === 'binary' || preview.kind === 'oversized') && (
         <div className="text-[10px] italic text-fg-dim">
           {preview.kind === 'binary' ? 'binary file' : 'too large to preview'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── workflow ──────────────────────────────────────────────────────────────
+
+function WorkflowPreview({ workflow }: { workflow: WorkflowRow }) {
+  const label = workflow.displayName ?? workflow.name;
+  const scope = workflow.scope === 'global' ? 'global' : 'project';
+  const status = workflow.disabled ? 'disabled' : workflow.status;
+  return (
+    <div className="px-3 py-2 text-xs">
+      <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        workflow · {workflow.slug}
+      </div>
+      <div className="mb-1 truncate text-sm font-medium text-foreground">{label}</div>
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[10px] uppercase tracking-wider">
+        <span className="border border-border px-1.5 py-0.5 text-muted-foreground">{scope}</span>
+        <span className="border border-border px-1.5 py-0.5 text-muted-foreground">{status}</span>
+      </div>
+      {workflow.description && (
+        <div className="whitespace-pre-wrap break-words text-[11px] leading-snug text-muted-foreground">
+          {workflow.description.slice(0, 240)}
+          {workflow.description.length > 240 && '…'}
         </div>
       )}
     </div>

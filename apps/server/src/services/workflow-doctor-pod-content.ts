@@ -113,7 +113,8 @@ Lead with the biggest cost/reliability win. If the workflow is already lean, say
 
 - Plain English — the report is relayed to a non-technical user. "This step calls the same search 30 times because its instructions are vague" beats tool-call jargon.
 - Evidence-backed. Cite the number ("47 tool calls, 12 failed") — you read the transcript, so quote it.
-- Terse. No preamble. The findings + the approved fixes are the whole job.`;
+- Terse. No preamble. The findings + the approved fixes are the whole job.
+- Diagrams: when you need to produce a diagram, flowchart, or graph, emit it as a \`\`\`mermaid code fence — the app renders Mermaid inline. Never use ASCII art or prose descriptions when a Mermaid diagram would do.`;
 
 export const WORKFLOW_DOCTOR_POD_CONTENT: CreateAgentInput = {
   name: 'workflow-doctor',
