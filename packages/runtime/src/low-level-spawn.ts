@@ -170,6 +170,8 @@ export class LowLevelSpawn extends EventEmitter {
   private rawBuffer = '';
   private trustConfirmSent = false;
   private resumeSummaryConfirmSent = false;
+  private onboardingThemeSent = false;
+  private onboardingSecuritySent = false;
   private readonly input: LowLevelSpawnInput;
   private readonly gate: ReadyGate;
   private tailer: JsonlTailer | null = null;
@@ -461,6 +463,35 @@ export class LowLevelSpawn extends EventEmitter {
       }
     }
 
+    // Auto-confirm CC's onboarding theme-picker dialog. Fires when
+    // `hasCompletedOnboarding` was absent/false in the config CC actually read
+    // (defense-in-depth: seedClaudeFirstRun should have cleared this, but the
+    // legacy ~/.claude/.config.json path on macOS can be missed). Theme picker
+    // is the first onboarding step; a bare Enter selects the pre-highlighted
+    // option (CC defaults to "Dark mode"). Idempotent.
+    // CC source: src/components/Onboarding.tsx + src/components/ThemePicker.tsx
+    if (!this.onboardingThemeSent && looksLikeOnboardingThemePicker(this.rawBuffer)) {
+      this.onboardingThemeSent = true;
+      try {
+        this.child?.write('\r');
+      } catch {
+        /* exited mid-press */
+      }
+    }
+
+    // Auto-confirm CC's onboarding security-notes step ("Press Enter to
+    // continue…"). Appears after the theme picker. A bare Enter advances past
+    // it. CC source: src/components/Onboarding.tsx (securityStep) +
+    // src/components/PressEnterToContinue.tsx
+    if (!this.onboardingSecuritySent && looksLikeOnboardingSecurityStep(this.rawBuffer)) {
+      this.onboardingSecuritySent = true;
+      try {
+        this.child?.write('\r');
+      } catch {
+        /* exited mid-press */
+      }
+    }
+
     this.gate.feedChunk(data);
   }
 
@@ -574,6 +605,36 @@ export function looksLikeResumeSummaryDialog(rawBuffer: string): boolean {
     compact.includes('resumefromsummary') ||
     compact.includes('resumingthefullsession')
   );
+}
+
+/** True when the raw PTY buffer is showing CC's onboarding theme-picker step.
+ *  The Onboarding component renders "Let's get started." + "Choose the text
+ *  style that looks best with your terminal" before the theme Select list.
+ *  A bare Enter selects the pre-highlighted option (CC defaults to "Dark mode").
+ *  Pure function so the match is testable in isolation.
+ *  CC source: src/components/Onboarding.tsx + src/components/ThemePicker.tsx
+ *  (verified 2026-06-09). */
+export function looksLikeOnboardingThemePicker(rawBuffer: string): boolean {
+  const compact = collapseAnsiToWhitespace(rawBuffer)
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  // "Let's get started." has an apostrophe that survives whitespace-stripping;
+  // match must include it. "choosethetextstyle" has none.
+  return (
+    compact.includes("let'sgetstarted") ||
+    compact.includes('choosethetextstyle')
+  );
+}
+
+/** True when the raw PTY buffer is showing CC's onboarding security-notes step
+ *  ("Press Enter to continue…"). A bare Enter advances past it.
+ *  Pure function so the match is testable in isolation.
+ *  CC source: src/components/PressEnterToContinue.tsx (verified 2026-06-09). */
+export function looksLikeOnboardingSecurityStep(rawBuffer: string): boolean {
+  const compact = collapseAnsiToWhitespace(rawBuffer)
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  return compact.includes('pressentertocontinue');
 }
 
 export function buildLowLevelSpawnArgs(

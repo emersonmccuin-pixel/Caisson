@@ -5,13 +5,20 @@
 // it will accept any prompt. Caisson spawns claude headlessly, so that dialog
 // stalls every chat/agent turn indefinitely.
 //
-// This module MERGES the three keys CC checks into whatever `.claude.json` the
-// spawned claude process will actually read — determined by
-// `(process.env.CLAUDE_CONFIG_DIR || homedir()) + '/.claude.json'`, which is
-// EXACTLY what CC source computes:
-//   `sn.join(process.env.CLAUDE_CONFIG_DIR || Hp.homedir(), ".claude.json")`
-// (verified in CC 2.1.168 extension.js). When CLAUDE_CONFIG_DIR is unset the
-// file lives at `~/.claude.json` (home root, NOT inside `~/.claude/`).
+// This module MERGES the three keys CC checks into whatever config file the
+// spawned claude process will actually read — determined by CC's own two-step
+// `getGlobalClaudeFile()` resolution (src/utils/env.ts, verified 2026-06-09):
+//
+//   claudeConfigHomeDir = CLAUDE_CONFIG_DIR ?? ~/.claude
+//   if (claudeConfigHomeDir/.config.json exists)  → legacy path (used on Macs
+//     with any pre-existing CC install; CLAUDE_CONFIG_DIR skipped here)
+//   else → (CLAUDE_CONFIG_DIR || homedir())/.claude.json
+//
+// On macOS any prior CC install leaves ~/.claude/.config.json, so that file
+// is what CC reads even though it's not the obvious "new" path. Seeding
+// ~/.claude.json instead means the onboarding gate is never cleared and the
+// interactive theme dialog still fires. The updated resolveClaudeJsonPath()
+// below mirrors this two-step check exactly.
 //
 // MERGE rules — existing keys are preserved (the file holds oauthAccount,
 // projects, tipsHistory, etc.); we only SET the three keys when absent or
@@ -51,13 +58,25 @@ export interface FirstRunSeedResult {
   claudeVersion: string | null;
 }
 
-/** Resolve the `.claude.json` path CC will read, matching CC's own logic:
- *  `(CLAUDE_CONFIG_DIR || homedir()) + '/.claude.json'`
+/** Resolve the config file path that CC will actually read, mirroring CC's
+ *  two-step `getGlobalClaudeFile()` (src/utils/env.ts, verified 2026-06-09):
+ *
+ *   1. claudeConfigHomeDir = CLAUDE_CONFIG_DIR ?? ~/.claude
+ *   2. If claudeConfigHomeDir/.config.json exists → legacy path (pre-dates the
+ *      .claude.json name; present on any Mac with a prior CC install)
+ *   3. Otherwise → (CLAUDE_CONFIG_DIR || homedir())/.claude.json
+ *
  *  Called at seed time so it picks up whatever `process.env.CLAUDE_CONFIG_DIR`
  *  is after `applyClaudeRuntimeSettings` has run. */
 export function resolveClaudeJsonPath(): string {
-  const dir = process.env.CLAUDE_CONFIG_DIR || homedir();
-  return join(dir, '.claude.json');
+  const claudeConfigHomeDir =
+    process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+  const legacyPath = join(claudeConfigHomeDir, '.config.json');
+  if (existsSync(legacyPath)) {
+    return legacyPath;
+  }
+  // Production fileSuffixForOauthConfig() returns '' → filename is '.claude.json'.
+  return join(process.env.CLAUDE_CONFIG_DIR || homedir(), '.claude.json');
 }
 
 /** Ask CC itself for its version string (`claude --version`).
