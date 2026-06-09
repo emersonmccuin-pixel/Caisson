@@ -73,6 +73,18 @@ export const projectsApi = {
       return r.projects;
     }),
 
+  /** Command focus — star/unstar a whole project (the gold star in the rail).
+   *  Posts to the unified focus write door; the project.changed live event
+   *  fans out so the rail refreshes its star automatically. */
+  setFocus: (projectId: ULID, focused: boolean) =>
+    postJson<{ ok: true; project: ProjectDto } | { ok: false; error: string }>(
+      '/api/focus',
+      { kind: 'project', id: projectId, focused },
+    ).then((r) => {
+      if (!r.ok) throw new Error(r.error);
+      return r.project;
+    }),
+
   updateProjectNotes: (projectId: ULID, text: string) =>
     postJsonMethod<{ ok: true; notes: string | null } | { ok: false; error: string }>(
       projectRoutes.notes(projectId),

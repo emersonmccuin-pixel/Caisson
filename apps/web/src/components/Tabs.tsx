@@ -4,7 +4,9 @@
 // topbar (rendered above the body grid in Shell); restyled from folder-
 // tab to underline-active with hover-revealed ↗ popout affordance.
 
-export const TABS = ['orchestrator', 'work-items', 'agents', 'workflows', 'patterns', 'files'] as const;
+// `patterns` is temporarily hidden from the nav — not ready for live. Re-add
+// 'patterns' here (and its LABEL entry + the Shell render branch) to restore it.
+export const TABS = ['orchestrator', 'work-items', 'agents', 'workflows', 'files'] as const;
 /** `project-settings` is reachable via the right-aligned gear, not the main strip. */
 export type Tab = (typeof TABS)[number] | 'project-settings';
 
@@ -12,8 +14,7 @@ const LABEL: Record<(typeof TABS)[number], string> = {
   orchestrator: 'chat',
   'work-items': 'work',
   agents: 'agents',
-  workflows: 'processes',
-  patterns: 'patterns',
+  workflows: 'workflows',
   files: 'files',
 };
 

@@ -155,6 +155,15 @@ export function ProjectRail({
     }
   }
 
+  async function toggleFocus(project: Project) {
+    setMenu(null);
+    try {
+      await projectsApi.setFocus(project.id, project.focusedAt == null);
+    } catch (err) {
+      alert(`Couldn't update focus: ${(err as Error).message}`);
+    }
+  }
+
   async function startNewSession(project: Project) {
     setMenu(null);
     try {
@@ -357,6 +366,10 @@ export function ProjectRail({
           style={{ position: 'fixed', top: menu.y, left: menu.x, zIndex: 50 }}
           className="min-w-[12rem] border border-primary/40 bg-popover py-1 text-popover-foreground shadow-2xl"
         >
+          <MenuItem onClick={() => toggleFocus(menu.project)}>
+            {menu.project.focusedAt != null ? '★ Remove from focus' : '☆ Add to focus'}
+          </MenuItem>
+          <div className="my-1 border-t border-border" />
           <MenuItem onClick={() => openProjectSettings(menu.project)}>
             Open project settings
           </MenuItem>
