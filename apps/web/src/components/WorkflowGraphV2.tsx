@@ -583,15 +583,11 @@ export function WorkflowGraphV2({
       const wfNode = workflow.nodes.find((n) => n.id === rfNode.id);
       if (!wfNode) return;
       onNodeClick?.(wfNode);
-      // Agent nodes with a known project: open PodDetailModal, skip side panel.
-      if (wfNode.kind === 'agent' && projectId) {
-        setDetailNode(null);
-        void openAgentPod(wfNode.agent);
-        return;
-      }
+      // Always show the node detail panel first. Agent nodes expose a
+      // clickable agent name inside the panel that opens the PodDetailModal.
       setDetailNode((prev) => (prev?.id === wfNode.id ? null : wfNode));
     },
-    [authoring, onNodeClick, workflow, projectId, openAgentPod],
+    [authoring, onNodeClick, workflow],
   );
 
   const handleIsValidConnection = useCallback<IsValidConnection>(
@@ -694,6 +690,8 @@ export function WorkflowGraphV2({
           node={detailNode}
           workflow={workflow}
           onClose={() => setDetailNode(null)}
+          onOpenAgent={projectId ? openAgentPod : undefined}
+          agentPodLoading={agentPodLoading}
         />
       )}
 
@@ -1001,10 +999,14 @@ function NodeDetailPanel({
   node,
   workflow,
   onClose,
+  onOpenAgent,
+  agentPodLoading = false,
 }: {
   node: WorkflowV2.WorkflowNode;
   workflow: WorkflowV2.Workflow;
   onClose: () => void;
+  onOpenAgent?: ((agentName: string) => void) | undefined;
+  agentPodLoading?: boolean;
 }) {
   const label = nodeLabel(node);
   const cfg = KIND_CONFIG[node.kind];
@@ -1035,7 +1037,12 @@ function NodeDetailPanel({
             {node.id}
           </code>
         </div>
-        <NodeDetailBody node={node} workflow={workflow} />
+        <NodeDetailBody
+          node={node}
+          workflow={workflow}
+          onOpenAgent={onOpenAgent}
+          agentPodLoading={agentPodLoading}
+        />
       </div>
     </aside>
   );
@@ -1044,15 +1051,37 @@ function NodeDetailPanel({
 function NodeDetailBody({
   node,
   workflow,
+  onOpenAgent,
+  agentPodLoading = false,
 }: {
   node: WorkflowV2.WorkflowNode;
   workflow: WorkflowV2.Workflow;
+  onOpenAgent?: ((agentName: string) => void) | undefined;
+  agentPodLoading?: boolean;
 }) {
   if (node.kind === 'agent') {
     const inputEntries = node.input ? Object.entries(node.input) : [];
     return (
       <>
-        <DetailRow label="Agent" value={node.agent} />
+        {onOpenAgent ? (
+          <DetailSection label="Agent">
+            <button
+              type="button"
+              onClick={() => onOpenAgent(node.agent)}
+              disabled={agentPodLoading}
+              className="group flex items-center gap-1.5 text-left text-primary hover:underline disabled:opacity-60"
+              title="Open agent details"
+            >
+              <Bot className="h-3.5 w-3.5 shrink-0" />
+              <span className="break-words font-medium">{node.agent}</span>
+              <span className="text-[10px] text-muted-foreground/70 group-hover:text-primary">
+                {agentPodLoading ? '(opening…)' : '(view details)'}
+              </span>
+            </button>
+          </DetailSection>
+        ) : (
+          <DetailRow label="Agent" value={node.agent} />
+        )}
         {node.task && (
           <DetailSection label="Task">
             <p className="whitespace-pre-wrap break-words text-foreground/80">{node.task}</p>
