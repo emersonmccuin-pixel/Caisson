@@ -10,6 +10,7 @@
     "pnpm": ">=10.33.0"
   },
   "scripts": {
+    "postinstall": "node scripts/fix-node-pty-perms.mjs",
     "dev": "node scripts/dev-app.mjs",
     "dev:app": "node scripts/dev-app.mjs",
     "dev:staging": "node scripts/dev-staging.mjs",
