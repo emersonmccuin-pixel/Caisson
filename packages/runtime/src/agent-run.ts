@@ -779,14 +779,29 @@ export class AgentRun extends EventEmitter {
     this.setState(next);
     // Release the cap-slot. Idempotent — release / abort both safe here.
     this.ticket.release();
-    // Terminal means this dispatched worker is done. CC returns to a prompt
-    // after a normal turn-end, so explicitly kill the PTY here too; otherwise
-    // completed agents can leave idle node.exe/claude.exe children behind.
+    // Terminal means this dispatched worker is done. Kill the PTY so completed
+    // agents don't leave idle node.exe/claude.exe children behind.
+    //
+    // Issue 1 fix (Option A, belt-and-suspenders) — for `completed`, defer the
+    // kill 2 s. An immediate kill injects \x03 via ConPTY in ~μs while the
+    // HTTP tool-result response travels back over TCP in ~ms; \x03 wins and CC
+    // sees its own correct pc_submit_deliverable as "[Request interrupted by
+    // user]". For `failed`/`cancelled` there is no in-flight response to
+    // protect, so kill immediately as before.
     if (this.spawn) {
-      try {
-        this.spawn.kill();
-      } catch {
-        /* already dead */
+      const spawnRef = this.spawn;
+      if (next === 'completed') {
+        // .unref() so the deferred kill doesn't hold the process open after
+        // the rest of the app (or a test) exits.
+        setTimeout(() => {
+          try { spawnRef.kill(); } catch { /* already dead */ }
+        }, 2000).unref();
+      } else {
+        try {
+          spawnRef.kill();
+        } catch {
+          /* already dead */
+        }
       }
     }
     this.emit('terminal', {

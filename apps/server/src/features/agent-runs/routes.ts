@@ -813,15 +813,24 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         ? parsed.deliverable.text ?? ''
         : '');
     const host = resolveHost();
-    if (host) {
-      try {
-        await Promise.resolve(host.sendCommand({ type: 'complete-run', runId, result: deliverableText }));
-      } catch {
-        /* best-effort — the completion gate + terminal path are the durable backstop */
-      }
-    }
 
-    return c.json({ ok: true, contractId, status: updated.status });
+    // Issue 1 fix (Option B) — return the HTTP 200 to CC BEFORE signalling
+    // complete-run to the host. The host's complete-run → toTerminal →
+    // spawn.kill() → \x03 path races the TCP loopback response; ConPTY wins
+    // (~μs) and CC interprets the Ctrl-C as a "user rejected" interrupt on its
+    // own in-flight submit. Detaching complete-run behind setImmediate ensures
+    // CC's MCP client receives the tool result first.
+    // The completion gate + run-terminal from the host's JSONL turn-end are the
+    // durable backstop if the detached command is dropped.
+    const response = c.json({ ok: true, contractId, status: updated.status });
+    setImmediate(() => {
+      if (host) {
+        void Promise.resolve(
+          host.sendCommand({ type: 'complete-run', runId, result: deliverableText }),
+        ).catch(() => { /* best-effort — durable backstop handles finalization */ });
+      }
+    });
+    return response;
   });
 
   /** `pc_list_my_runs` HTTP surface. Reads from the `agent_runs` table. */

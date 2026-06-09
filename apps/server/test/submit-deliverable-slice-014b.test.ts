@@ -53,11 +53,12 @@ function mkProject(slug: string) {
   return createProject({ slug, name: slug, stages, folderPath: join(tmpDir, slug) });
 }
 
-function mkApp(): Hono {
+function mkApp(extraDeps?: Partial<Parameters<typeof registerAgentRunRoutes>[1]>): Hono {
   const app = new Hono();
   registerAgentRunRoutes(app, {
     broadcastTo: () => {},
     getActiveRunRegistry: () => ({ get: () => null }),
+    ...extraDeps,
   });
   return app;
 }
@@ -279,6 +280,75 @@ test('hasPendingAskForRun is any-status (open AND answered), unlike hasOpenPendi
   markPendingAskAnswered({ id: askId, answer: 'here', answeredBy: 'user', now: Date.now() });
   assert.equal(hasOpenPendingAskForRun(runId), false);
   assert.equal(hasPendingAskForRun(runId), true);
+});
+
+// Issue 1 fix — ordering: HTTP 200 reaches CC BEFORE complete-run is signalled
+// ─────────────────────────────────────────────────────────────────────────────
+// ConPTY delivers \x03 in ~μs; the HTTP response travels over TCP in ~ms.
+// The fix fires complete-run via setImmediate so CC's MCP client receives the
+// tool result first and never sees its own correct submit as "user rejected".
+
+test('Issue 1 fix: HTTP 200 is returned BEFORE complete-run is signalled to the host', async () => {
+  const { p, runId } = seedRunWithContract('sd-ordering', { kind: 'answer' });
+
+  const events: string[] = [];
+  let resolveComplete!: () => void;
+  const completeProm = new Promise<void>((r) => { resolveComplete = r; });
+
+  const fakeHost = {
+    listRuns: () => [],
+    sendCommand: async (cmd: { type: string }) => {
+      if (cmd.type === 'complete-run') {
+        events.push('complete-run');
+        resolveComplete();
+      }
+      return {};
+    },
+  } as never;
+
+  const app = mkApp({ getHostConnection: () => fakeHost });
+
+  const responseProm = app
+    .request(`/api/projects/${p.id}/agent-runs/${runId}/deliverable`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deliverable: { kind: 'answer', text: 'The answer.' } }),
+    })
+    .then((res) => {
+      events.push('http-response');
+      return res;
+    });
+
+  const [res] = await Promise.all([responseProm, completeProm]);
+
+  assert.equal(res.status, 200);
+  // http-response must precede complete-run — CC receives its tool result
+  // before any PTY kill can inject \x03.
+  assert.deepEqual(events, ['http-response', 'complete-run']);
+});
+
+test('Issue 1 fix: successful submit still persists deliverable + returns ok:true even with a host', async () => {
+  const { p, contract, runId } = seedRunWithContract('sd-persist-host', { kind: 'answer' });
+
+  const fakeHost = {
+    listRuns: () => [],
+    sendCommand: async () => ({}),
+  } as never;
+
+  const app = mkApp({ getHostConnection: () => fakeHost });
+
+  const res = await app.request(`/api/projects/${p.id}/agent-runs/${runId}/deliverable`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ deliverable: { kind: 'answer', text: 'Persisted answer.' }, report: 'done' }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as { ok: boolean; contractId: string; status: string };
+  assert.equal(body.ok, true);
+
+  const updated = getContract(contract.id as ULID);
+  assert.deepEqual(updated!.deliverable, { kind: 'answer', text: 'Persisted answer.' });
+  assert.equal(updated!.report, 'done');
 });
 
 test('submit 404s on unknown run / 409s when the run has no contract', async () => {
