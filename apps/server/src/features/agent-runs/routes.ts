@@ -655,7 +655,6 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     const result = await services.dispatchContinueAgent(
       {
         projectId,
-        worktreeDir: project.folderPath,
         parentAgentRunId,
         input,
         dispatcherSessionId,

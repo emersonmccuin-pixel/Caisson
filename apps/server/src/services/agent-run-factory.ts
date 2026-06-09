@@ -127,7 +127,6 @@ export interface DispatchFreshAgentInput {
 
 export interface DispatchContinueAgentInput {
   projectId: ULID;
-  worktreeDir: string;
   /** Parent run id to continue. Same scope rules as Session 8's
    *  `continueAgent` — parent must be terminal completed/failed, JSONL
    *  must still be on disk, no other continuation in flight. */
@@ -634,7 +633,10 @@ export async function dispatchContinueAgent(
     podPrep = preparePodSpawn({
       agentName: plan.plan.podName,
       projectId: input.projectId,
-      worktreeDir: input.worktreeDir,
+      // Use the cwd from the plan — the parent run's actual worktree dir.
+      // CC locates --resume sessions by slugifying cwd, so this MUST match
+      // what the original dispatch used (not project.folderPath).
+      worktreeDir: plan.plan.worktreeDir,
       scratchDir,
       workItem: continueWorkItem ?? undefined,
       // FD-2 — identity for the pc-rig HTTP headers (mirrors buildAgentEnv).
@@ -695,7 +697,8 @@ export async function dispatchContinueAgent(
   const started = await startDispatchedRun({
     input: {
       projectId: input.projectId,
-      worktreeDir: input.worktreeDir,
+      // Same plan-sourced cwd as preparePodSpawn above.
+      worktreeDir: plan.plan.worktreeDir,
       agentName: plan.plan.podName,
       input: input.input,
       dispatcherSessionId: plan.plan.dispatcherSessionId,
