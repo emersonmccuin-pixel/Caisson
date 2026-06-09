@@ -448,6 +448,15 @@ export function makeExecutorDeps(
   };
 
   // pc-pty-chat-270 Chunk B step 6 — engine-executed, verified git merge.
+  //
+  // Safety: ALL git operations (merge, push, state-check) run inside
+  // WorktreeService, which delegates them to a dedicated engine-controlled
+  // dev worktree (`<baseDir>/__dev-merge/`) — NEVER in the user's main
+  // working tree (`workspaceDir`). WorktreeService.mergeBranchIntoDev also
+  // asserts the dev worktree is on `dev` and clean before touching anything;
+  // a precondition violation throws (caught below → `failed` outcome) and the
+  // merge is never attempted. This is pc-pty-chat-270.3.
+  //
   // Idempotent: reads git state FIRST so a re-entry (after conflict resolution,
   // or after a mid-merge crash + boot reconcile re-drive) handles every case
   // without re-doing work already done.

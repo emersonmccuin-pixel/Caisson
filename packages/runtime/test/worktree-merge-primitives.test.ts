@@ -17,7 +17,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { gitMergeState, mergeBranchIntoDev, pushBranch } from '../src/worktree.ts';
+import {
+  ensureDevWorktree,
+  getWorktreeStatus,
+  gitMergeState,
+  mergeBranchIntoDev,
+  pushBranch,
+} from '../src/worktree.ts';
 
 let repoDir: string;
 let originDir: string;
@@ -117,4 +123,40 @@ test('pushBranch + gitMergeState: pushed=true after push', async () => {
   await pushBranch(repoDir, 'dev');
   const state = await gitMergeState(repoDir, 'feature-clean');
   assert.equal(state.pushed, true, 'origin/dev should match local dev after push');
+});
+
+// ── ensureDevWorktree ────────────────────────────────────────────────────────
+
+let devWtDir: string;
+
+test('ensureDevWorktree: creates a detached-HEAD worktree at dev commit', async () => {
+  devWtDir = mkdtempSync(join(tmpdir(), 'pc-dev-wt-'));
+  const devWtPath = join(devWtDir, 'dev-merge');
+
+  await assert.doesNotReject(
+    () => ensureDevWorktree(repoDir, devWtPath),
+    'ensureDevWorktree must not throw for a clean creation',
+  );
+
+  // Worktree is created with --detach so it works even when the main checkout
+  // is already on dev. Branch is null (detached HEAD); tree is clean.
+  const status = await getWorktreeStatus(devWtPath);
+  assert.equal(status.branch, null, 'dev worktree is in detached HEAD (--detach mode)');
+  assert.equal(status.clean, true, 'freshly created dev worktree must be clean');
+});
+
+test('ensureDevWorktree: idempotent — calling twice with detached worktree does not error', async () => {
+  const devWtPath = join(devWtDir, 'dev-merge');
+  await assert.doesNotReject(
+    () => ensureDevWorktree(repoDir, devWtPath),
+    'second call must be a no-op when worktree already exists in detached HEAD',
+  );
+});
+
+// ── getWorktreeStatus ────────────────────────────────────────────────────────
+
+test('getWorktreeStatus: returns branch=dev and clean=true on the main repo', async () => {
+  const status = await getWorktreeStatus(repoDir);
+  assert.equal(status.branch, 'dev', 'main repo is on dev');
+  assert.equal(status.clean, true, 'main repo is clean (no pending changes)');
 });

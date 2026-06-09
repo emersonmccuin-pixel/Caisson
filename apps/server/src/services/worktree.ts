@@ -20,7 +20,9 @@ import {
   attachWorktree as _attachWorktree,
   createWorktree as _createWorktree,
   destroyWorktree as _destroyWorktree,
+  ensureDevWorktree as _ensureDevWorktree,
   gitMergeState as _gitMergeState,
+  getWorktreeStatus as _getWorktreeStatus,
   listWorktrees as _listWorktrees,
   mergeBranchIntoDev as _mergeBranchIntoDev,
   pruneWorktrees as _pruneWorktrees,
@@ -70,6 +72,16 @@ export interface WorktreeServiceDeps {
   pushBranch?: (workspaceDir: string, ref: string) => Promise<void>;
   /** Override for `gitMergeState` (avoids real git in tests). */
   gitMergeState?: (workspaceDir: string, branch: string) => Promise<GitMergeState>;
+  /**
+   * Override for `ensureDevWorktree` — skips real git worktree creation in
+   * tests. The real impl creates/attaches a worktree on `dev` under `baseDir`.
+   */
+  ensureDevWorktree?: (workspaceDir: string, devWtPath: string) => Promise<void>;
+  /**
+   * Override for `getWorktreeStatus` — returns synthetic branch/cleanliness in
+   * tests without inspecting a real git worktree.
+   */
+  getWorktreeStatus?: (wtPath: string) => Promise<{ branch: string | null; clean: boolean }>;
 }
 
 /**
@@ -205,32 +217,97 @@ export class WorktreeService {
     return this.cache;
   }
 
-  // ── Merge / push wrappers (pc-pty-chat-270, Chunk A) ──────────────────────
+  // ── Merge / push wrappers (pc-pty-chat-270) ──────────────────────────────
+  //
+  // ALL merge operations run inside a dedicated, engine-controlled dev
+  // worktree (`<baseDir>/__dev-merge/`) — NEVER in `workspaceDir` (the
+  // user's main checkout). This eliminates the bug where `git merge` would
+  // run in the user's repo regardless of which branch they had checked out
+  // or whether their tree was dirty.
+  //
+  // The dev worktree is a plain `git worktree add <path> dev` — no pnpm
+  // install. It is created lazily and reused across merge steps.
+  //
+  // `mergeBranchIntoDev` additionally asserts that the worktree is on `dev`
+  // and clean before touching anything (belt-and-suspenders guard). A
+  // violation returns loudly — never silently merges into the wrong place.
 
   /**
-   * Merge `branch` into dev (`--no-ff`) in the workspace dir. Throws on
-   * conflict or failure — callers should call `mergeState` first for idempotency.
+   * Absolute path to the engine-controlled dev merge worktree. Lives under
+   * the same `baseDir` as run worktrees but is NOT provisioned with pnpm.
+   */
+  get devWorktreePath(): string {
+    return resolve(this.baseDir, '__dev-merge');
+  }
+
+  /** Ensure the dev merge worktree exists and is on `dev`. Idempotent. */
+  private async ensureDevWorktreeReady(): Promise<string> {
+    const devWtPath = this.devWorktreePath;
+    const fn = this.deps.ensureDevWorktree ?? _ensureDevWorktree;
+    await fn(this.workspaceDir, devWtPath);
+    return devWtPath;
+  }
+
+  /**
+   * Merge `branch` into dev (`--no-ff`) in the engine-controlled dev
+   * worktree (NOT in the user's main working tree). The dev worktree is in
+   * detached HEAD at dev's current commit; the merge advances HEAD. Asserts
+   * the dev worktree is clean before merging; throws loudly on any violation.
+   * Callers should call `mergeState` first for idempotency.
    */
   async mergeBranchIntoDev(branch: string): Promise<void> {
+    const devWtPath = await this.ensureDevWorktreeReady();
+
+    // Belt-and-suspenders: assert the dev worktree is in a valid state before
+    // any destructive git command. Valid states: detached HEAD (branch === null,
+    // our normal creation mode via --detach) or tracking 'dev' directly.
+    // Any OTHER branch means something is badly wrong — refuse loudly.
+    const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
+    const { branch: currentBranch, clean } = await statusFn(devWtPath);
+    if (currentBranch !== null && currentBranch !== 'dev') {
+      throw new Error(
+        `MERGE GUARD: dev merge worktree is on branch "${currentBranch}", expected detached HEAD or "dev" — refusing to merge`,
+      );
+    }
+    if (!clean) {
+      throw new Error(
+        `MERGE GUARD: dev merge worktree has uncommitted changes — refusing to merge into a dirty tree`,
+      );
+    }
+
     const fn = this.deps.mergeBranchIntoDev ?? _mergeBranchIntoDev;
-    await fn(this.workspaceDir, branch);
+    // Pass devWtPath as the cwd — the user's workspaceDir is never touched.
+    await fn(devWtPath, branch);
   }
 
   /**
-   * Push the local `dev` branch to `origin/dev`. Call after a verified merge.
+   * Push `dev` to `origin/dev` from the engine-controlled dev worktree.
+   * When the dev worktree is in detached HEAD (the normal case after --detach),
+   * pushes `HEAD:dev` so the merge commit (not the stale local `dev` pointer)
+   * reaches origin. Call after a verified merge.
    */
   async pushDev(): Promise<void> {
+    const devWtPath = await this.ensureDevWorktreeReady();
+    const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
+    const { branch } = await statusFn(devWtPath);
+    // Detached HEAD (standard dev merge worktree): push HEAD (the merge commit)
+    // to origin/dev. Branch-tracking worktree: push dev normally.
+    const refspec = branch === null ? 'HEAD:dev' : 'dev';
     const fn = this.deps.pushBranch ?? _pushBranch;
-    await fn(this.workspaceDir, 'dev');
+    await fn(devWtPath, refspec);
   }
 
   /**
-   * Read-only inspection of merge / push state for `branch` relative to `dev`.
-   * All checks are non-destructive.
+   * Read-only inspection of merge / push state for `branch` relative to
+   * `dev`, run from the engine-controlled dev worktree. All checks are
+   * non-destructive. MERGE_HEAD is read from the dev worktree (each worktree
+   * has its own MERGE_HEAD), so it correctly reflects conflicts that occurred
+   * in the dev worktree.
    */
   async mergeState(branch: string): Promise<GitMergeState> {
+    const devWtPath = await this.ensureDevWorktreeReady();
     const fn = this.deps.gitMergeState ?? _gitMergeState;
-    return fn(this.workspaceDir, branch);
+    return fn(devWtPath, branch);
   }
 
   // ── private ───────────────────────────────────────────────────────────────
