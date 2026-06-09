@@ -1,4 +1,15 @@
 import type { ULID } from '@/features/projects/types';
+import {
+  FONT_KEYS,
+  MONO_FONT_KEYS,
+  type FontGroup,
+  type FontKey,
+  type FontSettings,
+} from '@pc/domain';
+
+// Re-export so the rest of the web app can import from one place.
+export type { FontGroup, FontKey, FontSettings };
+export { FONT_KEYS, MONO_FONT_KEYS };
 
 export interface ActivityPanelSettings {
   open: boolean;
@@ -32,6 +43,7 @@ export interface GlobalSettings {
   remoteControlEnabled: boolean;
   showCommandSpace: boolean;
   onboardingCompletedAt: string | null;
+  fonts: FontSettings;
 }
 
 export const FONT_SCALE_MIN = 0.85;
