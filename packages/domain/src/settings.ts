@@ -204,6 +204,10 @@ export interface GlobalSettings {
    *  on in App Settings. Toggling this only shows/hides the rail entry; the
    *  Command project and its data are untouched. */
   showCommandSpace: boolean;
+  /** When true, the one-time Command intro modal has been dismissed by the
+   *  user via "Don't show this again". Once set, the modal never shows again.
+   *  Default false. */
+  commandIntroDismissed: boolean;
   /** Per-surface font selections. Each key maps to a FontKey registered in the
    *  web app's font registry. Defaults: chat/workItems → Inter; ui/code →
    *  JetBrains Mono. */
@@ -254,6 +258,7 @@ export function defaultGlobalSettings(dataDir: string, homeDir: string): GlobalS
     hideCancelledStage: false,
     remoteControlEnabled: true,
     showCommandSpace: false,
+    commandIntroDismissed: false,
     fonts: { ...FONT_GROUP_DEFAULTS },
   };
 }
@@ -340,6 +345,7 @@ export function withSettingsDefaults(
     hideCancelledStage: stored.hideCancelledStage ?? defaults.hideCancelledStage,
     remoteControlEnabled: stored.remoteControlEnabled ?? defaults.remoteControlEnabled,
     showCommandSpace: stored.showCommandSpace ?? defaults.showCommandSpace,
+    commandIntroDismissed: stored.commandIntroDismissed ?? defaults.commandIntroDismissed,
     fonts: normalizeFontSettings((stored as { fonts?: unknown }).fonts ?? defaults.fonts),
     jsonl: {
       retentionDays: normalizeJsonlRetention(

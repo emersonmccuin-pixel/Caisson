@@ -141,6 +141,10 @@ function mergeSettingsPatch(body: Partial<GlobalSettings>, current: GlobalSettin
         typeof body.showCommandSpace === 'boolean'
           ? body.showCommandSpace
           : current.showCommandSpace,
+      commandIntroDismissed:
+        typeof body.commandIntroDismissed === 'boolean'
+          ? body.commandIntroDismissed
+          : current.commandIntroDismissed,
       fonts: normalizeFontSettings(
         body.fonts !== undefined && typeof body.fonts === 'object' && body.fonts !== null
           ? body.fonts

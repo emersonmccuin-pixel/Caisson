@@ -4,6 +4,7 @@ import { projectsApi, type Project } from '@/features/projects/client';
 import { settingsApi, type GlobalSettings } from '@/features/settings/client';
 import { applyFontCssVars } from '@/features/settings/fonts';
 import { AppSettingsModal } from '@/components/AppSettingsModal';
+import { CommandIntroModal } from '@/components/CommandIntroModal';
 import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { NotesPopover } from '@/components/NotesPopover';
@@ -14,6 +15,7 @@ import { BuildMarker } from '@/features/system/BuildMarker';
 import { ClaudeVersionBanner } from '@/features/system/ClaudeVersionBanner';
 import { HostHealthBanner } from '@/features/system/HostHealthBanner';
 import { Shell } from '@/components/Shell';
+import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
 import { liveEventsApi } from '@/features/live/client';
 import {
   readStoredProjectChangedCursor,
@@ -254,6 +256,25 @@ export default function App() {
   // snapshot endpoint, which returns the latest host-health frame. A later WS
   // frame (version null → last-write-wins) supersedes it. Host-health only this
   // slice (D4); T3.x generalizes.
+  // Command intro modal — show once per entry into the Command space when
+  // commandIntroDismissed is false. Resets when the user navigates away so it
+  // shows again next time (unless permanently dismissed via "Don't show again").
+  const [commandIntroVisible, setCommandIntroVisible] = useState(false);
+  const commandIntroLastSlugRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      activeSlug === COMMAND_PROJECT_SLUG &&
+      commandIntroLastSlugRef.current !== COMMAND_PROJECT_SLUG &&
+      settings !== null &&
+      !settings.commandIntroDismissed
+    ) {
+      commandIntroLastSlugRef.current = COMMAND_PROJECT_SLUG;
+      setCommandIntroVisible(true);
+    } else if (activeSlug !== COMMAND_PROJECT_SLUG) {
+      commandIntroLastSlugRef.current = null;
+    }
+  }, [activeSlug, settings]);
+
   const hostHealthSeededRef = useRef(false);
   useEffect(() => {
     if (hostHealthSeededRef.current) return;
@@ -559,6 +580,19 @@ export default function App() {
             setSettings(next);
             if (needsRestart) setRestartRequired(true);
             setSettingsOpen(false);
+          }}
+        />
+      )}
+      {commandIntroVisible && (
+        <CommandIntroModal
+          onClose={(dismissed) => {
+            setCommandIntroVisible(false);
+            if (dismissed) {
+              void settingsApi
+                .patchSettings({ commandIntroDismissed: true })
+                .then((r) => setSettings(r.settings))
+                .catch(() => {});
+            }
           }}
         />
       )}
