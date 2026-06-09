@@ -49,6 +49,7 @@ export {
 export {
   deriveAcceptanceCriteriaV2,
   KINDS_REQUIRING_EVIDENCE,
+  REPO_CHECK_DEFAULT_TIMEOUT_MS,
   proseAttachmentName,
 } from './ac-derivation.ts';
 export { expectedOutputRequiresWorkItem } from './work-item-policy.ts';

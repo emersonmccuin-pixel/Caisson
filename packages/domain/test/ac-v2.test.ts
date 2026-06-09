@@ -8,6 +8,7 @@ import {
   deriveAcceptanceCriteriaV2,
   evaluateAcceptance,
   KINDS_REQUIRING_EVIDENCE,
+  REPO_CHECK_DEFAULT_TIMEOUT_MS,
   getPodDefaultExpectedOutput,
   type EvaluationContext,
   type PredicateExecutors,
@@ -29,7 +30,7 @@ function ctx(over: Partial<EvaluationContext> = {}): EvaluationContext {
 
 const noExec: PredicateExecutors = {
   fileSize: async () => null,
-  runBash: async () => 1,
+  runBash: async () => ({ exitCode: 1, timedOut: false }),
 };
 
 // ── new predicates ──────────────────────────────────────────────────────────
@@ -192,8 +193,8 @@ test('repo derives git_diff_nonempty + bash checks; external derives handle', ()
   });
   assert.deepEqual(repo, [
     { kind: 'git_diff_nonempty', cwd: 'worktree' },
-    { kind: 'bash_exit_zero', command: 'pnpm test', cwd: 'worktree' },
-    { kind: 'bash_exit_zero', command: 'echo ok', cwd: 'worktree' },
+    { kind: 'bash_exit_zero', command: 'pnpm test', cwd: 'worktree', timeout_ms: 600_000 },
+    { kind: 'bash_exit_zero', command: 'echo ok', cwd: 'worktree', timeout_ms: 600_000 },
   ]);
   assert.deepEqual(deriveAcceptanceCriteriaV2({ kind: 'external', system: 'email', action: 'send', confirm: 'always', idempotency_key: 'k' }), [
     { kind: 'external_handle_present' },
@@ -243,8 +244,8 @@ test('repo checks as plain strings (279 fix): normalize to command shape, no thr
   });
   assert.deepEqual(result, [
     { kind: 'git_diff_nonempty', cwd: 'worktree' },
-    { kind: 'bash_exit_zero', command: 'pnpm --filter @pc/contracts typecheck', cwd: 'worktree' },
-    { kind: 'bash_exit_zero', command: 'pnpm -r typecheck', cwd: 'worktree' },
+    { kind: 'bash_exit_zero', command: 'pnpm --filter @pc/contracts typecheck', cwd: 'worktree', timeout_ms: 600_000 },
+    { kind: 'bash_exit_zero', command: 'pnpm -r typecheck', cwd: 'worktree', timeout_ms: 600_000 },
   ]);
 });
 
@@ -384,4 +385,79 @@ test('PROOF CASE: an action contract whose tool was never called FAILS', async (
   );
   assert.equal(result.pass, false);
   assert.equal(result.failures.length, 2); // tool_called + pending_ask_created both fail
+});
+
+// ── pc-pty-chat-370: timeout vs non-zero exit disambiguation ─────────────────
+
+test('(370) bash_exit_zero with timedOut:true reports "timed out", not "exited 124"', async () => {
+  const crit: AcceptanceCriteria = [{ kind: 'bash_exit_zero', command: 'pnpm typecheck' }];
+  const timedOutExec: PredicateExecutors = {
+    ...noExec,
+    runBash: async () => ({ exitCode: 124, timedOut: true }),
+  };
+  const result = await evaluateAcceptance(crit, ctx(), timedOutExec);
+  assert.equal(result.pass, false);
+  assert.match(result.failures[0]!.reason, /timed out/, 'reason must say "timed out" when killed by timeout');
+  assert.ok(!result.failures[0]!.reason.includes('exited 124'), 'reason must NOT say "exited 124" for a timeout kill');
+});
+
+test('(370) bash_exit_zero with exitCode:1 timedOut:false reports "exited 1"', async () => {
+  const crit: AcceptanceCriteria = [{ kind: 'bash_exit_zero', command: 'pnpm test' }];
+  const failExec: PredicateExecutors = {
+    ...noExec,
+    runBash: async () => ({ exitCode: 1, timedOut: false }),
+  };
+  const result = await evaluateAcceptance(crit, ctx(), failExec);
+  assert.equal(result.pass, false);
+  assert.match(result.failures[0]!.reason, /exited 1/, 'genuine failure must say "exited N"');
+  assert.ok(!result.failures[0]!.reason.includes('timed out'), 'genuine failure must NOT say "timed out"');
+});
+
+test('(370) bash_exit_zero passes the per-predicate timeout_ms to the executor', async () => {
+  let capturedTimeoutMs: number | undefined = undefined;
+  const capturingExec: PredicateExecutors = {
+    ...noExec,
+    runBash: async (_cmd, _cwd, timeoutMs) => {
+      capturedTimeoutMs = timeoutMs;
+      return { exitCode: 0, timedOut: false };
+    },
+  };
+  const crit: AcceptanceCriteria = [{ kind: 'bash_exit_zero', command: 'echo ok', timeout_ms: 42_000 }];
+  await evaluateAcceptance(crit, ctx(), capturingExec);
+  assert.equal(capturedTimeoutMs, 42_000, 'predicate timeout_ms must reach the executor');
+});
+
+// ── pc-pty-chat-370: derived repo checks carry a 10-minute timeout ────────────
+
+test('(370) derived repo checks carry REPO_CHECK_DEFAULT_TIMEOUT_MS (10 min)', () => {
+  const crit = deriveAcceptanceCriteriaV2({
+    kind: 'repo',
+    isolation: 'worktree',
+    checks: [{ preset: 'test' }, { command: 'pnpm typecheck' }],
+  });
+  // First predicate is git_diff_nonempty (no timeout_ms); remaining are bash checks.
+  const bashChecks = crit.filter((p) => p.kind === 'bash_exit_zero');
+  assert.equal(bashChecks.length, 2, 'two bash_exit_zero predicates expected');
+  for (const p of bashChecks) {
+    assert.equal(
+      (p as { timeout_ms?: number }).timeout_ms,
+      REPO_CHECK_DEFAULT_TIMEOUT_MS,
+      `${(p as { command: string }).command} must carry the 10-minute default timeout`,
+    );
+  }
+  assert.equal(REPO_CHECK_DEFAULT_TIMEOUT_MS, 600_000, '10 minutes = 600_000 ms');
+});
+
+test('(370) RepoCheck.timeout_ms overrides the per-check default', () => {
+  const crit = deriveAcceptanceCriteriaV2({
+    kind: 'repo',
+    isolation: 'worktree',
+    checks: [
+      { preset: 'test', timeout_ms: 120_000 },
+      { command: 'pnpm lint', timeout_ms: 60_000 },
+    ],
+  });
+  const bashChecks = crit.filter((p) => p.kind === 'bash_exit_zero');
+  assert.equal((bashChecks[0] as { timeout_ms?: number }).timeout_ms, 120_000, 'preset override must propagate');
+  assert.equal((bashChecks[1] as { timeout_ms?: number }).timeout_ms, 60_000, 'command override must propagate');
 });
