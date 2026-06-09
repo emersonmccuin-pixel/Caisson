@@ -164,7 +164,9 @@ export function TerminalModePanel({
       convertEol: false,
       cursorBlink: true,
       disableStdin: !writableRef.current,
-      fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+      fontFamily:
+        getComputedStyle(document.documentElement).getPropertyValue('--font-code').trim() ||
+        '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
       fontSize: 13,
       scrollback: 5000,
       theme: terminalTheme(),

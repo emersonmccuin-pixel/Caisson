@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { projectsApi, type Project } from '@/features/projects/client';
 import { settingsApi, type GlobalSettings } from '@/features/settings/client';
+import { applyFontCssVars } from '@/features/settings/fonts';
 import { AppSettingsModal } from '@/components/AppSettingsModal';
 import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -152,6 +153,14 @@ export default function App() {
     if (!settings) return;
     document.documentElement.style.setProperty('--font-scale', String(settings.fontScale));
   }, [settings?.fontScale]);
+
+  // Apply per-surface font choices. Each of the four --font-* CSS vars is
+  // set on documentElement so every surface picks them up immediately.
+  // AppSettingsModal live-previews changes before Save via applyFontCssVars.
+  useEffect(() => {
+    if (!settings?.fonts) return;
+    applyFontCssVars(settings.fonts);
+  }, [settings?.fonts]);
 
   // Reconcile activeSlug with the loaded list — pick the first project if the
   // persisted selection no longer exists (e.g. fresh DB or after soft-delete).
