@@ -300,3 +300,123 @@ function loadVerifyingContract(workItemId: ULID, service: ContractService): Cont
   }
   return contract;
 }
+
+/** Shared guard for contract-by-id approve + reject. Loads the contract
+ *  directly by its id — no work item required. Throws `VerificationReviewError`
+ *  on any precondition miss. */
+function loadVerifyingContractById(contractId: ULID, service: ContractService): Contract {
+  const contract = service.get(contractId);
+  if (!contract) {
+    throw new VerificationReviewError('wi-not-found', `contract ${contractId} not found`);
+  }
+  if (contract.status !== 'verifying') {
+    throw new VerificationReviewError(
+      'not-awaiting-verification',
+      `contract ${contractId} is not awaiting verification (status: ${contract.status})`,
+    );
+  }
+  return contract;
+}
+
+// ── Contract-by-id approve / reject ─────────────────────────────────────────
+// Used when a dispatch has no linked work item (answer/payload, contract-only).
+// The WI roll-up and auto-advance steps are skipped entirely; only the contract
+// status is flipped and the verification receipt is written.
+
+export interface ApproveAgentContractInput {
+  contractId: ULID;
+  notes?: string | null;
+  actor?: 'orchestrator' | 'user';
+}
+
+/** Approve a contract-only verification hold (no linked work item). Flips the
+ *  contract to `accepted`/`passed` and resolves the verification inbox card.
+ *  Always returns null (no work item to roll up). */
+export function approveAgentContract(
+  input: ApproveAgentContractInput,
+  deps: ApproveAgentWorkItemDeps = {},
+): null {
+  const service = deps.contractService ?? new ContractService();
+  const contract = loadVerifyingContractById(input.contractId, service);
+  const note = input.notes?.trim() ?? '';
+  service.setVerification({
+    id: contract.id as ULID,
+    verificationStatus: 'passed',
+    verificationNotes: note || null,
+  });
+  resolveVerificationInbox(deps.reviewInbox, contract.id);
+  // Contract-only: no work item to roll up.
+  return null;
+}
+
+export interface RejectAgentContractInput {
+  contractId: ULID;
+  feedback: string;
+  actor?: 'orchestrator' | 'user';
+  dispatcherSessionId?: string | null;
+  project: Project;
+}
+
+/** Reject a contract-only verification hold. Flips the contract to
+ *  `rejected`/`failed` and wakes the producer run with the feedback.
+ *  Returns null for `workItem` (no WI linked), the contract, and the
+ *  continuation dispatch result. */
+export async function rejectAgentContract(
+  input: RejectAgentContractInput,
+  deps: RejectAgentWorkItemDeps,
+): Promise<RejectAgentWorkItemResult> {
+  const feedback = input.feedback?.trim() ?? '';
+  if (!feedback) {
+    throw new VerificationReviewError('feedback-required', 'feedback required for reject');
+  }
+  const service = deps.contractService ?? new ContractService();
+  const contract = loadVerifyingContractById(input.contractId, service);
+  if (!contract.agentRunId) {
+    throw new VerificationReviewError(
+      'no-assigned-run',
+      `contract ${contract.id} has no agentRunId — was it dispatched via pc_invoke_agent?`,
+    );
+  }
+  const actor = input.actor ?? 'orchestrator';
+  const dispatcherSessionId =
+    input.dispatcherSessionId?.trim() ||
+    getAgentRunRow(contract.agentRunId as ULID)?.dispatcherSessionId ||
+    '';
+  if (!dispatcherSessionId) {
+    throw new VerificationReviewError(
+      'no-assigned-run',
+      `contract ${contract.id}'s producer run has no dispatcher session to continue under`,
+    );
+  }
+
+  // Flip the contract to rejected.
+  service.setVerification({
+    id: contract.id as ULID,
+    verificationStatus: 'failed',
+    verificationNotes: feedback,
+  });
+  resolveVerificationInbox(deps.reviewInbox, contract.id);
+
+  // Contract-only: no work item to roll back.
+  const continuationInput = `Reviewer rejected your previous deliverable on contract ${contract.id} with this feedback:\n\n${feedback}\n\nAddress the feedback, then re-submit your deliverable via pc_submit_deliverable before reporting done.`;
+
+  const dispatch = deps.dispatch ?? dispatchContinueAgent;
+  const continuation = await dispatch(
+    {
+      projectId: input.project.id,
+      worktreeDir: input.project.folderPath,
+      parentAgentRunId: contract.agentRunId as ULID,
+      input: continuationInput,
+      dispatcherSessionId,
+      slug: input.project.slug,
+      // No workItemId — this is a contract-only hold.
+    },
+    {
+      ...(deps.mailboxEnqueue ? { mailboxEnqueue: deps.mailboxEnqueue } : {}),
+      ...(deps.broadcast ? { broadcast: deps.broadcast } : {}),
+      ...(deps.hostClient ? { hostClient: deps.hostClient } : {}),
+    },
+  );
+
+  return { workItem: null, contract, continuation };
+}
