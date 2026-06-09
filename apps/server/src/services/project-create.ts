@@ -43,6 +43,20 @@ import type { ProjectScaffold, ProjectScaffoldTarget } from './project-scaffold.
 
 const exec = promisify(execFile);
 
+async function assertGitIdentity(cwd: string): Promise<void> {
+  const get = (key: string) =>
+    exec('git', ['config', key], { cwd }).then((r: { stdout: string }) => r.stdout.trim()).catch(() => '');
+  const [email, name] = await Promise.all([get('user.email'), get('user.name')]);
+  if (!email || !name) {
+    throw new Error(
+      'Git identity not configured.\n' +
+        'Run these commands in your terminal, then try again:\n\n' +
+        '  git config --global user.email "you@example.com"\n' +
+        '  git config --global user.name "Your Name"',
+    );
+  }
+}
+
 export type CreateProjectMode = 'init-empty' | 'init-in-place' | 'attach-to-git';
 
 export interface CreateProjectFlowInput {
@@ -105,6 +119,7 @@ export class ProjectCreate {
 
     if (input.mode !== 'attach-to-git') {
       await exec('git', ['init', '-b', 'main'], { cwd: folderPath });
+      await assertGitIdentity(folderPath);
     }
 
     const hadExistingFiles = filesBefore.length > 0;
