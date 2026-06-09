@@ -124,35 +124,67 @@ function writeConfigAtomic(path: string, data: Record<string, unknown>): void {
   renameSync(tmp, path);
 }
 
-/** Seed `hasCompletedOnboarding`, `theme`, and `lastOnboardingVersion` into
- *  the CC global config file without clobbering any existing keys.
+/** Synchronously ensure the two keys CC's onboarding gate actually checks —
+ *  `hasCompletedOnboarding` AND `theme` (CC shows onboarding when EITHER is
+ *  absent) — are present in the config file CC will read. NO awaits: a
+ *  fire-and-forget caller still completes the write before the first claude
+ *  spawn. Merge-only, idempotent, corrupt-safe.
  *
- *  `claudeExe` is optional — defaults to 'claude', which respects PATH +
- *  the app-bundled override set by `setBundledClaudeExe`. Pass
- *  `resolveClaudeBinary().path ?? 'claude'` for production use. */
-export async function seedClaudeFirstRun(
-  claudeExe = 'claude',
-): Promise<FirstRunSeedResult> {
+ *  `lastOnboardingVersion` is deliberately NOT touched here — it is not part of
+ *  CC's onboarding gate, so it must never gate or delay this write. (The old
+ *  async path awaited `claude --version` BEFORE writing; on a fresh macOS
+ *  launch the bundled binary's first run is slow enough that the first chat
+ *  beat the write and hit the theme picker.) */
+export function seedClaudeFirstRunSync(): FirstRunSeedResult {
   const configPath = resolveClaudeJsonPath();
-  const claudeVersion = await readClaudeVersion(claudeExe);
-
   const config = readConfigSafe(configPath);
+  const existingVersion =
+    typeof config['lastOnboardingVersion'] === 'string'
+      ? (config['lastOnboardingVersion'] as string)
+      : null;
 
-  const alreadyDone =
+  const gateSatisfied =
     config['hasCompletedOnboarding'] === true &&
-    typeof config['theme'] === 'string' &&
-    (claudeVersion === null ||
-      config['lastOnboardingVersion'] === claudeVersion);
+    typeof config['theme'] === 'string';
 
-  if (alreadyDone) {
-    return { configPath, written: false, claudeVersion };
+  if (gateSatisfied) {
+    return { configPath, written: false, claudeVersion: existingVersion };
   }
 
   const next: Record<string, unknown> = { ...config };
   next['hasCompletedOnboarding'] = true;
   if (typeof next['theme'] !== 'string') next['theme'] = DEFAULT_THEME;
-  if (claudeVersion !== null) next['lastOnboardingVersion'] = claudeVersion;
 
   writeConfigAtomic(configPath, next);
-  return { configPath, written: true, claudeVersion };
+  return { configPath, written: true, claudeVersion: existingVersion };
+}
+
+/** Seed the CC first-run config: write the onboarding-gate keys synchronously
+ *  (the part that matters), then best-effort stamp `lastOnboardingVersion` from
+ *  `claude --version`. The version stamp never blocks or reverts the gate keys.
+ *
+ *  `claudeExe` is optional — defaults to 'claude', which respects PATH + the
+ *  app-bundled override set by `setBundledClaudeExe`. Pass
+ *  `resolveClaudeBinary().path ?? 'claude'` for production use. */
+export async function seedClaudeFirstRun(
+  claudeExe = 'claude',
+): Promise<FirstRunSeedResult> {
+  const gate = seedClaudeFirstRunSync();
+  const claudeVersion = await readClaudeVersion(claudeExe);
+
+  if (claudeVersion !== null) {
+    const config = readConfigSafe(gate.configPath);
+    if (config['lastOnboardingVersion'] !== claudeVersion) {
+      writeConfigAtomic(gate.configPath, {
+        ...config,
+        lastOnboardingVersion: claudeVersion,
+      });
+    }
+  }
+
+  return {
+    configPath: gate.configPath,
+    written: gate.written,
+    claudeVersion: claudeVersion ?? gate.claudeVersion,
+  };
 }

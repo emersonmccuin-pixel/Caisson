@@ -80,18 +80,23 @@ test('allDone gate: all four prerequisites must be true', () => {
 });
 
 // ── Boot readiness test (pc-pty-chat-298 req 3b) ─────────────────────────────
-// The App.tsx gate is prerequisite-driven: show wizard when auth or folder
-// is missing, regardless of the onboardingCompletedAt marker. This mirrors
-// the inline logic: `setBootReady(p.auth.status === 'authed' && folderOk)`.
-test('boot readiness: requires auth ok + folder set (any missing → wizard forced)', () => {
-  function computeBootReady(authOk: boolean, folderOk: boolean): boolean {
-    return authOk && folderOk;
+// The App.tsx gate requires the onboarding marker AND the live prerequisites:
+// a user is "set up" only once they've been through the wizard AND auth+folder
+// hold. The marker is required because the prerequisites alone can be satisfied
+// on a fresh machine (folder has a default; a separately-installed Claude is
+// already authed) — which previously skipped the wizard for first-timers. This
+// mirrors the inline logic:
+//   `setBootReady(p.auth.status === 'authed' && folderOk && everCompleted)`.
+test('boot readiness: requires auth ok + folder set + ever completed (any missing → wizard forced)', () => {
+  function computeBootReady(authOk: boolean, folderOk: boolean, everCompleted: boolean): boolean {
+    return authOk && folderOk && everCompleted;
   }
 
-  assert.equal(computeBootReady(true, true), true, 'both ok → no wizard');
-  assert.equal(computeBootReady(false, true), false, 'no auth → wizard forced');
-  assert.equal(computeBootReady(true, false), false, 'no folder → wizard forced');
-  assert.equal(computeBootReady(false, false), false, 'both missing → wizard forced');
+  assert.equal(computeBootReady(true, true, true), true, 'all ok → no wizard');
+  assert.equal(computeBootReady(false, true, true), false, 'no auth → wizard forced');
+  assert.equal(computeBootReady(true, false, true), false, 'no folder → wizard forced');
+  assert.equal(computeBootReady(true, true, false), false, 'never onboarded → wizard forced');
+  assert.equal(computeBootReady(false, false, false), false, 'all missing → wizard forced');
 });
 
 test('buildOutstanding returns correct labels for each missing item', () => {

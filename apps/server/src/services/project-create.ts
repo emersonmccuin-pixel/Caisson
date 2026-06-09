@@ -43,6 +43,25 @@ import type { ProjectScaffold, ProjectScaffoldTarget } from './project-scaffold.
 
 const exec = promisify(execFile);
 
+/** Return `git -c` args supplying a fallback commit identity when the machine
+ *  has none configured (fresh installs: no global user.name/user.email → git
+ *  aborts the commit with "Please tell me who you are"). Returns [] when a real
+ *  identity is resolvable, so the user's own name/email is always preferred.
+ *  The `-c` form scopes the fallback to a single invocation; nothing is written
+ *  to the user's global git config. */
+async function gitIdentityArgs(cwd: string): Promise<string[]> {
+  const resolved = async (key: string): Promise<boolean> => {
+    try {
+      const { stdout } = await exec('git', ['config', key], { cwd });
+      return stdout.trim().length > 0;
+    } catch {
+      return false; // unset → git config exits non-zero
+    }
+  };
+  if ((await resolved('user.name')) && (await resolved('user.email'))) return [];
+  return ['-c', 'user.name=Caisson', '-c', 'user.email=caisson@localhost'];
+}
+
 export type CreateProjectMode = 'init-empty' | 'init-in-place' | 'attach-to-git';
 
 export interface CreateProjectFlowInput {
@@ -107,10 +126,17 @@ export class ProjectCreate {
       await exec('git', ['init', '-b', 'main'], { cwd: folderPath });
     }
 
+    // Git refuses to commit with no identity configured. On a fresh machine
+    // neither user.name nor user.email is set, so the commits below fail with
+    // "Please tell me who you are" — the red error a first-time user hit on
+    // create. Inject a fallback identity for THESE commits only (via -c, never
+    // written to the user's global config) when none is resolvable.
+    const idArgs = await gitIdentityArgs(folderPath);
+
     const hadExistingFiles = filesBefore.length > 0;
     if (input.mode === 'init-in-place' && hadExistingFiles) {
       await exec('git', ['add', '.'], { cwd: folderPath });
-      await exec('git', ['commit', '-m', 'Initial import'], { cwd: folderPath });
+      await exec('git', [...idArgs, 'commit', '-m', 'Initial import'], { cwd: folderPath });
     }
 
     if (input.mode !== 'attach-to-git') {
@@ -123,7 +149,7 @@ export class ProjectCreate {
       this.scaffold.writeAll(target);
       await exec('git', ['add', '.'], { cwd: folderPath });
       const scaffoldMsg = hadExistingFiles ? 'Add Caisson scaffold' : 'Initial commit';
-      await exec('git', ['commit', '-m', scaffoldMsg], { cwd: folderPath });
+      await exec('git', [...idArgs, 'commit', '-m', scaffoldMsg], { cwd: folderPath });
     }
 
     const result = persistCreatedProjectWithLiveEvent({

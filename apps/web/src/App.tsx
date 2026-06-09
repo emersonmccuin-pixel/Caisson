@@ -95,8 +95,13 @@ export default function App() {
       });
     void settingsApi.getSettings().then((s) => {
       setSettings(s);
-      // Prerequisite-driven gate: check ACTUAL state, not a completion marker.
-      // Any missing auth or unset folder → wizard, regardless of prior "skipped" state.
+      // Gate: a user is "set up" only when they've been through the wizard at
+      // least once (onboardingCompletedAt) AND the real prerequisites hold
+      // (Claude authed + projects folder set). The completion marker is
+      // required because the prerequisites alone can be satisfied on a fresh
+      // machine without ever seeing the wizard — projectsFolder has a built-in
+      // default, and a user who installed Claude Code separately is already
+      // authed — which silently skipped onboarding for first-time users.
       if (!forceOnboarding && !onboardingSimMode) {
         const folderOk = (s.projectsFolder ?? '').trim().length > 0;
         const everCompleted = Boolean(s.onboardingCompletedAt);
@@ -109,7 +114,7 @@ export default function App() {
         // default).
         const tryPreflight = (attempt: number) => {
           void settingsApi.getPreflight()
-            .then((p) => { setBootReady(p.auth.status === 'authed' && folderOk); })
+            .then((p) => { setBootReady(p.auth.status === 'authed' && folderOk && everCompleted); })
             .catch(() => {
               if (attempt < 4) {
                 window.setTimeout(() => tryPreflight(attempt + 1), 500);
@@ -399,9 +404,9 @@ export default function App() {
     );
   }
 
-  // Prerequisite-driven gate: show the wizard when real-state readiness fails,
-  // not when a "completed" marker is absent. Users who previously skipped
-  // (no Claude auth) are automatically caught here on every launch.
+  // Show the wizard until it's been completed once AND the prerequisites hold
+  // (both folded into bootReady above). Users who never onboarded, or who later
+  // lose Claude auth, are caught here on every launch.
   const showWizard = !wizardDismissed && (forceOnboarding || onboardingSimMode || !bootReady);
   if (showWizard) {
     return (

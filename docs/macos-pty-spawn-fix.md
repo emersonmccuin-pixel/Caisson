@@ -67,31 +67,40 @@ WARNING: Claude Code running in Bypass Permissions mode
 ```
 
 It waits there for a keypress and never reaches the composer, so the runtime's
-ReadyGate times out. The PC session settings template never set a permission
-`defaultMode`, so Claude treated bypass mode as something to confirm
-interactively.
+ReadyGate times out.
 
 ### Fix
 
-`templates/.claude/settings.template.json` now sets:
+The dialog is **not** gated by `permissions.defaultMode`. In Claude Code's
+source the gate is a separate top-level setting, `skipDangerousModePermissionPrompt`
+(checked by `hasSkipDangerousModePermissionPrompt()`); setting `defaultMode`
+alone does nothing for the dialog. Claude honors the flag from any trusted
+source — including the file we pass via `--settings` (`flagSettings`) — but
+deliberately ignores a repo's own `.claude/settings.json` for this.
+
+`templates/.claude/settings.template.json` now sets it at the top level:
 
 ```json
-"permissions": {
-  "defaultMode": "bypassPermissions",
-  ...
+{
+  "skipDangerousModePermissionPrompt": true,
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    ...
+  }
 }
 ```
 
-This takes the **configured** (non-interactive) bypass path, which:
+This:
 
 1. skips the acceptance dialog entirely, and
 2. makes Claude print `⏵⏵ bypass permissions on` in its status line — which is
    exactly the init-complete signal the ReadyGate already matches
    (`/bypass permissions on/i`).
 
-> Note: this is a per-machine, one-time interactive gate. The template fix is
-> the real resolution. (Historically you could also accept it once by hand in a
-> terminal `claude` session, but the template change means you never have to.)
+> History: an earlier fix set only `defaultMode: bypassPermissions`, which did
+> NOT suppress the dialog — the real gate is `skipDangerousModePermissionPrompt`.
+> (You could also accept it once by hand in a terminal `claude` session, but the
+> template flag means you never have to.)
 
 ## Verification
 
@@ -109,4 +118,4 @@ state: busy  →  <assistant reply>  →  state: ready
 | Cause | Fix |
 | --- | --- |
 | `node-pty/spawn-helper` not executable after pnpm install → `posix_spawnp failed` | `scripts/fix-node-pty-perms.mjs` + root `postinstall` |
-| Interactive "Bypass Permissions" dialog blocks ReadyGate | `defaultMode: bypassPermissions` in the session settings template |
+| Interactive "Bypass Permissions" dialog blocks ReadyGate | `skipDangerousModePermissionPrompt: true` (top level) in the session settings template — `defaultMode` does NOT gate the dialog |
