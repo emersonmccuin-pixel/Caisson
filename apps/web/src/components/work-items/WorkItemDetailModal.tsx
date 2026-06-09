@@ -319,7 +319,7 @@ export function WorkItemDetailModal({
       onClick={attemptClose}
     >
       <div
-        className="flex h-[80vh] w-full max-w-3xl flex-col border border-border bg-card text-foreground"
+        className="pc-work-content flex h-[80vh] w-full max-w-3xl flex-col border border-border bg-card text-foreground"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
