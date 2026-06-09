@@ -54,6 +54,16 @@ export const mcpServersApi = {
     ).then((r) => r.server),
 };
 
+// ── Orchestrator pod resolution (P4a) ────────────────────────────────────────
+
+/** Resolve the agentId of the pod driving this project's orchestrator chat. */
+export const orchestratorPodApi = {
+  getAgentId: (projectId: string) =>
+    getJson<{ ok: true; agentId: string }>(
+      `/api/projects/${encodeURIComponent(projectId)}/orchestrator-pod`,
+    ).then((r) => r.agentId),
+};
+
 // ── Agent MCP Attachment API (P3) ─────────────────────────────────────────────
 
 export const mcpAttachmentsApi = {

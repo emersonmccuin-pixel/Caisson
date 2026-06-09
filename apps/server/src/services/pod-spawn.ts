@@ -15,8 +15,8 @@
 // treat that as a loud spawn error; the old project-root fallback was removed
 // when PC's runtime became isolated from terminal Claude Code sessions.
 
-import { getPodForSpawn } from '@pc/db';
-import type { ULID } from '@pc/domain';
+import { getPodForSpawn, getMcpServerRegistry, listMcpAttachmentsForAgent } from '@pc/db';
+import type { PodMcpServerConfig, ULID } from '@pc/domain';
 import { materializePodPlugin, type MaterializedPluginPod, type PodWorkItemContext } from '@pc/runtime';
 import {
   prepareClaudeRuntimeFiles,
@@ -139,12 +139,17 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
     }
   }
 
+  // pc-pty-chat-359 P4a — merge registry-based MCP servers into the spawn
+  // config. Both dispatched agents and the orchestrator go through this path;
+  // the orchestrator is just another agentId with its own attachments row set.
+  const registry = buildRegistryMcpConfig(bundle.agent.id);
+
   const materialised: MaterializedPluginPod = materializePodPlugin({
     bundle,
     worktreeDir: input.worktreeDir,
     scratchDir: input.scratchDir,
-    baselineMcpServers: runtimeFiles.baselineMcpServers,
-    mcpToolCatalog: { 'pc-rig': PC_RIG_TOOL_NAMES },
+    baselineMcpServers: { ...runtimeFiles.baselineMcpServers, ...registry.servers },
+    mcpToolCatalog: { 'pc-rig': PC_RIG_TOOL_NAMES, ...registry.catalog },
     workItem: input.workItem,
     ...(contextChain ? { contextChain } : {}),
     ...(Object.keys(variables).length > 0 ? { variables } : {}),
@@ -167,4 +172,38 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
     podScope: bundle.agent.scope,
     podProjectId: bundle.agent.projectId ?? null,
   };
+}
+
+// ── Registry MCP resolution ────────────────────────────────────────────────────
+
+/** Load the registry-based MCP servers attached to `agentId` and return the
+ *  extra `servers` (to merge into `baselineMcpServers`) and `catalog` (to
+ *  merge into `mcpToolCatalog`) entries they contribute.
+ *
+ *  - `enabledTools: '*'`  → catalog entry uses `discoveredTools` (empty array
+ *    when the server has not been probed; the wildcard expander then emits no
+ *    tools, which is the safe default rather than a hard spawn failure).
+ *  - `enabledTools: string[]` → catalog entry uses the explicit selection.
+ *
+ *  Non-fatal: any DB or registry-read error is silently swallowed so that a
+ *  missing registry row or a probe failure never prevents spawn. */
+export function buildRegistryMcpConfig(agentId: ULID): {
+  servers: Record<string, PodMcpServerConfig>;
+  catalog: Record<string, readonly string[]>;
+} {
+  const servers: Record<string, PodMcpServerConfig> = {};
+  const catalog: Record<string, readonly string[]> = {};
+  try {
+    const attachments = listMcpAttachmentsForAgent(agentId);
+    for (const att of attachments) {
+      const row = getMcpServerRegistry(att.mcpServerId);
+      if (!row) continue;
+      servers[row.name] = row.transport;
+      catalog[row.name] =
+        att.enabledTools === '*' ? (row.discoveredTools ?? []) : att.enabledTools;
+    }
+  } catch {
+    // Non-fatal: never block spawn because the registry is unavailable.
+  }
+  return { servers, catalog };
 }
