@@ -48,6 +48,13 @@ export interface MailboxWorkerDeps {
   /** Resolve a message kind (agent-terminal, workflow-review, …) for the
    *  FD-3/FD-6 system-marker fallback on injected turns. */
   getMessageKind?: (messageId: ULID) => string | null;
+  /** Issue 2 — look up a message's source ref. Used by the agent-stalled
+   *  staleness guard: if the source run is already terminal at delivery time,
+   *  the body is prefixed with a "[NOTE: …]" so the orchestrator isn't misled
+   *  by advice that was accurate at enqueue time but stale by delivery. */
+  getMessageSource?: (messageId: ULID) => { sourceId: string | null; sourceKind: string | null } | null;
+  /** Issue 2 — live agent-run status probe. Returns null when unknown. */
+  getAgentRunStatus?: (runId: ULID) => string | null;
   leaseOwner?: string;
   leaseMs?: number;
   maxAttempts?: number;
@@ -56,6 +63,8 @@ export interface MailboxWorkerDeps {
 
 const DEFAULT_LEASE_MS = 30_000;
 const DEFAULT_MAX_ATTEMPTS = 5;
+/** Issue 2 — run statuses that mean "no longer running". */
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 /** M4a/FD-8 — recheck cadence while waiting for an orchestrator to exist. */
 const DEFER_RECHECK_MS = 60_000;
 
@@ -65,7 +74,8 @@ function backoffMs(attempts: number): number {
 }
 
 export class MailboxWorker {
-  private readonly d: Required<Omit<MailboxWorkerDeps, never>> & MailboxWorkerDeps;
+  private readonly d: Required<Omit<MailboxWorkerDeps, 'getMessageKind' | 'getMessageSource' | 'getAgentRunStatus'>> &
+    Pick<MailboxWorkerDeps, 'getMessageKind' | 'getMessageSource' | 'getAgentRunStatus'>;
 
   constructor(deps: MailboxWorkerDeps) {
     this.d = {
@@ -177,11 +187,32 @@ export class MailboxWorker {
       const session = resolved.session;
       const body = this.d.getMessageBody(delivery.messageId);
       if (body === null) return fail('message body missing', false);
+
+      // Issue 2 — for agent-stalled notices, check whether the source run is
+      // already terminal at delivery time (the ~1s mailbox tick means it can
+      // finalize between enqueue and delivery). If so, prefix the body so the
+      // orchestrator isn't misled by advice that was correct at enqueue but is
+      // now moot. We relabel rather than drop: the orchestrator still needs to
+      // know the stall happened (it may need to re-dispatch or take note).
+      let deliveryBody = body;
+      const msgKind = this.d.getMessageKind?.(delivery.messageId);
+      if (msgKind === 'agent-stalled' && this.d.getMessageSource && this.d.getAgentRunStatus) {
+        const src = this.d.getMessageSource(delivery.messageId);
+        if (src?.sourceKind === 'agent' && src.sourceId) {
+          const liveStatus = this.d.getAgentRunStatus(src.sourceId as ULID);
+          if (liveStatus && TERMINAL_STATUSES.has(liveStatus)) {
+            deliveryBody =
+              `[NOTE: this run has since finalized — status: ${liveStatus}; ` +
+              `the advice below may be moot]\n\n${body}`;
+          }
+        }
+      }
+
       const result = this.d.orchestratorTurn.deliver({
         projectId: session.projectId,
         sessionId: session.sessionId,
         deliveryId: delivery.id,
-        text: body,
+        text: deliveryBody,
         kind: this.d.getMessageKind?.(delivery.messageId) ?? null,
       });
       if (result.ok) {

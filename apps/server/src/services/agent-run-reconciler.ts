@@ -76,6 +76,9 @@ export interface AgentRunReconcilerDeps {
   warn?: (msg: string) => void;
   onHostCommandError?: (error: Error) => void;
   onTerminalError?: (error: Error) => void;
+  /** Issue 3 — forwarded to terminal effects so an immediate mailbox drain can
+   *  be triggered after the completion envelope is enqueued. */
+  onMailboxEnqueued?: () => void;
   /** Test seams — default to the real sweeps. */
   reconcileHost?: typeof reconcileAgentRunsAgainstHost;
   stallWarn?: typeof sweepStallWarn;
@@ -166,6 +169,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
           mailboxEnqueue: deps.mailboxEnqueue,
           now: deps.now,
           onTerminalError: deps.onTerminalError,
+          onMailboxEnqueued: deps.onMailboxEnqueued,
         });
         if (event.type === 'run-state' || event.type === 'run-terminal') {
           const handle = registry.get(event.run.runId)?.run;
@@ -243,6 +247,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
       // backlog can't re-broadcast.
       backfillOnRegister: true,
       ...(deps.replayEnvelopes ? { replayEnvelopes: deps.replayEnvelopes } : {}),
+      ...(deps.onMailboxEnqueued ? { onMailboxEnqueued: deps.onMailboxEnqueued } : {}),
     });
 
     // The P9/FD-17 stall ladder: badge (rung 1) + verify-alive→orchestrator

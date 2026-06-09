@@ -103,6 +103,11 @@ export interface AgentRunTerminalEffectsDeps {
   verificationDeps?: VerificationDeps;
   now?: () => number;
   onError?: (error: Error) => void;
+  /** Issue 3 (near-term) — called immediately after the terminal mailbox
+   *  envelope is enqueued so the caller can trigger an immediate worker drain
+   *  instead of waiting for the next 1s poll tick. Fire-and-forget; errors are
+   *  silently ignored (the tick is the correctness backstop). */
+  onMailboxEnqueued?: () => void;
 }
 
 export interface AgentRunTerminalEffectsResult {
@@ -501,6 +506,12 @@ async function finishTerminalEffects(args: {
       failureCause,
       verification,
     });
+    // Issue 3 (near-term) — signal the mailbox worker to drain immediately so
+    // the terminal envelope reaches the orchestrator within ms, not at the next
+    // 1s poll tick. The 1s tick + S3 replay are the durable backstops; this is
+    // a latency optimisation only. Errors are silently swallowed (no throw in
+    // an async detached tail).
+    try { deps.onMailboxEnqueued?.(); } catch { /* intentional */ }
   }
 }
 

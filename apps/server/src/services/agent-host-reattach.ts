@@ -74,6 +74,9 @@ export interface AgentHostReattachDeps {
   terminalCleanup?: () => void;
   onTerminalError?: (error: Error) => void;
   onHostCommandError?: (error: Error) => void;
+  /** Issue 3 — forwarded to terminal effects so the caller can drain the
+   *  mailbox worker immediately after the envelope is enqueued. */
+  onMailboxEnqueued?: () => void;
   /** T1.4 (D1) — this tick the connection authoritatively could not reach a
    *  live host (`hostConnection.isConnected() === false` after a `refreshRuns`
    *  that COMPLETED). Required for the host-lost finalize; absent ⇒ no finalize
@@ -329,6 +332,7 @@ function handleHostMissingRow(
       verificationDeps: deps.verificationDeps,
       now: deps.now,
       onError: deps.onTerminalError,
+      onMailboxEnqueued: deps.onMailboxEnqueued,
     },
   ).applied;
 
@@ -439,6 +443,7 @@ export function applyHostTerminalSnapshot(
       verificationDeps: deps.verificationDeps,
       now: deps.now,
       onError: deps.onTerminalError,
+      onMailboxEnqueued: deps.onMailboxEnqueued,
     },
   ).applied;
 }
