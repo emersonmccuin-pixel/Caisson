@@ -16,12 +16,16 @@ import type { Hono } from 'hono';
 import type { McpServerRegistryRow, PodMcpServerConfig, PodScope, ULID } from '@pc/domain';
 import {
   createMcpServerRegistry,
+  getProjectById,
   getMcpServerRegistry,
   listMcpServersRegistry,
   patchMcpServerRegistry,
+  resolveAgentForDispatch,
   setMcpServerDiscovery,
   softDeleteMcpServerRegistry,
 } from '@pc/db';
+import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
+import { COMMAND_PLANNER_POD_NAME } from '../../services/command-planner-pod-content.ts';
 import { parsePodMcpServerConfig } from '../../services/pod-mcp-config.ts';
 
 export type ProbeFn = (config: PodMcpServerConfig) => Promise<{ status: 'ok' | 'failed'; tools?: string[]; error?: string }>;
@@ -160,6 +164,24 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 422);
     }
+  });
+
+  // ── Orchestrator pod resolution (P4a) ────────────────────────────────────────
+
+  /** GET /api/projects/:projectId/orchestrator-pod — resolve the pod that
+   *  drives this project's chat session (orchestrator for regular projects;
+   *  command-planner for the Command project). Returns `{ agentId }` so the
+   *  UI can manage the orchestrator's MCP attachments without knowing which
+   *  pod name is in play. */
+  app.get('/api/projects/:projectId/orchestrator-pod', (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const project = getProjectById(projectId);
+    if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+    const podName =
+      project.slug === COMMAND_PROJECT_SLUG ? COMMAND_PLANNER_POD_NAME : 'orchestrator';
+    const agent = resolveAgentForDispatch(podName, projectId);
+    if (!agent) return c.json({ ok: false, error: 'orchestrator pod not found' }, 404);
+    return c.json({ ok: true, agentId: agent.id });
   });
 }
 

@@ -9,7 +9,7 @@
 // matrix) and depends on shapes that don't exist on the trunk yet. This is
 // the minimal panel matching the trunk's endpoints.
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { useLiveEntitySignature } from '@/store/live-store';
 import { useActiveCenterTab } from '@/store/active-center-tab';
@@ -17,6 +17,13 @@ import { useActiveCenterTab } from '@/store/active-center-tab';
 import { projectsApi, type Project } from '@/features/projects/client';
 import { projectContextApi } from '@/features/project-context/client';
 import { McpServersPanel } from '@/features/mcp-servers/McpServersPanel';
+import {
+  mcpAttachmentsApi,
+  mcpServersApi,
+  orchestratorPodApi,
+  type AgentMcpAttachment,
+  type McpServer,
+} from '@/features/mcp-servers/client';
 import { DeleteProjectFilesModal, SoftDeleteProjectModal } from './ProjectDangerModals';
 import { FieldSchemasEditor } from './project-settings/FieldSchemasEditor';
 import { StagesEditor } from './project-settings/StagesEditor';
@@ -27,13 +34,14 @@ interface ProjectSettingsPanelProps {
   onProjectDeleted: (projectId: string) => void;
 }
 
-type SectionId = 'info' | 'stages' | 'fields' | 'mcp-servers' | 'danger';
+type SectionId = 'info' | 'stages' | 'fields' | 'mcp-servers' | 'orchestrator' | 'danger';
 
 const SECTIONS: { id: SectionId; label: string; danger?: boolean }[] = [
   { id: 'info', label: 'Project info' },
   { id: 'stages', label: 'Stages' },
   { id: 'fields', label: 'Field schemas' },
   { id: 'mcp-servers', label: 'MCP Servers' },
+  { id: 'orchestrator', label: 'Orchestrator tools' },
   { id: 'danger', label: 'Danger zone', danger: true },
 ];
 
@@ -102,6 +110,12 @@ export function ProjectSettingsPanel({
             {active === 'mcp-servers' && (
               <Section title="MCP Servers">
                 <McpServersPanel scope="project" projectId={project.id} />
+              </Section>
+            )}
+
+            {active === 'orchestrator' && (
+              <Section title="Orchestrator tools">
+                <OrchestratorMcpSection projectId={project.id} />
               </Section>
             )}
 
@@ -398,6 +412,281 @@ function SetupWizardNag({
           Dismiss
         </button>
       </div>
+    </div>
+  );
+}
+
+// ─── Orchestrator MCP section ─────────────────────────────────────────────────
+//
+// Lists all registered MCP servers (global + this project's) and lets the user
+// attach them to the project's orchestrator pod via the agent_mcp_attachments
+// table. The orchestrator is just another agentId — we resolve it from the new
+// /orchestrator-pod endpoint. Changes take effect on the next chat-session
+// start (i.e., after a restart).
+
+function OrchestratorMcpSection({ projectId }: { projectId: string }) {
+  const [agentId, setAgentId] = useState<string | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAgentId(null);
+    setLoadErr(null);
+    orchestratorPodApi
+      .getAgentId(projectId)
+      .then(setAgentId)
+      .catch((e: Error) => setLoadErr(e.message));
+  }, [projectId]);
+
+  if (loadErr) {
+    return (
+      <div className="border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+        {loadErr}
+      </div>
+    );
+  }
+  if (!agentId) {
+    return <div className="text-xs text-muted-foreground">Loading…</div>;
+  }
+  return <OrchestratorMcpPicker projectId={projectId} agentId={agentId} />;
+}
+
+function OrchestratorMcpPicker({
+  projectId,
+  agentId,
+}: {
+  projectId: string;
+  agentId: string;
+}) {
+  const [servers, setServers] = useState<McpServer[]>([]);
+  const [attachments, setAttachments] = useState<AgentMcpAttachment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [opError, setOpError] = useState<string | null>(null);
+  const [expandedServerId, setExpandedServerId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    setOpError(null);
+    Promise.all([
+      mcpServersApi.listGlobal(),
+      mcpServersApi.listForProject(projectId),
+      mcpAttachmentsApi.listForAgent(agentId),
+    ])
+      .then(([globals, project, attachs]) => {
+        const seen = new Set<string>();
+        const all: McpServer[] = [];
+        for (const s of [...globals, ...project]) {
+          if (!seen.has(s.id)) {
+            seen.add(s.id);
+            all.push(s);
+          }
+        }
+        setServers(all);
+        setAttachments(attachs);
+        setLoading(false);
+      })
+      .catch((e: Error) => {
+        setOpError(e.message);
+        setLoading(false);
+      });
+  }, [projectId, agentId]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const attachmentByServerId = new Map(attachments.map((a) => [a.mcpServerId, a]));
+
+  async function toggleAttach(server: McpServer) {
+    if (busy) return;
+    setBusy(true);
+    setOpError(null);
+    try {
+      const existing = attachmentByServerId.get(server.id);
+      if (existing) {
+        await mcpAttachmentsApi.detach(agentId, server.id);
+        setExpandedServerId(null);
+      } else {
+        await mcpAttachmentsApi.upsert(agentId, server.id, { enabledTools: '*' });
+        setExpandedServerId(server.id);
+      }
+      reload();
+    } catch (e) {
+      setOpError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateToolSelection(server: McpServer, enabledTools: string[] | '*') {
+    if (busy) return;
+    setBusy(true);
+    setOpError(null);
+    try {
+      await mcpAttachmentsApi.upsert(agentId, server.id, { enabledTools });
+      reload();
+    } catch (e) {
+      setOpError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-xs text-muted-foreground">
+        Choose which MCP servers the orchestrator (your chat assistant) can use.
+        A newly-granted server only takes effect after you restart the chat session.
+      </p>
+
+      {loading && <div className="text-xs text-muted-foreground">Loading…</div>}
+      {opError && (
+        <div className="border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {opError}
+        </div>
+      )}
+
+      {!loading && servers.length === 0 && (
+        <div className="border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
+          No servers in the registry yet. Add them in the MCP Servers section above.
+        </div>
+      )}
+
+      {!loading && servers.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {servers.map((server) => {
+            const attachment = attachmentByServerId.get(server.id);
+            const attached = !!attachment;
+            const expanded = expandedServerId === server.id;
+            return (
+              <div key={server.id} className="border border-border bg-card">
+                <div className="flex items-center gap-2 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    id={`orc-attach-${server.id}`}
+                    checked={attached}
+                    disabled={busy}
+                    onChange={() => void toggleAttach(server)}
+                    className="h-3.5 w-3.5 accent-primary"
+                  />
+                  <label
+                    htmlFor={`orc-attach-${server.id}`}
+                    className="flex-1 cursor-pointer select-none font-mono text-xs font-medium text-foreground"
+                  >
+                    {server.name}
+                    {server.scope === 'project' && (
+                      <span className="ml-1.5 text-[9px] text-muted-foreground">(project)</span>
+                    )}
+                  </label>
+                  {attached && (
+                    <button
+                      type="button"
+                      onClick={() => setExpandedServerId(expanded ? null : server.id)}
+                      className="text-[10px] text-muted-foreground underline hover:text-foreground"
+                    >
+                      {expanded ? 'hide tools' : 'tools'}
+                    </button>
+                  )}
+                  {attached && attachment && (
+                    <span className="text-[9px] text-muted-foreground">
+                      {attachment.enabledTools === '*'
+                        ? 'all tools'
+                        : `${(attachment.enabledTools as string[]).length} tool(s)`}
+                    </span>
+                  )}
+                </div>
+                {attached && expanded && attachment && (
+                  <OrchestratorToolSelector
+                    server={server}
+                    enabledTools={attachment.enabledTools}
+                    busy={busy}
+                    onUpdate={(sel) => void updateToolSelection(server, sel)}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OrchestratorToolSelector({
+  server,
+  enabledTools,
+  busy,
+  onUpdate,
+}: {
+  server: McpServer;
+  enabledTools: string[] | '*';
+  busy: boolean;
+  onUpdate: (selection: string[] | '*') => void;
+}) {
+  const tools = server.discoveredTools ?? [];
+  const allSelected = enabledTools === '*';
+
+  function toggleAll() {
+    onUpdate(allSelected ? [] : '*');
+  }
+
+  function toggleTool(tool: string) {
+    if (enabledTools === '*') {
+      onUpdate(tools.filter((t) => t !== tool));
+    } else {
+      const current = enabledTools as string[];
+      if (current.includes(tool)) {
+        onUpdate(current.filter((t) => t !== tool));
+      } else {
+        const next = [...current, tool];
+        onUpdate(next.length === tools.length ? '*' : next);
+      }
+    }
+  }
+
+  function isToolEnabled(tool: string): boolean {
+    if (enabledTools === '*') return true;
+    return (enabledTools as string[]).includes(tool);
+  }
+
+  return (
+    <div className="border-t border-border px-3 py-2">
+      {tools.length === 0 && server.discoveryStatus !== 'ok' && (
+        <p className="text-[10px] text-muted-foreground italic">
+          No tools discovered yet. Run a probe on this server in the MCP Servers section.
+        </p>
+      )}
+      {tools.length === 0 && server.discoveryStatus === 'ok' && (
+        <p className="text-[10px] text-muted-foreground italic">Server reports no tools.</p>
+      )}
+      {tools.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <label className="flex cursor-pointer items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={allSelected}
+              disabled={busy}
+              onChange={toggleAll}
+              className="h-3 w-3 accent-primary"
+            />
+            <span className="text-[10px] font-medium text-foreground">All tools</span>
+          </label>
+          <div className="ml-4 flex max-h-40 flex-col gap-0.5 overflow-y-auto">
+            {tools.map((tool) => (
+              <label key={tool} className="flex cursor-pointer items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={isToolEnabled(tool)}
+                  disabled={busy}
+                  onChange={() => toggleTool(tool)}
+                  className="h-3 w-3 accent-primary"
+                />
+                <span className="font-mono text-[10px] text-foreground">{tool}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
