@@ -256,7 +256,7 @@ export function ProjectRail({
                 (commandUnread ? ' pc-project-tile-unread' : '')
               }
             >
-              <span className="text-[1.25rem] leading-none">★</span>
+              <span className="text-[1.1rem] leading-none">★</span>
             </span>
             <span className="min-w-0 flex-1 truncate font-medium tracking-wide">
               {commandProject.name}
