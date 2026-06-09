@@ -1,6 +1,6 @@
 # Caisson
 
-**Build your own team of AI specialists — by talking, not coding.**
+**Build a team of AI specialists that run real work in your real systems.**
 
 [![Latest release](https://img.shields.io/github/v/release/emersonmccuin-pixel/Caisson?label=download&sort=semver)](https://github.com/emersonmccuin-pixel/Caisson/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
@@ -10,39 +10,41 @@
 
 ---
 
-![Caisson — tasks on the board](docs/images/02-board.png)
+![Caisson — talk to an orchestrator that runs your project, with a team of specialists behind it](docs/images/00-hero.png)
 
 ## What it is
 
-Caisson is a harness that lets anyone in a company — technical or not — turn the repetitive parts of their job into AI agents and workflows, just by describing them.
+Caisson lets you stand up a team of AI specialists and put them to work in the systems you already run — your cloud accounts, your data warehouse, your issue tracker, your codebase. Give a specialist the right access and it operates those systems directly through their APIs: runs the queries, ships the code, files the tickets, provisions the infra, watches for what changed.
 
-The result is a personal **team of specialists** that know your work and run it the way you would: a researcher, a writer, a reviewer, a data analyst — each an expert in one area, each on call.
+You set each one up once, in plain English — what it's expert in, what it can reach, how you want the work done. From then on it carries the load: the planning, the building, the day-to-day admin that used to sit on you. You stay in the loop only where judgment actually matters.
 
-You don't write prompts, YAML, or code. You have a conversation with a per-project **AI Project Manager**, and it builds the agents and workflows for you. It runs entirely on your machine, on your own Claude subscription.
+It's not a chat window you start over in every morning. It's a standing team you assemble, direct, and grow — running on your machine, on your own Claude subscription.
 
 ## The problem it solves
 
-AI at work is gated by tech fluency. The people who know what `CLAUDE.md` is, how to write a skill, how to wire up an MCP server — they get real leverage. Everyone else gets a chat window and starts over every conversation.
+Real leverage from AI is gated by tech fluency. The people who know how to wire up an MCP server, write a system prompt, and hand a model real API access turn it into a teammate that operates their stack. Everyone else gets a chat box and re-explains their job every session.
 
-Caisson closes that gap. You describe how the work should be done, in plain English; Caisson captures it once and runs it forever. The person who knows the job is the one operating the tool.
+Caisson closes that gap. The person who knows the work — the analyst who knows the warehouse, the engineer who knows the codebase, the ops lead who knows the runbook — describes how it should be done, once. Caisson turns that into a specialist that does it, repeatedly, in the real system. The expert becomes the operator.
 
-## Who it's for
+## What a specialist can be
 
-Anyone with repetitive, judgment-light work they'd rather not redo by hand. Three examples:
+A specialist is an expert you configure: a focused role, the tools and credentials it needs, and the context that normally lives in your head. A few shapes the same machinery takes:
 
-**A developer.** Bugs and small features pile up. He captures each as a card. A workflow hands it to the **code-writer** specialist with a contract — *must typecheck and pass tests before it counts as done* — and the **reviewer** checks the result against his criteria. He gets a verified fix to look over instead of a blank editor. *(This is literally how Caisson builds itself.)*
+**A data team.** A Snowflake / Redshift specialist with warehouse credentials, the query tools, and your semantic-layer rules — what "active user" means, where the data lives, how you'd actually answer. It runs the recurring analyses and writes up what changed, without you re-explaining the schema every time.
 
-**An HR coordinator.** Every new hire means the same checklist: welcome email, first-week plan, accounts to request, forms to collect. She describes onboarding once. Running it lays the whole task tree out on the board, and the **writer** drafts the welcome note in the company's voice — she reviews and sends, instead of rebuilding it per hire.
+**A platform / ops team.** Specialists wired into AWS, GCP, and your CI — handling the routine work (provisioning to spec, checking for drift, triaging the standard alerts) and escalating the calls that need a human.
 
-**A salesperson.** After every call she does the same thing: read the transcript for questions and objections, match them to her standard answers, write a follow-up in her voice. She drops in the transcript; a specialist reads it, the **researcher** pulls what she needs on the account, and the **writer** drafts the email for her to send — twenty minutes after the call, not two days.
+**A build team.** A code-writer that plans, writes, typechecks, and tests a change against a contract, with a reviewer checking the result. A bug or feature goes from a card to a verified diff. *(It's how Caisson builds itself.)*
 
-None of these are canned templates. Each person builds the one *they* need by describing it.
+**A delivery team.** Specialists connected to Jira / Atlassian that triage inbound, groom the board, draft the specs, and run the status roll-ups.
+
+And the lighter end of the same engine: a sales rep whose specialist drafts post-call follow-ups in their voice; an HR coordinator whose onboarding runs itself out into a task tree. **Same tool — the ceiling is as high as the access you give it.** None of these ship as canned templates; you build the team *you* need by describing it.
 
 ## A look at it
 
-| The project chat — your front door | Workflows, with their triggers |
+| The board — work items across stages | A workflow, visualized |
 | --- | --- |
-| ![The project chat](docs/images/01-orchestrator-chat.png) | ![A workflow](docs/images/03-workflow-builder.png) |
+| ![The board](docs/images/02-board.png) | ![A workflow](docs/images/03-workflow-builder.png) |
 
 | Your roster of specialists | A task, inspected |
 | --- | --- |
@@ -50,19 +52,29 @@ None of these are canned templates. Each person builds the one *they* need by de
 
 ## How you build it
 
-You have a conversation. An interview walks you through it — both for **workflows** and for **specialists**:
+You have a conversation. An interview walks you through it — for both **specialists** and **workflows**:
 
-- **What should it do?** In your words.
-- **What triggers it?** A schedule, an external event, a manual click, or a task crossing a stage on the board.
-- **What has to happen?** The steps.
-- **What does it need?** Credentials, API keys, tools to reach external systems.
-- **What does "done" look like?** Drafted for your approval, auto-sent, filed as a task, or routed to someone for sign-off.
+- **What is it expert in?** The role, in your words.
+- **What can it reach?** The tools, API access, and credentials it needs to operate your systems.
+- **What context does it need?** The rules, definitions, and runbook that live in your head.
+- **What triggers the work?** A schedule, an external event, a manual run, or a task crossing a stage on the board.
+- **What does "done" look like?** Shipped automatically, drafted for your approval, filed as a task, or routed to someone for sign-off.
 
-You answer in plain English. Caisson writes it. Want a change? Tell it — same chat — and it adjusts.
+You answer in plain English. Caisson writes it. Want a change? Tell it — same chat — and it adjusts. No prompts, no YAML, no code.
+
+## How it's put together
+
+| Piece | What it is |
+| --- | --- |
+| **Specialists** | Expert agents with their own role, model, tools, credentials, and context. Dispatchable, and every run is audited. |
+| **Tools & integrations** | How specialists reach the outside world (the MCP tool layer). Hand one the right tools and credentials and it drives that system's API — query a warehouse, open a PR, file a ticket, call a cloud control plane. |
+| **Workflows** | A trigger + a series of steps + a verified output. Steps dispatch specialists, call tools, move work across the board, or pause for your sign-off. |
+| **Contracts** | Every dispatch carries one: what the output must be and how to check it. "Done" means *verified done*, not assumed — and the output lands where you said it should. |
+| **The board** | Tasks are the universal primitive. A workflow run produces a tree of them; the kanban board is one view of that tree. |
 
 ## Your starting team
 
-Every project ships with nine specialists. The Project Manager dispatches work to them; edit them, add your own, or promote a good one to use across all your projects.
+Every project ships with nine built-in specialists as a starting kit. The Project Manager dispatches work to them; edit them, add your own wired to your systems, or promote a good one to use across all your projects.
 
 | Specialist | What it's for |
 | --- | --- |
@@ -76,18 +88,12 @@ Every project ships with nine specialists. The Project Manager dispatches work t
 | **agent-designer** | Designs new specialists from a plain-language description |
 | **caisson** | The in-app guide — explains how Caisson works and adjusts your settings |
 
-## What a workflow is
-
-A **trigger** + a series of **steps** + a **verified output.**
-
-Steps can dispatch a specialist, call an external tool, move a task across the board, or pause for your approval. When work is handed to a specialist, Caisson attaches a contract — what the output should be and how to tell it's right — and checks the result against it. "Done" means *verified done*, and the output lands where you said it should.
-
 ## Status — v0.1.0
 
 First published release — pre-1.0, under active development.
 
-- ✅ **Live now:** the project chat, the board, conversational workflow building, the specialist roster, agent dispatch with verified contracts, the packaged Windows app.
-- 🔜 **Modeled, UI coming:** schedule and event triggers, full human-in-the-loop review gates.
+- ✅ **Live now:** the project chat, the board, conversational workflow building, the specialist roster, the tool layer, agent dispatch with verified contracts, and the packaged Windows app.
+- 🔜 **Maturing:** the external-integration surface (bringing more systems under specialists' control), schedule and event triggers, and full human-in-the-loop review gates — these exist in the model and are being wired into the interface.
 - 🪟 **Windows-first.** The macOS build path exists but isn't part of this release.
 
 Schemas and APIs may still change between releases.
