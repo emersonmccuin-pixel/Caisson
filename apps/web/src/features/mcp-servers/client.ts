@@ -1,4 +1,4 @@
-// pc-pty-chat-359 P1 — MCP Server Registry API client.
+// pc-pty-chat-359 P1/P2 — MCP Server Registry API client.
 
 import { getJson, postJson, postJsonMethod } from '@/api/http';
 import type { CreateMcpServerInput, McpServer, PatchMcpServerInput } from './types';
@@ -28,6 +28,12 @@ export const mcpServersApi = {
       throw new Error(data.error ?? `delete mcp server → ${res.status}`);
     }
   },
+
+  /** P2: trigger a discovery probe and return the updated server row. */
+  probeServer: (id: string) =>
+    postJson<{ ok: true; server: McpServer }>(`/api/mcp-servers/${id}/probe`, {}).then(
+      (r) => r.server,
+    ),
 
   // Project scope
   listForProject: (projectId: string) =>
