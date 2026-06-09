@@ -1,4 +1,4 @@
-// pc-pty-chat-359 P1 — MCP Server Registry panel.
+// pc-pty-chat-359 P1/P2 — MCP Server Registry panel.
 //
 // Shared between Global Settings (scope='global') and Project Settings
 // (scope='project'). Shows a list of registered servers; supports Add, Edit,
@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-import type { CreateMcpServerInput, McpServer, McpTransport } from './client';
+import type { CreateMcpServerInput, McpDiscoveryStatus, McpServer, McpTransport } from './client';
 import { mcpServersApi } from './client';
 
 // -- Props --------------------------------------------------------------------
@@ -126,6 +126,9 @@ export function McpServersPanel({ scope, projectId }: McpServersPanelProps) {
               isEditing={formState?.mode === 'edit' && formState.id === s.id}
               onEdit={() => openEdit(s)}
               onDelete={() => void handleDelete(s)}
+              onServerUpdated={(updated) =>
+                setServers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)))
+              }
             />
           ))}
         </div>
@@ -151,46 +154,138 @@ function ServerRow({
   isEditing,
   onEdit,
   onDelete,
+  onServerUpdated,
 }: {
   server: McpServer;
   isEditing: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  onServerUpdated: (updated: McpServer) => void;
 }) {
+  const [probing, setProbing] = useState(false);
+  const [probeErr, setProbeErr] = useState<string | null>(null);
+  const [toolsExpanded, setToolsExpanded] = useState(false);
+
   const transportSummary = server.transport.command
     ? `stdio: ${server.transport.command}`
     : `http: ${server.transport.url ?? ''}`;
 
+  async function handleProbe() {
+    setProbing(true);
+    setProbeErr(null);
+    try {
+      const updated = await mcpServersApi.probeServer(server.id);
+      onServerUpdated(updated);
+    } catch (e) {
+      setProbeErr((e as Error).message);
+    } finally {
+      setProbing(false);
+    }
+  }
+
   return (
     <div
-      className={`flex items-start justify-between gap-2 px-3 py-2 ${
+      className={`flex flex-col gap-1 px-3 py-2 ${
         isEditing ? 'bg-muted/40' : 'hover:bg-muted/20'
       }`}
     >
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <div className="text-sm font-medium text-foreground">{server.name}</div>
-        {server.description && (
-          <div className="truncate text-xs text-muted-foreground">{server.description}</div>
-        )}
-        <div className="font-mono text-[10px] text-muted-foreground">{transportSummary}</div>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm font-medium text-foreground">{server.name}</span>
+            <DiscoveryBadge status={server.discoveryStatus} toolCount={server.discoveredTools?.length ?? null} />
+          </div>
+          {server.description && (
+            <div className="truncate text-xs text-muted-foreground">{server.description}</div>
+          )}
+          <div className="font-mono text-[10px] text-muted-foreground">{transportSummary}</div>
+        </div>
+        <div className="flex shrink-0 items-start gap-1">
+          <button
+            type="button"
+            onClick={() => void handleProbe()}
+            disabled={probing}
+            title="Re-probe for tool list"
+            className="border border-border bg-card px-2 py-0.5 text-[11px] text-foreground hover:bg-muted disabled:opacity-50"
+          >
+            {probing ? 'Probing…' : 'Re-probe'}
+          </button>
+          <button
+            type="button"
+            onClick={onEdit}
+            className="border border-border bg-card px-2 py-0.5 text-[11px] text-foreground hover:bg-muted"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            className="border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[11px] text-destructive hover:bg-destructive/20"
+          >
+            Delete
+          </button>
+        </div>
       </div>
-      <div className="flex shrink-0 gap-1">
-        <button
-          type="button"
-          onClick={onEdit}
-          className="border border-border bg-card px-2 py-0.5 text-[11px] text-foreground hover:bg-muted"
-        >
-          Edit
-        </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[11px] text-destructive hover:bg-destructive/20"
-        >
-          Delete
-        </button>
-      </div>
+
+      {probeErr && (
+        <div className="text-[10px] text-destructive">{probeErr}</div>
+      )}
+
+      {server.discoveredTools && server.discoveredTools.length > 0 && (
+        <div className="mt-0.5">
+          <button
+            type="button"
+            onClick={() => setToolsExpanded((v) => !v)}
+            className="text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            {toolsExpanded ? '▾ hide tools' : `▸ ${server.discoveredTools.length} tool${server.discoveredTools.length === 1 ? '' : 's'}`}
+          </button>
+          {toolsExpanded && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {server.discoveredTools.map((t) => (
+                <span
+                  key={t}
+                  className="border border-border bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+// -- Discovery badge ----------------------------------------------------------
+
+function DiscoveryBadge({
+  status,
+  toolCount,
+}: {
+  status: McpDiscoveryStatus;
+  toolCount: number | null;
+}) {
+  if (status === 'ok') {
+    return (
+      <span className="inline-flex items-center border border-green-700/40 bg-green-900/20 px-1 py-0 font-mono text-[9px] font-medium text-green-400">
+        ✓ {toolCount ?? 0} tools
+      </span>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <span className="inline-flex items-center border border-destructive/40 bg-destructive/10 px-1 py-0 font-mono text-[9px] font-medium text-destructive">
+        ✕ probe failed
+      </span>
+    );
+  }
+  // stale
+  return (
+    <span className="inline-flex items-center border border-border bg-muted/30 px-1 py-0 font-mono text-[9px] text-muted-foreground">
+      · not probed
+    </span>
   );
 }
 

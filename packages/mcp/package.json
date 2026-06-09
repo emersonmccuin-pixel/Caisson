@@ -14,6 +14,10 @@
     "./http-endpoint": {
       "types": "./src/http-endpoint.ts",
       "import": "./src/http-endpoint.ts"
+    },
+    "./probe": {
+      "types": "./src/probe.ts",
+      "import": "./src/probe.ts"
     }
   },
   "scripts": {

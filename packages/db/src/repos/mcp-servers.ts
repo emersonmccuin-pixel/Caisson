@@ -134,6 +134,10 @@ export function patchMcpServerRegistry(
   }
   if (patch.transport !== undefined && JSON.stringify(patch.transport) !== JSON.stringify(existing.transport)) {
     set.transport = patch.transport;
+    // Transport changed → cached tools are stale; clear them so the UI doesn't
+    // show a tool list that belongs to the old transport.
+    set.discoveryStatus = 'stale';
+    set.discoveredTools = null;
     changed = true;
   }
   if (!changed) return existing;
@@ -141,6 +145,37 @@ export function patchMcpServerRegistry(
   set.updatedAt = now;
   set.rev = existing.rev + 1;
   getDb().update(mcpServers).set(set).where(eq(mcpServers.id, id)).run();
+  return getMcpServerRegistry(id);
+}
+
+// --- discovery ---------------------------------------------------------------
+
+export interface SetMcpServerDiscoveryInput {
+  status: 'ok' | 'failed';
+  /** Tool names from a successful probe; null on failure. */
+  tools: string[] | null;
+}
+
+/** Write the probe result back onto the registry row. Called after a probe
+ *  completes (success or failure). Sets discoveryStatus + discoveredTools and
+ *  bumps rev so WS consumers (future) can discard stale deltas. */
+export function setMcpServerDiscovery(
+  id: ULID,
+  result: SetMcpServerDiscoveryInput,
+): McpServerRegistryRow | null {
+  const existing = getMcpServerRegistry(id);
+  if (!existing) return null;
+  const now = Date.now();
+  getDb()
+    .update(mcpServers)
+    .set({
+      discoveryStatus: result.status,
+      discoveredTools: result.status === 'ok' ? result.tools : null,
+      updatedAt: now,
+      rev: existing.rev + 1,
+    })
+    .where(eq(mcpServers.id, id))
+    .run();
   return getMcpServerRegistry(id);
 }
 
