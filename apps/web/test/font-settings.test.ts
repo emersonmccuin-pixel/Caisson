@@ -67,15 +67,15 @@ test('FontSettings type has all four group fields', () => {
   assert.equal(s.code, 'jetbrains-mono');
 });
 
-test('Default font values match spec: chat/workItems=inter, ui/code=jetbrains-mono', () => {
+test('Default font values match spec: chat/workItems=system, ui=ibm-plex-sans, code=jetbrains-mono', () => {
   const s: FontSettings = {
-    chat: 'inter',
-    workItems: 'inter',
-    ui: 'jetbrains-mono',
+    chat: 'system',
+    workItems: 'system',
+    ui: 'ibm-plex-sans',
     code: 'jetbrains-mono',
   };
-  assert.equal(s.chat, 'inter');
-  assert.equal(s.workItems, 'inter');
-  assert.equal(s.ui, 'jetbrains-mono');
+  assert.equal(s.chat, 'system');
+  assert.equal(s.workItems, 'system');
+  assert.equal(s.ui, 'ibm-plex-sans');
   assert.equal(s.code, 'jetbrains-mono');
 });

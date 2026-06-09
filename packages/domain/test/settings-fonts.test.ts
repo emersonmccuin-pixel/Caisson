@@ -49,9 +49,9 @@ test('normalizeFontKey: non-string values fall back to group default', () => {
 });
 
 test('normalizeFontKey: defaults match expected values', () => {
-  assert.equal(FONT_GROUP_DEFAULTS.chat, 'inter');
-  assert.equal(FONT_GROUP_DEFAULTS.workItems, 'inter');
-  assert.equal(FONT_GROUP_DEFAULTS.ui, 'jetbrains-mono');
+  assert.equal(FONT_GROUP_DEFAULTS.chat, 'system');
+  assert.equal(FONT_GROUP_DEFAULTS.workItems, 'system');
+  assert.equal(FONT_GROUP_DEFAULTS.ui, 'ibm-plex-sans');
   assert.equal(FONT_GROUP_DEFAULTS.code, 'jetbrains-mono');
 });
 

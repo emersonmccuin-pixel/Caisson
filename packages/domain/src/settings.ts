@@ -48,9 +48,9 @@ export interface FontSettings {
 }
 
 export const FONT_GROUP_DEFAULTS: FontSettings = {
-  chat: 'inter',
-  workItems: 'inter',
-  ui: 'jetbrains-mono',
+  chat: 'system',
+  workItems: 'system',
+  ui: 'ibm-plex-sans',
   code: 'jetbrains-mono',
 };
 
@@ -198,19 +198,18 @@ export interface GlobalSettings {
    *  Dispatched agent/worker sessions are never remote-controlled. Default true. */
   remoteControlEnabled: boolean;
   /** When true, the Command space — a cross-project planning project pinned at
-   *  the top of the project rail — is shown. Off by default: Command is an
-   *  advanced, opt-in surface for people juggling many projects, so a fresh
-   *  install keeps the rail focused on real projects until the user turns it
-   *  on in App Settings. Toggling this only shows/hides the rail entry; the
-   *  Command project and its data are untouched. */
+   *  the top of the project rail — is shown. On by default: Command is the
+   *  cross-project planning surface, surfaced on a fresh install. Toggling this
+   *  only shows/hides the rail entry; the Command project and its data are
+   *  untouched. */
   showCommandSpace: boolean;
   /** When true, the one-time Command intro modal has been dismissed by the
    *  user via "Don't show this again". Once set, the modal never shows again.
    *  Default false. */
   commandIntroDismissed: boolean;
   /** Per-surface font selections. Each key maps to a FontKey registered in the
-   *  web app's font registry. Defaults: chat/workItems → Inter; ui/code →
-   *  JetBrains Mono. */
+   *  web app's font registry. Defaults: chat/workItems → System (sans); ui →
+   *  IBM Plex Sans; code → JetBrains Mono. */
   fonts: FontSettings;
 }
 
@@ -257,7 +256,7 @@ export function defaultGlobalSettings(dataDir: string, homeDir: string): GlobalS
     },
     hideCancelledStage: false,
     remoteControlEnabled: true,
-    showCommandSpace: false,
+    showCommandSpace: true,
     commandIntroDismissed: false,
     fonts: { ...FONT_GROUP_DEFAULTS },
   };
