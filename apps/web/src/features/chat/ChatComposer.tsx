@@ -86,6 +86,27 @@ function writeHistory(key: string, list: string[]) {
   }
 }
 
+function draftStorageKey(key: string) {
+  return `pc:composer-draft:${key}`;
+}
+
+function readDraft(key: string): string {
+  try {
+    return localStorage.getItem(draftStorageKey(key)) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function writeDraft(key: string, value: string) {
+  try {
+    if (value) localStorage.setItem(draftStorageKey(key), value);
+    else localStorage.removeItem(draftStorageKey(key));
+  } catch {
+    /* quota / disabled storage - best effort */
+  }
+}
+
 export function Composer({
   projectId,
   historyKey,
@@ -111,7 +132,7 @@ export function Composer({
   statusMessage?: string;
   sendLabel: string;
 }) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(() => readDraft(historyKey));
   const [interruptFeedback, setInterruptFeedback] = useState<'sent' | 'failed' | null>(null);
   const [pasteUpload, setPasteUpload] = useState<{
     uploading: number;
@@ -165,11 +186,26 @@ export function Composer({
   const historyRef = useRef<string[]>(readHistory(historyKey));
   const [historyIdx, setHistoryIdx] = useState<number | null>(null);
 
+  // Tracks which historyKey the current `text` belongs to, so the persist
+  // effect can skip the render right after a key switch (where `text` still
+  // holds the previous key's value).
+  const draftKeyRef = useRef(historyKey);
+
   useEffect(() => {
     historyRef.current = readHistory(historyKey);
     setHistoryIdx(null);
-    setText('');
+    // Restore this key's saved draft instead of clearing.
+    setText(readDraft(historyKey));
   }, [historyKey]);
+
+  // Persist the live draft per historyKey so it survives navigation away.
+  useEffect(() => {
+    if (draftKeyRef.current !== historyKey) {
+      draftKeyRef.current = historyKey;
+      return;
+    }
+    writeDraft(historyKey, text);
+  }, [text, historyKey]);
 
   function submit() {
     const trimmed = text.trim();

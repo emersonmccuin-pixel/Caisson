@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { agentsApi, type Pod, type PodBundle } from '@/features/agents/client';
+import { Markdown } from '@/components/Markdown';
 import { ContextTab } from './ContextTab';
 import { SecretsTab } from './SecretsTab';
 import { SettingsTab } from './SettingsTab';
@@ -296,6 +297,7 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
             <PromptTab
               draft={draft}
               lastEdited={lastEdited}
+              readOnly={!!readOnly}
               onPromptChange={(v) => setDraft((p) => ({ ...p, prompt: v }))}
               onViewHistory={() => setTab('history')}
             />
@@ -415,32 +417,60 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
 function PromptTab({
   draft,
   lastEdited,
+  readOnly,
   onPromptChange,
   onViewHistory,
 }: {
   draft: ScalarDraft;
   lastEdited: string;
+  readOnly: boolean;
   onPromptChange: (v: string) => void;
   onViewHistory: () => void;
 }) {
+  // Default to a rendered-markdown view; the Edit toggle flips to the raw
+  // textarea. Read-only pods (e.g. stock agents opened from a workflow) are
+  // locked to the rendered view.
+  const [editing, setEditing] = useState(false);
+  const showEditor = editing && !readOnly;
   return (
     <div className="flex h-full flex-col gap-2">
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>Last edited {lastEdited}</span>
-        <button
-          type="button"
-          onClick={onViewHistory}
-          className="underline hover:text-foreground"
-        >
-          View in history
-        </button>
+        <div className="flex items-center gap-3">
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => setEditing((v) => !v)}
+              className="underline hover:text-foreground"
+            >
+              {showEditor ? 'Preview' : 'Edit'}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onViewHistory}
+            className="underline hover:text-foreground"
+          >
+            View in history
+          </button>
+        </div>
       </div>
-      <textarea
-        value={draft.prompt}
-        onChange={(e) => onPromptChange(e.target.value)}
-        className="min-h-[400px] flex-1 border border-border bg-background px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary"
-        placeholder="The system prompt this agent receives at spawn."
-      />
+      {showEditor ? (
+        <textarea
+          value={draft.prompt}
+          onChange={(e) => onPromptChange(e.target.value)}
+          className="min-h-[400px] flex-1 border border-border bg-background px-3 py-2 font-mono text-xs text-foreground outline-none focus:border-primary"
+          placeholder="The system prompt this agent receives at spawn."
+        />
+      ) : draft.prompt.trim() ? (
+        <div className="min-h-[400px] flex-1 overflow-y-auto border border-border bg-background px-3 py-2">
+          <Markdown text={draft.prompt} />
+        </div>
+      ) : (
+        <div className="flex min-h-[400px] flex-1 items-center justify-center border border-border bg-background text-xs text-muted-foreground">
+          No prompt set.
+        </div>
+      )}
     </div>
   );
 }
