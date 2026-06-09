@@ -46,7 +46,6 @@ import { ProjectSettingsPanel } from './ProjectSettingsPanel';
 import { RichLinkPreviewCard } from './RichLinkPreviewCard';
 import { DevControls } from './DevControls';
 import { TabBar } from './Tabs';
-import { PatternsTab } from './work-items/PatternsTab';
 import { WorkflowsList } from './WorkflowsList';
 
 // Section 32.1 — TabBar lifted to a topbar but spanning the full width
@@ -311,8 +310,6 @@ function Center({
           <WorkflowsList project={activeProject} events={wsEvents} />
         ) : tab === 'agents' ? (
           <AgentsList project={activeProject} events={wsEvents} />
-        ) : tab === 'patterns' ? (
-          <PatternsTab />
         ) : tab === 'files' ? (
           <FilesViewer project={activeProject} />
         ) : tab === 'project-settings' ? (

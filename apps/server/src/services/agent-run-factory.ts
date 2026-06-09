@@ -238,8 +238,9 @@ export type DispatchAgentFailure =
     }
   | {
       ok: false;
-      /** Dispatch invariant: a contract is mandatory. The row was inserted then
-       *  immediately marked terminal-failed; the agent never spawned. */
+      /** Dispatch invariant: a contract is mandatory.  The resolution chain
+       *  (inline spec → pod-row default → stock default) produced no
+       *  expected_output; no AgentRun row was inserted (pc-pty-chat-366). */
       cause: 'contract-required';
       error: string;
     }
@@ -284,6 +285,26 @@ export async function dispatchFreshAgent(
       cause: 'unknown-agent',
       error: `no agent named "${input.agentName}" found in pod registry`,
     };
+  }
+
+  // Contract-required pre-check (pc-pty-chat-366): hoist the resolvability
+  // decision BEFORE the row insert so a spec-less dispatch creates NO AgentRun
+  // and emits NO terminal event.  Chain: inline spec → pod-row default →
+  // stock default.  If all three are empty, refuse immediately with NO row, NO
+  // queued announce, NO failed announce — the 422 is the only signal.
+  // Note: the contract WRITE still happens after the row is inserted below
+  // (resolveContractForDispatch stamps agent_runs.contract_id), so only the
+  // CHECK moves here, not the write.
+  if (
+    !input.expectedOutput &&
+    !podRow.expectedOutput &&
+    !getPodDefaultExpectedOutput(input.agentName)
+  ) {
+    const reason =
+      `no expected_output could be resolved for pod "${input.agentName}" — ` +
+      'pass an explicit expected_output (this pod has no stored or stock default), ' +
+      'or check server logs for a contract-resolution error';
+    return { ok: false, cause: 'contract-required', error: reason };
   }
 
   // Slice 019 (Decision 4) — reject loudly when the dispatch's own output spec
@@ -456,12 +477,12 @@ export async function dispatchFreshAgent(
     requireExpectedOutput: true,
   });
 
-  // Contract invariant: every run MUST have a contract before it spawns. A null
-  // here is one of: the resolution chain yielded NO expected_output (a dispatch
-  // to a pod with no default + no inline spec — the empty-contract case), or an
-  // internal error (logged inside resolveContractForDispatch). Either way, abort
-  // NOW — mark the already-inserted row terminal-failed and return a typed
-  // refusal. Never spawn contract-less.
+  // Contract invariant: every run MUST have a contract before it spawns.  The
+  // pre-check above (pc-pty-chat-366) already blocked the "no resolvable spec"
+  // case before the row was inserted.  A null here is therefore an internal
+  // error inside resolveContractForDispatch (DB write failure, logged there).
+  // Abort NOW — mark the already-inserted row terminal-failed and return a
+  // typed refusal.  Never spawn contract-less.
   if (!contractId) {
     const reason =
       `no expected_output could be resolved for pod "${input.agentName}" — ` +

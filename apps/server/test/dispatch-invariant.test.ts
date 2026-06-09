@@ -6,6 +6,9 @@
 // (B) When isolation: worktree is declared, the spawn worktreeDir must be a
 //     provisioned worktree path, NOT project.folderPath. An agent can never
 //     commit to the main repo from a worktree-isolation dispatch.
+//
+// (D) A contract-required rejection (pc-pty-chat-366) creates NO AgentRun row
+//     and emits NO terminal event — the 422 is the only signal.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -18,10 +21,11 @@ import { Hono } from "hono";
 const tmpDir = mkdtempSync(join(tmpdir(), "pc-dispatch-invariant-"));
 process.env.PC_DATA_DIR = tmpDir;
 
-const { closeDb, createProject, runMigrations, newId } = await import("@pc/db");
+const { closeDb, createAgent, createProject, listAgentRunsForSession, runMigrations, newId } = await import("@pc/db");
+const { dispatchFreshAgent } = await import("../src/services/agent-run-factory.ts");
 const { registerAgentRunRoutes } = await import("../src/features/agent-runs/routes.ts");
 import type { AgentRunRouteDeps } from "../src/features/agent-runs/routes.ts";
-import type { DispatchAgentResult } from "../src/services/agent-run-factory.ts";
+import type { DispatchAgentFailure, DispatchAgentResult } from "../src/services/agent-run-factory.ts";
 import type { ULID } from "@pc/domain";
 
 const stages = [{ id: "todo", name: "Todo", order: 0 }];
@@ -251,6 +255,57 @@ test("dispatch-invariant (C): isolation:worktree from pod DEFAULT (no inline spe
     WORKTREE_PATH,
     "worktreeDir must be the provisioned worktree path",
   );
+});
+
+// ── (D) pc-pty-chat-366: contract-required must create zero rows + zero events ──
+
+test("dispatch-invariant (D): contract-required creates NO AgentRun row and NO terminal event", async () => {
+  // Create a project + a project-scoped pod with NO expectedOutput.
+  // A project-scoped pod is dispatchable (resolveAgentForDispatch finds it).
+  const project = createProject({
+    slug: "inv-d-" + Date.now(),
+    name: "Invariant D",
+    stages,
+    folderPath: join(tmpDir, "inv-d"),
+  });
+  createAgent(
+    { name: "no-spec-pod-d", scope: "project", projectId: project.id as ULID },
+    { actor: "user" },
+  );
+
+  const sessionId = "sess-inv-d-" + Date.now();
+  const result = await dispatchFreshAgent(
+    {
+      projectId: project.id as ULID,
+      worktreeDir: join(tmpDir, "inv-d"),
+      agentName: "no-spec-pod-d",
+      input: "do something",
+      dispatcherSessionId: sessionId,
+      invokeDepth: 1,
+      slug: "inv-d",
+      // No expectedOutput — the pod has no stored default and is not in the
+      // stock default table, so the resolution chain returns null.
+    },
+    {
+      // No deps needed — the pre-check fires before any dep is consulted.
+    },
+  );
+
+  // (a) synchronous 422 cause
+  assert.equal(result.ok, false);
+  assert.equal((result as DispatchAgentFailure).cause, "contract-required");
+
+  // (b) zero agent_runs rows — the row must NOT have been inserted
+  const runs = listAgentRunsForSession(project.id as ULID, sessionId, { limit: 10 });
+  assert.equal(
+    runs.length,
+    0,
+    "contract-required rejection must not insert an agent_runs row",
+  );
+
+  // (c) zero terminal events: no row means no queued or failed announce was
+  // possible (announceAgentRunChange re-reads the row; without a row there is
+  // nothing to announce).
 });
 
 test("dispatch-invariant (B): isolation:in_place keeps project.folderPath", async () => {

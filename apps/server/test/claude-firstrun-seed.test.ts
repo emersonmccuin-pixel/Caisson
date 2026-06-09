@@ -158,3 +158,65 @@ test('claude version lookup fails: seed completes, lastOnboardingVersion omitted
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── resolveClaudeJsonPath branch tests ────────────────────────────────────────
+//
+// Mirrors CC's two-step `getGlobalClaudeFile()` resolution:
+//   1. claudeConfigHomeDir = CLAUDE_CONFIG_DIR ?? ~/.claude
+//   2. If claudeConfigHomeDir/.config.json exists → legacy path (Mac prior-install)
+//   3. Otherwise → (CLAUDE_CONFIG_DIR || homedir())/.claude.json
+
+test('resolveClaudeJsonPath: CLAUDE_CONFIG_DIR set, no legacy .config.json → .claude.json under the dir', async () => {
+  const dir = mkdtempSync(join(homedir(), '.cs-f-'));
+  const saved = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  try {
+    const { resolveClaudeJsonPath } = await import(
+      '../src/services/claude-firstrun-seed.ts'
+    );
+    // No .config.json created, so new-path branch.
+    assert.equal(resolveClaudeJsonPath(), join(dir, '.claude.json'));
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveClaudeJsonPath: CLAUDE_CONFIG_DIR set, legacy .config.json exists → legacy path', async () => {
+  const dir = mkdtempSync(join(homedir(), '.cs-g-'));
+  const saved = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = dir;
+  try {
+    const { resolveClaudeJsonPath } = await import(
+      '../src/services/claude-firstrun-seed.ts'
+    );
+    const legacyPath = join(dir, '.config.json');
+    writeFileSync(legacyPath, '{}', 'utf-8');
+    // Legacy path now exists → must return it instead of .claude.json.
+    assert.equal(resolveClaudeJsonPath(), legacyPath);
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveClaudeJsonPath: CLAUDE_CONFIG_DIR unset → correct path for this machine', async () => {
+  const saved = process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CLAUDE_CONFIG_DIR;
+  try {
+    const { resolveClaudeJsonPath } = await import(
+      '../src/services/claude-firstrun-seed.ts'
+    );
+    // CC checks ~/.claude/.config.json first; fall back to ~/.claude.json.
+    const legacyCandidate = join(homedir(), '.claude', '.config.json');
+    const expected = existsSync(legacyCandidate)
+      ? legacyCandidate
+      : join(homedir(), '.claude.json');
+    assert.equal(resolveClaudeJsonPath(), expected);
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = saved;
+  }
+});

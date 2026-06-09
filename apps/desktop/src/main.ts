@@ -37,8 +37,15 @@ import { findPortConflicts, freeCaissonPorts, type PortConflict } from './port-c
 // Cosmetic-only dev labeling (window title / icon / app id) so a dev instance
 // is visually distinct from the packaged app. It gates NOTHING about boot.
 const DEV_LABEL = process.env.PC_DESKTOP_DEV === '1';
-const APP_NAME = DEV_LABEL ? 'Caisson Dev' : 'Caisson';
-const APP_ID = DEV_LABEL ? 'com.projectcompanion.app.dev' : 'com.projectcompanion.app';
+// Optional explicit label (e.g. "Staging") so a second non-packaged instance
+// gets its OWN Electron profile + single-instance lock + taskbar identity
+// instead of colliding with a plain dev instance (which is also DEV_LABEL).
+// Absent: dev instances are "Caisson Dev"; the packaged app is "Caisson".
+const APP_LABEL = process.env.PC_APP_LABEL?.trim() || (DEV_LABEL ? 'Dev' : '');
+const APP_NAME = APP_LABEL ? `Caisson ${APP_LABEL}` : 'Caisson';
+const APP_ID = APP_LABEL
+  ? `com.projectcompanion.app.${APP_LABEL.toLowerCase().replace(/[^a-z0-9]/g, '')}`
+  : 'com.projectcompanion.app';
 
 app.setName(APP_NAME);
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
