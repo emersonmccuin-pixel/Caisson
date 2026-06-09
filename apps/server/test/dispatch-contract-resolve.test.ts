@@ -3,6 +3,9 @@
 // an explicit expectedOutput win over the linked WI's columns.
 // pc-pty-chat-303 — explicit expectedOutput must never be silently dropped when
 // a WI already has a contract; the new spec lands on a fresh contract.
+//
+// Issue 4 fix — approveAgentContract + rejectAgentContract cover the
+// contract-only (no linked WI) approve/reject path.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,6 +17,9 @@ import { join } from 'node:path';
 process.env.PC_DATA_DIR = mkdtempSync(join(tmpdir(), 'pc-dispatch-resolve-'));
 
 const { resolveContractForDispatch } = await import('../src/services/agent-run-factory.ts');
+const { approveAgentContract, rejectAgentContract, VerificationReviewError } = await import(
+  '../src/services/agent-verification-review.ts'
+);
 
 function fakeService() {
   const created: any[] = [];
@@ -201,4 +207,118 @@ test('[303] no explicit expectedOutput + WI has dispatched contract → reuse (c
   );
   assert.equal(id, 'C-DISPATCHED');
   assert.equal(created.length, 0, 'must reuse, not create');
+});
+
+// ── Issue 4 — contract-only approve + reject ──────────────────────────────────
+
+/** Build a fake ContractService stub for approve/reject tests. */
+function fakeContractService(contract: any) {
+  const verifications: any[] = [];
+  return {
+    service: {
+      get: (id: string) => (id === contract.id ? contract : null),
+      setVerification(input: any) { verifications.push(input); },
+    } as any,
+    verifications,
+  };
+}
+
+test('[Issue4] approveAgentContract: flips contract status + returns null (no WI)', () => {
+  const { service, verifications } = fakeContractService({
+    id: 'C-ONLY',
+    status: 'verifying',
+    workItemId: null,
+    agentRunId: 'R1',
+    projectId: 'P1',
+  });
+
+  const result = approveAgentContract(
+    { contractId: 'C-ONLY' as any },
+    { contractService: service },
+  );
+
+  assert.equal(result, null, 'no work item → always null');
+  assert.equal(verifications.length, 1);
+  assert.equal(verifications[0].id, 'C-ONLY');
+  assert.equal(verifications[0].verificationStatus, 'passed');
+});
+
+test('[Issue4] approveAgentContract: 404 when contract not found', () => {
+  const { service } = fakeContractService({ id: 'OTHER', status: 'verifying', workItemId: null, agentRunId: null, projectId: 'P1' });
+
+  assert.throws(
+    () => approveAgentContract({ contractId: 'MISSING' as any }, { contractService: service }),
+    (err: any) => err instanceof VerificationReviewError && err.cause === 'wi-not-found',
+  );
+});
+
+test('[Issue4] approveAgentContract: 409 when contract not in verifying status', () => {
+  const { service } = fakeContractService({ id: 'C-DONE', status: 'accepted', workItemId: null, agentRunId: null, projectId: 'P1' });
+
+  assert.throws(
+    () => approveAgentContract({ contractId: 'C-DONE' as any }, { contractService: service }),
+    (err: any) => err instanceof VerificationReviewError && err.cause === 'not-awaiting-verification',
+  );
+});
+
+test('[Issue4] rejectAgentContract: flips contract to rejected + spawns continuation', async () => {
+  const { service, verifications } = fakeContractService({
+    id: 'C-ONLY',
+    status: 'verifying',
+    workItemId: null,
+    agentRunId: 'R-PARENT',
+    projectId: 'P1',
+  });
+
+  const continuationCalls: any[] = [];
+  const fakeDispatch = async (input: any) => {
+    continuationCalls.push(input);
+    return { ok: true as const, agentRunId: 'R-CONTINUATION' };
+  };
+
+  const result = await rejectAgentContract(
+    {
+      contractId: 'C-ONLY' as any,
+      feedback: 'needs more detail',
+      dispatcherSessionId: 'sess-123',
+      project: { id: 'P1', folderPath: '/tmp/p1', slug: 'p1' } as any,
+    },
+    {
+      contractService: service,
+      dispatch: fakeDispatch as any,
+    },
+  );
+
+  assert.equal(result.workItem, null, 'no WI linked → workItem null');
+  assert.ok(result.contract, 'contract returned');
+  assert.equal(verifications.length, 1);
+  assert.equal(verifications[0].verificationStatus, 'failed');
+  assert.equal(verifications[0].verificationNotes, 'needs more detail');
+  assert.equal(continuationCalls.length, 1);
+  assert.equal(continuationCalls[0].parentAgentRunId, 'R-PARENT');
+  // No workItemId in continuation — contract-only hold.
+  assert.equal(continuationCalls[0].workItemId, undefined);
+});
+
+test('[Issue4] rejectAgentContract: throws feedback-required when feedback is empty', async () => {
+  const { service } = fakeContractService({
+    id: 'C-ONLY',
+    status: 'verifying',
+    workItemId: null,
+    agentRunId: 'R1',
+    projectId: 'P1',
+  });
+
+  await assert.rejects(
+    () => rejectAgentContract(
+      {
+        contractId: 'C-ONLY' as any,
+        feedback: '  ',
+        dispatcherSessionId: 'sess',
+        project: { id: 'P1', folderPath: '/tmp', slug: 'p1' } as any,
+      },
+      { contractService: service, dispatch: async () => ({ ok: true, agentRunId: 'R' }) as any },
+    ),
+    (err: any) => err instanceof VerificationReviewError && err.cause === 'feedback-required',
+  );
 });

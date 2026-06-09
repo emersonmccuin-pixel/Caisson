@@ -209,6 +209,8 @@ const ALLOWLIST: Record<string, string> = {
     'Injects the agent broadcast dep that fans latency-class agent-jsonl-event + kill acks. Agent-run lifecycle facts ride the relay (agent-run-writer outbox row).',
   'apps/server/src/features/work-items/routes.ts':
     'Injects the agent-dispatch broadcast dep (reject→dispatch fans agent-jsonl-event). Work-item facts ride the door (patch() announces internally).',
+  'apps/server/src/features/contracts/routes.ts':
+    'Injects the agent-dispatch broadcast dep for contract-only reject (fans agent-jsonl-event on continuation). Contract facts ride the ContractService door; no WI or work-item fact is hand-broadcast.',
   // NOTE: agent-run-factory.ts fans `agent-jsonl-event` (live-transcript modal,
   // ADR §4 pass-through) but through a bare `broadcast` param, so it is not a
   // gated-symbol site and needs no allowlist entry.

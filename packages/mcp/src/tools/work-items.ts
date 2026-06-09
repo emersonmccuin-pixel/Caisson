@@ -168,24 +168,76 @@ export async function handleWorkItemTool(
         }
       }
       const id = await ctx.resolveWorkItemIdViaServer(ref);
+      // Build the shared request payload for either path.
+      const wiPayload: Record<string, unknown> =
+        decision === 'approve'
+          ? typeof args.notes === 'string'
+            ? { notes: args.notes }
+            : {}
+          : { feedback, dispatcherSessionId: ctx.dispatcherSessionId };
+
+      // Helper: try ref as a contractId via the contract-native approve/reject route.
+      const tryContractPath = async (contractId: string) => {
+        const contractBase = `/api/contracts/${encodeURIComponent(contractId)}`;
+        const contractPath = decision === 'approve' ? `${contractBase}/approve` : `${contractBase}/reject`;
+        return ctx.postServer(contractPath, wiPayload);
+      };
+
       if (!id) {
-        return {
-          content: [{ type: 'text', text: `pc_resolve_work_item: unknown work item: ${ref}` }],
-          isError: true,
-        };
+        // ref is a non-ULID callsign that didn't resolve to a WI → fall back to
+        // contract path (e.g. a contract callsign if one is ever supported).
+        try {
+          const contractRes = await tryContractPath(ref);
+          if (contractRes.status >= 200 && contractRes.status < 300) {
+            return { content: [{ type: 'text', text: contractRes.body }] };
+          }
+          if (contractRes.status === 404) {
+            return {
+              content: [{ type: 'text', text: `pc_resolve_work_item: unknown work item or contract: ${ref}` }],
+              isError: true,
+            };
+          }
+          return {
+            content: [
+              { type: 'text', text: `pc_resolve_work_item failed (${contractRes.status}): ${contractRes.body}` },
+            ],
+            isError: true,
+          };
+        } catch (err) {
+          return {
+            content: [
+              { type: 'text', text: `pc_resolve_work_item failed: ${(err as Error).message}` },
+            ],
+            isError: true,
+          };
+        }
       }
       try {
         const base = `/api/projects/${ctx.projectId}/work-items/${encodeURIComponent(id)}`;
         const path = decision === 'approve' ? `${base}/approve` : `${base}/reject`;
-        const payload: Record<string, unknown> =
-          decision === 'approve'
-            ? typeof args.notes === 'string'
-              ? { notes: args.notes }
-              : {}
-            : { feedback, dispatcherSessionId: ctx.dispatcherSessionId };
-        const res = await ctx.postServer(path, payload);
+        const res = await ctx.postServer(path, wiPayload);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
+        }
+        // If the WI path returns 404, the ref may be a contractId ULID — fall
+        // back to the contract-native route (Issue 4 fix).
+        if (res.status === 404) {
+          const contractRes = await tryContractPath(id);
+          if (contractRes.status >= 200 && contractRes.status < 300) {
+            return { content: [{ type: 'text', text: contractRes.body }] };
+          }
+          if (contractRes.status === 404) {
+            return {
+              content: [{ type: 'text', text: `pc_resolve_work_item: unknown work item or contract: ${ref}` }],
+              isError: true,
+            };
+          }
+          return {
+            content: [
+              { type: 'text', text: `pc_resolve_work_item failed (${contractRes.status}): ${contractRes.body}` },
+            ],
+            isError: true,
+          };
         }
         return {
           content: [

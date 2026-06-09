@@ -1160,7 +1160,17 @@ registerFocusRoutes(app, { resolveProject });
 
 registerContextDocRoutes(app, { resolveProject });
 
-registerContractRoutes(app, {});
+registerContractRoutes(app, {
+  mailboxEnqueue: enqueueMailboxAndFanout,
+  getHostConnection: () => hostConnection,
+  broadcastTo,
+  // M8 (FD-7) — verification decisions action the contract's open inbox cards.
+  reviewInbox: {
+    collectUnactionedRecipients: (sourceKind, sourceId) =>
+      mailboxService.collectUnactionedRecipients(sourceKind, sourceId),
+    actionRecipients: (ids, now) => mailboxService.actionRecipients(ids, now),
+  },
+});
 
 registerWorkflowCompatRoutes(app, {
   resolveProject,
