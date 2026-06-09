@@ -74,32 +74,35 @@ $STAGING_SIG    = [regex]::Escape($STAGING_DIR)
 
 # ---- Process helpers ----------------------------------------------------------
 
-function Get-ProcCmdline([int]$Pid) {
+# NOTE: parameters are named $ProcId, never $Pid — $PID is a read-only
+# automatic variable in PowerShell and binding a param to it throws
+# "Cannot overwrite variable Pid because it is read-only or constant."
+function Get-ProcCmdline([int]$ProcId) {
   try {
-    return (Get-CimInstance Win32_Process -Filter "ProcessId=$Pid" `
+    return (Get-CimInstance Win32_Process -Filter "ProcessId=$ProcId" `
       -ErrorAction SilentlyContinue)?.CommandLine ?? ''
   } catch { return '' }
 }
 
-function Test-PidAlive([int]$Pid) {
-  return $Pid -gt 0 -and ($null -ne (Get-Process -Id $Pid -ErrorAction SilentlyContinue))
+function Test-PidAlive([int]$ProcId) {
+  return $ProcId -gt 0 -and ($null -ne (Get-Process -Id $ProcId -ErrorAction SilentlyContinue))
 }
 
-# Kill the process tree rooted at $Pid only if its CommandLine matches $Sig.
+# Kill the process tree rooted at $ProcId only if its CommandLine matches $Sig.
 # No-ops gracefully when the process is already dead.
-function Invoke-KillIfSafe([int]$Pid, [string]$Sig, [string]$Label) {
-  if ($Pid -le 0) { return }
-  if (-not (Test-PidAlive $Pid)) {
-    Write-Host "  $Label pid $Pid : already gone"
+function Invoke-KillIfSafe([int]$ProcId, [string]$Sig, [string]$Label) {
+  if ($ProcId -le 0) { return }
+  if (-not (Test-PidAlive $ProcId)) {
+    Write-Host "  $Label pid $ProcId : already gone"
     return
   }
-  $cmd = Get-ProcCmdline $Pid
+  $cmd = Get-ProcCmdline $ProcId
   if (-not ($cmd -match $Sig)) {
-    Write-Warning "SKIPPED kill of $Label pid $Pid -- command line does not match staging signature:`n  $cmd"
+    Write-Warning "SKIPPED kill of $Label pid $ProcId -- command line does not match staging signature:`n  $cmd"
     return
   }
-  Write-Host "  killing $Label (pid $Pid)"
-  & taskkill /F /T /PID $Pid *> $null
+  Write-Host "  killing $Label (pid $ProcId)"
+  & taskkill /F /T /PID $ProcId *> $null
 }
 
 function Read-Pidfile {
@@ -386,7 +389,9 @@ Write-Host "`n-- Step 4: Booting staging stack --"
 # resolves to the same exe regardless of which worktree anchors the lookup.
 $electronExe = & node -e "const r=require('module').createRequire(process.argv[1]+'/apps/desktop/package.json');process.stdout.write(r('electron'))" $STAGING_DIR 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $electronExe -or -not (Test-Path $electronExe)) {
-  Write-Error 'Cannot resolve electron.exe from staging worktree. Confirm pnpm install succeeded.'
+  # Hard-fail: Write-Error is non-terminating and would fall through into an
+  # endless health poll against a stack that never booted.
+  throw "Cannot resolve electron.exe from staging worktree (resolved: '$electronExe'). Confirm pnpm install succeeded and electron's binary was downloaded."
 }
 $desktopDir = Join-Path $STAGING_DIR 'apps\desktop'
 Write-Host "  electron.exe : $electronExe"
@@ -413,6 +418,12 @@ $savedEnv = @{
   CLAUDE_CONFIG_DIR = $env:CLAUDE_CONFIG_DIR
   PC_DEV_WEB_PORT   = $env:PC_DEV_WEB_PORT
   PC_DEV_API_PORT   = $env:PC_DEV_API_PORT
+  # When this script runs from inside an agent/orchestrator shell, Caisson has
+  # spawned that process as an electron-as-node child, so ELECTRON_RUN_AS_NODE=1
+  # leaks in. If inherited, the staging electron.exe runs as plain Node and
+  # `require('electron').app` is undefined → "Cannot read properties of
+  # undefined (reading 'setName')". Clear it before launch; restore after.
+  ELECTRON_RUN_AS_NODE = $env:ELECTRON_RUN_AS_NODE
 }
 
 $electronProc = $null
@@ -430,25 +441,27 @@ try {
   $env:PC_CHILD_NODE  = $nodeExe
   $env:PC_DESKTOP_URL = "http://127.0.0.1:$WEB_PORT"
   $env:PC_DESKTOP_DEV = '1'
-  Remove-Item Env:PC_ROOT           -ErrorAction SilentlyContinue
-  Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
+  Remove-Item Env:PC_ROOT              -ErrorAction SilentlyContinue
+  Remove-Item Env:CLAUDE_CONFIG_DIR    -ErrorAction SilentlyContinue
+  # Critical: a leaked ELECTRON_RUN_AS_NODE makes electron.exe behave as Node.
+  Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 
-  # Launch Electron. Pass $desktopDir as an absolute argument so electron.exe's
-  # CommandLine contains the staging worktree path -- required for verify-before-kill.
-  # cmd.exe /c wrapper stays alive (blocking) until Electron exits, giving a
-  # stable PID; -WindowStyle Hidden hides the console while the Electron GUI
-  # window opens normally (it is a separate GUI process).
-  $electronLaunchCmd = "`"$electronExe`" `"$desktopDir`""
+  # Launch Electron DIRECTLY (no cmd.exe wrapper). The electron.exe path lives
+  # under "E:\Claude Code Projects\..." which contains spaces; routing it through
+  # `cmd.exe /c "<exe>" "<arg>"` makes cmd treat "E:\Claude" as the command and
+  # die with "'E:\Claude' is not recognized". Start-Process -FilePath handles the
+  # spaced path correctly, and electron.exe's own CommandLine still embeds
+  # $desktopDir (the staging path) so verify-before-kill matches. electron.exe is
+  # a GUI-subsystem app: it survives this script exiting and shows no console.
   Write-Host '  Launching Electron (supervises api + agent-host)...'
-  $electronProc = Start-Process 'cmd.exe' `
-    -ArgumentList '/c', $electronLaunchCmd `
+  $electronProc = Start-Process -FilePath $electronExe `
+    -ArgumentList "`"$desktopDir`"" `
     -WorkingDirectory $desktopDir `
-    -WindowStyle Hidden `
     -RedirectStandardOutput (Join-Path $LOG_DIR 'electron.log') `
     -RedirectStandardError  (Join-Path $LOG_DIR 'electron.err') `
     -PassThru
 
-  Write-Host "  Electron wrapper pid : $($electronProc.Id)"
+  Write-Host "  Electron pid : $($electronProc.Id)"
 
   # Vite-side env vars (consumed by apps/web/vite.config.ts).
   $env:PC_DEV_WEB_PORT = $WEB_PORT
