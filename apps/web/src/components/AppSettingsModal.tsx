@@ -4,17 +4,12 @@
 // content + per-tab Save (where applicable).
 //
 // Tabs:
-//   - General: projectsFolder, telemetryOptIn, bugLogTargetProjectId, fontScale.
-//   - Storage: dataDir (restart-required).
-//   - Specialists: stock pod editor (danger zone) — per-pod actions, no form Save.
-//
-// dataDir is the only field that needs a process restart per v1 decision #24;
-// all others apply immediately on PATCH /api/settings.
+//   - General: projectsFolder, claudeConfigDir, fontScale, etc.
+//   - Usage: aggregate cost/session data.
+//   - Updates: desktop auto-update.
 
 import { useEffect, useRef, useState } from 'react';
 
-import { agentsApi, type Pod } from '@/features/agents/client';
-import { projectsApi, type Project, type ULID } from '@/features/projects/client';
 import { runtimeApi } from '@/features/runtime/client';
 import {
   FONT_SCALE_MAX,
@@ -27,16 +22,13 @@ import { FONT_REGISTRY, applyFontCssVars, fontsForGroup } from '@/features/setti
 import { useDesktopUpdates } from '@/hooks/use-desktop-updates';
 import { useNotificationDingEnabled } from '@/hooks/use-notification-settings';
 import { FolderBrowserModal } from './FolderBrowserModal';
-import { PodDetailModal } from './agents/PodDetailModal';
 
-type TabId = 'general' | 'storage' | 'usage' | 'updates' | 'specialists';
+type TabId = 'general' | 'usage' | 'updates';
 
-const TABS: { id: TabId; label: string; danger?: boolean }[] = [
+const TABS: { id: TabId; label: string }[] = [
   { id: 'general', label: 'General' },
-  { id: 'storage', label: 'Storage' },
   { id: 'usage', label: 'Usage' },
   { id: 'updates', label: 'Updates' },
-  { id: 'specialists', label: 'Specialists', danger: true },
 ];
 
 interface AppSettingsModalProps {
@@ -56,12 +48,6 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
   >(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [stockPods, setStockPods] = useState<Pod[] | null>(null);
-  const [editPodId, setEditPodId] = useState<ULID | null>(null);
-  const [resetBusyId, setResetBusyId] = useState<ULID | null>(null);
-  const [resetErr, setResetErr] = useState<string | null>(null);
-  const initialDataDir = useRef(settings.dataDir);
   const initialFontScale = useRef(settings.fontScale);
   const initialFonts = useRef(settings.fonts);
 
@@ -84,12 +70,12 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !picker && !editPodId) cancel();
+      if (e.key === 'Escape' && !picker) cancel();
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [picker, editPodId]);
+  }, [picker]);
 
   // Section 33 — load the resolved Claude profile for the General-tab read-out.
   const loadProfile = useRef(() => {
@@ -101,93 +87,8 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
     loadProfile.current();
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    void projectsApi.listProjects()
-      .then((list) => {
-        if (!cancelled) setProjects(list);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Load stock pods when the Specialists tab is first activated.
-  useEffect(() => {
-    if (active !== 'specialists') return;
-    if (stockPods !== null) return;
-    let cancelled = false;
-    void agentsApi.listPods()
-      .then((pods) => {
-        if (cancelled) return;
-        setStockPods(pods.filter((p) => p.origin === 'stock'));
-      })
-      .catch((e) => {
-        if (!cancelled) setResetErr((e as Error).message);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [active, stockPods]);
-
-  function refetchStockPods() {
-    void agentsApi.listPods()
-      .then((pods) => {
-        setStockPods(pods.filter((p) => p.origin === 'stock'));
-      })
-      .catch((e) => setResetErr((e as Error).message));
-  }
-
-  async function resetPod(pod: Pod) {
-    const ok = window.confirm(
-      `Reset "${pod.name}" to the seeded default?\n\nThe prompt, tools, model, effort, max-turns, and output destination revert. Knowledge, secrets, and MCP servers are untouched. The change is audited.`,
-    );
-    if (!ok) return;
-    setResetErr(null);
-    setResetBusyId(pod.id);
-    try {
-      await agentsApi.resetStockPodToDefault(pod.id);
-      refetchStockPods();
-    } catch (e) {
-      setResetErr((e as Error).message);
-    } finally {
-      setResetBusyId(null);
-    }
-  }
-
-  /** Section 36+ — Reset every customised stock pod in one call. */
-  async function resetAllPods() {
-    const customizedNames = (stockPods ?? [])
-      .filter((p) => p.driftedFields !== null && p.driftedFields.length > 0)
-      .map((p) => p.name);
-    if (customizedNames.length === 0) {
-      window.alert('No customised stock pods to reset. Everything already matches the seeded default.');
-      return;
-    }
-    const ok = window.confirm(
-      `Reset ${customizedNames.length} customised specialist${customizedNames.length === 1 ? '' : 's'} to seeded default?\n\n${customizedNames.map((n) => `  • ${n}`).join('\n')}\n\nFor each: prompt, tools, model, effort, max-turns, output destination revert. Knowledge, secrets, and MCP servers are untouched. Each change is audited.`,
-    );
-    if (!ok) return;
-    setResetErr(null);
-    setResetBusyId('all' as ULID);
-    try {
-      await agentsApi.resetAllStockPodsToDefault();
-      refetchStockPods();
-    } catch (e) {
-      setResetErr((e as Error).message);
-    } finally {
-      setResetBusyId(null);
-    }
-  }
-
-  const editPod = stockPods?.find((p) => p.id === editPodId) ?? null;
-  const dataDirDirty = draft.dataDir !== initialDataDir.current;
-
   const generalDirty =
     draft.projectsFolder !== settings.projectsFolder ||
-    draft.telemetryOptIn !== settings.telemetryOptIn ||
-    draft.bugLogTargetProjectId !== settings.bugLogTargetProjectId ||
     draft.fontScale !== settings.fontScale ||
     draft.hideCancelledStage !== settings.hideCancelledStage ||
     draft.remoteControlEnabled !== settings.remoteControlEnabled ||
@@ -207,8 +108,6 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
     try {
       const patch: Partial<GlobalSettings> = {
         projectsFolder: draft.projectsFolder,
-        telemetryOptIn: draft.telemetryOptIn,
-        bugLogTargetProjectId: draft.bugLogTargetProjectId,
         fontScale: draft.fontScale,
         hideCancelledStage: draft.hideCancelledStage,
         remoteControlEnabled: draft.remoteControlEnabled,
@@ -225,21 +124,6 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
       // Section 33 — the effective profile may have just changed; refresh the
       // read-out so it reflects the new account immediately.
       loadProfile.current();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function saveStorage() {
-    if (busy || !dataDirDirty) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const r = await settingsApi.patchSettings({ dataDir: draft.dataDir });
-      initialDataDir.current = r.settings.dataDir;
-      onSaved(r.settings, r.restartRequired);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -274,10 +158,8 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
                 const isActive = active === t.id;
                 const base = 'block w-full border-l-2 px-3 py-2 text-left text-xs ';
                 const state = isActive
-                  ? 'border-primary bg-muted ' +
-                    (t.danger ? 'text-destructive font-medium' : 'text-primary font-medium')
-                  : 'border-transparent hover:bg-muted ' +
-                    (t.danger ? 'text-destructive/80 hover:text-destructive' : 'text-foreground/80');
+                  ? 'border-primary bg-muted text-primary font-medium'
+                  : 'border-transparent hover:bg-muted text-foreground/80';
                 return (
                   <button
                     key={t.id}
@@ -297,31 +179,13 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
                   <GeneralTab
                     draft={draft}
                     onDraftChange={(patch) => setDraft((p) => ({ ...p, ...patch }))}
-                    projects={projects}
                     profile={profile}
                     onBrowse={() => setPicker('projectsFolder')}
                     onBrowseClaudeConfig={() => setPicker('claudeConfigDir')}
                   />
                 )}
-                {active === 'storage' && (
-                  <StorageTab
-                    draft={draft}
-                    dataDirDirty={dataDirDirty}
-                    onDraftChange={(patch) => setDraft((p) => ({ ...p, ...patch }))}
-                  />
-                )}
                 {active === 'usage' && <UsageTab />}
                 {active === 'updates' && <UpdatesTab />}
-                {active === 'specialists' && (
-                  <SpecialistsTab
-                    stockPods={stockPods}
-                    error={resetErr}
-                    resetBusyId={resetBusyId}
-                    onEdit={(id) => setEditPodId(id)}
-                    onReset={(pod) => void resetPod(pod)}
-                    onResetAll={() => void resetAllPods()}
-                  />
-                )}
               </div>
 
               {err && (
@@ -331,7 +195,7 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
               )}
 
               <footer className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-                {active === 'specialists' || active === 'updates' ? (
+                {active === 'updates' ? (
                   <button
                     type="button"
                     onClick={cancel}
@@ -353,13 +217,8 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
                       type="button"
                       onClick={() => {
                         if (active === 'general') void saveGeneral();
-                        if (active === 'storage') void saveStorage();
                       }}
-                      disabled={
-                        busy ||
-                        (active === 'general' && !generalDirty) ||
-                        (active === 'storage' && !dataDirDirty)
-                      }
+                      disabled={busy || (active === 'general' && !generalDirty)}
                       className="bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                     >
                       {busy ? 'Saving…' : 'Save'}
@@ -391,22 +250,6 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
           }}
         />
       )}
-      {editPod && (
-        <PodDetailModal
-          pod={editPod}
-          readOnly={editPod.origin === 'stock'}
-          onClose={() => {
-            setEditPodId(null);
-            refetchStockPods();
-          }}
-          onDeleted={() => {
-            // Stock pods can't be deleted server-side; this branch is
-            // structurally unreachable. Refetch defensively if it does fire.
-            setEditPodId(null);
-            refetchStockPods();
-          }}
-        />
-      )}
     </>
   );
 }
@@ -416,14 +259,12 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
 function GeneralTab({
   draft,
   onDraftChange,
-  projects,
   profile,
   onBrowse,
   onBrowseClaudeConfig,
 }: {
   draft: GlobalSettings;
   onDraftChange: (patch: Partial<GlobalSettings>) => void;
-  projects: Project[];
   profile: { effective: string; source: 'override' | 'shell' | 'default' } | null;
   onBrowse: () => void;
   onBrowseClaudeConfig: () => void;
@@ -537,17 +378,6 @@ function GeneralTab({
         </div>
       </FieldRow>
 
-      <FieldRow label="Telemetry" help="Opt in to send anonymous usage stats. Off by default.">
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={draft.telemetryOptIn}
-            onChange={(e) => onDraftChange({ telemetryOptIn: e.target.checked })}
-          />
-          <span>Enable telemetry</span>
-        </label>
-      </FieldRow>
-
       <FieldRow
         label="Hide cancelled stage"
         help="When on, the cancelled column is hidden on every project's kanban board. Each project can override this in its own settings."
@@ -588,29 +418,6 @@ function GeneralTab({
           />
           <span>Show the Command space</span>
         </label>
-      </FieldRow>
-
-      <FieldRow
-        label="Bug log target"
-        help="When Log Bug is called from any project's chat, the bug card lands here. Leave unset to disable the tool."
-      >
-        <select
-          value={draft.bugLogTargetProjectId ?? ''}
-          onChange={(e) =>
-            onDraftChange({
-              bugLogTargetProjectId:
-                e.target.value === '' ? null : (e.target.value as ULID),
-            })
-          }
-          className="w-full border border-border bg-background px-2 py-1 text-sm text-foreground"
-        >
-          <option value="">(none — Log Bug disabled)</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
       </FieldRow>
 
       <FieldRow
@@ -757,36 +564,6 @@ function NotificationDingRow() {
         <span>Enable notification ding</span>
       </label>
     </FieldRow>
-  );
-}
-
-// ── Storage tab ───────────────────────────────────────────────────────────
-
-function StorageTab({
-  draft,
-}: {
-  draft: GlobalSettings;
-  dataDirDirty: boolean;
-  onDraftChange: (patch: Partial<GlobalSettings>) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-4">
-      <FieldRow
-        label="Data dir"
-        help={
-          'Where PC stores sqlite, worktrees, and events. ' +
-          'Read-only — to change, restart PC with the PC_DATA_DIR environment ' +
-          'variable set to the target path.'
-        }
-      >
-        <input
-          type="text"
-          value={draft.dataDir}
-          readOnly
-          className="w-full cursor-default border border-border bg-muted/40 px-2 py-1 font-mono text-xs text-muted-foreground"
-        />
-      </FieldRow>
-    </div>
   );
 }
 
@@ -1058,122 +835,6 @@ function UpdatesTab() {
       {state.checkedAt && (
         <div className="text-xs text-muted-foreground">
           Last checked {new Date(state.checkedAt).toLocaleString()}.
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Specialists tab ───────────────────────────────────────────────────────
-
-function SpecialistsTab({
-  stockPods,
-  error,
-  resetBusyId,
-  onEdit,
-  onReset,
-  onResetAll,
-}: {
-  stockPods: Pod[] | null;
-  error: string | null;
-  resetBusyId: ULID | null;
-  onEdit: (id: ULID) => void;
-  onReset: (pod: Pod) => void;
-  onResetAll: () => void;
-}) {
-  const customizedCount = (stockPods ?? []).filter(
-    (p) => p.driftedFields !== null && p.driftedFields.length > 0,
-  ).length;
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-        Built-in specialists are controlled centrally — view-only here, not editable. Each boot resyncs them to the shipped defaults. Reset to default forces that resync now (knowledge, secrets, and MCP servers are untouched). To customize one, clone it into a project and edit the copy.
-      </div>
-      {error && (
-        <div className="border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          {error}
-        </div>
-      )}
-      {stockPods !== null && stockPods.length > 0 && (
-        <div className="flex items-center justify-between border border-border bg-card px-3 py-2">
-          <div className="text-xs text-muted-foreground">
-            {customizedCount === 0
-              ? 'All specialists match their seeded defaults.'
-              : `${customizedCount} specialist${customizedCount === 1 ? '' : 's'} customised.`}
-          </div>
-          <button
-            type="button"
-            onClick={onResetAll}
-            disabled={resetBusyId !== null || customizedCount === 0}
-            className="border border-destructive/60 bg-card px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
-            title={
-              customizedCount === 0
-                ? 'Nothing to reset — every specialist is on its seeded default.'
-                : 'Reset every customised specialist to its seeded default. Knowledge / secrets / MCP servers stay.'
-            }
-          >
-            {resetBusyId === ('all' as ULID) ? 'Resetting all…' : 'Reset all to default'}
-          </button>
-        </div>
-      )}
-      {stockPods === null ? (
-        <div className="text-xs text-muted-foreground">Loading specialists…</div>
-      ) : stockPods.length === 0 ? (
-        <div className="text-xs text-muted-foreground">
-          No stock specialists found. They seed at server boot.
-        </div>
-      ) : (
-        <div className="flex flex-col gap-1">
-          {stockPods.map((pod) => {
-            const customized = pod.driftedFields !== null && pod.driftedFields.length > 0;
-            return (
-              <div
-                key={pod.id}
-                className="grid grid-cols-[1fr_auto] items-center gap-3 border border-border bg-background px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    <span className="truncate">{pod.name}</span>
-                    {customized && (
-                      <span
-                        className="shrink-0 border border-amber-500/60 bg-amber-500/10 px-1 py-px text-[9px] uppercase tracking-wider text-amber-300"
-                        title={`Drifted on: ${pod.driftedFields!.join(', ')}`}
-                      >
-                        Customized
-                      </span>
-                    )}
-                  </div>
-                  {pod.description && (
-                    <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {pod.description}
-                    </div>
-                  )}
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onEdit(pod.id)}
-                    className="border border-border bg-card px-2 py-1 text-xs hover:bg-muted"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onReset(pod)}
-                    disabled={resetBusyId !== null || !customized}
-                    className="border border-destructive/60 bg-card px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
-                    title={
-                      customized
-                        ? 'Restore the seeded canonical content.'
-                        : 'Already on default.'
-                    }
-                  >
-                    {resetBusyId === pod.id ? 'Resetting…' : 'Reset to default'}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
         </div>
       )}
     </div>
