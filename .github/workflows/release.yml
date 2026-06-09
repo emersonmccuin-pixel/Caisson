@@ -152,9 +152,34 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      # Stable-named copy so the README can link to a version-agnostic URL
+      # (releases/latest/download/Caisson-latest-mac-arm64.dmg). --clobber
+      # overwrites the prior release's copy when re-run.
+      - name: Publish "latest" stable macOS link
+        if: github.event_name == 'push' && startsWith(matrix.os, 'macos')
+        run: |
+          set -euo pipefail
+          dmg=$(ls apps/desktop/release/*-mac-arm64.dmg | head -1)
+          cp "$dmg" apps/desktop/release/Caisson-latest-mac-arm64.dmg
+          gh release upload "${{ github.ref_name }}" apps/desktop/release/Caisson-latest-mac-arm64.dmg --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and publish release (Windows)
         if: github.event_name == 'push' && matrix.os == 'windows-latest'
         run: pnpm desktop:publish:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Stable-named copy for the version-agnostic README link
+      # (releases/latest/download/Caisson-latest-win-x64.exe).
+      - name: Publish "latest" stable Windows link
+        if: github.event_name == 'push' && matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem apps/desktop/release/*-win-x64.exe | Select-Object -First 1
+          Copy-Item $exe.FullName apps/desktop/release/Caisson-latest-win-x64.exe -Force
+          gh release upload "${{ github.ref_name }}" apps/desktop/release/Caisson-latest-win-x64.exe --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
