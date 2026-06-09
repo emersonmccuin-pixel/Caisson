@@ -42,6 +42,7 @@ export interface GlobalSettings {
   hideCancelledStage: boolean;
   remoteControlEnabled: boolean;
   showCommandSpace: boolean;
+  commandIntroDismissed: boolean;
   onboardingCompletedAt: string | null;
   fonts: FontSettings;
 }
