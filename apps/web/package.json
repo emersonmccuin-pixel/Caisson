@@ -16,7 +16,13 @@
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
+    "@fontsource/atkinson-hyperlegible": "^5.2.8",
+    "@fontsource/fira-code": "^5.2.7",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
+    "@fontsource/ibm-plex-sans": "^5.2.8",
+    "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/source-serif-4": "^5.2.9",
     "@pc/contracts": "workspace:*",
     "@pc/domain": "workspace:*",
     "@pc/runtime": "workspace:*",

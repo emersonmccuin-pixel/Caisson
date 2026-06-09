@@ -23,6 +23,7 @@ import {
   settingsApi,
   type GlobalSettings,
 } from '@/features/settings/client';
+import { FONT_REGISTRY, applyFontCssVars, fontsForGroup } from '@/features/settings/fonts';
 import { useDesktopUpdates } from '@/hooks/use-desktop-updates';
 import { useNotificationDingEnabled } from '@/hooks/use-notification-settings';
 import { FolderBrowserModal } from './FolderBrowserModal';
@@ -62,6 +63,7 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
   const [resetErr, setResetErr] = useState<string | null>(null);
   const initialDataDir = useRef(settings.dataDir);
   const initialFontScale = useRef(settings.fontScale);
+  const initialFonts = useRef(settings.fonts);
 
   // Live-preview the font scale as the slider moves. Revert to the persisted
   // value if the user closes without saving.
@@ -69,8 +71,14 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
     document.documentElement.style.setProperty('--font-scale', String(draft.fontScale));
   }, [draft.fontScale]);
 
+  // Live-preview font choices as the dropdowns change. Revert on cancel.
+  useEffect(() => {
+    applyFontCssVars(draft.fonts);
+  }, [draft.fonts]);
+
   function cancel() {
     document.documentElement.style.setProperty('--font-scale', String(initialFontScale.current));
+    applyFontCssVars(initialFonts.current);
     onClose();
   }
 
@@ -186,7 +194,11 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
     draft.showCommandSpace !== settings.showCommandSpace ||
     draft.defaultOrchestratorSurface !== settings.defaultOrchestratorSurface ||
     draft.claudeConfigDir !== settings.claudeConfigDir ||
-    draft.agentDispatch.maxConcurrent !== settings.agentDispatch.maxConcurrent;
+    draft.agentDispatch.maxConcurrent !== settings.agentDispatch.maxConcurrent ||
+    draft.fonts.chat !== settings.fonts.chat ||
+    draft.fonts.workItems !== settings.fonts.workItems ||
+    draft.fonts.ui !== settings.fonts.ui ||
+    draft.fonts.code !== settings.fonts.code;
 
   async function saveGeneral() {
     if (busy || !generalDirty) return;
@@ -204,9 +216,11 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
         defaultOrchestratorSurface: draft.defaultOrchestratorSurface,
         claudeConfigDir: draft.claudeConfigDir,
         agentDispatch: draft.agentDispatch,
+        fonts: draft.fonts,
       };
       const r = await settingsApi.patchSettings(patch);
       initialFontScale.current = r.settings.fontScale;
+      initialFonts.current = r.settings.fonts;
       onSaved(r.settings, r.restartRequired);
       // Section 33 — the effective profile may have just changed; refresh the
       // read-out so it reflects the new account immediately.
@@ -666,6 +680,61 @@ function GeneralTab({
           </button>
         </div>
       </FieldRow>
+
+      <AppearanceSection draft={draft} onDraftChange={onDraftChange} />
+    </div>
+  );
+}
+
+// ── Appearance section (inside General tab) ──────────────────────────────────
+
+function AppearanceSection({
+  draft,
+  onDraftChange,
+}: {
+  draft: GlobalSettings;
+  onDraftChange: (patch: Partial<GlobalSettings>) => void;
+}) {
+  const fontGroups: {
+    key: 'chat' | 'workItems' | 'ui' | 'code';
+    label: string;
+    help: string;
+  }[] = [
+    { key: 'chat', label: 'Chat', help: 'Font for orchestrator chat messages and markdown.' },
+    { key: 'workItems', label: 'Work Items', help: 'Font for kanban cards, work-item views, and areas.' },
+    { key: 'ui', label: 'App chrome', help: 'Font for navigation, labels, buttons, and settings.' },
+    { key: 'code', label: 'Code & Terminal', help: 'Font for the terminal, code blocks, and technical badges. Monospace only.' },
+  ];
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
+        Appearance
+      </div>
+      {fontGroups.map(({ key, label, help }) => {
+        const eligible = fontsForGroup(key);
+        return (
+          <FieldRow key={key} label={label} help={help}>
+            <select
+              value={draft.fonts[key]}
+              onChange={(e) =>
+                onDraftChange({
+                  fonts: {
+                    ...draft.fonts,
+                    [key]: e.target.value,
+                  },
+                })
+              }
+              className="w-full border border-border bg-background px-2 py-1 text-sm text-foreground"
+            >
+              {eligible.map((fontKey) => (
+                <option key={fontKey} value={fontKey}>
+                  {FONT_REGISTRY[fontKey].label}
+                </option>
+              ))}
+            </select>
+          </FieldRow>
+        );
+      })}
     </div>
   );
 }

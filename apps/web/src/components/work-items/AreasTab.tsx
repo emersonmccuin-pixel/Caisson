@@ -172,7 +172,7 @@ export function AreasTab({ project, events }: Props) {
   const draggingArea = draggingId ? sortedAreas.find((a) => a.id === draggingId) ?? null : null;
 
   return (
-    <div className="mx-auto h-full max-w-[1000px] overflow-y-auto px-7 py-6 pb-16">
+    <div className="pc-work-content mx-auto h-full max-w-[1000px] overflow-y-auto px-7 py-6 pb-16">
       <div className="mb-4 flex items-center justify-between">
         <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--fg-dim)]">
           Areas · {sortedAreas.length}

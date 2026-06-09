@@ -2,6 +2,83 @@
 
 import type { ULID } from './ulid.ts';
 
+// ── Per-surface font theming ─────────────────────────────────────────────────
+
+/** All recognised font keys. Mono keys are eligible for every surface group;
+ *  sans/serif/'system' keys are NOT eligible for the `code` group. */
+export type FontKey =
+  | 'inter'
+  | 'ibm-plex-sans'
+  | 'atkinson-hyperlegible'
+  | 'source-serif-4'
+  | 'system'
+  | 'jetbrains-mono'
+  | 'fira-code'
+  | 'ibm-plex-mono'
+  | 'system-mono';
+
+export const FONT_KEYS: readonly FontKey[] = [
+  'inter',
+  'ibm-plex-sans',
+  'atkinson-hyperlegible',
+  'source-serif-4',
+  'system',
+  'jetbrains-mono',
+  'fira-code',
+  'ibm-plex-mono',
+  'system-mono',
+] as const;
+
+/** Mono font keys — the only ones eligible for the `code` surface group. */
+export const MONO_FONT_KEYS: readonly FontKey[] = [
+  'jetbrains-mono',
+  'fira-code',
+  'ibm-plex-mono',
+  'system-mono',
+] as const;
+
+/** The four user-configurable surface groups. */
+export type FontGroup = 'chat' | 'workItems' | 'ui' | 'code';
+
+export interface FontSettings {
+  chat: FontKey;
+  workItems: FontKey;
+  ui: FontKey;
+  code: FontKey;
+}
+
+export const FONT_GROUP_DEFAULTS: FontSettings = {
+  chat: 'inter',
+  workItems: 'inter',
+  ui: 'jetbrains-mono',
+  code: 'jetbrains-mono',
+};
+
+/** Coerce an unknown / ineligible font key back to the group default.
+ *  - Unknown key → group default.
+ *  - Sans/serif/system key in the `code` group → group default (mono only). */
+export function normalizeFontKey(key: unknown, group: FontGroup): FontKey {
+  const fallback = FONT_GROUP_DEFAULTS[group];
+  if (typeof key !== 'string') return fallback;
+  if (!(FONT_KEYS as readonly string[]).includes(key)) return fallback;
+  const fk = key as FontKey;
+  if (group === 'code' && !(MONO_FONT_KEYS as readonly string[]).includes(fk)) return fallback;
+  return fk;
+}
+
+/** Normalise a raw object into a valid FontSettings, back-filling any
+ *  missing / invalid keys with per-group defaults. */
+export function normalizeFontSettings(raw: unknown): FontSettings {
+  if (typeof raw !== 'object' || raw === null) return { ...FONT_GROUP_DEFAULTS };
+  const obj = raw as Record<string, unknown>;
+  return {
+    chat: normalizeFontKey(obj['chat'], 'chat'),
+    workItems: normalizeFontKey(obj['workItems'], 'workItems'),
+    ui: normalizeFontKey(obj['ui'], 'ui'),
+    code: normalizeFontKey(obj['code'], 'code'),
+  };
+}
+
 export interface ActivityPanelSettings {
   /** User's last persisted open/closed state for the right-rail activity panel. */
   open: boolean;
@@ -127,6 +204,10 @@ export interface GlobalSettings {
    *  on in App Settings. Toggling this only shows/hides the rail entry; the
    *  Command project and its data are untouched. */
   showCommandSpace: boolean;
+  /** Per-surface font selections. Each key maps to a FontKey registered in the
+   *  web app's font registry. Defaults: chat/workItems → Inter; ui/code →
+   *  JetBrains Mono. */
+  fonts: FontSettings;
 }
 
 export const FONT_SCALE_MIN = 0.85;
@@ -173,6 +254,7 @@ export function defaultGlobalSettings(dataDir: string, homeDir: string): GlobalS
     hideCancelledStage: false,
     remoteControlEnabled: true,
     showCommandSpace: false,
+    fonts: { ...FONT_GROUP_DEFAULTS },
   };
 }
 
@@ -258,6 +340,7 @@ export function withSettingsDefaults(
     hideCancelledStage: stored.hideCancelledStage ?? defaults.hideCancelledStage,
     remoteControlEnabled: stored.remoteControlEnabled ?? defaults.remoteControlEnabled,
     showCommandSpace: stored.showCommandSpace ?? defaults.showCommandSpace,
+    fonts: normalizeFontSettings((stored as { fonts?: unknown }).fonts ?? defaults.fonts),
     jsonl: {
       retentionDays: normalizeJsonlRetention(
         stored.jsonl?.retentionDays ?? defaults.jsonl.retentionDays,

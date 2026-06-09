@@ -268,7 +268,7 @@ export function KanbanBoard({ project, events, rightSlot }: KanbanBoardProps) {
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className="flex h-full">
+      <div className="pc-work-content flex h-full">
         <AreaFilterRail areas={areas} items={railItems} />
         <div className="flex min-w-0 flex-1 flex-col">
         <WorkItemsToolbar rightSlot={rightSlot} />

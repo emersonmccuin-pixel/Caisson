@@ -4,6 +4,7 @@ import type { Hono } from 'hono';
 import type { GlobalSettings } from '@pc/domain';
 import {
   normalizeOrchestratorSurfacePreference,
+  normalizeFontSettings,
   resolveClaudeConfigDirEnv,
   withSettingsDefaults,
 } from '@pc/domain';
@@ -140,6 +141,11 @@ function mergeSettingsPatch(body: Partial<GlobalSettings>, current: GlobalSettin
         typeof body.showCommandSpace === 'boolean'
           ? body.showCommandSpace
           : current.showCommandSpace,
+      fonts: normalizeFontSettings(
+        body.fonts !== undefined && typeof body.fonts === 'object' && body.fonts !== null
+          ? body.fonts
+          : current.fonts,
+      ),
     },
     getDataDir(),
     homedir(),
