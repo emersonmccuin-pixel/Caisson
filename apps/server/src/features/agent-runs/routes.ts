@@ -8,6 +8,7 @@ import type {
   PendingAskOption,
   ULID,
 } from '@pc/domain';
+import { getPodDefaultExpectedOutput } from '@pc/domain';
 import {
   AgentRunJsonlTailer,
   jsonlPathFor,
@@ -23,6 +24,7 @@ import {
   listContractsForRun,
   listProjectVisibleAgents,
   markAgentRunDelivered,
+  resolveAgentForDispatch as defaultResolveAgentForDispatch,
 } from '@pc/db';
 import { ContractService } from '@pc/app-services';
 import { EXTERNAL_SYSTEMS, type Deliverable, type ExternalSystem } from '@pc/contracts';
@@ -65,6 +67,12 @@ export interface AgentRunRouteDeps {
    *  when no ProjectRuntime exists for the project (dispatch is refused). Tests
    *  inject a fake; production wires to `resolveProject(id)?.worktrees()`. */
   worktreeServiceFor?: (projectId: ULID) => { ensureWorktree(name: string): Promise<{ path: string }> } | null;
+  /** Effective-spec resolution seam: looks up the pod row (project-scoped win
+   *  over global) to read its stored `expectedOutput` default. Used by the
+   *  isolation precondition to honour pod-default `isolation: "worktree"` even
+   *  when the inline dispatch body omits `expectedOutput`. Defaults to the real
+   *  `resolveAgentForDispatch` from @pc/db; tests inject a stub. */
+  resolveAgentForDispatch?: (name: string, projectId?: ULID | null) => { expectedOutput?: unknown } | null;
   /** Mailbox enqueue port; threaded into the factory/terminal/pause/kill
    *  delivery sites — the sole delivery door. */
   mailboxEnqueue?: MailboxEnqueuePort | null;
@@ -483,9 +491,18 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     // Never fall back to project.folderPath for a worktree-isolation dispatch —
     // falling back is what caused the "committed straight to dev" incident.
     let worktreeDir = project.folderPath;
-    const declaredIsolation = body.expectedOutput != null
-      ? (body.expectedOutput as { isolation?: unknown }).isolation
-      : undefined;
+    // Resolve the EFFECTIVE expected_output for the isolation precondition —
+    // same three-tier chain the factory/contract layer uses:
+    //   inline body.expectedOutput ?? pod-row stored default ?? stock pod default
+    // This closes the bypass where a pod whose default declares `isolation:
+    // "worktree"` was silently skipped because the inline body was null.
+    const resolveAgentRow = deps.resolveAgentForDispatch ?? defaultResolveAgentForDispatch;
+    const podRow = resolveAgentRow(agentName, projectId);
+    const effectiveSpec =
+      body.expectedOutput != null
+        ? body.expectedOutput
+        : ((podRow?.expectedOutput as unknown) ?? getPodDefaultExpectedOutput(agentName) ?? null);
+    const declaredIsolation = (effectiveSpec as { isolation?: unknown } | null)?.isolation;
     if (declaredIsolation === 'worktree') {
       const wts = deps.worktreeServiceFor?.(projectId) ?? null;
       if (!wts) {
