@@ -17,7 +17,7 @@ export interface ValidationResult {
   errors: string[];
 }
 
-const NODE_KINDS = new Set(['agent', 'review', 'move', 'loop']);
+const NODE_KINDS = new Set(['agent', 'review', 'move', 'loop', 'merge']);
 const REVIEW_KINDS = new Set(['review']);
 const REVIEWERS = new Set(['human', 'orchestrator']);
 /** Flow fields a `loop` node cannot carry — its routing is fixed. */
@@ -87,6 +87,15 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
           errors.push(`loop node "${id}": "${f}" is not allowed — a loop's routing is fixed (under ceiling → back_to; at ceiling → human)`);
       }
     }
+    if (kind === 'merge') {
+      if ((n.target as unknown) !== 'dev')
+        errors.push(`merge node "${id}": target must be "dev"`);
+      if (
+        n.on_conflict_stage !== undefined &&
+        (typeof n.on_conflict_stage !== 'string' || n.on_conflict_stage === '')
+      )
+        errors.push(`merge node "${id}": on_conflict_stage must be a non-empty string when set`);
+    }
 
     // input map shape — an object of identifier → string (a `$ref` or literal).
     if (n.input !== undefined) {
@@ -101,6 +110,14 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
         }
       }
     }
+  }
+
+  // ── merge node requires a run worktree ──
+  const hasMergeNode = nodes.some((n) => n.kind === 'merge');
+  if (hasMergeNode && workflow.worktree === 'none') {
+    errors.push(
+      'a "merge" node requires a run worktree — set worktree to "auto" (or omit it; "none" is not compatible)',
+    );
   }
 
   // ── ref integrity ──
@@ -216,7 +233,7 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
             continue;
           }
           const refKind = kindOf(ref.nodeId);
-          if (refKind === 'move' || refKind === 'loop') {
+          if (refKind === 'move' || refKind === 'loop' || refKind === 'merge') {
             errors.push(
               `node "${id}": reads $${ref.nodeId}.output${fieldSuffix} but "${ref.nodeId}" is a ${refKind} step — only agent steps produce an output`,
             );

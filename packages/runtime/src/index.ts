@@ -18,10 +18,13 @@ export {
   attachWorktree,
   createWorktree,
   destroyWorktree,
+  gitMergeState,
   listWorktrees,
+  mergeBranchIntoDev,
   pruneWorktrees,
+  pushBranch,
 } from './worktree.ts';
-export type { WorktreeEntry } from './worktree.ts';
+export type { GitMergeState, WorktreeEntry } from './worktree.ts';
 
 export {
   buildEnvMap,
