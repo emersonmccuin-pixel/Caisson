@@ -25,6 +25,7 @@ import type {
   WorktreeStatus,
 } from '@pc/domain';
 
+
 /**
  * v2 trunk schema (sqlite migration). 7 tables — projects, work_items,
  * workflows, workflow_runs, worktrees, orchestrator_sessions, settings_global.
@@ -828,6 +829,37 @@ export const mcpServers = sqliteTable(
     uniqueIndex('mcp_servers_project_name_idx')
       .on(t.projectId, t.name)
       .where(sql`scope = 'project' AND deleted_at IS NULL`),
+  ],
+);
+
+/**
+ * pc-pty-chat-359 P3 — agent → registry MCP server attachment link.
+ *
+ * One row per (agent, registered-server) pair. `enabled_tools` is stored as
+ * either the literal string `'*'` (all tools) or a JSON-encoded `string[]`
+ * (specific subset). Unique index on (agent_id, mcp_server_id) — one
+ * attachment per pair; PUT routes upsert in-place.
+ */
+export const agentMcpAttachments = sqliteTable(
+  'agent_mcp_attachments',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    agentId: text('agent_id')
+      .notNull()
+      .$type<ULID>()
+      .references(() => agents.id),
+    mcpServerId: text('mcp_server_id')
+      .notNull()
+      .$type<ULID>()
+      .references(() => mcpServers.id),
+    /** `'*'` = all tools; JSON-encoded `string[]` = specific subset. */
+    enabledTools: text('enabled_tools').notNull().default('*'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [
+    index('agent_mcp_attachments_agent_idx').on(t.agentId),
+    uniqueIndex('agent_mcp_attachments_unique_idx').on(t.agentId, t.mcpServerId),
   ],
 );
 

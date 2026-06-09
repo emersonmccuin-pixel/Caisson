@@ -1,7 +1,13 @@
 // pc-pty-chat-359 P1/P2 — MCP Server Registry API client.
 
 import { getJson, postJson, postJsonMethod } from '@/api/http';
-import type { CreateMcpServerInput, McpServer, PatchMcpServerInput } from './types';
+import type {
+  AgentMcpAttachment,
+  CreateMcpServerInput,
+  McpServer,
+  PatchMcpServerInput,
+  UpsertMcpAttachmentInput,
+} from './types';
 
 export * from './types';
 
@@ -46,4 +52,35 @@ export const mcpServersApi = {
       `/api/projects/${encodeURIComponent(projectId)}/mcp-servers`,
       input,
     ).then((r) => r.server),
+};
+
+// ── Agent MCP Attachment API (P3) ─────────────────────────────────────────────
+
+export const mcpAttachmentsApi = {
+  /** List all registry server attachments for an agent. */
+  listForAgent: (agentId: string) =>
+    getJson<{ ok: true; attachments: AgentMcpAttachment[] }>(
+      `/api/agents/pods/${agentId}/mcp-attachments`,
+    ).then((r) => r.attachments),
+
+  /** Attach a registry server to an agent, or update its tool selection.
+   *  Idempotent — calling again with a different selection updates in-place. */
+  upsert: (agentId: string, mcpServerId: string, input: UpsertMcpAttachmentInput) =>
+    postJsonMethod<{ ok: true; attachment: AgentMcpAttachment }>(
+      `/api/agents/pods/${agentId}/mcp-attachments/${mcpServerId}`,
+      input,
+      'PUT',
+    ).then((r) => r.attachment),
+
+  /** Detach a registry server from an agent. Idempotent — safe if not attached. */
+  detach: async (agentId: string, mcpServerId: string): Promise<void> => {
+    const res = await fetch(
+      `/api/agents/pods/${agentId}/mcp-attachments/${mcpServerId}`,
+      { method: 'DELETE' },
+    );
+    const data = (await res.json()) as { ok?: boolean; error?: string };
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error ?? `detach mcp attachment → ${res.status}`);
+    }
+  },
 };

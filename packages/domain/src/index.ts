@@ -184,6 +184,7 @@ export type {
 } from './agent-file.ts';
 export { parseAgentFile, serializeAgentFile } from './agent-file.ts';
 export type {
+  AgentMcpAttachmentRow,
   McpDiscoveryStatus,
   McpServerRegistryRow,
   PodAgentRow,

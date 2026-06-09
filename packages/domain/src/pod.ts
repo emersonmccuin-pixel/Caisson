@@ -188,6 +188,21 @@ export interface PodSpawnBundle {
   mcpServers: PodMcpServerRow[];
 }
 
+// ── MCP Agent Attachments (P3 — pc-pty-chat-359.3) ───────────────────────────
+
+/** A single attachment linking an agent to a registry MCP server, with a
+ *  per-tool selection. `enabledTools === '*'` grants all discovered tools;
+ *  an array restricts to the listed tool names. */
+export interface AgentMcpAttachmentRow {
+  id: ULID;
+  agentId: ULID;
+  mcpServerId: ULID;
+  /** `'*'` = all tools; `string[]` = specific subset. */
+  enabledTools: string[] | '*';
+  createdAt: number;
+  updatedAt: number;
+}
+
 // ── MCP Server Registry (P1 — pc-pty-chat-359) ───────────────────────────────
 
 /** Discovery lifecycle for a registry server entry. `stale` = never probed or

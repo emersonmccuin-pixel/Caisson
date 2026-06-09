@@ -335,6 +335,7 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
               bundleLoading={bundleLoading}
               bundleErr={bundleErr}
               podId={baseline.id}
+              projectId={baseline.projectId}
               onDraftChange={(patch) => setDraft((p) => ({ ...p, ...patch }))}
               onBundleChanged={() =>
                 agentsApi.getPod(baseline.id)
