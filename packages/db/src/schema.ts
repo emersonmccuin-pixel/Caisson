@@ -6,6 +6,7 @@ import type {
   ExpectedOutput,
   FieldSchemaType,
   GlobalSettings,
+  McpDiscoveryStatus,
   PodAuditActor,
   PodAuditField,
   PodKnowledgeKind,
@@ -779,6 +780,56 @@ export {
   pendingAsks,
   // ☠ M4a: agentInbox + agentDeliveryAudit deleted (migration 0041 archive).
 } from './schema-agent-system.ts';
+
+/**
+ * pc-pty-chat-359 P1 — MCP Server Registry. One row per registered server,
+ * scoped to `'global'` or `'project'` (mirrors `agents`). The `transport`
+ * column carries the same stdio/HTTP shape as `agent_mcp_servers.config_json`;
+ * the `parsePodMcpServerConfig` validator is reused at the route boundary.
+ *
+ * `discovered_tools` and `discoveryStatus` are populated by the P2 discovery
+ * probe — left NULL/`'stale'` in P1. Soft-delete via `deleted_at`.
+ *
+ * Unique name constraints mirror the agents table's per-scope partial indices
+ * (sqlite NULL-distinct gotcha handled the same way).
+ */
+export const mcpServers = sqliteTable(
+  'mcp_servers',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    scope: text('scope').notNull().$type<PodScope>(),
+    /** Null when `scope === 'global'`; required when `scope === 'project'`. */
+    projectId: text('project_id')
+      .$type<ULID | null>()
+      .references(() => projects.id),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    /** Validated stdio (command/args/env) or HTTP (url/headers) transport. */
+    transport: text('transport', { mode: 'json' }).notNull().$type<PodMcpServerConfig>(),
+    /** Tool list populated by the P2 discovery probe. Null until discovered. */
+    discoveredTools: text('discovered_tools', { mode: 'json' }).$type<string[] | null>(),
+    discoveryStatus: text('discovery_status')
+      .notNull()
+      .default('stale')
+      .$type<McpDiscoveryStatus>(),
+    /** Monotonic write counter — incremented on every mutating write. */
+    rev: integer('rev').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    deletedAt: integer('deleted_at'),
+  },
+  (t) => [
+    index('mcp_servers_scope_project_idx').on(t.scope, t.projectId),
+    /** Unique global server name (live rows only). */
+    uniqueIndex('mcp_servers_global_name_idx')
+      .on(t.name)
+      .where(sql`scope = 'global' AND deleted_at IS NULL`),
+    /** Unique per-project server name (live rows only). */
+    uniqueIndex('mcp_servers_project_name_idx')
+      .on(t.projectId, t.name)
+      .where(sql`scope = 'project' AND deleted_at IS NULL`),
+  ],
+);
 
 // Section 31.12 — post-turn summary log. CC's `system:post_turn_summary` row
 // carries rich per-turn metadata (title/description/needs_action/artifact_urls)

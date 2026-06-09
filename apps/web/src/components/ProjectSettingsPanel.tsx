@@ -16,6 +16,7 @@ import { useActiveCenterTab } from '@/store/active-center-tab';
 
 import { projectsApi, type Project } from '@/features/projects/client';
 import { projectContextApi } from '@/features/project-context/client';
+import { McpServersPanel } from '@/features/mcp-servers/McpServersPanel';
 import { DeleteProjectFilesModal, SoftDeleteProjectModal } from './ProjectDangerModals';
 import { FieldSchemasEditor } from './project-settings/FieldSchemasEditor';
 import { StagesEditor } from './project-settings/StagesEditor';
@@ -26,12 +27,13 @@ interface ProjectSettingsPanelProps {
   onProjectDeleted: (projectId: string) => void;
 }
 
-type SectionId = 'info' | 'stages' | 'fields' | 'danger';
+type SectionId = 'info' | 'stages' | 'fields' | 'mcp-servers' | 'danger';
 
 const SECTIONS: { id: SectionId; label: string; danger?: boolean }[] = [
   { id: 'info', label: 'Project info' },
   { id: 'stages', label: 'Stages' },
   { id: 'fields', label: 'Field schemas' },
+  { id: 'mcp-servers', label: 'MCP Servers' },
   { id: 'danger', label: 'Danger zone', danger: true },
 ];
 
@@ -94,6 +96,12 @@ export function ProjectSettingsPanel({
             {active === 'fields' && (
               <Section title="Field schemas">
                 <FieldSchemasEditor projectId={project.id} />
+              </Section>
+            )}
+
+            {active === 'mcp-servers' && (
+              <Section title="MCP Servers">
+                <McpServersPanel scope="project" projectId={project.id} />
               </Section>
             )}
 

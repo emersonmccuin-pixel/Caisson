@@ -10,6 +10,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+import { McpServersPanel } from '@/features/mcp-servers/McpServersPanel';
 import { runtimeApi } from '@/features/runtime/client';
 import {
   FONT_SCALE_MAX,
@@ -23,12 +24,13 @@ import { useDesktopUpdates } from '@/hooks/use-desktop-updates';
 import { useNotificationDingEnabled } from '@/hooks/use-notification-settings';
 import { FolderBrowserModal } from './FolderBrowserModal';
 
-type TabId = 'general' | 'usage' | 'updates';
+type TabId = 'general' | 'usage' | 'updates' | 'mcp-servers';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'usage', label: 'Usage' },
   { id: 'updates', label: 'Updates' },
+  { id: 'mcp-servers', label: 'MCP Servers' },
 ];
 
 interface AppSettingsModalProps {
@@ -186,6 +188,7 @@ export function AppSettingsModal({ settings, onClose, onSaved }: AppSettingsModa
                 )}
                 {active === 'usage' && <UsageTab />}
                 {active === 'updates' && <UpdatesTab />}
+                {active === 'mcp-servers' && <McpServersPanel scope="global" />}
               </div>
 
               {err && (

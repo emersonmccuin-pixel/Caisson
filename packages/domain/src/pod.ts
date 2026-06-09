@@ -187,3 +187,32 @@ export interface PodSpawnBundle {
   secrets: PodSecretRow[];
   mcpServers: PodMcpServerRow[];
 }
+
+// ── MCP Server Registry (P1 — pc-pty-chat-359) ───────────────────────────────
+
+/** Discovery lifecycle for a registry server entry. `stale` = never probed or
+ *  needs re-probe; `ok` = tools list cached; `failed` = last probe errored. */
+export type McpDiscoveryStatus = 'ok' | 'failed' | 'stale';
+
+export const MCP_DISCOVERY_STATUSES: readonly McpDiscoveryStatus[] = ['ok', 'failed', 'stale'];
+
+/** Row in the `mcp_servers` registry table. Scope mirrors agents: global rows
+ *  are shared across all projects; project rows are project-local. `transport`
+ *  carries the same stdio/HTTP shape as `agent_mcp_servers.config_json`. */
+export interface McpServerRegistryRow {
+  id: ULID;
+  scope: PodScope;
+  /** Null when `scope === 'global'`; set when `scope === 'project'`. */
+  projectId: ULID | null;
+  name: string;
+  description: string;
+  /** Stdio: command + optional args/env. HTTP: url + optional headers. */
+  transport: PodMcpServerConfig;
+  /** Cached tool list from the last successful discovery probe. Null until P2. */
+  discoveredTools: string[] | null;
+  discoveryStatus: McpDiscoveryStatus;
+  rev: number;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
