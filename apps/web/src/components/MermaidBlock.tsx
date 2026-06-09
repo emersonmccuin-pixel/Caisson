@@ -45,12 +45,29 @@ export function MermaidBlock({ code }: { code: string }) {
     let cancelled = false;
     setDiagram({ status: 'pending' });
 
+    // Remove any temp/error element mermaid may have appended to <body>. On a
+    // parse error, mermaid.render() injects its full-width "bomb" error graphic
+    // into document.body and does NOT clean it up — that's the banner spanning
+    // the screen. We pre-validate to avoid creating it, and sweep it here as a
+    // belt-and-braces (the measurement element id is `d${diagramId}`).
+    const sweepOrphan = () => {
+      document.getElementById(diagramId)?.remove();
+      document.getElementById(`d${diagramId}`)?.remove();
+    };
+
     loadMermaid()
-      .then((mermaid) => mermaid.render(diagramId, code))
+      .then(async (mermaid) => {
+        // Validate WITHOUT rendering. suppressErrors makes parse resolve to a
+        // falsy value on bad syntax instead of throwing + injecting the bomb.
+        const valid = await mermaid.parse(code, { suppressErrors: true });
+        if (!valid) throw new Error('Invalid diagram syntax');
+        return mermaid.render(diagramId, code);
+      })
       .then(({ svg }) => {
         if (!cancelled) setDiagram({ status: 'ok', svg });
       })
       .catch((err: unknown) => {
+        sweepOrphan();
         if (!cancelled)
           setDiagram({
             status: 'error',
@@ -60,6 +77,7 @@ export function MermaidBlock({ code }: { code: string }) {
 
     return () => {
       cancelled = true;
+      sweepOrphan();
     };
   }, [code, diagramId]);
 
