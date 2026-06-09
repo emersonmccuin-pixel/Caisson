@@ -11,9 +11,9 @@ on:
 
 jobs:
   test:
-    name: Typecheck + unit tests
+    name: Typecheck + tests + e2e + build smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -36,5 +36,21 @@ jobs:
       - name: Typecheck
         run: pnpm -r typecheck
 
-      - name: Unit tests
+      - name: Unit + component tests
         run: pnpm -r test
+
+      # Browser-level smoke. The self-contained specs (z-order / modal stacking
+      # regression proofs) run headless with no server; the server-dependent
+      # specs (app-load, onboarding) skip gracefully when localhost:5173 is
+      # unreachable. Adding a served-app e2e (vite preview + API) is a tracked
+      # follow-up — see docs/build-ship-pipeline-design-2026-06-08.md.
+      - name: Install Playwright browser (chromium)
+        run: pnpm --filter @pc/web exec playwright install --with-deps chromium
+
+      - name: E2E smoke (Playwright)
+        run: pnpm --filter @pc/web test:e2e
+
+      # Catches packaging breaks (tsc -b project refs + vite build) at PR time
+      # instead of at release-tag time.
+      - name: Web build smoke
+        run: pnpm --filter @pc/web build
