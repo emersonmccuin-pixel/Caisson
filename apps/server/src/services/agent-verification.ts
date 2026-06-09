@@ -26,7 +26,11 @@
 //     abandon this dispatch and owns the next step.
 //
 // Predicate execution is sandboxed: `fileSize` rejects relative paths that
-// escape the worktree; `runBash` runs with a 30s hard timeout via SIGKILL.
+// escape the worktree; `runBash` applies a per-predicate timeout (from
+// `bash_exit_zero.timeout_ms`) falling back to `DEFAULT_BASH_TIMEOUT_MS`
+// when none is set. Repo checks derived by `ac-derivation` carry a 10-minute
+// default (pc-pty-chat-370) so pnpm typecheck / pnpm test aren't SIGKILLed
+// mid-run. Ad-hoc script predicates with no timeout_ms keep the 30s default.
 
 import { spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
@@ -61,8 +65,10 @@ import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
 /** FD-12 — the one write door (repo write + outbox receipt in one txn). */
 const gateway = new WorkItemMutationGateway();
 
-/** Default cap on a single `bash_exit_zero` predicate. Keeps the terminal
- *  handler from blocking on a runaway verifier script. Override per test. */
+/** Fallback cap on a single `bash_exit_zero` predicate when the predicate
+ *  carries no `timeout_ms` field. Keeps the terminal handler from blocking on
+ *  a runaway ad-hoc script. Repo checks derived by `ac-derivation` carry
+ *  their own 10-minute timeout_ms (pc-pty-chat-370) and never hit this. */
 const DEFAULT_BASH_TIMEOUT_MS = 30_000;
 
 export interface RunVerificationInput {
@@ -454,9 +460,13 @@ export function createWorktreeExecutors(input: {
         return null;
       }
     },
-    async runBash(command, cwd) {
+    async runBash(command, cwd, timeoutMs) {
       const cwdAbs = cwd === 'project' ? input.projectFolderPath : input.worktreeDir;
-      return await new Promise<number>((resolveResult) => {
+      // Per-predicate timeout (from bash_exit_zero.timeout_ms) overrides the
+      // executor-level default. Repo checks carry a 10-minute timeout_ms set
+      // by ac-derivation; ad-hoc predicates fall back to bashTimeoutMs (30s).
+      const effectiveTimeout = timeoutMs ?? bashTimeoutMs;
+      return await new Promise<{ exitCode: number; timedOut: boolean }>((resolveResult) => {
         let settled = false;
         const child = spawn(command, { shell: true, cwd: cwdAbs });
         const timer = setTimeout(() => {
@@ -465,25 +475,24 @@ export function createWorktreeExecutors(input: {
           try {
             child.kill('SIGKILL');
           } catch {
-            /* best-effort kill — fall through to the 124 resolution */
+            /* best-effort kill */
           }
-          // 124 mirrors GNU `timeout`'s convention so the predicate failure
-          // reason is recognizable in the channel-event tag.
-          resolveResult(124);
-        }, bashTimeoutMs);
+          // timedOut:true lets the evaluator report "timed out" rather than
+          // "exited 124" — the distinction matters for diagnosis (pc-pty-chat-370).
+          resolveResult({ exitCode: 124, timedOut: true });
+        }, effectiveTimeout);
         child.on('error', () => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          // 127 mirrors a "command not found" exit; surfaces the same way
-          // through the predicate failure path.
-          resolveResult(127);
+          // 127 mirrors a "command not found" exit.
+          resolveResult({ exitCode: 127, timedOut: false });
         });
         child.on('exit', (code) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          resolveResult(code ?? 0);
+          resolveResult({ exitCode: code ?? 0, timedOut: false });
         });
       });
     },

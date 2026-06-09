@@ -19,6 +19,13 @@ import type {
   RepoCheck,
 } from './contract.ts';
 
+/** Default per-check timeout for bash predicates derived from a repo contract's
+ *  `checks` list. 10 minutes is generous enough for workspace-wide
+ *  pnpm typecheck / pnpm test runs on real monorepos (the 30s default was
+ *  SIGKILLing them mid-run and false-failing verification — pc-pty-chat-370).
+ *  Individual checks can override via `RepoCheck.timeout_ms`. */
+export const REPO_CHECK_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+
 /** Side-effect kinds that must fail-closed on an empty derived AC. */
 export const KINDS_REQUIRING_EVIDENCE: ReadonlyArray<ExpectedOutputV2['kind']> = [
   'action',
@@ -128,9 +135,19 @@ function deriveRepoV2(
         ? { command: rawCheck as unknown as string }
         : (rawCheck as RepoCheck);
     if ('preset' in check) {
-      preds.push({ kind: 'bash_exit_zero', command: `pnpm ${check.preset}`, cwd });
+      preds.push({
+        kind: 'bash_exit_zero',
+        command: `pnpm ${check.preset}`,
+        cwd,
+        timeout_ms: check.timeout_ms ?? REPO_CHECK_DEFAULT_TIMEOUT_MS,
+      });
     } else {
-      preds.push({ kind: 'bash_exit_zero', command: check.command, cwd: check.cwd ?? cwd });
+      preds.push({
+        kind: 'bash_exit_zero',
+        command: check.command,
+        cwd: check.cwd ?? cwd,
+        timeout_ms: check.timeout_ms ?? REPO_CHECK_DEFAULT_TIMEOUT_MS,
+      });
     }
   }
   return preds;

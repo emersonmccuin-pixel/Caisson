@@ -111,8 +111,8 @@ export type PayloadSemantic =
   | 'decomposition'
   | 'score';
 export type RepoCheck =
-  | { preset: 'build' | 'test' | 'lint' }
-  | { command: string; cwd?: 'worktree' | 'project' };
+  | { preset: 'build' | 'test' | 'lint'; timeout_ms?: number }
+  | { command: string; cwd?: 'worktree' | 'project'; timeout_ms?: number };
 export type BinaryArtifactType = 'diagram' | 'screenshot' | 'export' | 'dataset' | 'build';
 export const EXTERNAL_SYSTEMS = ['email', 'calendar', 'chat', 'ticket', 'crm', 'api'] as const;
 export type ExternalSystem = (typeof EXTERNAL_SYSTEMS)[number];
@@ -140,7 +140,7 @@ export type AcceptancePredicate =
   | { kind: 'files_exist'; paths: string[]; min_size_bytes?: number }
   | { kind: 'fields_populated'; keys: string[] }
   | { kind: 'field_matches'; key: string; pattern: string }
-  | { kind: 'bash_exit_zero'; command: string; cwd?: 'worktree' | 'project' }
+  | { kind: 'bash_exit_zero'; command: string; cwd?: 'worktree' | 'project'; timeout_ms?: number }
   | { kind: 'attachments_present'; names: string[] }
   | { kind: 'body_contains'; pattern: string; regex?: boolean }
   | { kind: 'child_work_items_done'; count?: number; all?: boolean }

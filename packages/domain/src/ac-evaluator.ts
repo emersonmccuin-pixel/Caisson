@@ -54,8 +54,16 @@ export interface PredicateExecutors {
    *  path doesn't exist (or isn't a regular file). */
   fileSize: (relativePath: string) => Promise<number | null>;
   /** Runs the bash command in either the worktree or the project root and
-   *  resolves the process exit code. */
-  runBash: (command: string, cwd: 'worktree' | 'project') => Promise<number>;
+   *  resolves the exit result. `timedOut` is true when the process was killed
+   *  by the timeout rather than exiting naturally, so callers can report
+   *  "timed out" instead of "exited 124" in failure messages. The optional
+   *  `timeoutMs` overrides the executor's built-in default for this one call
+   *  (used to apply per-predicate timeouts from `bash_exit_zero.timeout_ms`). */
+  runBash: (
+    command: string,
+    cwd: 'worktree' | 'project',
+    timeoutMs?: number,
+  ) => Promise<{ exitCode: number; timedOut: boolean }>;
   /** True when the git tree has relevant changes vs its base.
    *
    *  For worktree dispatches (`cwd: 'worktree'`): returns true when the
@@ -390,8 +398,15 @@ async function evalBashExitZero(
   executors: PredicateExecutors,
 ): Promise<{ pass: boolean; reason?: string }> {
   const cwd = pred.cwd ?? 'worktree';
-  const exitCode = await executors.runBash(pred.command, cwd);
+  const { exitCode, timedOut } = await executors.runBash(pred.command, cwd, pred.timeout_ms);
   if (exitCode === 0) return { pass: true };
+  if (timedOut) {
+    // Distinguish a SIGKILL timeout from a genuine non-zero exit so the
+    // verification notes say "timed out" rather than "exited 124" — the
+    // latter looks like a real test failure when it's actually just a
+    // misconfigured timeout (pc-pty-chat-370).
+    return { pass: false, reason: `bash command timed out: ${pred.command}` };
+  }
   return {
     pass: false,
     reason: `bash command exited ${exitCode}: ${pred.command}`,

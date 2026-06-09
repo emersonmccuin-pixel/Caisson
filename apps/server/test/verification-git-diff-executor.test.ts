@@ -134,6 +134,68 @@ test('pc-pty-chat-207 regression: repo worktree with commits passes even with sp
   }
 });
 
+// ── pc-pty-chat-370: runBash returns { exitCode, timedOut } ─────────────────
+
+test('(370) runBash: successful command returns {exitCode:0, timedOut:false}', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-bash-ok-'));
+  try {
+    const exec = createWorktreeExecutors({ worktreeDir: dir, projectFolderPath: dir });
+    const result = await exec.runBash('exit 0', 'worktree');
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.timedOut, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('(370) runBash: non-zero exit returns {timedOut:false}', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-bash-fail-'));
+  try {
+    const exec = createWorktreeExecutors({ worktreeDir: dir, projectFolderPath: dir });
+    const result = await exec.runBash('exit 1', 'worktree');
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.timedOut, false, 'genuine failure must have timedOut:false');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('(370) runBash: SIGKILLed at timeout returns {exitCode:124, timedOut:true}', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-bash-timeout-'));
+  try {
+    // bashTimeoutMs of 50ms to keep the test fast; node -e "setTimeout()" is
+    // cross-platform (works on Windows and Linux without a `sleep` binary).
+    const exec = createWorktreeExecutors({
+      worktreeDir: dir,
+      projectFolderPath: dir,
+      bashTimeoutMs: 50,
+    });
+    const result = await exec.runBash('node -e "setTimeout(()=>{},10000)"', 'worktree');
+    assert.equal(result.timedOut, true, 'must be timedOut when killed by the executor timeout');
+    assert.equal(result.exitCode, 124, 'exit code 124 mirrors GNU timeout convention');
+  } finally {
+    // On Windows a SIGKILL'd node subprocess may not release the directory
+    // handle immediately — swallow EBUSY rather than failing the test.
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
+test('(370) runBash: per-predicate timeoutMs overrides the executor default', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-bash-per-pred-'));
+  try {
+    // Large default timeout; but the per-call timeoutMs of 50ms fires first.
+    const exec = createWorktreeExecutors({
+      worktreeDir: dir,
+      projectFolderPath: dir,
+      bashTimeoutMs: 30_000,
+    });
+    const result = await exec.runBash('node -e "setTimeout(()=>{},10000)"', 'worktree', 50);
+    assert.equal(result.timedOut, true, 'per-call timeoutMs must override the executor default');
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
 // pc-pty-chat-207 in_place: for in_place isolation the fallback is working-tree
 // dirtiness (committed-only detection requires a stored pre-dispatch HEAD).
 // An uncommitted dirty tree PASSES in_place; a clean tree does not.
