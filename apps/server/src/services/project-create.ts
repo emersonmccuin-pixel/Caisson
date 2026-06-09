@@ -55,8 +55,8 @@ export interface CreateProjectFlowInput {
 // Section 27 — default stages carry the three flag slots. User can rename /
 // delete / unflag any of them post-create.
 const DEFAULT_STAGES: Stage[] = [
-  { id: 'draft', name: 'Draft', order: 0, isNew: true },
-  { id: 'review', name: 'Review', order: 1 },
+  { id: 'todo', name: 'To Do', order: 0, isNew: true },
+  { id: 'in-progress', name: 'In Progress', order: 1 },
   { id: 'done', name: 'Done', order: 2, isDone: true },
   { id: 'cancelled', name: 'Cancelled', order: 3, isCancelled: true },
 ];
