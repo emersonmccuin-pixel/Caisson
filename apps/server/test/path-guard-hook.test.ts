@@ -104,6 +104,43 @@ test('workflow agent: Edit outside worktree denied, inside allowed', () => {
   assert.equal(inside.denied, false);
 });
 
+// ── 1b. direct isolation:worktree dispatch — PC_WORKFLOW_WORKTREE only (pc-pty-chat-348) ──
+//
+// THE BREACH: an orchestrator-dispatched `isolation:worktree` agent gets
+// PC_WORKFLOW_WORKTREE set but NOT PC_WORKFLOW_RUN_ID (that's workflow-only).
+// The old compound condition required BOTH → enforcement silently skipped →
+// the agent's absolute-path writes to the main checkout went unguarded.
+// PC_WORKFLOW_WORKTREE alone must now activate full confinement.
+
+const DIRECT_ISO_ENV = {
+  PC_PROJECT_ID: 'P01',
+  PC_WORKFLOW_WORKTREE: WT,
+  // NB: no PC_WORKFLOW_RUN_ID — this is a direct dispatch, not a workflow node.
+};
+
+test('BREACH GUARD: direct isolation:worktree Edit to MAIN checkout is denied (no RUN_ID)', () => {
+  const r = runEnforce(
+    { tool_name: 'Edit', tool_input: { file_path: `${REPO}/apps/server/src/services/mailbox-worker.ts` }, cwd: WT, agent_type: 'code-writer' },
+    DIRECT_ISO_ENV,
+  );
+  assert.equal(r.denied, true, 'main-checkout Edit must be denied with only PC_WORKFLOW_WORKTREE set');
+  assert.match(r.reason, /Out-of-worktree/);
+});
+
+test('BREACH GUARD: direct isolation:worktree out-of-worktree Bash path denied (no RUN_ID)', () => {
+  const r = runEnforce(bash(`cat "${REPO}/package.json"`, WT), DIRECT_ISO_ENV);
+  assert.equal(r.denied, true);
+  assert.match(r.reason, /Out-of-worktree/);
+});
+
+test('direct isolation:worktree in-worktree Edit still passes (no RUN_ID)', () => {
+  const r = runEnforce(
+    { tool_name: 'Edit', tool_input: { file_path: `${WT}/docs/x.md` }, cwd: WT, agent_type: 'code-writer' },
+    DIRECT_ISO_ENV,
+  );
+  assert.equal(r.denied, false, r.reason);
+});
+
 // ── 2. the git write fence (every PC session) ────────────────────────────────
 
 const ORCH_ENV = { PC_PROJECT_ID: 'P01' }; // orchestrator: no workflow env

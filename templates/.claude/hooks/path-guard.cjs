@@ -230,14 +230,19 @@ function gitWriteFenceViolation(cmd, fence, sessionCwd) {
 
 function enforce() {
   // Resolve the bound worktree (FULL confinement scope):
-  //   1. Workflow agents — PC_WORKFLOW_WORKTREE env (set at spawn by
-  //      dag-run-service). Checked FIRST: payload.agent_type is set on the
-  //      MAIN thread of --agent sessions in CC ≥2.1, so it cannot be used to
-  //      detect subagents (the 2026-06-03 silent-skip regression).
+  //   1. Any agent with a bound worktree — PC_WORKFLOW_WORKTREE env. Set at
+  //      spawn by dag-run-service (workflow nodes) AND by the agent-runs invoke
+  //      route for direct isolation:worktree dispatches. Checked FIRST:
+  //      payload.agent_type is set on the MAIN thread of --agent sessions in
+  //      CC ≥2.1, so it cannot be used to detect subagents (the 2026-06-03
+  //      silent-skip regression). PC_WORKFLOW_WORKTREE is the single correct
+  //      confinement signal — do NOT also require PC_WORKFLOW_RUN_ID: that
+  //      gated out direct isolation:worktree dispatches, so their absolute-path
+  //      writes to the main checkout went completely unguarded (pc-pty-chat-348).
   //   2. Task() subagents — most-recent binding written by 'bind' mode. Only
   //      applies when a binding actually exists.
   let wt = null;
-  if (process.env.PC_WORKFLOW_RUN_ID && process.env.PC_WORKFLOW_WORKTREE) {
+  if (process.env.PC_WORKFLOW_WORKTREE) {
     wt = resolve(process.env.PC_WORKFLOW_WORKTREE);
   } else if (payload.agent_type) {
     const all = readBindings();
