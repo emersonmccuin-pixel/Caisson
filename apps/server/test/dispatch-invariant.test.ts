@@ -40,6 +40,7 @@ function mkApp(opts: {
   dispatchResult: DispatchAgentResult;
   capturedWorktreeDir?: { value: string };
   worktreeServiceFor?: AgentRunRouteDeps["worktreeServiceFor"];
+  resolveAgentForDispatch?: AgentRunRouteDeps["resolveAgentForDispatch"];
 }): Hono {
   const app = new Hono();
   registerAgentRunRoutes(app, {
@@ -52,6 +53,7 @@ function mkApp(opts: {
     recordAgentInvoke: () => {},
     checkInvokeDepth: () => ({ ok: true, childDepth: 1 }),
     worktreeServiceFor: opts.worktreeServiceFor,
+    resolveAgentForDispatch: opts.resolveAgentForDispatch,
   });
   return app;
 }
@@ -185,6 +187,70 @@ test("dispatch-invariant (B): isolation:worktree without worktreeService returns
   const body = await json<{ ok: boolean; cause: string }>(res);
   assert.equal(body.ok, false);
   assert.equal(body.cause, "worktree-provision-failed");
+});
+
+test("dispatch-invariant (C): isolation:worktree from pod DEFAULT (no inline spec) provisions worktree", async () => {
+  // This is the hole pc-pty-chat-353 closes: when the CALLER omits
+  // `expectedOutput` entirely but the pod's default declares
+  // `isolation: "worktree"`, the route must still provision a worktree.
+  const projectFolderPath = join(tmpDir, "inv-c2-main-repo");
+  const project = createProject({
+    slug: "inv-c2-" + Date.now(),
+    name: "Invariant C2",
+    stages,
+    folderPath: projectFolderPath,
+  });
+
+  const WORKTREE_PATH = join(tmpDir, "worktrees", "inv-c2", "agent-test");
+  const capturedWorktreeDir = { value: "" };
+
+  // Simulate a pod whose stored default is isolation:worktree.
+  const podWithWorktreeDefault: AgentRunRouteDeps["resolveAgentForDispatch"] =
+    (_name, _projectId) => ({ expectedOutput: { kind: "repo", isolation: "worktree" } });
+
+  const app = mkApp({
+    dispatchResult: {
+      ok: true,
+      agentRunId: newId() as ULID,
+      ccSessionId: "cc-inv-c2",
+      podName: "code-writer",
+      initialState: "queued",
+      startedAt: Date.now(),
+      done: new Promise<never>(() => {}),
+    },
+    capturedWorktreeDir,
+    resolveAgentForDispatch: podWithWorktreeDefault,
+    worktreeServiceFor: (_projectId) => ({
+      ensureWorktree: async (_name: string) => ({ path: WORKTREE_PATH }),
+    }),
+  });
+
+  const res = await app.request(
+    "/api/projects/" + project.id + "/agents/code-writer/invoke",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: "fix the bug",
+        dispatcherSessionId: "orch-session-c2",
+        // NO inline expectedOutput — isolation must come from the pod default.
+      }),
+    },
+  );
+
+  assert.equal(res.status, 200, "dispatch should succeed");
+  const body = await json<{ ok: boolean }>(res);
+  assert.equal(body.ok, true);
+  assert.notEqual(
+    capturedWorktreeDir.value,
+    projectFolderPath,
+    "worktreeDir must not be the main project folder when pod default is isolation:worktree",
+  );
+  assert.equal(
+    capturedWorktreeDir.value,
+    WORKTREE_PATH,
+    "worktreeDir must be the provisioned worktree path",
+  );
 });
 
 test("dispatch-invariant (B): isolation:in_place keeps project.folderPath", async () => {
