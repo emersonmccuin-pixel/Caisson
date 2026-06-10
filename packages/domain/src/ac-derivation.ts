@@ -58,9 +58,10 @@ function deriveAnswerV2(
   spec: Extract<ExpectedOutputV2, { kind: 'answer' }>,
 ): AcceptancePredicateV2[] {
   const preds: AcceptancePredicateV2[] = [];
-  for (const topic of spec.must_address ?? []) {
-    preds.push({ kind: 'report_contains', pattern: topic });
-  }
+  // must_address[] is agent guidance only — NOT compiled to report_contains
+  // predicates (verification-soundness Principle 1, pc-pty-chat-371).
+  // report_contains/body_contains remain valid for orchestrator-authored literal
+  // assertions; we only stop AUTO-DERIVING them from semantic intent fields.
   if (typeof spec.min_chars === 'number' && spec.min_chars > 0) {
     // min_length measures the DELIVERABLE (not the report) — the one-door fix
     // for min_chars-via-report-regex false-fails (pc-pty-chat-265.1).
@@ -91,26 +92,18 @@ function deriveProseV2(
   }
 
   const preds: AcceptancePredicateV2[] = [];
-  // The store decides which corpus the section/min-chars checks read:
-  //   - attachment → the work-item body + attachment contents (`body_contains`
-  //     searches both); the executor writes the document there.
-  //   - contract (default — FD-5/M5) → the contract report (`report_contains`);
-  //     the text stays on the contract and verification reads it via the report
-  //     fallback. ☠ work_item_body: the body is the human brief only.
-  const useBody = spec.store === 'attachment';
-  // attachment also asserts the document actually landed, by name.
+  // attachment asserts the document actually landed, by name.
   if (spec.store === 'attachment') {
     preds.push({ kind: 'attachments_present', names: [proseAttachmentName(spec)] });
   }
-  const contains = (pattern: string): AcceptancePredicateV2 =>
-    useBody ? { kind: 'body_contains', pattern } : { kind: 'report_contains', pattern };
-  for (const section of spec.sections ?? []) {
-    preds.push(contains(section));
-  }
+  // sections[] is agent guidance only — NOT compiled to body_contains/report_contains
+  // predicates (verification-soundness Principle 1, pc-pty-chat-371).
+  // report_contains/body_contains remain valid for orchestrator-authored literal
+  // assertions; we only stop AUTO-DERIVING them from semantic intent fields.
   if (typeof spec.min_chars === 'number' && spec.min_chars > 0) {
     // min_length measures the DELIVERABLE (not the report/body) — the one-door
     // fix for min_chars-via-report-regex false-fails (pc-pty-chat-265.1).
-    // Both `store: contract` and `store: attachment` now derive the same
+    // Both `store: contract` and `store: attachment` derive the same
     // min_length predicate — same intent, same mechanism.
     preds.push({ kind: 'min_length', min: spec.min_chars });
   }
