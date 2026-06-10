@@ -57,7 +57,7 @@ import { createHostConnection, toHostHealthSnapshot } from './services/host-conn
 import { announceHostHealth } from './services/host-health-writer.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
 import { backfillStageFlags } from './services/stage-flags-backfill.ts';
-import { seedClaudeFirstRun, seedClaudeFirstRunSync } from './services/claude-firstrun-seed.ts';
+import { seedClaudeFirstRun } from './services/claude-firstrun-seed.ts';
 import { ProjectCreate } from './services/project-create.ts';
 import { ProjectRegistry } from './services/project-registry.ts';
 import type { ProjectRuntime } from './services/project-runtime.ts';
@@ -451,24 +451,11 @@ const projectCreate = new ProjectCreate(projectScaffold, projectRegistry);
   }
 }
 
-// Gap B (pc-pty-chat-338) — pre-seed CC's first-run config so spawned claude
-// processes skip the interactive theme-picker + "press enter" dialogs on a
-// fresh machine. Runs after applyClaudeRuntimeSettings (so CLAUDE_CONFIG_DIR
-// is already resolved).
-//
-// The onboarding-gate keys (theme + hasCompletedOnboarding) are written
-// SYNCHRONOUSLY here, before the server starts accepting requests — so a
-// user-triggered claude spawn can never race ahead of the seed (the macOS
-// theme-picker bug: the old fire-and-forget seed awaited `claude --version`
-// first, and on a fresh Mac the first chat beat the write).
-try {
-  const seeded = seedClaudeFirstRunSync();
-  console.log(
-    `[pc] claude-firstrun-seed(sync): ${seeded.written ? `wrote ${seeded.configPath}` : 'already complete'}`,
-  );
-} catch (err) {
-  console.warn(`[pc] claude-firstrun-seed(sync) failed: ${(err as Error).message}`);
-}
+// Gap B (pc-pty-chat-338) — CC's first-run config (theme +
+// hasCompletedOnboarding) is seeded SYNCHRONOUSLY inside
+// applyClaudeRuntimeSettings (boot call above + every settings PATCH), so a
+// user-triggered claude spawn can never race ahead of the seed and a
+// claudeConfigDir change re-seeds the new profile.
 // Background, non-blocking: stamp lastOnboardingVersion (NOT part of CC's gate).
 void seedClaudeFirstRun(resolveClaudeBinary().path ?? 'claude').catch((err) => {
   console.warn(`[pc] claude-firstrun-seed version stamp failed: ${(err as Error).message}`);

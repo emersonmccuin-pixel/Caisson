@@ -27,6 +27,12 @@ export const settingsApi = {
       {},
     ),
 
+  configureGitIdentity: (name: string, email: string) =>
+    postJson<{ ok: true; preflight: PreflightReport; log: string }>(
+      '/api/onboarding/git-identity',
+      { name, email },
+    ),
+
   startOnboardingLogin: (method: 'browser' | 'code' = 'browser') =>
     postJson<{ ok: true; login: OnboardingLoginState }>('/api/onboarding/auth/login', { method }),
 

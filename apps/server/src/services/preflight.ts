@@ -71,6 +71,17 @@ export interface DependencyProbe {
   note?: string;
 }
 
+/** Whether git has a commit identity (user.name + user.email) configured at
+ *  the global/system level — what commits in NEWLY created project repos see.
+ *  Without one, every `git commit` a project or agent makes falls back to
+ *  PC's per-invocation stand-in identity instead of the user's real name. */
+export interface GitIdentityPreflight {
+  name: string | null;
+  email: string | null;
+  /** true = both name and email resolve. */
+  configured: boolean;
+}
+
 export interface PlaywrightPreflight {
   /** present = playwright binary found; chromium-missing = binary found but
    *  browser not downloaded yet (`playwright install chromium` needed);
@@ -92,6 +103,9 @@ export interface PreflightReport {
   auth: AuthPreflight;
   /** git is a HARD dep — project create + agent worktrees shell out to it. */
   git: DependencyProbe;
+  /** Commit identity for git. Missing identity is not a hard wall (project
+   *  create has a stand-in fallback) but the wizard offers to set it. */
+  gitIdentity: GitIdentityPreflight;
   /** node / bash / python — SOFT deps (workflow code-nodes only). */
   soft: DependencyProbe[];
   /** Playwright + chromium — SOFT dep (QA/browser-smoke workflow steps). */
@@ -228,6 +242,38 @@ function gitCandidates(): string[] {
   return ['git', '/usr/bin/git', '/opt/homebrew/bin/git', '/usr/local/bin/git'];
 }
 
+/** First git binary that actually runs, or null. Shared by the identity probe
+ *  and the onboarding identity-config action so both target the same git. */
+export async function resolveGitBinary(): Promise<string | null> {
+  for (const bin of gitCandidates()) {
+    if ((await runVersion(bin)) !== null) return bin;
+  }
+  return null;
+}
+
+/** Read git's commit identity as a NEW repo would see it: `git config --get`
+ *  run from the user's home dir, so global + system config apply but no
+ *  repo-local config can mask a missing global identity. */
+export async function probeGitIdentity(): Promise<GitIdentityPreflight> {
+  const git = await resolveGitBinary();
+  if (!git) return { name: null, email: null, configured: false };
+  const read = async (key: string): Promise<string | null> => {
+    try {
+      const { stdout } = await execFileAsync(git, ['config', '--get', key], {
+        timeout: PROBE_TIMEOUT_MS,
+        windowsHide: true,
+        cwd: homedir(),
+      });
+      const v = (stdout ?? '').trim();
+      return v || null;
+    } catch {
+      return null; // unset → git exits non-zero
+    }
+  };
+  const [name, email] = await Promise.all([read('user.name'), read('user.email')]);
+  return { name, email, configured: Boolean(name && email) };
+}
+
 function nodeCandidates(): string[] {
   if (process.platform !== 'darwin') return ['node'];
   return ['node', '/opt/homebrew/bin/node', '/usr/local/bin/node'];
@@ -325,10 +371,11 @@ async function checkPlaywright(): Promise<PlaywrightPreflight> {
 
 export async function runPreflight(): Promise<PreflightReport> {
   const claude = await checkClaude();
-  const [auth, git, node, bash, python, playwright] = await Promise.all([
+  const [auth, git, gitIdentity, node, bash, python, playwright] = await Promise.all([
     checkAuth(claude.path),
     probeBinary('git', 'hard', gitCandidates(), 'Required for project creation + agent worktrees.'),
-    probeBinary('node', 'soft', nodeCandidates(), 'Workflow code-nodes only.'),
+    probeGitIdentity(),
+    probeBinary('node', 'soft', nodeCandidates(), 'Optional — Caisson runs its own hooks with the app’s built-in runtime.'),
     probeBinary('bash', 'soft', bashCandidates(), 'Workflow code-nodes only.'),
     probeBinary('python', 'soft', pythonCandidates(), 'Workflow code-nodes only.'),
     checkPlaywright(),
@@ -336,5 +383,5 @@ export async function runPreflight(): Promise<PreflightReport> {
 
   const ok = claude.status === 'ok' && git.present;
 
-  return { claude, auth, git, soft: [node, bash, python], playwright, ok };
+  return { claude, auth, git, gitIdentity, soft: [node, bash, python], playwright, ok };
 }

@@ -20,7 +20,12 @@ import { promisify } from 'node:util';
 
 import { clearClaudeProbeCache } from '@pc/runtime';
 
-import { PINNED_CLAUDE_VERSION, runPreflight, type PreflightReport } from './preflight.ts';
+import {
+  PINNED_CLAUDE_VERSION,
+  resolveGitBinary,
+  runPreflight,
+  type PreflightReport,
+} from './preflight.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -103,6 +108,26 @@ export async function installGit(platform: NodeJS.Platform = process.platform): 
   }
   const preflight = await runPreflight();
   return { preflight, log: log || 'git install finished.' };
+}
+
+/** Write the user's global git commit identity (`git config --global`) on an
+ *  explicit wizard action, so a non-technical user never has to open a
+ *  terminal. Re-runs preflight afterward so the wizard can advance. */
+export async function configureGitIdentity(name: string, email: string): Promise<InstallResult> {
+  const cleanName = name.trim();
+  const cleanEmail = email.trim();
+  if (!cleanName) throw new Error('name is required');
+  // Light-touch sanity check — git itself accepts nearly anything; this only
+  // catches obvious slips (no @, embedded whitespace).
+  if (!/^\S+@\S+$/.test(cleanEmail)) {
+    throw new Error('email must look like you@example.com');
+  }
+  const git = await resolveGitBinary();
+  if (!git) throw new Error('git is not installed yet — install it first.');
+  await run(git, ['config', '--global', 'user.name', cleanName], 30_000);
+  await run(git, ['config', '--global', 'user.email', cleanEmail], 30_000);
+  const preflight = await runPreflight();
+  return { preflight, log: `Saved git identity: ${cleanName} <${cleanEmail}>` };
 }
 
 async function installGitOnMac(): Promise<string> {

@@ -16,6 +16,7 @@ import {
   PC_MCP_TOKEN_HEADER,
   type PcMcpClaims,
 } from '@pc/mcp/http-endpoint';
+import { nodeShellCommand } from '@pc/runtime';
 import { getDataDir } from '@pc/utils';
 
 import { SERVER_ROOT } from '../server-root.ts';
@@ -161,6 +162,11 @@ function resolveRuntimeContext(input: ClaudeRuntimeFilesInput): RuntimeContext {
       // For PC-spawned sessions those scripts live in the session bundle, not
       // the user's repo.
       PROJECT_FOLDER: posixPath(runtimeRoot),
+      // Hook node command — the system node under dev, the app's own binary
+      // (Electron-as-node) in a packaged build, so hooks work on machines with
+      // no node installed. Quoted shell prefix → JSON-escape the quotes for
+      // insertion into the settings JSON text.
+      NODE_CMD: nodeShellCommand().replace(/"/g, '\\"'),
     },
   };
 }

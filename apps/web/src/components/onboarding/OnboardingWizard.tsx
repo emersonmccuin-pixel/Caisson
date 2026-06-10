@@ -19,15 +19,33 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { settingsApi, type OrchestratorSurfacePreference, type PreflightReport } from '@/features/settings/client';
 import { FolderBrowserModal } from '@/components/FolderBrowserModal';
 
-type StepId = 'welcome' | 'experience' | 'claude' | 'git' | 'auth' | 'projects' | 'done';
+type StepId =
+  | 'welcome'
+  | 'experience'
+  | 'claude'
+  | 'git'
+  | 'identity'
+  | 'auth'
+  | 'projects'
+  | 'done';
 
-const STEP_ORDER: StepId[] = ['welcome', 'experience', 'claude', 'git', 'auth', 'projects', 'done'];
+const STEP_ORDER: StepId[] = [
+  'welcome',
+  'experience',
+  'claude',
+  'git',
+  'identity',
+  'auth',
+  'projects',
+  'done',
+];
 
 const STEP_TITLES: Record<StepId, string> = {
   welcome: 'Welcome',
   experience: 'Default view',
   claude: 'Claude Code',
   git: 'Git',
+  identity: 'Your name',
   auth: 'Sign in',
   projects: 'Projects folder',
   done: 'All set',
@@ -61,6 +79,7 @@ function freshMachinePreflight(): PreflightReport {
     },
     auth: { status: 'login-required', note: 'Simulated blank machine.' },
     git: { name: 'git', present: false, version: null, severity: 'hard' },
+    gitIdentity: { name: null, email: null, configured: false },
     soft: [
       { name: 'node', present: false, version: null, severity: 'soft' },
       { name: 'bash', present: false, version: null, severity: 'soft' },
@@ -86,7 +105,10 @@ export function OnboardingWizard({
     simMode ? freshMachinePreflight() : null,
   );
   const [step, setStep] = useState<StepId>('welcome');
-  const [busy, setBusy] = useState<null | 'claude' | 'git' | 'auth' | 'refresh'>(null);
+  const [busy, setBusy] = useState<null | 'claude' | 'git' | 'identity' | 'auth' | 'refresh'>(null);
+  // "Skip for now" on the identity step — commits fall back to a stand-in
+  // identity until the user sets a real one.
+  const [identitySkipped, setIdentitySkipped] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string | null>(null);
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
@@ -140,6 +162,7 @@ export function OnboardingWizard({
 
   const claudeOk = preflight?.claude.status === 'ok';
   const gitOk = preflight?.git.present === true;
+  const identityOk = preflight?.gitIdentity?.configured === true;
   const authOk = preflight?.auth.status === 'authed';
   const folderOk = projectsFolder.trim().length > 0;
 
@@ -157,6 +180,8 @@ export function OnboardingWizard({
           return claudeOk;
         case 'git':
           return gitOk;
+        case 'identity':
+          return identityOk || identitySkipped;
         case 'auth':
           return authOk;
         case 'projects':
@@ -165,7 +190,7 @@ export function OnboardingWizard({
           return false;
       }
     },
-    [claudeOk, gitOk, authOk, folderOk, step],
+    [claudeOk, gitOk, identityOk, identitySkipped, authOk, folderOk, step],
   );
 
   // ── Install / auth actions ───────────────────────────────────────────────
@@ -212,6 +237,28 @@ export function OnboardingWizard({
         setLog('Simulated: git installed (2.51.0).');
       } else {
         const r = await settingsApi.installGit();
+        setPreflight(r.preflight);
+        setLog(r.log);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleSaveIdentity(name: string, email: string) {
+    setBusy('identity');
+    setError(null);
+    setLog(null);
+    try {
+      if (simMode) {
+        await delay(900);
+        simPreflight.current.gitIdentity = { name, email, configured: true };
+        setPreflight({ ...simPreflight.current });
+        setLog(`Simulated: git identity saved (${name} <${email}>).`);
+      } else {
+        const r = await settingsApi.configureGitIdentity(name, email);
         setPreflight(r.preflight);
         setLog(r.log);
       }
@@ -438,6 +485,22 @@ export function OnboardingWizard({
                   busy={busy === 'git'}
                   busyLabel="Installing Git…"
                   onAction={handleInstallGit}
+                  onNext={goNext}
+                />
+              )}
+
+              {step === 'identity' && (
+                <GitIdentityStep
+                  configured={identityOk}
+                  currentName={preflight.gitIdentity?.name ?? null}
+                  currentEmail={preflight.gitIdentity?.email ?? null}
+                  gitPresent={gitOk}
+                  busy={busy === 'identity'}
+                  onSave={(name, email) => void handleSaveIdentity(name, email)}
+                  onSkip={() => {
+                    setIdentitySkipped(true);
+                    goNext();
+                  }}
                   onNext={goNext}
                 />
               )}
@@ -725,6 +788,98 @@ function DependencyStep({
           <PrimaryButton onClick={onAction} disabled={busy}>
             {busy ? busyLabel : actionLabel}
           </PrimaryButton>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GitIdentityStep({
+  configured,
+  currentName,
+  currentEmail,
+  gitPresent,
+  busy,
+  onSave,
+  onSkip,
+  onNext,
+}: {
+  configured: boolean;
+  currentName: string | null;
+  currentEmail: string | null;
+  gitPresent: boolean;
+  busy: boolean;
+  onSave: (name: string, email: string) => void;
+  onSkip: () => void;
+  onNext: () => void;
+}) {
+  const [name, setName] = useState(currentName ?? '');
+  const [email, setEmail] = useState(currentEmail ?? '');
+  const canSave = gitPresent && name.trim().length > 0 && /^\S+@\S+$/.test(email.trim());
+
+  return (
+    <div className="flex flex-1 flex-col">
+      <h1 className="text-2xl font-semibold tracking-tight">Who should saves be credited to?</h1>
+      <p className="mt-3 max-w-lg text-sm leading-relaxed text-muted-foreground">
+        Every save point Caisson makes in your projects carries a name and
+        email, so there's a record of who made each change. Set yours once here
+        — no terminal needed.
+      </p>
+
+      <div className="mt-6 max-w-md space-y-3">
+        {configured ? (
+          <div className="flex items-center gap-2 bg-success/15 px-3 py-2 text-sm text-success">
+            <span>✓</span>
+            <span>
+              Saves will be credited to {currentName} &lt;{currentEmail}&gt;.
+            </span>
+          </div>
+        ) : (
+          <>
+            {!gitPresent && (
+              <div className="flex items-center gap-2 bg-warning/15 px-3 py-2 text-sm text-warning">
+                <span>!</span>
+                <span>Install Git first (previous step), then set your name here.</span>
+              </div>
+            )}
+            <label className="block">
+              <span className="text-xs uppercase tracking-wide text-[var(--fg-dim)]">Your name</span>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Jane Smith"
+                spellCheck={false}
+                autoComplete="name"
+                className="mt-1 w-full bg-muted px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-ring"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs uppercase tracking-wide text-[var(--fg-dim)]">Your email</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                spellCheck={false}
+                autoComplete="email"
+                className="mt-1 w-full bg-muted px-3 py-2 text-sm text-foreground outline-none focus:ring-1 focus:ring-ring"
+              />
+            </label>
+          </>
+        )}
+      </div>
+
+      <div className="mt-auto flex items-center gap-3 pt-6">
+        {configured ? (
+          <PrimaryButton onClick={onNext}>Continue</PrimaryButton>
+        ) : (
+          <>
+            <PrimaryButton onClick={() => onSave(name.trim(), email.trim())} disabled={!canSave || busy}>
+              {busy ? 'Saving…' : 'Save & continue'}
+            </PrimaryButton>
+            <SecondaryButton onClick={onSkip}>Skip for now</SecondaryButton>
+          </>
         )}
       </div>
     </div>

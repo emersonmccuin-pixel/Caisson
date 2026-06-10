@@ -172,6 +172,7 @@ export class LowLevelSpawn extends EventEmitter {
   private resumeSummaryConfirmSent = false;
   private onboardingThemeSent = false;
   private onboardingSecuritySent = false;
+  private bypassPermissionsConfirmSent = false;
   private readonly input: LowLevelSpawnInput;
   private readonly gate: ReadyGate;
   private tailer: JsonlTailer | null = null;
@@ -492,6 +493,27 @@ export class LowLevelSpawn extends EventEmitter {
       }
     }
 
+    // Auto-accept CC's bypass-permissions WARNING dialog (CC ≥2.1.170; spawns
+    // with --dangerously-skip-permissions hit it when the accepted flag is
+    // absent). "No, exit" is PRE-selected, so a bare Enter kills the session —
+    // press DOWN to "Yes, I accept" first. Defense-in-depth: the session
+    // settings template seeds skipDangerousModePermissionPrompt, so this
+    // should never fire for a PC-rendered settings file; it covers spawns
+    // whose --settings input omits the flag. (PR #4, Courtney Fohrman.)
+    // CC source: src/components/BypassPermissionsModeDialog.tsx +
+    // interactiveHelpers.tsx showSetupScreens (verified 2026-06-10).
+    if (
+      !this.bypassPermissionsConfirmSent &&
+      looksLikeBypassPermissionsDialog(this.rawBuffer)
+    ) {
+      this.bypassPermissionsConfirmSent = true;
+      try {
+        this.child?.write('\x1b[B\r');
+      } catch {
+        /* exited mid-press */
+      }
+    }
+
     this.gate.feedChunk(data);
   }
 
@@ -635,6 +657,21 @@ export function looksLikeOnboardingSecurityStep(rawBuffer: string): boolean {
     .replace(/\s+/g, '')
     .toLowerCase();
   return compact.includes('pressentertocontinue');
+}
+
+/** True when the raw PTY buffer is showing CC's bypass-permissions WARNING
+ *  dialog ("WARNING: Claude Code running in Bypass Permissions mode" with a
+ *  "No, exit" / "Yes, I accept" Select). Requires BOTH the title and the
+ *  accept option so ordinary chat mentioning bypass permissions can't trip it.
+ *  Pure function so the match is testable in isolation.
+ *  CC source: src/components/BypassPermissionsModeDialog.tsx (verified 2026-06-10). */
+export function looksLikeBypassPermissionsDialog(rawBuffer: string): boolean {
+  const compact = collapseAnsiToWhitespace(rawBuffer)
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  return (
+    compact.includes('bypasspermissionsmode') && compact.includes('yes,iaccept')
+  );
 }
 
 export function buildLowLevelSpawnArgs(
