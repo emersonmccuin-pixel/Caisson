@@ -9,8 +9,6 @@ import type {
   PodBundle,
   PodKnowledge,
   PodKnowledgeKind,
-  PodMcpServer,
-  PodMcpServerConfig,
   PodSecret,
 } from './types';
 
@@ -26,11 +24,10 @@ export const agentsApi = {
 
   getPod: (podId: ULID) =>
     getJson<{ ok: true } & PodBundle>(`/api/agents/pods/${podId}`).then(
-      ({ agent, knowledge, secrets, mcpServers }) => ({
+      ({ agent, knowledge, secrets }) => ({
         agent,
         knowledge,
         secrets,
-        mcpServers,
       }),
     ),
 
@@ -44,7 +41,7 @@ export const agentsApi = {
     ).then((r) => r.pod),
 
   clonePodToProject: (podId: ULID, projectId: ULID, name?: string) =>
-    postJson<{ ok: true; pod: Pod; copied: { knowledge: number; mcpServers: number } }>(
+    postJson<{ ok: true; pod: Pod; copied: { knowledge: number } }>(
       `/api/agents/pods/${podId}/clone-to-project`,
       name ? { projectId, name } : { projectId },
     ).then((r) => ({ pod: r.pod, copied: r.copied })),
@@ -129,25 +126,6 @@ export const agentsApi = {
     const data = (await res.json()) as { ok?: boolean; error?: string };
     if (!res.ok || data.ok === false) {
       throw new Error(data.error ?? `delete secret → ${res.status}`);
-    }
-  },
-
-  createPodMcpServer: (
-    podId: ULID,
-    input: { name: string; config: PodMcpServerConfig },
-  ) =>
-    postJson<{ ok: true; mcpServer: PodMcpServer }>(
-      `/api/agents/pods/${podId}/mcp-servers`,
-      input,
-    ).then((r) => r.mcpServer),
-
-  deletePodMcpServer: async (podId: ULID, mcpId: ULID): Promise<void> => {
-    const res = await fetch(`/api/agents/pods/${podId}/mcp-servers/${mcpId}`, {
-      method: 'DELETE',
-    });
-    const data = (await res.json()) as { ok?: boolean; error?: string };
-    if (!res.ok || data.ok === false) {
-      throw new Error(data.error ?? `delete mcp server → ${res.status}`);
     }
   },
 

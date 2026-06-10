@@ -23,13 +23,6 @@ export type PodAuditField =
   | 'created'
   | 'deleted';
 
-export interface PodMcpServerConfig {
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  url?: string;
-}
-
 export interface Pod {
   id: ULID;
   name: string;
@@ -70,16 +63,6 @@ export interface PodSecret {
   createdAt: number;
 }
 
-export interface PodMcpServer {
-  id: ULID;
-  agentId: ULID;
-  scope: PodScope;
-  projectId: ULID | null;
-  name: string;
-  config: PodMcpServerConfig;
-  createdAt: number;
-}
-
 export interface PodAuditEntry {
   id: ULID;
   agentId: ULID;
@@ -97,7 +80,6 @@ export interface PodBundle {
   agent: Pod;
   knowledge: PodKnowledge[];
   secrets: PodSecret[];
-  mcpServers: PodMcpServer[];
 }
 
 export interface CreatePodInput {
