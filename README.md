@@ -1,8 +1,10 @@
 # Caisson
 
-**Build a team of AI specialists that run real work in your real systems — by describing them in plain English.**
+**An AI-native project management platform, and a harness that builds harnesses.**
 
-Caisson is a local desktop app where you assemble a team of AI specialists, automate the workflows that connect them, and put both to work in the systems you already run. It's a harness that builds harnesses: you describe the expert and the process, and Caisson stands up the scaffolding that turns a raw model into something that does the job, repeatedly, in your real stack.
+Caisson is a local desktop app where you run your projects with a team of AI specialists you build yourself. Describe the **experts** you need and the **process** that connects them, in plain English, and Caisson stands up the scaffolding that turns a raw model into something that does the job, repeatedly, in your real systems.
+
+A board, a project manager that dispatches the work, and a roster of experts behind it. The catch: the manager and the workers are AI, and you direct them. It's built to **drive agents through complex, multi-step tasks** and sustain **long-running agentic work**: not one-shot answers, but jobs that plan, execute, verify, and report back over time.
 
 The proof that it works: **Caisson builds itself.** It's the daily driver I use to develop Caisson. Bugs and polish become work items, its own build team plans/fixes/tests them, and the fix lands back in the app I'm using.
 
@@ -23,11 +25,13 @@ The proof that it works: **Caisson builds itself.** It's the daily driver I use 
 
 ## What it is
 
-Real leverage from AI is gated by tech fluency. The people who know how to wire up an MCP server, write a system prompt, and hand a model real API access turn it into a teammate that operates their stack. Everyone else gets a chat box and re-explains their job every morning.
+Project management assumes the people are already hired. Caisson doesn't. You describe the specialist you need and it exists, then you put it on the board and direct it like any other team member.
 
-Caisson closes that gap. The person who knows the work (the analyst who knows the warehouse, the engineer who knows the codebase, the ops lead who knows the runbook) describes how it should be done, once. Caisson builds the harness around it: the role, the tools and credentials, the context that normally lives in your head. From then on the specialist carries the load, operating your real systems directly through their APIs, running the queries, shipping the code, filing the tickets, watching for what changed.
+That's the leverage. I don't have a data team, but I have a **data analyst** and a **data engineer** wired into my warehouse. I'm not a finance person, but I have a **finance assistant** that runs the numbers. I have a **software developer** that ships code against a contract, and a **personal tutor** for whatever I'm learning. Whatever I need, built in a conversation, working in my real systems on my own Claude subscription.
 
-It's not a chat window you start over in every morning. It's a standing team you assemble, direct, and grow, running on your machine, on your own Claude subscription.
+And these aren't chatbots that fire one reply. They're specialists you point at complex work and let run: planning, executing across many steps, calling real tools, and pushing through long jobs to a verified result while you do something else.
+
+Real leverage from AI has been gated by tech fluency. The people who can wire up an MCP server, write a system prompt, and hand a model real API access turn it into a teammate that operates their stack. Everyone else gets a chat box and re-explains their job every morning. Caisson closes that gap: the person who knows the work describes how it should be done, once, and the specialist carries the load from then on.
 
 Two things it lets anyone do without writing code:
 
@@ -57,7 +61,7 @@ A specialist is an expert you configure: a focused role, the tools and credentia
 
 **A delivery team.** Specialists connected to Jira / Atlassian that triage inbound, groom the board, draft the specs, and run the status roll-ups.
 
-And the lighter end of the same engine: a sales rep whose specialist drafts post-call follow-ups in their voice; an HR coordinator whose onboarding runs itself out into a task tree. **Same tool — the ceiling is as high as the access you give it.** None of these ship as canned templates; you build the team *you* need by describing it.
+And the lighter end of the same engine: a sales rep whose specialist drafts post-call follow-ups in their voice; an HR coordinator whose onboarding runs itself out into a task tree. **Same tool. The ceiling is as high as the access you give it.** None of these ship as canned templates; you build the team *you* need by describing it.
 
 ## A look at it
 
