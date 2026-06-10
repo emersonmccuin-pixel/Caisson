@@ -387,9 +387,16 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
       void tick()
         .then((res) => {
           const r = res.hostReconcile;
-          if (r && (r.terminalApplied > 0 || r.statusUpdated > 0 || r.hostLost > 0 || r.registered > 0)) {
+          if (
+            r &&
+            (r.terminalApplied > 0 ||
+              r.statusUpdated > 0 ||
+              r.hostLost > 0 ||
+              r.registered > 0 ||
+              r.ghostCancelled > 0)
+          ) {
             log(
-              `[agent-runs] reconcile: terminal=${r.terminalApplied}, status=${r.statusUpdated}, hostLost=${r.hostLost}, registered=${r.registered}, checked=${r.checked}`,
+              `[agent-runs] reconcile: terminal=${r.terminalApplied}, status=${r.statusUpdated}, hostLost=${r.hostLost}, registered=${r.registered}, ghostCancelled=${r.ghostCancelled}, checked=${r.checked}`,
             );
           }
           if (

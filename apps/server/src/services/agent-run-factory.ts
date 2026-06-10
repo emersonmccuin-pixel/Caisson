@@ -228,7 +228,7 @@ export type DispatchAgentFailure =
     }
   | {
       ok: false;
-      cause: 'host-unavailable' | 'host-protocol-error';
+      cause: 'host-unavailable' | 'host-protocol-error' | 'host-rejected';
       error: string;
     }
   | {
@@ -794,7 +794,7 @@ type StartDispatchedRunResult =
   | { ok: true; initialState: 'queued' | 'spawning' }
   | {
       ok: false;
-      cause: 'host-unavailable' | 'host-protocol-error';
+      cause: 'host-unavailable' | 'host-protocol-error' | 'host-rejected';
       error: string;
     };
 
@@ -834,7 +834,7 @@ async function startHostBackedRun(
   // terminal returned synchronously in the start response is applied below.
   let handle: HostBackedActiveRunHandle | null = null;
   const fail = (
-    cause: 'host-unavailable' | 'host-protocol-error',
+    cause: 'host-unavailable' | 'host-protocol-error' | 'host-rejected',
     error: string,
   ): StartDispatchedRunResult => failHostStart(args, cause, error);
 
@@ -855,8 +855,17 @@ async function startHostBackedRun(
     );
   }
   if (!response.ok) {
+    // The host ANSWERED — it is not unavailable. 'host-shutting-down' is the
+    // one rejection that genuinely means "host can't take work right now";
+    // every other rejection (run-exists collision, unsupported, …) is the host
+    // refusing THIS command. Labelling those 'host-unavailable' produced the
+    // contradictory "run already exists / host-unavailable" spawn error.
     const cause =
-      response.code === 'protocol-error' ? 'host-protocol-error' : 'host-unavailable';
+      response.code === 'protocol-error'
+        ? 'host-protocol-error'
+        : response.code === 'host-shutting-down'
+          ? 'host-unavailable'
+          : 'host-rejected';
     return fail(cause, `agent host command ${commandType} failed: ${response.error}`);
   }
   if (response.command !== commandType || !('run' in response)) {
@@ -912,6 +921,7 @@ async function startHostBackedRun(
       status: snapshot.state,
       ...(snapshot.spawnedAt !== null ? { spawnedAt: snapshot.spawnedAt } : {}),
       ...(snapshot.readyAt !== null ? { readyAt: snapshot.readyAt } : {}),
+      ...(snapshot.pid !== undefined ? { pid: snapshot.pid } : {}),
     });
     broadcastHostRunChanged(args, snapshot);
   }
@@ -991,7 +1001,7 @@ function transcriptPathFor(args: ConstructAndStartArgs): string {
 
 function failHostStart(
   args: ConstructAndStartArgs,
-  cause: 'host-unavailable' | 'host-protocol-error',
+  cause: 'host-unavailable' | 'host-protocol-error' | 'host-rejected',
   error: string,
 ): StartDispatchedRunResult {
   const completedAt = (args.deps.now ?? Date.now)();

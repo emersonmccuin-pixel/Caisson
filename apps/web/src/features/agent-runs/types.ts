@@ -35,7 +35,8 @@ export type AgentRunFailureCause =
   | 'host-unavailable'
   | 'host-lost'
   | 'host-crashed'
-  | 'host-protocol-error';
+  | 'host-protocol-error'
+  | 'host-rejected';
 
 export type PendingAskKind = 'ask-orchestrator' | 'ask-user' | 'approval';
 export type PendingAskStatus = 'waiting' | 'answered' | 'cancelled';

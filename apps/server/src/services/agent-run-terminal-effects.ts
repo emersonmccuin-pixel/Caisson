@@ -680,6 +680,21 @@ export async function replayMissingTerminalEnvelopes(
   let replayed = 0;
   for (const row of rows) {
     const status = row.status as TerminalStatus;
+    // Spawn-flakiness fix (2026-06-10) — a dispatch that failed BEFORE any
+    // spawn on a host start receipt already returned that failure
+    // SYNCHRONOUSLY to its dispatcher (the pc_invoke_agent tool result / the
+    // workflow settlement). Replaying an agent-failed envelope for it minutes
+    // later re-pages the orchestrator about a failure it has typically already
+    // retried — pure noise. The sync receipt is the notification; skip.
+    if (
+      status === 'failed' &&
+      row.spawnedAt === null &&
+      (row.failureCause === 'host-unavailable' ||
+        row.failureCause === 'host-rejected' ||
+        row.failureCause === 'host-protocol-error')
+    ) {
+      continue;
+    }
     const kind: AgentInboxEventKind =
       status === 'completed' ? 'agent-completed' : 'agent-failed';
     if (hasKey(`agent:${row.id}:${kind}`)) continue;
@@ -777,6 +792,7 @@ function agentFailureCauseToPayload(
     case 'host-lost':
     case 'host-crashed':
     case 'host-protocol-error':
+    case 'host-rejected':
       return 'spawn-failed';
     case null:
     default:
@@ -821,6 +837,8 @@ export function describeAgentRunFailure(
       return 'agent host crashed while owning this run';
     case 'host-protocol-error':
       return 'agent host returned an invalid protocol response';
+    case 'host-rejected':
+      return 'agent host rejected the dispatch command';
     default:
       return cause;
   }

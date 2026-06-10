@@ -489,3 +489,82 @@ test('Step 2: self-healing reattach — matched host run with no registry entry 
   });
   assert.equal(res2.registered, 0, 'no double-register on the next tick');
 });
+
+// Ghost reaper (2026-06-10) — a NON-terminal host run whose DB row is already
+// terminal (the timed-out-start-receipt dispatch marked it failed while the
+// host had actually started it) must be cancelled once the row has been
+// terminal past the grace window. Nothing else converges it: the row loop only
+// iterates non-terminal DB rows.
+test('ghost reaper: live host run with a terminal DB row past grace gets a cancel', () => {
+  const host = new FakeHostClient([hostRun('run-ghost', 'running')]);
+  const terminalRow = row('run-ghost', {
+    status: 'failed',
+    failureCause: 'host-unavailable',
+    completedAt: 1_700_000_000_000,
+  });
+
+  const res = reconcileAgentRunsAgainstHost({
+    hostClient: host,
+    listNonTerminalRuns: () => [],
+    getAgentRun: (id) => (id === ('run-ghost' as ULID) ? terminalRow : null),
+    hostAuthoritativelyAbsent: true,
+    now: () => 1_700_000_000_000 + 60_000, // past the 30s grace
+    announce: () => {},
+    broadcast: () => {},
+  });
+
+  assert.equal(res.ghostCancelled, 1, 'ghost counted');
+  assert.deepEqual(host.commands, [{ type: 'cancel', runId: 'run-ghost' }]);
+});
+
+test('ghost reaper holds inside the grace window and on an unconfirmed host list', () => {
+  const terminalRow = row('run-ghost2', {
+    status: 'failed',
+    failureCause: 'host-unavailable',
+    completedAt: 1_700_000_000_000,
+  });
+
+  // Inside the grace window → no cancel (never race in-flight terminal effects).
+  const hostA = new FakeHostClient([hostRun('run-ghost2', 'running')]);
+  const inGrace = reconcileAgentRunsAgainstHost({
+    hostClient: hostA,
+    listNonTerminalRuns: () => [],
+    getAgentRun: () => terminalRow,
+    hostAuthoritativelyAbsent: true,
+    now: () => 1_700_000_000_000 + 10_000,
+    announce: () => {},
+    broadcast: () => {},
+  });
+  assert.equal(inGrace.ghostCancelled, 0);
+  assert.deepEqual(hostA.commands, []);
+
+  // Stale/unconfirmed host list → no cancel (HOLD on no-information).
+  const hostB = new FakeHostClient([hostRun('run-ghost2', 'running')]);
+  const unconfirmed = reconcileAgentRunsAgainstHost({
+    hostClient: hostB,
+    listNonTerminalRuns: () => [],
+    getAgentRun: () => terminalRow,
+    hostAuthoritativelyAbsent: false,
+    now: () => 1_700_000_000_000 + 60_000,
+    announce: () => {},
+    broadcast: () => {},
+  });
+  assert.equal(unconfirmed.ghostCancelled, 0);
+  assert.deepEqual(hostB.commands, []);
+});
+
+test('ghost reaper never touches a live host run whose row is non-terminal', () => {
+  const liveRow = row('run-live', { status: 'running' });
+  const host = new FakeHostClient([hostRun('run-live', 'running')]);
+  const res = reconcileAgentRunsAgainstHost({
+    hostClient: host,
+    listNonTerminalRuns: () => [liveRow],
+    getAgentRun: () => liveRow,
+    hostAuthoritativelyAbsent: true,
+    now: () => 1_700_000_000_000 + 600_000,
+    announce: () => {},
+    broadcast: () => {},
+  });
+  assert.equal(res.ghostCancelled, 0);
+  assert.deepEqual(host.commands, []);
+});

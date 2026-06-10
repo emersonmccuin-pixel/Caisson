@@ -32,6 +32,10 @@ export interface AgentHostRunSnapshot {
    *  `running` onward; the chat send-queue drains on 'ready'. */
   turnState?: AgentRunTurnState;
   jsonlPath: string | null;
+  /** OS pid of the live claude.exe child, or null before spawn / after exit.
+   *  Optional on the wire (older hosts omit it). Lets peek/kill and the runs
+   *  list answer "is anything actually alive" for host-backed runs. */
+  pid?: number | null;
   transcriptPath: string | null;
   queuedAt: number;
   spawnedAt: number | null;

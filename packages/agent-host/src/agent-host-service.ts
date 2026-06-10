@@ -202,7 +202,23 @@ export class AgentHostService extends EventEmitter {
     if (this.shuttingDown) {
       return this.error(command, 'host-shutting-down', 'host is shutting down');
     }
-    if (this.runs.has(request.runId)) {
+    const existing = this.runs.get(request.runId);
+    if (existing) {
+      // Idempotent receipt — the server's HostConnection re-sends a command
+      // ONCE when the first response timed out. That first send already
+      // registered + started this exact run; answering ok with the live
+      // snapshot lets the retry heal instead of stranding a ghost run behind
+      // a 'run-exists' error (the spawn-flakiness bug, 2026-06-10). A same-id
+      // request from a DIFFERENT dispatch (ccSessionId mismatch) is still a
+      // genuine collision.
+      if (existing.request.ccSessionId === request.ccSessionId) {
+        return {
+          ok: true,
+          command,
+          run: this.snapshot(existing),
+          lastSeq: this.seq,
+        };
+      }
       return this.error(command, 'run-exists', `run ${request.runId} already exists`);
     }
     if (this.ccSessionIndex.has(request.ccSessionId)) {
@@ -547,6 +563,7 @@ export class AgentHostService extends EventEmitter {
       policy: record.policy,
       turnState: record.turnState,
       jsonlPath: entry.run.getJsonlPath(),
+      pid: entry.run.getPid(),
       transcriptPath: entry.request.transcriptPath ?? null,
       queuedAt: record.queuedAt ?? record.createdAt,
       spawnedAt: record.spawningAt ?? null,
