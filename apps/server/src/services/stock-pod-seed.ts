@@ -666,6 +666,13 @@ Field schemas:
 - GET /api/projects/:projectId/field-schemas
 - PUT /api/projects/:projectId/field-schemas bulk-replaces schemas.
 
+MCP servers (registry) — see the "Caisson MCP servers guide" knowledge doc for the model:
+
+- Global: GET/POST /api/mcp-servers, GET/PATCH/DELETE /api/mcp-servers/:id, POST /api/mcp-servers/:id/probe.
+- Project: GET/POST /api/projects/:projectId/mcp-servers.
+- GET /api/projects/:projectId/orchestrator-pod resolves the chat's agentId so a registered server can be attached to the orchestrator.
+- Create/patch body: { name, description?, transport } where transport is { command, args?, env? } (stdio) or { url } (http). Adding/attaching/deleting servers is approval-gated.
+
 Workflows — use your TYPED tools, not curl:
 
 - Authoring is done with pc_create_workflow / pc_update_workflow / pc_delete_workflow, and reads with pc_get_workflow / pc_list_workflows. These are the supported path; do NOT hand-roll curl to publish or edit a workflow.
@@ -882,6 +889,67 @@ Pick the cheapest model that can reliably do the job.
 ## When to create an agent
 
 Create an agent for recurring work with a stable role. For a one-off task, ask the orchestrator to do or dispatch the work directly.`,
+  },
+  {
+    name: 'caisson-mcp-servers-guide',
+    content: `# Caisson MCP servers guide
+
+Use this when the user asks how to add, install, or connect an MCP server — globally or for one project — and how to give an agent (or the orchestrator) the tools that server exposes.
+
+## The registry model (register once, attach to many)
+
+Caisson manages MCP servers through a REGISTRY, not by pasting raw JSON into each agent. The flow has two distinct steps:
+
+1. **Register the server once** — it lands in the registry at one of two scopes:
+   - **Global scope** — available to every project. This is what "install an MCP server globally" means.
+   - **Project scope** — available only inside that one project.
+2. **Attach it where you want it** — a registered server does nothing until it's attached to an agent. Attach the same server to as many agents as you like, and choose per-tool which of its tools that agent may call. The orchestrator (the project chat) is just another agent you can attach to.
+
+Registering ≠ attaching. A globally-registered server is NOT automatically wired into any agent — you still attach it per agent. This is deliberate: one registration, controlled exposure.
+
+## Where it lives in the UI
+
+- **Register globally:** open the app menu (the CAISSON wordmark, top-left) → App settings → **MCP Servers** tab. Servers added here are global and reusable across every project.
+- **Register for one project:** Project settings → **MCP Servers** section. Scoped to that project.
+- **Probe a server's tools:** each server row has a probe action. It connects to the server and discovers the tool list. Per-tool grants come from this discovered set, so probe before attaching if you want to pick individual tools.
+- **Attach to a dispatched agent:** open that agent in the Agents tab → its settings → the MCP attachments picker. Choose which registered servers it gets, and which of their tools.
+- **Attach to the orchestrator (the chat):** Project settings → **Orchestrator tools** section. The orchestrator is resolved as a normal agent under the hood; this is where you give the project's chat access to a registered server.
+
+**When changes take effect:** MCP attachment changes apply on the **next chat-session start** — the user restarts the session (or the app) before the new tools appear. Tell them this; it's the usual "I attached it but don't see the tools" cause.
+
+## How to install a server globally, end to end
+
+1. App settings → MCP Servers → add a server. Give it a name and its transport (see below).
+2. Probe it to discover its tools.
+3. Decide who needs it. For each agent (or the orchestrator) that should use it, open that agent's MCP attachments and attach the server, granting the specific tools.
+4. Restart the session so the agent picks up the tools.
+
+## Transport shapes
+
+A server is either a local process (stdio) or a remote endpoint (http). Exactly one — never both:
+
+- **stdio (local command):** \`{ "command": "npx", "args": ["-y", "@some/mcp-server"], "env": { "API_KEY": "..." } }\`. \`args\` and \`env\` are optional and only valid with \`command\`.
+- **http (remote):** \`{ "url": "https://example.com/mcp" }\`. No \`args\`/\`env\` with a url.
+
+Setting both \`command\` and \`url\`, or neither, is rejected.
+
+## HTTP API (when caisson mutates via curl)
+
+Base URL http://127.0.0.1:4040. Body for create/patch: \`{ name, description?, transport }\` where transport is the stdio/http shape above.
+
+- Global: \`GET /api/mcp-servers\`, \`POST /api/mcp-servers\`, \`GET|PATCH|DELETE /api/mcp-servers/:id\`, \`POST /api/mcp-servers/:id/probe\`.
+- Project: \`GET /api/projects/:projectId/mcp-servers\`, \`POST /api/projects/:projectId/mcp-servers\`.
+- Resolve the orchestrator's agent id (to attach a server to the chat): \`GET /api/projects/:projectId/orchestrator-pod\` → \`{ agentId }\`.
+
+## Approval + safety
+
+Registering, attaching, or deleting an MCP server wires an external process or endpoint into an agent — often with the user's API keys in \`env\`. Treat add / attach / delete as approval-worthy mutations, like changing global settings: state the server, its transport, who it'll be attached to, and which tools, then confirm before applying. Never invent a server's command, url, or tool names — read them from the user or from a probe.
+
+## What to tell users
+
+- "Install an MCP server globally" = register it at global scope (App settings → MCP Servers), then attach it to whichever agents/orchestrator need it.
+- The old way (pasting a raw JSON MCP block into a single agent) is being retired in favor of this registry — prefer the registry path.
+- If they attached a server but don't see its tools: they need to restart the chat session, and the server should have been probed so its tools are known.`,
   },
   {
     name: 'caisson-context-model',
