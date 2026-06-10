@@ -179,13 +179,13 @@ export interface PodAuditRow {
   createdAt: number;
 }
 
-/** Aggregate read shape the materialiser (17a.3) consumes. v1 = global-only;
- *  17c upgrades the repo-level merge to overlay project-scoped rows on top. */
+/** Aggregate read shape the materialiser (17a.3) consumes.
+ *  MCP servers are no longer inline — they are resolved from the registry
+ *  via agent_mcp_attachments at spawn time (pc-pty-chat-359 P4b). */
 export interface PodSpawnBundle {
   agent: PodAgentRow;
   contextDocs: AgentContextDoc[];
   secrets: PodSecretRow[];
-  mcpServers: PodMcpServerRow[];
 }
 
 // ── MCP Agent Attachments (P3 — pc-pty-chat-359.3) ───────────────────────────

@@ -29,15 +29,12 @@ import {
   cloneAgentToProject,
   createAgent,
   createContextDoc,
-  createMcpServer,
   createSecret,
-  deleteMcpServer,
   deleteSecret,
   deleteMcpAttachmentByPair,
   getAgentById,
   getContextDoc,
   getContextDocReadStats,
-  getMcpServer,
   getMcpServerRegistry,
   getSecret,
   listAgentAudit,
@@ -45,7 +42,6 @@ import {
   listContextDocsForScope,
   listMcpAttachmentsForAgent,
   listProjectVisibleAgents,
-  listMcpServers,
   listSecrets,
   promoteAgentToGlobal,
   softDeleteAgent,
@@ -62,14 +58,12 @@ import type {
   PodAgentRow,
   PodAuditActor,
   PodAuditField,
-  PodMcpServerRow,
   PodScope,
   PodSecretRow,
   ULID,
 } from '@pc/domain';
 import { POD_AUDIT_ACTORS, POD_AUDIT_FIELDS } from '@pc/domain';
 import { recordToolReadFromQuery } from '../features/context-docs/routes.ts';
-import { parsePodMcpServerConfig } from '../services/pod-mcp-config.ts';
 import { announcePod, announcePodDeleted } from '../services/pod-writer.ts';
 
 export type PodMutationKind = 'created' | 'updated' | 'deleted';
@@ -127,7 +121,6 @@ export interface PodBundle {
   agent: PodAgentRow;
   contextDocs: ContextDocWithReadStats[];
   secrets: PublicPodSecret[];
-  mcpServers: PodMcpServerRow[];
 }
 
 /** Join read receipts onto a doc list. Best-effort — stats default to
@@ -154,7 +147,6 @@ export function getPodBundle(agentId: ULID): PodBundle | null {
     agent,
     contextDocs: withReadStats(listContextDocsForScope({ scope: { agentId: agent.id } })),
     secrets: listSecrets({ agentId: agent.id, scope: agent.scope }).map(publicSecret),
-    mcpServers: listMcpServers({ agentId: agent.id, scope: agent.scope }),
   };
 }
 
@@ -448,15 +440,12 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     }
     announcePod(result.agent.id, 'created');
     deps.onPodChanged?.(result.agent.name, 'created');
-    return c.json(
-      { ok: true, pod: result.agent, copied: result.copied },
-      201,
-    );
+    return c.json({ ok: true, pod: result.agent, copied: result.copied }, 201);
   });
 
   /** Reset a stock pod's scalar fields to its canonical seed content. Only
    *  stock pods are valid targets; any other pod returns
-   *  400. Knowledge / secrets / mcp servers are untouched.
+   *  400. Knowledge / secrets / registry attachments are untouched.
    *  Body: `{ actor?, reason? }` — actor defaults to 'user', reason defaults
    *  to 'ui-reset-to-default'. */
   app.post('/api/agents/pods/:id/reset-to-default', async (c) => {
@@ -809,61 +798,6 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     const qs = new URL(c.req.url).searchParams;
     const removed = deleteSecret(secretId, auditFromQuery(qs, 'user', 'ui-delete-secret'));
     if (!removed) return c.json({ ok: false, error: `unknown secret: ${secretId}` }, 404);
-    bumpAgentRev(id);
-    announcePod(id, 'updated');
-    deps.onPodChanged?.(agent.name, 'updated');
-    return c.json({ ok: true });
-  });
-
-  // --- mcp servers --------------------------------------------------------
-
-  app.post('/api/agents/pods/:id/mcp-servers', async (c) => {
-    const id = c.req.param('id') as ULID;
-    const agent = getAgentById(id);
-    if (!agent) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    let body: Record<string, unknown>;
-    try {
-      body = (await c.req.json()) as Record<string, unknown>;
-    } catch {
-      return c.json({ ok: false, error: 'invalid JSON body' }, 400);
-    }
-    const name = typeof body.name === 'string' ? body.name.trim() : '';
-    if (!name) return c.json({ ok: false, error: 'name required' }, 400);
-    let row: PodMcpServerRow;
-    try {
-      const config = parsePodMcpServerConfig(body.config);
-      // Section 22.2 — mcp servers inherit agent.scope/projectId. See above.
-      row = createMcpServer(
-        {
-          agentId: id,
-          scope: agent.scope,
-          projectId: agent.projectId ?? null,
-          name,
-          config,
-        },
-        auditFromBody(body, 'user', 'ui-create-mcp'),
-      );
-    } catch (err) {
-      return c.json({ ok: false, error: (err as Error).message }, 400);
-    }
-    bumpAgentRev(id);
-    announcePod(id, 'updated');
-    deps.onPodChanged?.(agent.name, 'updated');
-    return c.json({ ok: true, mcpServer: row }, 201);
-  });
-
-  app.delete('/api/agents/pods/:id/mcp-servers/:mcpId', (c) => {
-    const id = c.req.param('id') as ULID;
-    const mcpId = c.req.param('mcpId') as ULID;
-    const agent = getAgentById(id);
-    if (!agent) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    const existing = getMcpServer(mcpId);
-    if (!existing || existing.agentId !== id) {
-      return c.json({ ok: false, error: `unknown mcp server: ${mcpId}` }, 404);
-    }
-    const qs = new URL(c.req.url).searchParams;
-    const removed = deleteMcpServer(mcpId, auditFromQuery(qs, 'user', 'ui-delete-mcp'));
-    if (!removed) return c.json({ ok: false, error: `unknown mcp server: ${mcpId}` }, 404);
     bumpAgentRev(id);
     announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');

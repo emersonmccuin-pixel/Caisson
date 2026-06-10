@@ -33,6 +33,7 @@ import type {
   PodSecretRow,
   PodSpawnBundle,
 } from '@pc/domain';
+// PodMcpServerRow is kept for renderMcpConfig's signature (public API).
 import { descriptionOf, mergeRequiredAgentTools } from '@pc/domain';
 
 /** Contract context the dispatch forwards. `expectedOutput` is the contract's
@@ -177,10 +178,10 @@ function materializePodFiles(
 
   const mcpConfigPath = resolve(scratchDir, 'mcp.json');
   mkdirSync(scratchDir, { recursive: true });
-  // ☠ FD-3: the referenced-tools mcp.json filter is gone. It existed only to
-  // keep the baseline `webhook` entry (which poisoned CC's --strict-mcp-config)
-  // out of agents' configs; the webhook entry itself no longer exists.
-  writeFileSync(mcpConfigPath, renderMcpConfig(bundle.mcpServers, baselineMcp), 'utf8');
+  // ☠ FD-3: the referenced-tools mcp.json filter is gone.
+  // ☠ pc-pty-chat-359 P4b: inline bundle.mcpServers removed; registry-based
+  //   servers arrive via baselineMcp (merged by the caller from attachments).
+  writeFileSync(mcpConfigPath, renderMcpConfig([], baselineMcp), 'utf8');
 
   return {
     agentMdPath,
