@@ -466,9 +466,25 @@ export function createWorktreeExecutors(input: {
       // executor-level default. Repo checks carry a 10-minute timeout_ms set
       // by ac-derivation; ad-hoc predicates fall back to bashTimeoutMs (30s).
       const effectiveTimeout = timeoutMs ?? bashTimeoutMs;
-      return await new Promise<{ exitCode: number; timedOut: boolean }>((resolveResult) => {
+      // Slice 5 (pc-pty-chat-374.4): buffer stdout + stderr so failure reasons
+      // carry actual diagnostic output (Principle 2a — no verdict without evidence).
+      const TAIL_CAP = 4096;
+      return await new Promise<{
+        exitCode: number;
+        timedOut: boolean;
+        stdoutTail?: string;
+        stderrTail?: string;
+      }>((resolveResult) => {
         let settled = false;
+        const stdoutChunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
         const child = spawn(command, { shell: true, cwd: cwdAbs });
+        child.stdout?.on('data', (chunk: Buffer) => {
+          stdoutChunks.push(chunk);
+        });
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderrChunks.push(chunk);
+        });
         const timer = setTimeout(() => {
           if (settled) return;
           settled = true;
@@ -492,7 +508,11 @@ export function createWorktreeExecutors(input: {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          resolveResult({ exitCode: code ?? 0, timedOut: false });
+          const stdoutFull = Buffer.concat(stdoutChunks).toString('utf8');
+          const stderrFull = Buffer.concat(stderrChunks).toString('utf8');
+          const stdoutTail = tailBytes(stdoutFull, TAIL_CAP) || undefined;
+          const stderrTail = tailBytes(stderrFull, TAIL_CAP) || undefined;
+          resolveResult({ exitCode: code ?? 0, timedOut: false, stdoutTail, stderrTail });
         });
       });
     },
@@ -521,6 +541,14 @@ export function createWorktreeExecutors(input: {
       return workingTreeDirty(cwdAbs, bashTimeoutMs);
     },
   };
+}
+
+/** Returns the LAST `maxBytes` characters of `s`. Used to cap stdout/stderr
+ *  diagnostic tails before embedding them in failure reasons. Returns `s`
+ *  unchanged when it already fits within the cap. */
+function tailBytes(s: string, maxBytes: number): string {
+  if (s.length <= maxBytes) return s;
+  return s.slice(-maxBytes);
 }
 
 /** True iff `abs` resolves under `root` (exclusive of `root` itself). Reject
