@@ -426,6 +426,10 @@ async function finishTerminalEffects(args: {
   // — pre-M8 it didn't exist). Approve/reject ride the existing work-item
   // verification doors; the decision actions this card via resolve-by-source.
   // orchestrator-review stays envelope-only (the orchestrator's to handle).
+  // Guarded: the inbox card is auxiliary — a crash here (work-item read,
+  // package build, mailbox write) must not starve the orchestrator of the
+  // terminal envelope below.
+  try {
   if (
     deps.mailboxEnqueue &&
     contractId &&
@@ -498,6 +502,9 @@ async function finishTerminalEffects(args: {
       ],
       now: Date.now(),
     });
+  }
+  } catch (err) {
+    deps.onError?.(err instanceof Error ? err : new Error(String(err)));
   }
 
   // Slice 005 — the rail broadcast (durable agent.run.changed) is emitted
