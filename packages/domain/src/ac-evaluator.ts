@@ -90,6 +90,12 @@ export interface PredicateExecutors {
 export interface PredicateFailure {
   kind: AcceptancePredicateKind;
   reason: string;
+  /** Slice 7 (pc-pty-chat-374.5) — true when the predicate failed because the
+   *  executor could not run the command at all (exit 127 / spawn error, no
+   *  captured output). This is a VERIFICATION defect (environment), not a WORK
+   *  defect. The caller escalates to 'pending'/inconclusive instead of 'failed'.
+   *  Absent / false = genuine failure with observable evidence. */
+  inconclusive?: boolean;
 }
 
 export interface EvaluationResult {
@@ -106,7 +112,13 @@ export async function evaluateAcceptance(
   for (const pred of criteria) {
     const res = await evaluatePredicate(pred, ctx, executors);
     if (!res.pass) {
-      failures.push({ kind: pred.kind, reason: res.reason ?? 'predicate failed' });
+      failures.push({
+        kind: pred.kind,
+        reason: res.reason ?? 'predicate failed',
+        // Thread the inconclusive flag (slice 7): lets the server-side verifier
+        // distinguish "executor couldn't run" from "real check found a problem".
+        ...(res.inconclusive ? { inconclusive: true } : {}),
+      });
     }
   }
   return { pass: failures.length === 0, failures };
@@ -116,7 +128,7 @@ export async function evaluatePredicate(
   pred: AcceptancePredicate,
   ctx: EvaluationContext,
   executors: PredicateExecutors,
-): Promise<{ pass: boolean; reason?: string }> {
+): Promise<{ pass: boolean; reason?: string; inconclusive?: boolean }> {
   switch (pred.kind) {
     case 'fields_populated':
       return evalFieldsPopulated(pred, ctx);
@@ -402,7 +414,7 @@ async function evalFilesExist(
 async function evalBashExitZero(
   pred: Extract<AcceptancePredicate, { kind: 'bash_exit_zero' }>,
   executors: PredicateExecutors,
-): Promise<{ pass: boolean; reason?: string }> {
+): Promise<{ pass: boolean; reason?: string; inconclusive?: boolean }> {
   const cwd = pred.cwd ?? 'worktree';
   const { exitCode, timedOut, stdoutTail, stderrTail } = await executors.runBash(
     pred.command,
@@ -416,6 +428,18 @@ async function evalBashExitZero(
     // latter looks like a real test failure when it's actually just a
     // misconfigured timeout (pc-pty-chat-370).
     return { pass: false, reason: `bash command timed out: ${pred.command}` };
+  }
+  // Slice 7 (pc-pty-chat-374.5): exit 127 with NO captured output means the
+  // executor couldn't spawn the command at all (command not found / spawn
+  // error). Tag as inconclusive: this is a VERIFICATION environment defect,
+  // not proof that the agent's work is bad. The server-side verifier escalates
+  // to 'pending' instead of 'failed' when all failures carry this flag.
+  if (exitCode === 127 && !stdoutTail && !stderrTail) {
+    return {
+      pass: false,
+      reason: `bash command not found or spawn error (exit 127): ${pred.command}`,
+      inconclusive: true,
+    };
   }
   // Slice 5 (pc-pty-chat-374.4): include the captured output tail in the
   // failure reason so verification notes carry actual diagnostic output, not

@@ -214,6 +214,13 @@ export function applyAgentRunTerminalEffects(
     /* best-effort */
   }
 
+  // Slice 7 (pc-pty-chat-374.5) — ordering note: the deliverable capture above
+  // is SYNCHRONOUS and complete before this async tail fires. The verifier
+  // inside `finishTerminalEffects` enforces the write-flush barrier for
+  // worktree dispatches: it checks that the agent's working tree is committed
+  // before running side-effecting predicates (bash_exit_zero / files_exist).
+  // Any uncommitted state visible to the barrier at this point reflects the
+  // agent's work, not a server-side timing race.
   void finishTerminalEffects({
     input,
     row,
