@@ -10,11 +10,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
+
 import type { Project } from '@/features/projects/client';
 import { agentRunsApi, type AgentRunRecord } from '@/features/agent-runs/client';
 import { workflowsApi, type V2RunStatus, type V2RunSummary } from '@/features/workflows/client';
 import { MailboxInbox } from '@/features/mailbox/MailboxInbox';
 import { useAgentTranscript } from '@/store/agent-transcript';
+import { QuickTasksPanel } from './work-items/QuickTasksPanel';
 
 const ACTIVE_STATUSES = new Set<V2RunStatus>(['pending', 'running', 'paused']);
 
@@ -39,6 +42,11 @@ export function CommandActivityPanel({ projects, expanded, onExpand }: Props) {
 
   const [agentRuns, setAgentRuns] = useState<AgentRunRecord[]>([]);
   const [workflowRuns, setWorkflowRuns] = useState<V2RunSummary[]>([]);
+
+  const commandProject = useMemo(
+    () => projects.find((p) => p.slug === COMMAND_PROJECT_SLUG) ?? null,
+    [projects],
+  );
 
   const projectIdsKey = projects.map((p) => p.id).join(',');
   useEffect(() => {
@@ -97,7 +105,7 @@ export function CommandActivityPanel({ projects, expanded, onExpand }: Props) {
       <div className="border-b border-border px-3 py-2 text-sm uppercase tracking-wider text-muted-foreground">
         Activity · all projects
       </div>
-      <div className="flex flex-1 flex-col overflow-y-auto">
+      <div className="flex flex-1 flex-col overflow-y-auto min-h-0">
         <InboxRegion projectNames={projectNames} />
         <Region title="Running agents" count={agentRuns.length} empty="No agents running anywhere.">
           {agentRuns.map((run) => (
@@ -126,6 +134,7 @@ export function CommandActivityPanel({ projects, expanded, onExpand }: Props) {
           ))}
         </Region>
       </div>
+      {commandProject && <QuickTasksPanel commandProject={commandProject} />}
     </div>
   );
 }
