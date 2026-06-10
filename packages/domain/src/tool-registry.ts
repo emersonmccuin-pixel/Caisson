@@ -1893,6 +1893,23 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
+    "name": "pc_get_deliverable",
+    "family": "agent-run",
+    "label": "Read a contract's deliverable",
+    "description": "Read the authoritative deliverable for any contract — the typed output the agent submitted and the verifier reads. `id` is a contract id (ULID) OR the linked work item's ULID / callsign (e.g. pc-2.1). Returns { ok, deliverable, report, status, expectedOutput }; `deliverable` is null when the agent hasn't submitted yet. Project-guarded: only reads contracts in the caller's project. Requires PC_SESSION_ID (orchestrator session); does NOT need PC_AGENT_RUN_ID. Use this before calling pc_resolve_work_item to read what the agent actually produced. This is the symmetric read of the same Contract.deliverable the worker submits via pc_submit_deliverable.",
+    "catalogDescription": "Read a contract's typed deliverable + report (orchestrator read door; symmetric to pc_submit_deliverable).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "contract id (ULID) or the linked work item's ULID / callsign (e.g. pc-2.1)"
+        }
+      },
+      "required": ["id"]
+    }
+  },
+  {
     "name": "pc_list_attachments",
     "family": "work-item",
     "label": "List a card's attachments",
@@ -2139,6 +2156,8 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_replace_stages: 'on-demand',
   pc_replace_field_schemas: 'on-demand',
   pc_write_claude_md: 'on-demand',
+  // Slice 4 — orchestrator read door for the contract deliverable.
+  pc_get_deliverable: 'first-order',
   // Worker-side — these flow INTO the orchestrator from dispatched agents.
   pc_ask_orchestrator: 'worker',
   // ☠ M7 (FD-6, 2026-06-04) — `pc_ask_user` deleted: ONE ask door. Agents ask
