@@ -473,6 +473,20 @@ export function makeExecutorDeps(
       return { outcome: 'failed', error: `cannot derive branch name from worktree path: ${run.worktreePath}` };
     }
 
+    // Worktree teardown — the branch has verifiably landed (both positive
+    // receipts), so the run worktree + branch have no further purpose.
+    // Best-effort: a teardown failure (Windows file lock, etc.) must never
+    // fail an already-merged node; the boot sweep retries leftovers.
+    const teardownBestEffort = async (): Promise<void> => {
+      try {
+        await opts.worktrees.teardownAfterMerge(branch);
+      } catch (err) {
+        console.warn(
+          `[dag-run] worktree teardown after merge failed for "${branch}" (boot sweep will retry): ${(err as Error).message}`,
+        );
+      }
+    };
+
     const emitConflict = async (): Promise<void> => {
       // Board visibility: move card to on_conflict_stage (documented side-effect
       // of the merge node — FD-9 exception, per the build decisions). A failed
@@ -532,6 +546,7 @@ export function makeExecutorDeps(
           nodeId: node.id,
           data: { branch, idempotent: true },
         });
+        await teardownBestEffort();
         return { outcome: 'merged' };
       }
 
@@ -575,6 +590,7 @@ export function makeExecutorDeps(
         nodeId: node.id,
         data: { branch },
       });
+      await teardownBestEffort();
       return { outcome: 'merged' };
 
     } catch (err) {

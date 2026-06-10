@@ -3,6 +3,7 @@ import './diagnostics.ts'; // FIRST — arm crash capture before anything else l
 import { serve } from '@hono/node-server';
 import { RESPONSE_ALREADY_SENT } from '@hono/node-server/utils/response';
 import { Hono } from 'hono';
+import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse as NodeServerResponse } from 'node:http';
 import { isAbsolute, relative, resolve } from 'node:path';
@@ -24,6 +25,7 @@ import {
   insertPostTurnSummary,
   getProjectById,
   getProjectBySlug,
+  listNonTerminalAgentRuns,
   listProjects,
   newId,
   pruneLiveOutbox,
@@ -652,6 +654,46 @@ try {
     }
   } catch (err) {
     console.error('[workflow-runs] boot reconcile failed:', (err as Error).message);
+  }
+}
+
+// Worktree boot sweep — backstop for the merge-node teardown. Reaps run
+// worktrees whose branch already landed on dev, merged orphan branches, and
+// husk dirs left by interrupted removals. Worktrees referenced by any live
+// run (agent: non-terminal; workflow: anything not completed/cancelled —
+// failed runs keep theirs for resume/re-drive) are never touched.
+// Fire-and-forget per project so a slow git/disk can't block startup.
+{
+  const inUse: string[] = [];
+  try {
+    for (const run of listNonTerminalAgentRuns()) {
+      if (run.worktreeDir) inUse.push(run.worktreeDir);
+    }
+    for (const run of workflowRunsV2Repo.listRunsByStatus(['pending', 'running', 'paused', 'failed'])) {
+      if (run.worktreePath) inUse.push(run.worktreePath);
+    }
+  } catch (err) {
+    console.warn(`[worktree-sweep] in-use scan failed, skipping sweep: ${(err as Error).message}`);
+  }
+  for (const p of listProjects()) {
+    const runtime = projectRegistry.get(p.id);
+    // No worktree dir on disk = this project never dispatched isolated runs.
+    if (!runtime || !existsSync(runtime.worktreeBaseDir)) continue;
+    void runtime
+      .worktrees()
+      .sweepStale(inUse)
+      .then((r) => {
+        if (r.removedWorktrees.length || r.deletedBranches.length || r.removedHusks.length) {
+          console.log(
+            `[worktree-sweep] ${p.slug}: removed ${r.removedWorktrees.length} worktrees, ` +
+              `${r.deletedBranches.length} branches, ${r.removedHusks.length} husks` +
+              (r.kept.length ? ` (kept ${r.kept.length})` : ''),
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn(`[worktree-sweep] ${p.slug} failed: ${(err as Error).message}`);
+      });
   }
 }
 

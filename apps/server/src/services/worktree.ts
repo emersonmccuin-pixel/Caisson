@@ -15,14 +15,18 @@
 
 import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import { readdir, rm } from 'node:fs/promises';
 
 import {
   attachWorktree as _attachWorktree,
+  branchMergedIntoDev as _branchMergedIntoDev,
   createWorktree as _createWorktree,
+  deleteBranch as _deleteBranch,
   destroyWorktree as _destroyWorktree,
   ensureDevWorktree as _ensureDevWorktree,
   gitMergeState as _gitMergeState,
   getWorktreeStatus as _getWorktreeStatus,
+  listBranchesByPrefix as _listBranchesByPrefix,
   listWorktrees as _listWorktrees,
   mergeBranchIntoDev as _mergeBranchIntoDev,
   pruneWorktrees as _pruneWorktrees,
@@ -82,6 +86,30 @@ export interface WorktreeServiceDeps {
    * tests without inspecting a real git worktree.
    */
   getWorktreeStatus?: (wtPath: string) => Promise<{ branch: string | null; clean: boolean }>;
+  /** Override for `branchMergedIntoDev` (avoids real git in tests). */
+  branchMergedIntoDev?: (workspaceDir: string, branch: string) => Promise<boolean>;
+  /** Override for `deleteBranch` (avoids real git in tests). */
+  deleteBranch?: (workspaceDir: string, branch: string) => Promise<void>;
+  /** Override for `listBranchesByPrefix` (avoids real git in tests). */
+  listBranchesByPrefix?: (workspaceDir: string, prefixes: string[]) => Promise<string[]>;
+  /** Override for baseDir directory listing (sweep husk scan). */
+  listBaseDirNames?: (baseDir: string) => Promise<string[]>;
+  /** Override for recursive directory delete (sweep husk removal). */
+  removeDirectory?: (path: string) => Promise<void>;
+}
+
+/** Names the engine reaps automatically: per-run isolation worktrees only. */
+const REAPABLE_NAME_RE = /^(agent|wf)-[A-Za-z0-9._-]+$/;
+
+export interface WorktreeSweepResult {
+  /** Registered worktrees removed (branch merged, not in use). */
+  removedWorktrees: string[];
+  /** Local branches deleted (merged, no worktree, not in use). */
+  deletedBranches: string[];
+  /** Unregistered leftover directories deleted from baseDir. */
+  removedHusks: string[];
+  /** Worktrees kept (in use by a run, or branch not merged yet). */
+  kept: string[];
 }
 
 /**
@@ -171,6 +199,137 @@ export class WorktreeService {
     const name = nameFromPath(wtPath);
     if (name) markWorktreeDestroyed(name);
     await this.refresh();
+  }
+
+  /**
+   * Tear down a run worktree after its branch has verifiably landed on dev:
+   * remove the worktree (force — node_modules is untracked) and delete the
+   * local branch. Refuses loudly if the branch is NOT merged — never deletes
+   * unlanded work. Called by the workflow merge node after both positive
+   * merge receipts; the boot sweep is the backstop for anything missed.
+   */
+  async teardownAfterMerge(branch: string): Promise<void> {
+    const mergedFn = this.deps.branchMergedIntoDev ?? _branchMergedIntoDev;
+    if (!(await mergedFn(this.workspaceDir, branch))) {
+      throw new Error(
+        `TEARDOWN GUARD: branch "${branch}" is not merged into dev — refusing to tear down`,
+      );
+    }
+    // Worktree dir name === branch name (ensureWorktree contract). The dir may
+    // already be gone (manual cleanup, partial removal) — branch delete still runs.
+    try {
+      await this.destroy(branch, true);
+    } catch (err) {
+      if (!/is not a working tree|No such file|not a valid path/i.test((err as Error).message)) {
+        throw err;
+      }
+      const pruneFn = this.deps.pruneWorktrees ?? _pruneWorktrees;
+      await pruneFn(this.workspaceDir);
+    }
+    const deleteFn = this.deps.deleteBranch ?? _deleteBranch;
+    await deleteFn(this.workspaceDir, branch);
+  }
+
+  /**
+   * Boot-time backstop sweep. Reaps, under this project's baseDir only:
+   *  1. registered `agent-*`/`wf-*` worktrees whose branch is merged into dev
+   *     and which no live run references,
+   *  2. merged local `agent-*`/`wf-*` branches with no worktree left,
+   *  3. unregistered leftover directories (husks from interrupted removals —
+   *     Windows file locks abort `git worktree remove` partway).
+   * Never touches `__dev-merge`, unmerged branches, or in-use paths.
+   */
+  async sweepStale(inUsePaths: Iterable<string>): Promise<WorktreeSweepResult> {
+    const result: WorktreeSweepResult = {
+      removedWorktrees: [],
+      deletedBranches: [],
+      removedHusks: [],
+      kept: [],
+    };
+    const inUse = new Set<string>();
+    const inUseNames = new Set<string>();
+    for (const p of inUsePaths) {
+      inUse.add(normalize(p));
+      const n = nameFromPath(p);
+      if (n) inUseNames.add(n);
+    }
+
+    const pruneFn = this.deps.pruneWorktrees ?? _pruneWorktrees;
+    await pruneFn(this.workspaceDir);
+
+    const baseNorm = normalize(this.baseDir);
+    const entries = (await this.list()).slice(1).filter((e) => {
+      const name = nameFromPath(e.path);
+      return (
+        normalize(e.path).startsWith(baseNorm) && name !== null && REAPABLE_NAME_RE.test(name)
+      );
+    });
+
+    const mergedFn = this.deps.branchMergedIntoDev ?? _branchMergedIntoDev;
+    const survivors = new Set<string>();
+    for (const entry of entries) {
+      const name = nameFromPath(entry.path)!;
+      const branch = entry.branch ?? name;
+      if (inUse.has(normalize(entry.path)) || !(await mergedFn(this.workspaceDir, branch))) {
+        result.kept.push(name);
+        survivors.add(name);
+        continue;
+      }
+      try {
+        await this.destroy(entry.path, true);
+        result.removedWorktrees.push(name);
+      } catch {
+        // Locked dir etc. — keep; the next boot sweep retries.
+        result.kept.push(name);
+        survivors.add(name);
+      }
+    }
+
+    // Merged branches with no worktree left (teardown crash window, manual
+    // dir deletes). In-use names are skipped so a mid-re-drive merge node can
+    // still resolve its branch ref.
+    const listBranchesFn = this.deps.listBranchesByPrefix ?? _listBranchesByPrefix;
+    const branches = await listBranchesFn(this.workspaceDir, ['agent-', 'wf-']);
+    const deleteFn = this.deps.deleteBranch ?? _deleteBranch;
+    for (const branch of branches) {
+      if (survivors.has(branch) || inUseNames.has(branch)) continue;
+      if (!(await mergedFn(this.workspaceDir, branch))) continue;
+      try {
+        await deleteFn(this.workspaceDir, branch);
+        result.deletedBranches.push(branch);
+      } catch {
+        /* best-effort — retried next boot */
+      }
+    }
+
+    // Husks: dirs in baseDir that look like run worktrees but aren't
+    // registered with git (interrupted removals). Registered survivors and
+    // in-use paths are excluded above by construction.
+    const listNamesFn =
+      this.deps.listBaseDirNames ??
+      (async (dir: string) => {
+        try {
+          return (await readdir(dir, { withFileTypes: true }))
+            .filter((d) => d.isDirectory())
+            .map((d) => d.name);
+        } catch {
+          return []; // baseDir absent — nothing to sweep
+        }
+      });
+    const removeDirFn =
+      this.deps.removeDirectory ?? ((p: string) => rm(p, { recursive: true, force: true }));
+    for (const name of await listNamesFn(this.baseDir)) {
+      if (!REAPABLE_NAME_RE.test(name) || survivors.has(name) || inUseNames.has(name)) continue;
+      if (result.removedWorktrees.includes(name)) continue; // already gone via destroy()
+      try {
+        await removeDirFn(resolve(this.baseDir, name));
+        result.removedHusks.push(name);
+      } catch {
+        /* locked — retried next boot */
+      }
+    }
+
+    return result;
   }
 
   /**

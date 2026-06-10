@@ -98,6 +98,51 @@ export async function pruneWorktrees(workspaceDir: string): Promise<void> {
 }
 
 /**
+ * True when `branch`'s tip is an ancestor of local `dev` or `origin/dev`
+ * (i.e. the branch's work has landed). False when the branch doesn't exist
+ * or isn't merged — callers use this as the safety gate before teardown.
+ */
+export async function branchMergedIntoDev(
+  workspaceDir: string,
+  branch: string,
+): Promise<boolean> {
+  assertBranchName(branch);
+  const cwd = resolve(workspaceDir);
+  for (const target of ['dev', 'origin/dev']) {
+    try {
+      await exec('git', ['merge-base', '--is-ancestor', branch, target], { cwd });
+      return true;
+    } catch {
+      /* not an ancestor of this target (or ref missing) — try the next */
+    }
+  }
+  return false;
+}
+
+/**
+ * Delete local branch `branch` unconditionally (`-D`). Callers must verify
+ * merge state first (`branchMergedIntoDev`) — this primitive does not check.
+ */
+export async function deleteBranch(workspaceDir: string, branch: string): Promise<void> {
+  assertBranchName(branch);
+  await exec('git', ['branch', '-D', branch], { cwd: resolve(workspaceDir) });
+}
+
+/** List local branch names starting with any of `prefixes`. */
+export async function listBranchesByPrefix(
+  workspaceDir: string,
+  prefixes: string[],
+): Promise<string[]> {
+  const patterns = prefixes.map((p) => `refs/heads/${p}*`);
+  const { stdout } = await exec(
+    'git',
+    ['for-each-ref', '--format=%(refname:short)', ...patterns],
+    { cwd: resolve(workspaceDir) },
+  );
+  return stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+}
+
+/**
  * Attach an existing branch as a worktree at `wtPath` (no `-b`). Used to
  * recover from "branch exists but worktree dir is gone" — i.e. orphaned
  * branch from a failed prior dispatch.

@@ -16,11 +16,14 @@ export type {
 
 export {
   attachWorktree,
+  branchMergedIntoDev,
   createWorktree,
+  deleteBranch,
   destroyWorktree,
   ensureDevWorktree,
   gitMergeState,
   getWorktreeStatus,
+  listBranchesByPrefix,
   listWorktrees,
   mergeBranchIntoDev,
   pruneWorktrees,
