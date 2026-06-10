@@ -62,6 +62,7 @@ export {
   getWorkItemIncludingArchived,
   listArchivedWorkItems,
   listChildWorkItems,
+  listFocusedWorkItems,
   listWorkItems,
   moveWorkItemStage,
   patchWorkItem,

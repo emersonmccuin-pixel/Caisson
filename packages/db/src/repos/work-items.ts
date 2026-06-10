@@ -417,6 +417,18 @@ export function setWorkItemFocus(id: ULID, focused: boolean): WorkItem | null {
   return toDomain({ ...existing, focusedAt, updatedAt: now, version });
 }
 
+/** FOCUS — all live work items with focusedAt set, across every project.
+ *  Ordered by focusedAt ascending (earliest-starred first). */
+export function listFocusedWorkItems(): WorkItem[] {
+  const rows = getDb()
+    .select()
+    .from(workItems)
+    .where(and(isNull(workItems.deletedAt), isNotNull(workItems.focusedAt)))
+    .orderBy(asc(workItems.focusedAt))
+    .all() as WorkItemRow[];
+  return rows.map(toDomain);
+}
+
 /** Section 35 — look up a work item by its callsign (`pc-2`, `pc-2.1`, …)
  *  within a project. Returns null if no live row matches. Callsign is
  *  project-scoped + write-once + only assigned to non-agent rows; the

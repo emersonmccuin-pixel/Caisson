@@ -97,6 +97,13 @@ export const workItemsApi = {
     return data.note;
   },
 
+  /** pc-pty-chat-355 — cross-project list of all work items that are currently
+   *  in focus (focusedAt non-null), ordered by focusedAt ascending. */
+  focusedWorkItems: () =>
+    getJson<{ ok: true; workItems: WorkItem[] }>('/api/work-items/focused').then(
+      (r) => r.workItems,
+    ),
+
   // includeBody=1: the web UI's list feeds the detail modal (which edits body),
   // so it needs the full WorkItem shape. The slim projection (pc-pty-chat-254)
   // is for the MCP tool, not this route — without body the modal's BodyField
