@@ -643,8 +643,8 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_add_agent_mcp_server",
     "family": "agent",
     "label": "Configure an agent's MCP server",
-    "description": "Configure a per-pod MCP server (e.g. gmail, jira, custom). The pod's materialised mcp.json will merge this server into the baseline at spawn time; pod entry wins per-server-name. Pass the standard MCP config shape: { command, args, env } OR { url } (for HTTP transports). Accepts either { agentId } or { agentName }.",
-    "catalogDescription": "Attach a per-pod MCP server config (gmail, jira, etc.).",
+    "description": "Attach an MCP server that is already registered in the MCP registry to a pod, choosing which of its tools the pod may call. Register the server first (App/Project settings → MCP Servers, or the /api/mcp-servers HTTP route); this grants the pod access by the server's id and takes effect on the pod's next session. Accepts either { agentId } or { agentName } plus { mcpServerId }.",
+    "catalogDescription": "Attach a registered MCP server to a pod (per-tool grants).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -656,42 +656,16 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
           "type": "string",
           "description": "pod name (looked up if agentId absent)"
         },
-        "serverName": {
+        "mcpServerId": {
           "type": "string",
-          "description": "MCP server name (e.g. \"gmail\")"
+          "description": "ULID id of a server already registered in the MCP registry"
         },
-        "config": {
-          "type": "object",
-          "description": "MCP server config: { command, args?, env? } or { url }",
-          "properties": {
-            "command": {
-              "type": "string"
-            },
-            "args": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "env": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "url": {
-              "type": "string"
-            }
-          }
-        },
-        "reason": {
-          "type": "string",
-          "description": "optional one-line audit reason"
+        "enabledTools": {
+          "description": "which of the server's tools to grant: \"*\" for all (default), or an array of tool names"
         }
       },
       "required": [
-        "serverName",
-        "config"
+        "mcpServerId"
       ]
     }
   },

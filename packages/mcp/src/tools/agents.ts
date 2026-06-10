@@ -511,17 +511,26 @@ export async function handleAgentTool(
     }
 
     case 'pc_add_agent_mcp_server': {
-      const serverName = typeof args.serverName === 'string' ? args.serverName.trim() : '';
-      const config = args.config && typeof args.config === 'object' ? args.config : null;
-      if (!serverName) {
+      const mcpServerId = typeof args.mcpServerId === 'string' ? args.mcpServerId.trim() : '';
+      if (!mcpServerId) {
         return {
-          content: [{ type: 'text', text: 'pc_add_agent_mcp_server: serverName required' }],
+          content: [{ type: 'text', text: 'pc_add_agent_mcp_server: mcpServerId required' }],
           isError: true,
         };
       }
-      if (!config) {
+      let enabledTools: '*' | string[];
+      if (args.enabledTools === undefined || args.enabledTools === '*') {
+        enabledTools = '*';
+      } else if (Array.isArray(args.enabledTools)) {
+        enabledTools = args.enabledTools.filter((t): t is string => typeof t === 'string');
+      } else {
         return {
-          content: [{ type: 'text', text: 'pc_add_agent_mcp_server: config required (object)' }],
+          content: [
+            {
+              type: 'text',
+              text: 'pc_add_agent_mcp_server: enabledTools must be "*" or an array of tool names',
+            },
+          ],
           isError: true,
         };
       }
@@ -533,17 +542,9 @@ export async function handleAgentTool(
             isError: true,
           };
         }
-        const payload: Record<string, unknown> = {
-          name: serverName,
-          config,
-          actor: 'orchestrator',
-          reason: typeof args.reason === 'string' && args.reason.trim().length > 0
-            ? args.reason.trim()
-            : 'mcp-add-server',
-        };
-        const res = await ctx.postServer(
-          `/api/agents/pods/${encodeURIComponent(id.id)}/mcp-servers`,
-          payload,
+        const res = await ctx.putServer(
+          `/api/agents/pods/${encodeURIComponent(id.id)}/mcp-attachments/${encodeURIComponent(mcpServerId)}`,
+          { enabledTools },
         );
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
@@ -626,13 +627,8 @@ export async function handleAgentTool(
             isError: true,
           };
         }
-        const reason =
-          typeof args.reason === 'string' && args.reason.trim().length > 0
-            ? args.reason.trim()
-            : 'mcp-delete-server';
-        const qs = `actor=orchestrator&reason=${encodeURIComponent(reason)}`;
         const res = await ctx.deleteServer(
-          `/api/agents/pods/${encodeURIComponent(id.id)}/mcp-servers/${encodeURIComponent(mcpServerId)}?${qs}`,
+          `/api/agents/pods/${encodeURIComponent(id.id)}/mcp-attachments/${encodeURIComponent(mcpServerId)}`,
         );
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
