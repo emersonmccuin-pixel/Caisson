@@ -27,8 +27,10 @@ export type {
 export {
   ACCEPTANCE_PREDICATE_KINDS,
   EXPECTED_OUTPUT_KINDS,
+  PREDICATE_DECIDABILITY,
   VERIFICATION_STATUSES,
   VERIFICATION_TIERS,
+  isDecidablePredicate,
   isVerificationTier,
 } from './contract.ts';
 // First-class contract v2 union. Also available namespaced as ContractV2.* for
