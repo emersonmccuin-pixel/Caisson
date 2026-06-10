@@ -601,11 +601,19 @@ export class LowLevelSpawn extends EventEmitter {
           try {
             const existing = readFileSync(path, 'utf-8');
             startLine = existing.split('\n').filter(Boolean).length;
-          } catch {
-            // Best-effort. Falling back to 0 inherits the replay bug on this
-            // run but doesn't hard-fail; surfaces as a premature complete()
-            // that the user can re-dispatch around.
-            startLine = 0;
+          } catch (err) {
+            // NEVER fall back to line 0: replaying the prior conversation
+            // re-emits old user rows + turn-ends (duplicate chat rows on the
+            // wire, a false resume receipt). A read failure right after
+            // existsSync()=true is transient (AV lock, vanish race) — retry on
+            // the poll cadence; a persistent failure leaves the run without a
+            // tailer and the stall ladder fails it with a typed reason.
+            ptyLog('jsonl-resume-read-failed', {
+              path,
+              error: (err as Error).message,
+            });
+            this.jsonlPollTimer = setTimeout(tryAttach, 250);
+            return;
           }
         }
         this.tailer = new JsonlTailer({ filePath: path, startLine });
