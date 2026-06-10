@@ -38,6 +38,9 @@ contextBridge.exposeInMainWorld('pcDesktop', {
     check: (): Promise<UpdateState> => ipcRenderer.invoke('pc:update:check'),
     download: (): Promise<UpdateState> => ipcRenderer.invoke('pc:update:download'),
     install: (): Promise<boolean> => ipcRenderer.invoke('pc:update:install'),
+    getBetaOptIn: (): Promise<boolean> => ipcRenderer.invoke('pc:update:getBetaOptIn'),
+    setBetaOptIn: (enabled: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('pc:update:setBetaOptIn', enabled),
     // Subscribe to main-process state pushes. Returns an unsubscribe fn.
     subscribe: (cb: (state: UpdateState) => void): (() => void) => {
       const listener = (_event: unknown, state: UpdateState) => cb(state);

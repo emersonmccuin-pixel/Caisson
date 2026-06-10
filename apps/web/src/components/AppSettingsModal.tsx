@@ -704,7 +704,7 @@ function UsageTab() {
 // ── Updates tab ───────────────────────────────────────────────────────────
 
 function UpdatesTab() {
-  const { isDesktop, state, check, download, install } = useDesktopUpdates();
+  const { isDesktop, state, betaOptIn, check, download, install, setBetaOptIn } = useDesktopUpdates();
   const [busy, setBusy] = useState(false);
 
   // Not in the desktop shell at all → updates are a desktop-only concern.
@@ -840,6 +840,20 @@ function UpdatesTab() {
           Last checked {new Date(state.checkedAt).toLocaleString()}.
         </div>
       )}
+
+      <FieldRow
+        label="Beta updates"
+        help="Get pre-release builds early; may be less stable."
+      >
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={betaOptIn ?? false}
+            onChange={(e) => void setBetaOptIn(e.target.checked)}
+          />
+          <span>Receive beta updates</span>
+        </label>
+      </FieldRow>
     </div>
   );
 }

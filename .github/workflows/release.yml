@@ -1,5 +1,13 @@
 name: release
 
+# Tag convention:
+#   stable release:  vX.Y.Z           (e.g. v1.2.3)       → full release, latest.yml updated
+#   beta prerelease: vX.Y.Z-beta.N    (e.g. v1.2.3-beta.1) → GitHub prerelease, latest stable links skipped
+# Any tag containing '-' is treated as a prerelease. Workflow uses the
+# is_prerelease step output to branch publish behavior.
+# To cut a beta: bump apps/desktop/package.json version to x.y.z-beta.N, commit, tag vx.y.z-beta.N off dev.
+# To cut stable: bump version to x.y.z, commit, tag vx.y.z off the release branch.
+
 on:
   push:
     tags:
@@ -86,6 +94,18 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Detect whether this tag is a prerelease (any '-' in the tag name).
+      # Output: is_prerelease=true|false — used by build/publish steps below.
+      - name: Detect prerelease tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_name }}" == *"-"* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Mac: native installer drops the binary at ~/.local/bin/claude
       - name: Install Claude CLI 2.1.165 (macOS)
         if: startsWith(matrix.os, 'macos')
@@ -145,7 +165,13 @@ jobs:
 
       - name: Build and publish release (macOS)
         if: github.event_name == 'push' && startsWith(matrix.os, 'macos')
-        run: pnpm desktop:publish:mac
+        shell: bash
+        run: |
+          if [[ "${{ steps.tag.outputs.is_prerelease }}" == "true" ]]; then
+            pnpm desktop:publish:mac:prerelease
+          else
+            pnpm desktop:publish:mac
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -154,9 +180,9 @@ jobs:
 
       # Stable-named copy so the README can link to a version-agnostic URL
       # (releases/latest/download/Caisson-latest-mac-arm64.dmg). --clobber
-      # overwrites the prior release's copy when re-run.
+      # overwrites the prior release's copy when re-run. Skipped for prereleases.
       - name: Publish "latest" stable macOS link
-        if: github.event_name == 'push' && startsWith(matrix.os, 'macos')
+        if: github.event_name == 'push' && startsWith(matrix.os, 'macos') && steps.tag.outputs.is_prerelease == 'false'
         run: |
           set -euo pipefail
           dmg=$(ls apps/desktop/release/*-mac-arm64.dmg | head -1)
@@ -167,14 +193,20 @@ jobs:
 
       - name: Build and publish release (Windows)
         if: github.event_name == 'push' && matrix.os == 'windows-latest'
-        run: pnpm desktop:publish:win
+        shell: bash
+        run: |
+          if [[ "${{ steps.tag.outputs.is_prerelease }}" == "true" ]]; then
+            pnpm desktop:publish:win:prerelease
+          else
+            pnpm desktop:publish:win
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Stable-named copy for the version-agnostic README link
-      # (releases/latest/download/Caisson-latest-win-x64.exe).
+      # (releases/latest/download/Caisson-latest-win-x64.exe). Skipped for prereleases.
       - name: Publish "latest" stable Windows link
-        if: github.event_name == 'push' && matrix.os == 'windows-latest'
+        if: github.event_name == 'push' && matrix.os == 'windows-latest' && steps.tag.outputs.is_prerelease == 'false'
         shell: pwsh
         run: |
           $exe = Get-ChildItem apps/desktop/release/*-win-x64.exe | Select-Object -First 1

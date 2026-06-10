@@ -25,7 +25,7 @@ import {
   waitForPortsFree,
   type ExitInfo,
 } from '@pc/supervisor';
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   packagedAgentHostLockFilePath,
@@ -317,6 +317,37 @@ async function bootSupervisedStack(config: StackConfig): Promise<boolean> {
 // to the UI over IPC (`pc:update-state`). Only meaningful in a packaged build
 // (feed/signing exist); otherwise the status stays `unsupported` and every IPC
 // verb short-circuits.
+//
+// Beta channel: users opt in via a persisted JSON pref (update-prefs.json in
+// userData). When enabled, autoUpdater.channel='beta' so the updater checks
+// beta.yml instead of latest.yml. Beta users still receive stable releases
+// because stable is the lower channel.
+
+// ── Beta opt-in persistence ───────────────────────────────────────────────
+
+const UPDATE_PREFS_FILENAME = 'update-prefs.json';
+
+interface UpdatePrefs {
+  betaOptIn: boolean;
+}
+
+function readUpdatePrefs(dataDir: string): UpdatePrefs {
+  try {
+    const raw = readFileSync(join(dataDir, UPDATE_PREFS_FILENAME), 'utf8');
+    const parsed = JSON.parse(raw) as Partial<UpdatePrefs>;
+    return { betaOptIn: parsed.betaOptIn === true };
+  } catch {
+    return { betaOptIn: false };
+  }
+}
+
+function writeUpdatePrefs(dataDir: string, prefs: UpdatePrefs): void {
+  try {
+    writeFileSync(join(dataDir, UPDATE_PREFS_FILENAME), JSON.stringify(prefs, null, 2));
+  } catch {
+    /* best-effort */
+  }
+}
 
 type UpdateStatus =
   | 'unsupported'
@@ -363,6 +394,12 @@ function initAutoUpdater(): void {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
+  // Apply persisted beta-channel preference before the first check.
+  if (resolvedDataDir) {
+    const { betaOptIn } = readUpdatePrefs(resolvedDataDir);
+    if (betaOptIn) autoUpdater.channel = 'beta';
+  }
+
   autoUpdater.on('checking-for-update', () =>
     pushUpdateState({ status: 'checking', error: null }),
   );
@@ -408,6 +445,25 @@ ipcMain.handle('pc:update:download', async () => {
     pushUpdateState({ status: 'error', error: (err as Error).message });
   }
   return updateState;
+});
+
+// Beta opt-in: get/set the persisted preference and apply the channel live.
+ipcMain.handle('pc:update:getBetaOptIn', () => {
+  const dataDir = resolvedDataDir ?? app.getPath('userData');
+  return readUpdatePrefs(dataDir).betaOptIn;
+});
+
+ipcMain.handle('pc:update:setBetaOptIn', (_event, enabled: unknown) => {
+  const dataDir = resolvedDataDir ?? app.getPath('userData');
+  const betaOptIn = enabled === true;
+  writeUpdatePrefs(dataDir, { betaOptIn });
+  if (updaterEnabled()) {
+    autoUpdater.channel = betaOptIn ? 'beta' : 'latest';
+    autoUpdater
+      .checkForUpdates()
+      .catch((err) => pushUpdateState({ status: 'error', error: (err as Error).message }));
+  }
+  return betaOptIn;
 });
 
 // Native OS folder chooser — used by the onboarding wizard (and future pickers)
