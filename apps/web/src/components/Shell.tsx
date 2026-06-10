@@ -144,6 +144,7 @@ export function Shell({
         <Panel id="center" defaultSize="70%" minSize="30%">
           <Center
             activeProject={activeProject}
+            projects={projects}
             projectCount={projects.length}
             wsEvents={wsEvents}
             wsSubscribeRawTerminal={wsSubscribeRawTerminal}
@@ -250,6 +251,7 @@ function AgentTranscriptModalMount({
 
 function Center({
   activeProject,
+  projects,
   projectCount,
   wsEvents,
   wsSubscribeRawTerminal,
@@ -264,6 +266,7 @@ function Center({
   defaultOrchestratorSurface,
 }: {
   activeProject: Project | null;
+  projects: Project[];
   projectCount: number;
   wsEvents: WsEnvelope[];
   wsSubscribeRawTerminal: (cb: (envs: WsEnvelope[]) => void) => () => void;
@@ -297,7 +300,7 @@ function Center({
       <div className="flex-1 overflow-hidden">
         {effectiveTab === 'work-items' ? (
           <ErrorBoundary key={activeProject.id} label="work items">
-            <WorkItemsPage project={activeProject} events={wsEvents} />
+            <WorkItemsPage project={activeProject} projects={projects} events={wsEvents} />
           </ErrorBoundary>
         ) : effectiveTab === 'orchestrator' ? (
           <ErrorBoundary key={activeProject.id} label="chat">
