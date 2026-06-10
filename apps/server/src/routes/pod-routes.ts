@@ -29,15 +29,12 @@ import {
   cloneAgentToProject,
   createAgent,
   createKnowledge,
-  createMcpServer,
   createSecret,
   deleteKnowledge,
-  deleteMcpServer,
   deleteSecret,
   deleteMcpAttachmentByPair,
   getAgentById,
   getKnowledge,
-  getMcpServer,
   getMcpServerRegistry,
   getSecret,
   listAgentAudit,
@@ -45,7 +42,6 @@ import {
   listMcpAttachmentsForAgent,
   listProjectVisibleAgents,
   listKnowledge,
-  listMcpServers,
   listSecrets,
   promoteAgentToGlobal,
   softDeleteAgent,
@@ -62,7 +58,6 @@ import type {
   PodAuditField,
   PodKnowledgeKind,
   PodKnowledgeRow,
-  PodMcpServerRow,
   PodScope,
   PodSecretRow,
   ULID,
@@ -72,7 +67,6 @@ import {
   POD_AUDIT_FIELDS,
   POD_KNOWLEDGE_KINDS,
 } from '@pc/domain';
-import { parsePodMcpServerConfig } from '../services/pod-mcp-config.ts';
 import { announcePod, announcePodDeleted } from '../services/pod-writer.ts';
 
 export type PodMutationKind = 'created' | 'updated' | 'deleted';
@@ -123,7 +117,6 @@ export interface PodBundle {
   agent: PodAgentRow;
   knowledge: PodKnowledgeRow[];
   secrets: PublicPodSecret[];
-  mcpServers: PodMcpServerRow[];
 }
 
 /** Assemble the full bundle for the modal mount. Lives next to the routes so
@@ -135,7 +128,6 @@ export function getPodBundle(agentId: ULID): PodBundle | null {
     agent,
     knowledge: listKnowledge({ agentId: agent.id, scope: agent.scope }),
     secrets: listSecrets({ agentId: agent.id, scope: agent.scope }).map(publicSecret),
-    mcpServers: listMcpServers({ agentId: agent.id, scope: agent.scope }),
   };
 }
 
@@ -437,15 +429,12 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     }
     announcePod(result.agent.id, 'created');
     deps.onPodChanged?.(result.agent.name, 'created');
-    return c.json(
-      { ok: true, pod: result.agent, copied: result.copied },
-      201,
-    );
+    return c.json({ ok: true, pod: result.agent, copied: result.copied }, 201);
   });
 
   /** Reset a stock pod's scalar fields to its canonical seed content. Only
    *  stock pods are valid targets; any other pod returns
-   *  400. Knowledge / secrets / mcp servers are untouched.
+   *  400. Knowledge / secrets / registry attachments are untouched.
    *  Body: `{ actor?, reason? }` — actor defaults to 'user', reason defaults
    *  to 'ui-reset-to-default'. */
   app.post('/api/agents/pods/:id/reset-to-default', async (c) => {
@@ -794,61 +783,6 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     const qs = new URL(c.req.url).searchParams;
     const removed = deleteSecret(secretId, auditFromQuery(qs, 'user', 'ui-delete-secret'));
     if (!removed) return c.json({ ok: false, error: `unknown secret: ${secretId}` }, 404);
-    bumpAgentRev(id);
-    announcePod(id, 'updated');
-    deps.onPodChanged?.(agent.name, 'updated');
-    return c.json({ ok: true });
-  });
-
-  // --- mcp servers --------------------------------------------------------
-
-  app.post('/api/agents/pods/:id/mcp-servers', async (c) => {
-    const id = c.req.param('id') as ULID;
-    const agent = getAgentById(id);
-    if (!agent) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    let body: Record<string, unknown>;
-    try {
-      body = (await c.req.json()) as Record<string, unknown>;
-    } catch {
-      return c.json({ ok: false, error: 'invalid JSON body' }, 400);
-    }
-    const name = typeof body.name === 'string' ? body.name.trim() : '';
-    if (!name) return c.json({ ok: false, error: 'name required' }, 400);
-    let row: PodMcpServerRow;
-    try {
-      const config = parsePodMcpServerConfig(body.config);
-      // Section 22.2 — mcp servers inherit agent.scope/projectId. See above.
-      row = createMcpServer(
-        {
-          agentId: id,
-          scope: agent.scope,
-          projectId: agent.projectId ?? null,
-          name,
-          config,
-        },
-        auditFromBody(body, 'user', 'ui-create-mcp'),
-      );
-    } catch (err) {
-      return c.json({ ok: false, error: (err as Error).message }, 400);
-    }
-    bumpAgentRev(id);
-    announcePod(id, 'updated');
-    deps.onPodChanged?.(agent.name, 'updated');
-    return c.json({ ok: true, mcpServer: row }, 201);
-  });
-
-  app.delete('/api/agents/pods/:id/mcp-servers/:mcpId', (c) => {
-    const id = c.req.param('id') as ULID;
-    const mcpId = c.req.param('mcpId') as ULID;
-    const agent = getAgentById(id);
-    if (!agent) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    const existing = getMcpServer(mcpId);
-    if (!existing || existing.agentId !== id) {
-      return c.json({ ok: false, error: `unknown mcp server: ${mcpId}` }, 404);
-    }
-    const qs = new URL(c.req.url).searchParams;
-    const removed = deleteMcpServer(mcpId, auditFromQuery(qs, 'user', 'ui-delete-mcp'));
-    if (!removed) return c.json({ ok: false, error: `unknown mcp server: ${mcpId}` }, 404);
     bumpAgentRev(id);
     announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
