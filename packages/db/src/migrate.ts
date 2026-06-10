@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,8 +22,48 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export function runMigrations(migrationsFolder = join(__dirname, '..', 'drizzle')): void {
   const db = getDb();
   migrate(db, { migrationsFolder });
+  reconcileSkippedMigrations(migrationsFolder);
   assertSchemaIntact();
   seedGlobalSettings();
+}
+
+/** Apply journal entries drizzle's watermark skipped (the v0.6.0 crash-loop).
+ *
+ *  drizzle's migrator applies "entries whose `when` exceeds the LAST applied
+ *  row's created_at" — a single watermark, not per-entry presence. A journal
+ *  whose `when` values are not strictly increasing (0054 < 0053) makes the
+ *  out-of-order entry invisible to every DB already at the watermark: it is
+ *  silently skipped, and the app crash-loops at assertSchemaIntact() with no
+ *  user-side remedy. Reconcile by IDENTITY instead: a journal entry is applied
+ *  iff a ledger row with created_at == entry.when exists; anything missing is
+ *  applied here and recorded, turning the crash-loop into self-repair on the
+ *  next boot. (Content hash is NOT the key — applied migration files have
+ *  been edited after application in this repo, so hashes legitimately drift.) */
+function reconcileSkippedMigrations(migrationsFolder: string): void {
+  const raw = getRawDb();
+  const journal = JSON.parse(
+    readFileSync(join(migrationsFolder, 'meta', '_journal.json'), 'utf8'),
+  ) as { entries: Array<{ when: number; tag: string }> };
+  // Ledger exists: migrate() above creates it before we get here.
+  const applied = new Set(
+    (raw.prepare('SELECT created_at FROM __drizzle_migrations').all() as {
+      created_at: number | string;
+    }[]).map((r) => Number(r.created_at)),
+  );
+  for (const entry of journal.entries) {
+    if (applied.has(entry.when)) continue;
+    const content = readFileSync(join(migrationsFolder, `${entry.tag}.sql`), 'utf8');
+    raw.transaction(() => {
+      for (const statement of content.split('--> statement-breakpoint')) {
+        const sql = statement.trim();
+        if (sql) raw.exec(sql);
+      }
+      raw
+        .prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)')
+        .run(createHash('sha256').update(content).digest('hex'), entry.when);
+    })();
+    console.warn(`[pc][db] reconciled skipped migration ${entry.tag} (when=${entry.when})`);
+  }
 }
 
 /** Fail fast on migration-ledger drift. drizzle decides what to apply by the
