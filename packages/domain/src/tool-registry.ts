@@ -1134,6 +1134,17 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
+    "name": "pc_list_waiting_on_you",
+    "family": "project",
+    "label": "List everything waiting on you",
+    "description": "Cross-project read: returns everything across ALL projects that is blocked on the human's input right now — paused agents waiting for an answer (pending asks), workflow runs paused at a human-review gate, and actionable inbox items (verification-review, workflow-review, agent-ask-escalated). Grouped by project with counts. No arguments. Use this at the start of a Command session to surface the full picture of 'what needs you today' before diving into individual projects. Returns { ok, totalCount, byProject: [{ projectId, projectName, projectSlug, pendingAsks: [{ askId, agentRunId, kind, promptBody, context, options, createdAt }], workflowReviews: [{ runId, workflowName, nodeId, workItemId }], inboxItems: [{ recipientId, messageId, kind, subject, payload, createdAt }] }] }.",
+    "catalogDescription": "Enumerate everything across ALL projects blocked on the human's input (paused agents, workflow review gates, inbox items).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
     "name": "pc_list_agents",
     "family": "agent",
     "label": "List available agents",
@@ -2127,6 +2138,7 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_list_agents: 'first-order',
   pc_list_stages: 'first-order',
   pc_list_projects: 'first-order',
+  pc_list_waiting_on_you: 'first-order',
   pc_list_workflows: 'first-order',
   pc_list_field_schemas: 'first-order',
   pc_list_areas: 'first-order',

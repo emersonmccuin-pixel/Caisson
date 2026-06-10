@@ -691,6 +691,30 @@ export async function handleWorkItemTool(
       }
     }
 
+    case 'pc_list_waiting_on_you': {
+      // Cross-project read: all pending asks + workflow human-review gates +
+      // actionable inbox items, grouped by project.
+      try {
+        const res = await ctx.getServer('/api/waiting-on-you');
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [
+            { type: 'text', text: `pc_list_waiting_on_you failed (${res.status}): ${res.body}` },
+          ],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [
+            { type: 'text', text: `pc_list_waiting_on_you failed: ${(err as Error).message}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     case 'pc_list_areas': {
       const areasTargetPid =
         typeof args.targetProjectId === 'string' && args.targetProjectId.trim()
