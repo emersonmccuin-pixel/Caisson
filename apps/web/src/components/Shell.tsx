@@ -45,7 +45,7 @@ import { ChatWorkItemModalMount } from './ChatWorkItemModalMount';
 import { ProjectSettingsPanel } from './ProjectSettingsPanel';
 import { RichLinkPreviewCard } from './RichLinkPreviewCard';
 import { DevControls } from './DevControls';
-import { TabBar } from './Tabs';
+import { COMMAND_TABS, TABS, TabBar } from './Tabs';
 import { WorkflowsList } from './WorkflowsList';
 
 // Section 32.1 — TabBar lifted to a topbar but spanning the full width
@@ -284,15 +284,22 @@ function Center({
     return <EmptyState projectCount={projectCount} onCreateProject={onCreateProject} />;
   }
 
+  const isCommand = activeProject.slug === COMMAND_PROJECT_SLUG;
+  const activeTabs = isCommand ? COMMAND_TABS : TABS;
+  // If the persisted tab is not in this surface's nav (e.g. stored 'workflows'
+  // then switched to Command), fall back to the orchestrator view.
+  const effectiveTab =
+    isCommand && (tab === 'workflows' || tab === 'files') ? 'orchestrator' : tab;
+
   return (
     <div className="flex h-full flex-col bg-background">
-      <TabBar value={tab} onChange={setTab} />
+      <TabBar value={effectiveTab} onChange={setTab} tabs={activeTabs} />
       <div className="flex-1 overflow-hidden">
-        {tab === 'work-items' ? (
+        {effectiveTab === 'work-items' ? (
           <ErrorBoundary key={activeProject.id} label="work items">
             <WorkItemsPage project={activeProject} events={wsEvents} />
           </ErrorBoundary>
-        ) : tab === 'orchestrator' ? (
+        ) : effectiveTab === 'orchestrator' ? (
           <ErrorBoundary key={activeProject.id} label="chat">
             <Orchestrator
               project={activeProject}
@@ -306,13 +313,13 @@ function Center({
               defaultOrchestratorSurface={defaultOrchestratorSurface}
             />
           </ErrorBoundary>
-        ) : tab === 'workflows' ? (
+        ) : effectiveTab === 'workflows' ? (
           <WorkflowsList project={activeProject} events={wsEvents} />
-        ) : tab === 'agents' ? (
+        ) : effectiveTab === 'agents' ? (
           <AgentsList project={activeProject} events={wsEvents} />
-        ) : tab === 'files' ? (
+        ) : effectiveTab === 'files' ? (
           <FilesViewer project={activeProject} />
-        ) : tab === 'project-settings' ? (
+        ) : effectiveTab === 'project-settings' ? (
           <ProjectSettingsPanel
             project={activeProject}
             onProjectUpdated={onProjectUpdated}
