@@ -35,7 +35,7 @@ The proof that it works: **Caisson builds itself.** It's the daily driver I use 
 
 ## What it costs
 
-Your existing Claude subscription: same login, same plan. Caisson drives the interactive Claude CLI directly. No separate API key, no per-token charge.
+Caisson runs on your own Claude subscription. It drives Claude Code (Anthropic's CLI) directly, so you need a Claude plan that includes Claude Code access (Pro or Max). Same login, same plan, no separate API key and no per-token charge.
 
 ## For developers
 
