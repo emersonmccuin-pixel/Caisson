@@ -106,7 +106,7 @@ export function CommandActivityPanel({ projects, expanded, onExpand }: Props) {
               title={run.agentName}
               project={projectNames[run.projectId] ?? run.projectId}
               elapsed={formatElapsed(nowMs - run.startedAt)}
-              onClick={() => openTranscript(run.runId)}
+              onClick={() => openTranscript(run.runId, run)}
             />
           ))}
         </Region>

@@ -222,6 +222,7 @@ function AgentTranscriptModalMount({
   events: WsEnvelope[];
 }) {
   const openRunId = useAgentTranscript((s) => s.runId);
+  const preloadedRun = useAgentTranscript((s) => s.preloadedRun);
   const close = useAgentTranscript((s) => s.close);
   const { runs: agentRuns } = useProjectAgentRuns(project, events);
 
@@ -231,6 +232,11 @@ function AgentTranscriptModalMount({
   // `events[]` for the deleted `agent-run-changed` envelope, which never matched
   // anymore, then fall back to the active list — so a just-completed run's
   // transcript opened empty. The store frame carries the full run snapshot.
+  //
+  // pc-pty-chat-365: final fallback is `preloadedRun` from the store, set when
+  // the caller (e.g. CommandActivityPanel) already has the AgentRunRecord and
+  // the run belongs to a DIFFERENT project than the active one. Lets cross-project
+  // transcript opens in Command work without routing into the home project's page.
   const agentRunFrames = useLiveEvents('agent-run', project.id);
   const transcriptRun = useMemo<AgentRunRecord | null>(() => {
     if (!openRunId) return null;
@@ -241,8 +247,11 @@ function AgentTranscriptModalMount({
         return { ...run, wait: false } as AgentRunRecord;
       }
     }
-    return agentRuns.find((r) => r.runId === openRunId) ?? null;
-  }, [openRunId, agentRunFrames, agentRuns]);
+    return (
+      agentRuns.find((r) => r.runId === openRunId) ??
+      (preloadedRun?.runId === openRunId ? preloadedRun : null)
+    );
+  }, [openRunId, agentRunFrames, agentRuns, preloadedRun]);
 
   if (!transcriptRun) return null;
   return <AgentTranscriptModal run={transcriptRun} events={events} onClose={close} />;
