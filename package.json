@@ -23,6 +23,8 @@
     "desktop:dist:mac": "pnpm --filter @pc/desktop dist:mac",
     "desktop:publish:win": "pnpm --filter @pc/desktop publish:win",
     "desktop:publish:mac": "pnpm --filter @pc/desktop publish:mac",
+    "desktop:publish:win:prerelease": "pnpm --filter @pc/desktop publish:win:prerelease",
+    "desktop:publish:mac:prerelease": "pnpm --filter @pc/desktop publish:mac:prerelease",
     "desktop:dist:mac:dir": "pnpm --filter @pc/desktop dist:mac:dir"
   },
   "pnpm": {

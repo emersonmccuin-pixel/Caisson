@@ -29,6 +29,8 @@ interface PcDesktopBridge {
     check(): Promise<DesktopUpdateState>;
     download(): Promise<DesktopUpdateState>;
     install(): Promise<boolean>;
+    getBetaOptIn(): Promise<boolean>;
+    setBetaOptIn(enabled: boolean): Promise<boolean>;
     subscribe(cb: (state: DesktopUpdateState) => void): () => void;
   };
 }
