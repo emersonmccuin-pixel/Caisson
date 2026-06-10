@@ -72,6 +72,17 @@ export interface RowPolicy {
   lane: RowLane;
 }
 
+// ── CC-internal user-role rows ─────────────────────────────────────────────
+// CC writes machine-generated rows with `type: "user"` that no human typed:
+// slash-command echoes (<command-name>/<command-message>/<command-args>),
+// local command output + caveat wrappers, terminal bash passthrough, tick
+// pings, and background-task notifications (tag names from CC source
+// constants/xml.ts). Rendering them as user bubbles makes the chat read as if
+// the user sent CC's plumbing. Matched on the row's FIRST non-whitespace
+// content only — a human pasting XML mid-message still renders as chat.
+export const CC_INTERNAL_USER_TEXT_RE =
+  /^\s*<(?:command-name|local-command-stdout|local-command-stderr|local-command-caveat|bash-input|bash-stdout|bash-stderr|tick|task-notification|system-reminder)[\s>/]/;
+
 /** Tool names whose JSONL tool-call/result rows never render in chat — agent /
  *  task / todo / search orchestration noise. Migrated here from toolGrouping's
  *  SUPPRESSED_TOOLS so the table is the single source (toolGrouping's copy is
@@ -94,13 +105,25 @@ export const INTERNAL_TOOLS: ReadonlySet<string> = new Set([
  *  tool-call are resolved at the grouping layer, not here). */
 export function rowPolicy(ev: JsonlEvent): RowPolicy {
   switch (ev.kind) {
-    case 'jsonl-user':
+    case 'jsonl-user': {
+      // CC-internal rows — meta injections, the post-compaction continuation
+      // summary, and XML-wrapped plumbing (command echoes, local stdout,
+      // caveats…). Machine-written; hidden (debug-toggle revealable). The
+      // compact boundary divider stays the user-facing compaction signal.
+      if (ev.isMeta || ev.isCompactSummary) {
+        return { visibility: 'hidden', lane: 'internal' };
+      }
+      const text = ev.text ?? '';
+      if (CC_INTERNAL_USER_TEXT_RE.test(text)) {
+        return { visibility: 'hidden', lane: 'internal' };
+      }
       // FD-3/FD-6 — mailbox-injected turns carry the [pc:…] marker and render
       // in the system lane (distinct style + user-facing filter). Shown by
       // default; never hidden at the policy layer.
-      return parseSystemTurnMarker(ev.text ?? '')
+      return parseSystemTurnMarker(text)
         ? { visibility: 'shown', lane: 'system' }
         : { visibility: 'shown', lane: 'chat' };
+    }
 
     case 'jsonl-turn-end':
       // Today: empty-text turn-end is dropped (normalizeJsonlEnvelope returns null).
