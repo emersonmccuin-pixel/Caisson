@@ -395,8 +395,11 @@ function initAutoUpdater(): void {
   autoUpdater.autoInstallOnAppQuit = true;
 
   // Apply persisted beta-channel preference before the first check.
+  // allowPrerelease must be set alongside channel: without it the GitHub provider
+  // only scans non-prerelease releases and never finds the prerelease's beta.yml.
   if (resolvedDataDir) {
     const { betaOptIn } = readUpdatePrefs(resolvedDataDir);
+    autoUpdater.allowPrerelease = betaOptIn;
     if (betaOptIn) autoUpdater.channel = 'beta';
   }
 
@@ -459,6 +462,7 @@ ipcMain.handle('pc:update:setBetaOptIn', (_event, enabled: unknown) => {
   writeUpdatePrefs(dataDir, { betaOptIn });
   if (updaterEnabled()) {
     autoUpdater.channel = betaOptIn ? 'beta' : 'latest';
+    autoUpdater.allowPrerelease = betaOptIn;
     autoUpdater
       .checkForUpdates()
       .catch((err) => pushUpdateState({ status: 'error', error: (err as Error).message }));
