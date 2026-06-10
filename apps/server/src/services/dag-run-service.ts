@@ -473,18 +473,26 @@ export function makeExecutorDeps(
       return { outcome: 'failed', error: `cannot derive branch name from worktree path: ${run.worktreePath}` };
     }
 
-    const emitConflict = (): void => {
+    const emitConflict = async (): Promise<void> => {
       // Board visibility: move card to on_conflict_stage (documented side-effect
-      // of the merge node — FD-9 exception, per the build decisions).
+      // of the merge node — FD-9 exception, per the build decisions). A failed
+      // move must not fail the conflict signal itself, but it can't vanish
+      // either — record it on the git_conflict event so the paused run explains
+      // why the card never moved.
+      let cardMoveError: string | undefined;
       if (node.on_conflict_stage) {
-        moveCard(node.on_conflict_stage).catch(() => { /* best-effort visibility */ });
+        try {
+          await moveCard(node.on_conflict_stage);
+        } catch (err) {
+          cardMoveError = (err as Error).message ?? 'unknown error';
+        }
       }
       runGateway.appendRunEvent({
         projectId: opts.projectId,
         runId: run.id,
         type: 'git_conflict',
         nodeId: node.id,
-        data: { branch },
+        data: cardMoveError ? { branch, cardMoveError } : { branch },
       });
     };
 
@@ -494,7 +502,7 @@ export function makeExecutorDeps(
 
       if (state.mergeInProgress) {
         // MERGE_HEAD present: a prior (interrupted) merge attempt left a conflict.
-        emitConflict();
+        await emitConflict();
         return { outcome: 'conflict' };
       }
 
@@ -507,7 +515,7 @@ export function makeExecutorDeps(
           } catch (pushErr) {
             const msg = (pushErr as Error).message ?? '';
             if (/rejected|non-fast-forward/i.test(msg)) {
-              emitConflict();
+              await emitConflict();
               return { outcome: 'conflict' };
             }
             return { outcome: 'failed', error: `push to origin/dev failed: ${msg}` };
@@ -545,7 +553,7 @@ export function makeExecutorDeps(
       } catch (pushErr) {
         const msg = (pushErr as Error).message ?? '';
         if (/rejected|non-fast-forward/i.test(msg)) {
-          emitConflict();
+          await emitConflict();
           return { outcome: 'conflict' };
         }
         return { outcome: 'failed', error: `push to origin/dev failed: ${msg}` };
@@ -573,7 +581,7 @@ export function makeExecutorDeps(
       const msg = (err as Error).message ?? 'unknown error';
       // Conflict thrown by mergeBranchIntoDev (git exits non-zero on conflict).
       if (/conflict|CONFLICT|Automatic merge failed/i.test(msg)) {
-        emitConflict();
+        await emitConflict();
         return { outcome: 'conflict' };
       }
       return { outcome: 'failed', error: msg };

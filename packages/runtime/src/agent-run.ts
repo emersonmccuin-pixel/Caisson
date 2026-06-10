@@ -741,6 +741,9 @@ export class AgentRun extends EventEmitter {
   }
 
   private onSpawnExit(_code: number | null, _signal: number | null): void {
+    // A dead spawn can never deliver the resume receipt — drop the waiter so
+    // it can't fire against a later spawn's JSONL stream.
+    this.resumeReceiptWaiter = null;
     // Pause is the only state where a clean exit is expected. In any other
     // non-terminal state, a spawn exit is unexpected → failed.
     if (this.isTerminal()) return;

@@ -349,6 +349,7 @@ async function finishTerminalEffects(args: {
 
   const verifier = deps.verifyOnTerminal ?? runVerificationOnTerminal;
   let outcome: VerificationOutcome | null = null;
+  let verifierCrash: Error | null = null;
   // Slice 020 — verification keys on the CONTRACT, not the WI. A contract-only
   // dispatch (no linked WI) still verifies; the WI advance is a roll-up.
   // Door-unification — guard the verifier so a verify crash doesn't skip the
@@ -377,10 +378,14 @@ async function finishTerminalEffects(args: {
         deps.verificationDeps ?? buildProductionVerificationDeps(project.folderPath, input.worktreeDir || undefined),
       );
     } catch (err) {
-      deps.onError?.(err instanceof Error ? err : new Error(String(err)));
+      verifierCrash = err instanceof Error ? err : new Error(String(err));
+      deps.onError?.(verifierCrash);
     }
   }
 
+  // Positive receipt: a verifier CRASH is not the same as "no verification".
+  // Surface it on the envelope (contract stays `pending` in the DB) instead of
+  // silently reporting the run as if acceptance criteria never existed.
   const verification: VerificationBlock | null = outcome
     ? {
         contractId: outcome.contractId,
@@ -389,7 +394,15 @@ async function finishTerminalEffects(args: {
         tier: outcome.verificationTier,
         notes: outcome.notes,
       }
-    : null;
+    : verifierCrash && contractId
+      ? {
+          contractId,
+          workItemId: workItemId ?? null,
+          status: 'pending',
+          tier: 'auto',
+          notes: `verifier crashed before evaluating acceptance criteria: ${verifierCrash.message}`,
+        }
+      : null;
 
   // Slice 013 — the deliverable was captured onto the contract synchronously
   // (see `captureDeliverable`). The envelope surfaces the resolved result.

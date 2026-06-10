@@ -177,6 +177,9 @@ export class LowLevelSpawn extends EventEmitter {
   private readonly gate: ReadyGate;
   private tailer: JsonlTailer | null = null;
   private jsonlPollTimer: NodeJS.Timeout | null = null;
+  /** Set the moment kill() is called — stops deferred tailer attaches from
+   *  re-arming the JSONL poll timer for a dying spawn. */
+  private killRequested = false;
   private transcriptStream: WriteStream | null = null;
   /** Resolved at start(). Stored so callers can introspect post-spawn. */
   private resolvedJsonlPath: string | null = null;
@@ -353,6 +356,7 @@ export class LowLevelSpawn extends EventEmitter {
   /** Kill the child. Sends Ctrl-C first, then SIGKILL after a grace window
    *  so CC's SessionEnd hook has time to fire its final JSONL write. */
   kill(graceMs = 500): void {
+    this.killRequested = true;
     if (this.readyTimer) {
       clearTimeout(this.readyTimer);
       this.readyTimer = null;
@@ -585,7 +589,10 @@ export class LowLevelSpawn extends EventEmitter {
     if (!path) return;
 
     const tryAttach = () => {
-      if (this.tailer || this.state === 'exited') return;
+      // killRequested guards the window where kill() already cleared the poll
+      // timer but the exit hasn't landed yet — a queued tryAttach would
+      // otherwise re-arm the timer and keep polling for a dead spawn.
+      if (this.tailer || this.state === 'exited' || this.killRequested) return;
       if (existsSync(path)) {
         let startLine = 0;
         if (this.input.jsonlStartLine !== undefined) {

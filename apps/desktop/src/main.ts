@@ -108,6 +108,9 @@ let windowUrl = '';
 // ── Supervisor wiring ────────────────────────────────────────────────────────
 
 let childrenLogPath: string | null = null;
+/** The stack's resolved data dir — set once in whenReady so every diagnostics
+ *  writer (children.log, renderer-console.log) shares one home. */
+let resolvedDataDir: string | null = null;
 
 function initChildrenLog(dataDir: string): void {
   try {
@@ -446,16 +449,14 @@ ipcMain.handle('pc:update:install', async () => {
 // Fresh per window launch (truncated on createWindow).
 
 function resolveDiagnosticsDir(): string {
+  // ONE diagnostics home: <dataDir>/diagnostics — the same folder children.log
+  // uses (initChildrenLog), so a post-mortem reads one directory. dataDir is
+  // resolved once in resolveStackConfig(); the fallback below only covers a
+  // window created before whenReady (not a real path today).
+  if (resolvedDataDir) return join(resolvedDataDir, 'diagnostics');
   const envDir = process.env.PC_DATA_DIR;
   if (envDir && envDir !== 'undefined') return join(envDir, 'diagnostics');
-  let dir = __dirname;
-  for (let i = 0; i < 8; i += 1) {
-    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) return join(dir, 'data', 'diagnostics');
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return app.getPath('logs');
+  return join(app.getPath('userData'), 'diagnostics');
 }
 
 function setupRendererDiagnostics(win: BrowserWindow): void {
@@ -568,6 +569,7 @@ async function createWindow(url: string): Promise<void> {
 void app.whenReady().then(async () => {
   const config = resolveStackConfig();
   windowUrl = config.windowUrl;
+  resolvedDataDir = config.dataDir;
   initChildrenLog(config.dataDir);
 
   try {
