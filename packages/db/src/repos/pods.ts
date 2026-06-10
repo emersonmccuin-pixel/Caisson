@@ -30,8 +30,6 @@ import type {
   PodAuditField,
   PodKnowledgeKind,
   PodKnowledgeRow,
-  PodMcpServerConfig,
-  PodMcpServerRow,
   PodOrigin,
   PodScope,
   PodSecretRow,
@@ -41,7 +39,7 @@ import type {
 import { mergeRequiredAgentTools } from '@pc/domain';
 import { getDb } from '../connection.ts';
 import { newId } from '../id.ts';
-import { agentAudit, agentKnowledge, agentMcpServers, agentSecrets, agents } from '../schema.ts';
+import { agentAudit, agentKnowledge, agentSecrets, agents } from '../schema.ts';
 import { type AuditInput, buildAuditRow } from './pod-audit.ts';
 
 // --- agents -----------------------------------------------------------------
@@ -405,7 +403,7 @@ export interface CloneAgentToProjectInput {
 export interface CloneAgentResult {
   agent: PodAgentRow;
   /** Counts of content rows that were copied. */
-  copied: { knowledge: number; mcpServers: number };
+  copied: { knowledge: number };
 }
 
 /** Clone a pod into a target project as a project-scope row. Copies the
@@ -442,10 +440,6 @@ export function cloneAgentToProject(
     source.scope === 'project' && source.projectId
       ? listKnowledge({ agentId: source.id, projectId: source.projectId })
       : listKnowledge({ agentId: source.id, scope: 'global' });
-  const sourceMcp =
-    source.scope === 'project' && source.projectId
-      ? listMcpServers({ agentId: source.id, projectId: source.projectId })
-      : listMcpServers({ agentId: source.id, scope: 'global' });
 
   const now = Date.now();
   const newAgentId = newId() as ULID;
@@ -495,24 +489,6 @@ export function cloneAgentToProject(
     }),
   }));
 
-  const mcpRows = sourceMcp.map((m) => ({
-    insertRow: {
-      id: newId() as ULID,
-      agentId: newAgentId,
-      scope: 'project' as PodScope,
-      projectId: input.targetProjectId,
-      name: m.name,
-      config: m.config,
-      createdAt: now,
-    },
-    auditField: 'mcp_server' as PodAuditField,
-    snapshot: mcpSnapshot({
-      ...m,
-      scope: 'project',
-      projectId: input.targetProjectId,
-    }),
-  }));
-
   const agentAuditRow = buildAuditRow(
     {
       agentId: newAgentId,
@@ -543,28 +519,11 @@ export function cloneAgentToProject(
         )
         .run();
     }
-    for (const m of mcpRows) {
-      tx.insert(agentMcpServers).values(m.insertRow).run();
-      tx.insert(agentAudit)
-        .values(
-          buildAuditRow(
-            {
-              agentId: newAgentId,
-              field: m.auditField,
-              fieldRef: m.insertRow.name,
-              newValue: m.snapshot,
-              audit: cloneAudit,
-            },
-            now,
-          ),
-        )
-        .run();
-    }
   });
 
   return {
     agent: newAgent,
-    copied: { knowledge: knowledgeRows.length, mcpServers: mcpRows.length },
+    copied: { knowledge: knowledgeRows.length },
   };
 }
 
@@ -916,147 +875,6 @@ export function deleteSecret(id: ULID, audit: AuditInput): boolean {
   return changed;
 }
 
-// --- agent_mcp_servers ------------------------------------------------------
-
-export interface CreateMcpServerInput {
-  id?: ULID;
-  agentId: ULID;
-  scope: PodScope;
-  projectId?: ULID | null;
-  name: string;
-  config: PodMcpServerConfig;
-}
-
-function rowToMcpServer(row: typeof agentMcpServers.$inferSelect): PodMcpServerRow {
-  return {
-    id: row.id as ULID,
-    agentId: row.agentId as ULID,
-    scope: row.scope,
-    projectId: row.projectId ?? null,
-    name: row.name,
-    config: row.config,
-    createdAt: row.createdAt,
-  };
-}
-
-function mcpSnapshot(row: PodMcpServerRow): string {
-  return JSON.stringify({ name: row.name, config: row.config });
-}
-
-export function createMcpServer(
-  input: CreateMcpServerInput,
-  audit: AuditInput,
-): PodMcpServerRow {
-  if (input.scope === 'project' && !input.projectId) {
-    throw new Error('createMcpServer: projectId is required when scope === "project"');
-  }
-  const now = Date.now();
-  const id = (input.id ?? newId()) as ULID;
-  const row = {
-    id,
-    agentId: input.agentId,
-    scope: input.scope,
-    projectId: input.scope === 'project' ? input.projectId ?? null : null,
-    name: input.name,
-    config: input.config,
-    createdAt: now,
-  };
-  const out = rowToMcpServer(row as typeof agentMcpServers.$inferSelect);
-  const auditValues = buildAuditRow(
-    {
-      agentId: input.agentId,
-      field: 'mcp_server',
-      fieldRef: input.name,
-      newValue: mcpSnapshot(out),
-      audit,
-    },
-    now,
-  );
-  getDb().transaction((tx) => {
-    tx.insert(agentMcpServers).values(row).run();
-    tx.insert(agentAudit).values(auditValues).run();
-  });
-  return out;
-}
-
-export function getMcpServer(id: ULID): PodMcpServerRow | null {
-  const row = getDb().select().from(agentMcpServers).where(eq(agentMcpServers.id, id)).get();
-  return row ? rowToMcpServer(row) : null;
-}
-
-export interface GetMcpServerByNameInput {
-  agentId: ULID;
-  scope: PodScope;
-  projectId?: ULID | null;
-  name: string;
-}
-
-export function getMcpServerByName(input: GetMcpServerByNameInput): PodMcpServerRow | null {
-  const projectCmp =
-    input.scope === 'project'
-      ? eq(agentMcpServers.projectId, input.projectId!)
-      : isNull(agentMcpServers.projectId);
-  const row = getDb()
-    .select()
-    .from(agentMcpServers)
-    .where(
-      and(
-        eq(agentMcpServers.agentId, input.agentId),
-        eq(agentMcpServers.scope, input.scope),
-        projectCmp,
-        eq(agentMcpServers.name, input.name),
-      ),
-    )
-    .get();
-  return row ? rowToMcpServer(row) : null;
-}
-
-export interface ListMcpServersOptions {
-  agentId: ULID;
-  scope?: PodScope;
-  projectId?: ULID;
-}
-
-export function listMcpServers(opts: ListMcpServersOptions): PodMcpServerRow[] {
-  const conditions = [eq(agentMcpServers.agentId, opts.agentId)];
-  if (opts.projectId !== undefined) {
-    conditions.push(eq(agentMcpServers.scope, 'project'));
-    conditions.push(eq(agentMcpServers.projectId, opts.projectId));
-  } else if (opts.scope !== undefined) {
-    conditions.push(eq(agentMcpServers.scope, opts.scope));
-  }
-  const rows = getDb()
-    .select()
-    .from(agentMcpServers)
-    .where(and(...conditions))
-    .orderBy(asc(agentMcpServers.name))
-    .all();
-  return rows.map(rowToMcpServer);
-}
-
-export function deleteMcpServer(id: ULID, audit: AuditInput): boolean {
-  const existing = getMcpServer(id);
-  if (!existing) return false;
-  const now = Date.now();
-  const auditValues = buildAuditRow(
-    {
-      agentId: existing.agentId,
-      field: 'mcp_server',
-      fieldRef: existing.name,
-      priorValue: mcpSnapshot(existing),
-      audit,
-    },
-    now,
-  );
-  let changed = false;
-  getDb().transaction((tx) => {
-    const result = tx.delete(agentMcpServers).where(eq(agentMcpServers.id, id)).run();
-    changed = (result.changes ?? 0) > 0;
-    if (changed) tx.insert(agentAudit).values(auditValues).run();
-  });
-  return changed;
-}
-
 // --- pod bundle -------------------------------------------------------------
 
 /** Resolve a pod for dispatch: prefer a project-scoped row for this project,
@@ -1118,13 +936,11 @@ export function getPodForSpawn(name: string, projectId?: ULID | null): PodSpawnB
       agent,
       knowledge: listKnowledge({ agentId: agent.id, projectId: agent.projectId }),
       secrets: listSecrets({ agentId: agent.id, projectId: agent.projectId }),
-      mcpServers: listMcpServers({ agentId: agent.id, projectId: agent.projectId }),
     };
   }
   return {
     agent,
     knowledge: listKnowledge({ agentId: agent.id, scope: 'global' }),
     secrets: listSecrets({ agentId: agent.id, scope: 'global' }),
-    mcpServers: listMcpServers({ agentId: agent.id, scope: 'global' }),
   };
 }

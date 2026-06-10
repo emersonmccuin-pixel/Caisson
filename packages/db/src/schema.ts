@@ -713,35 +713,8 @@ export const agentSecrets = sqliteTable(
   ],
 );
 
-export const agentMcpServers = sqliteTable(
-  'agent_mcp_servers',
-  {
-    id: text('id').primaryKey().$type<ULID>(),
-    agentId: text('agent_id')
-      .notNull()
-      .$type<ULID>()
-      .references(() => agents.id),
-    scope: text('scope').notNull().$type<PodScope>(),
-    projectId: text('project_id').$type<ULID | null>(),
-    /** Server name as it lands in the materialised `mcp.json`'s `mcpServers`
-     *  map. Project overlay wins per-server-name (17c). */
-    name: text('name').notNull(),
-    config: text('config_json', { mode: 'json' }).notNull().$type<PodMcpServerConfig>(),
-    createdAt: integer('created_at').notNull(),
-  },
-  (t) => [
-    index('agent_mcp_servers_agent_idx').on(t.agentId),
-    index('agent_mcp_servers_scope_project_idx').on(t.scope, t.projectId),
-    /** Per-scope partial uniqueness — sqlite NULL-distinct gotcha (see
-     *  agent_knowledge note). Project overlay wins per-server-name (17c). */
-    uniqueIndex('agent_mcp_servers_global_name_idx')
-      .on(t.agentId, t.name)
-      .where(sql`scope = 'global'`),
-    uniqueIndex('agent_mcp_servers_project_name_idx')
-      .on(t.agentId, t.projectId, t.name)
-      .where(sql`scope = 'project'`),
-  ],
-);
+// ☠ pc-pty-chat-359 P4b: agent_mcp_servers table dropped (migration 0055).
+// Inline per-agent MCP config migrated to mcp_servers registry + agent_mcp_attachments.
 
 export const agentAudit = sqliteTable(
   'agent_audit',
@@ -785,7 +758,7 @@ export {
 /**
  * pc-pty-chat-359 P1 — MCP Server Registry. One row per registered server,
  * scoped to `'global'` or `'project'` (mirrors `agents`). The `transport`
- * column carries the same stdio/HTTP shape as `agent_mcp_servers.config_json`;
+ * column carries the same stdio/HTTP shape the old `agent_mcp_servers.config_json` had;
  * the `parsePodMcpServerConfig` validator is reused at the route boundary.
  *
  * `discovered_tools` and `discoveryStatus` are populated by the P2 discovery
