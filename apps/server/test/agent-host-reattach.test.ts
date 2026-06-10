@@ -560,6 +560,12 @@ test('ghost reaper never touches a live host run whose row is non-terminal', () 
     hostClient: host,
     listNonTerminalRuns: () => [liveRow],
     getAgentRun: () => liveRow,
+    // This test's row IS matched + running on the host, so the main loop reaches
+    // shouldUpdateFromHost → the status-update path. Stub updateStatus (and
+    // announce) so it never falls through to the default DB writer — otherwise
+    // it depends on a shared, test-order-dependent DB singleton and fails on CI
+    // with "no such table: agent_runs" (pc-pty-chat-398).
+    updateStatus: () => {},
     hostAuthoritativelyAbsent: true,
     now: () => 1_700_000_000_000 + 600_000,
     announce: () => {},
