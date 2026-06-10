@@ -19,8 +19,8 @@
     "dist:mac:dir": "pnpm prepackage && electron-builder --mac dir",
     "publish:win": "pnpm prepackage && electron-builder --win nsis --publish always",
     "publish:mac": "pnpm prepackage && electron-builder --mac dmg zip --publish always",
-    "publish:win:prerelease": "pnpm prepackage && electron-builder --win nsis --publish always -c.publish.releaseType=prerelease -c.channel=beta",
-    "publish:mac:prerelease": "pnpm prepackage && electron-builder --mac dmg zip --publish always -c.publish.releaseType=prerelease -c.channel=beta",
+    "publish:win:prerelease": "pnpm prepackage && electron-builder --win nsis --publish always -c.publish.releaseType=prerelease",
+    "publish:mac:prerelease": "pnpm prepackage && electron-builder --mac dmg zip --publish always -c.publish.releaseType=prerelease",
     "typecheck": "tsc --noEmit"
   },
   "build": {
