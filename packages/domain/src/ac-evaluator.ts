@@ -58,12 +58,18 @@ export interface PredicateExecutors {
    *  by the timeout rather than exiting naturally, so callers can report
    *  "timed out" instead of "exited 124" in failure messages. The optional
    *  `timeoutMs` overrides the executor's built-in default for this one call
-   *  (used to apply per-predicate timeouts from `bash_exit_zero.timeout_ms`). */
+   *  (used to apply per-predicate timeouts from `bash_exit_zero.timeout_ms`).
+   *
+   *  Slice 5 (pc-pty-chat-374.4): production impls also return `stdoutTail` and
+   *  `stderrTail` — the LAST ~4 KB of each stream — so failure reasons carry
+   *  diagnostic output rather than a bare "exited N: <cmd>". Both fields are
+   *  OPTIONAL (undefined = no output captured / older mock executor) so existing
+   *  test fixtures remain valid without modification. */
   runBash: (
     command: string,
     cwd: 'worktree' | 'project',
     timeoutMs?: number,
-  ) => Promise<{ exitCode: number; timedOut: boolean }>;
+  ) => Promise<{ exitCode: number; timedOut: boolean; stdoutTail?: string; stderrTail?: string }>;
   /** True when the git tree has relevant changes vs its base.
    *
    *  For worktree dispatches (`cwd: 'worktree'`): returns true when the
@@ -398,7 +404,11 @@ async function evalBashExitZero(
   executors: PredicateExecutors,
 ): Promise<{ pass: boolean; reason?: string }> {
   const cwd = pred.cwd ?? 'worktree';
-  const { exitCode, timedOut } = await executors.runBash(pred.command, cwd, pred.timeout_ms);
+  const { exitCode, timedOut, stdoutTail, stderrTail } = await executors.runBash(
+    pred.command,
+    cwd,
+    pred.timeout_ms,
+  );
   if (exitCode === 0) return { pass: true };
   if (timedOut) {
     // Distinguish a SIGKILL timeout from a genuine non-zero exit so the
@@ -407,9 +417,15 @@ async function evalBashExitZero(
     // misconfigured timeout (pc-pty-chat-370).
     return { pass: false, reason: `bash command timed out: ${pred.command}` };
   }
+  // Slice 5 (pc-pty-chat-374.4): include the captured output tail in the
+  // failure reason so verification notes carry actual diagnostic output, not
+  // just a bare "exited N: <cmd>" (Principle 2a — no verdict without evidence).
+  const parts: string[] = [`bash command exited ${exitCode}: ${pred.command}`];
+  if (stdoutTail && stdoutTail.length > 0) parts.push(`\nstdout:\n${stdoutTail}`);
+  if (stderrTail && stderrTail.length > 0) parts.push(`\nstderr:\n${stderrTail}`);
   return {
     pass: false,
-    reason: `bash command exited ${exitCode}: ${pred.command}`,
+    reason: parts.join(''),
   };
 }
 
