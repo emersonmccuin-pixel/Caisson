@@ -41,9 +41,9 @@ function slimAgentList(body: string): string {
   }
 }
 
-/** Knowledge / secret / mcp-server tools accept { agentId } / { agentName }
- *  while agent tools use { id } / { name }. Adapt the former to the shape
- *  resolvePodId expects. */
+/** Secret / mcp-server tools accept { agentId } / { agentName } while agent
+ *  tools use { id } / { name }. Adapt the former to the shape resolvePodId
+ *  expects. */
 function agentArgs(args: Record<string, unknown>): Record<string, unknown> {
   return {
     id: args.agentId,
@@ -51,40 +51,13 @@ function agentArgs(args: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-/** Auto-derive a knowledge-doc name from the content body. Priority: first
- *  H1 (`# Heading`) → first non-empty line → fallback to a timestamp slug.
- *  Whitespace trimmed; capped at 64 chars; kebab-cased. */
-function deriveKnowledgeName(content: string): string {
-  const lines = content.split(/\r?\n/);
-  let candidate = '';
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-    if (line.startsWith('#')) {
-      candidate = line.replace(/^#+\s*/, '').trim();
-    } else {
-      candidate = line;
-    }
-    if (candidate) break;
-  }
-  if (!candidate) {
-    return `knowledge-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  }
-  const slug = candidate
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64);
-  return slug || `knowledge-${Date.now()}`;
-}
-
 /** Resolve a pod by either { id } or { name }. Name lookup searches the
  *  project's visible pods first (project-scope + stock globals) then the full
  *  global list, so pods of ANY scope — project, stock-global, or
- *  global-user-created — resolve by name. Used by every pc_*_agent /
- *  pc_*_knowledge MCP tool so the orchestrator can refer to pods by their
- *  human name without juggling ULIDs across turns. */
-async function resolvePodId(
+ *  global-user-created — resolve by name. Used by every pc_*_agent MCP tool
+ *  (and the agent-scope branches of the context-doc tools) so callers can
+ *  refer to pods by their human name without juggling ULIDs across turns. */
+export async function resolvePodId(
   args: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
@@ -135,7 +108,7 @@ async function resolvePodId(
 
 // Slice 011 (11E) — pod-CRUD responses are LEFT RAW. `@pc/contracts/pods.ts`
 // only models pod live-events (PodChanged*), not the pod-CRUD HTTP response
-// bodies (create/get/update/delete pod, knowledge, secret, mcp-server, audit,
+// bodies (create/get/update/delete pod, secret, mcp-server, audit,
 // list). Adding a pod-response DTO to @pc/contracts is a STOP-and-confirm per
 // the plan §16, so these handlers keep emitting the raw res.body via the
 // existing ctx.* helpers — byte-identical, no typed-client seam.
@@ -432,200 +405,6 @@ export async function handleAgentTool(
         return {
           content: [
             { type: 'text', text: `pc_reset_agent_to_default failed: ${(err as Error).message}` },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    case 'pc_create_knowledge': {
-      const content = typeof args.content === 'string' ? args.content : '';
-      if (typeof args.content !== 'string') {
-        return {
-          content: [{ type: 'text', text: 'pc_create_knowledge: content required (string)' }],
-          isError: true,
-        };
-      }
-      const explicitName =
-        typeof args.docName === 'string' && args.docName.trim().length > 0
-          ? args.docName.trim()
-          : null;
-      const docName = explicitName ?? deriveKnowledgeName(content);
-      try {
-        const id = await resolvePodId(agentArgs(args), ctx);
-        if (!id.ok) {
-          return {
-            content: [{ type: 'text', text: `pc_create_knowledge: ${id.error}` }],
-            isError: true,
-          };
-        }
-        const payload: Record<string, unknown> = {
-          name: docName,
-          content,
-          actor: 'orchestrator',
-          reason: typeof args.reason === 'string' && args.reason.trim().length > 0
-            ? args.reason.trim()
-            : 'mcp-create-knowledge',
-        };
-        const res = await ctx.postServer(
-          `/api/agents/pods/${encodeURIComponent(id.id)}/knowledge`,
-          payload,
-        );
-        if (res.status >= 200 && res.status < 300) {
-          return { content: [{ type: 'text', text: res.body }] };
-        }
-        return {
-          content: [
-            { type: 'text', text: `pc_create_knowledge failed (${res.status}): ${res.body}` },
-          ],
-          isError: true,
-        };
-      } catch (err) {
-        return {
-          content: [
-            { type: 'text', text: `pc_create_knowledge failed: ${(err as Error).message}` },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    case 'pc_update_knowledge': {
-      const knowledgeId = typeof args.knowledgeId === 'string' ? args.knowledgeId.trim() : '';
-      if (!knowledgeId) {
-        return {
-          content: [{ type: 'text', text: 'pc_update_knowledge: knowledgeId required' }],
-          isError: true,
-        };
-      }
-      try {
-        const id = await resolvePodId(agentArgs(args), ctx);
-        if (!id.ok) {
-          return {
-            content: [{ type: 'text', text: `pc_update_knowledge: ${id.error}` }],
-            isError: true,
-          };
-        }
-        const payload: Record<string, unknown> = {
-          actor: 'orchestrator',
-          reason: typeof args.reason === 'string' && args.reason.trim().length > 0
-            ? args.reason.trim()
-            : 'mcp-edit-knowledge',
-        };
-        if (typeof args.content === 'string') payload.content = args.content;
-        if (typeof args.docName === 'string') payload.name = args.docName.trim();
-        const fieldKeys = Object.keys(payload).filter(
-          (k) => k !== 'actor' && k !== 'reason',
-        );
-        if (fieldKeys.length === 0) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'pc_update_knowledge: at least one of { content, docName } required',
-              },
-            ],
-            isError: true,
-          };
-        }
-        const res = await ctx.patchServer(
-          `/api/agents/pods/${encodeURIComponent(id.id)}/knowledge/${encodeURIComponent(knowledgeId)}`,
-          payload,
-        );
-        if (res.status >= 200 && res.status < 300) {
-          return { content: [{ type: 'text', text: res.body }] };
-        }
-        return {
-          content: [
-            { type: 'text', text: `pc_update_knowledge failed (${res.status}): ${res.body}` },
-          ],
-          isError: true,
-        };
-      } catch (err) {
-        return {
-          content: [
-            { type: 'text', text: `pc_update_knowledge failed: ${(err as Error).message}` },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    case 'pc_delete_knowledge': {
-      const knowledgeId = typeof args.knowledgeId === 'string' ? args.knowledgeId.trim() : '';
-      if (!knowledgeId) {
-        return {
-          content: [{ type: 'text', text: 'pc_delete_knowledge: knowledgeId required' }],
-          isError: true,
-        };
-      }
-      try {
-        const id = await resolvePodId(agentArgs(args), ctx);
-        if (!id.ok) {
-          return {
-            content: [{ type: 'text', text: `pc_delete_knowledge: ${id.error}` }],
-            isError: true,
-          };
-        }
-        const reason =
-          typeof args.reason === 'string' && args.reason.trim().length > 0
-            ? args.reason.trim()
-            : 'mcp-delete-knowledge';
-        const qs = `actor=orchestrator&reason=${encodeURIComponent(reason)}`;
-        const res = await ctx.deleteServer(
-          `/api/agents/pods/${encodeURIComponent(id.id)}/knowledge/${encodeURIComponent(knowledgeId)}?${qs}`,
-        );
-        if (res.status >= 200 && res.status < 300) {
-          return { content: [{ type: 'text', text: res.body }] };
-        }
-        return {
-          content: [
-            { type: 'text', text: `pc_delete_knowledge failed (${res.status}): ${res.body}` },
-          ],
-          isError: true,
-        };
-      } catch (err) {
-        return {
-          content: [
-            { type: 'text', text: `pc_delete_knowledge failed: ${(err as Error).message}` },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    case 'pc_knowledge_read': {
-      const knowledgeId = typeof args.knowledgeId === 'string' ? args.knowledgeId.trim() : '';
-      if (!knowledgeId) {
-        return {
-          content: [{ type: 'text', text: 'pc_knowledge_read: knowledgeId required' }],
-          isError: true,
-        };
-      }
-      try {
-        const id = await resolvePodId(agentArgs(args), ctx);
-        if (!id.ok) {
-          return {
-            content: [{ type: 'text', text: `pc_knowledge_read: ${id.error}` }],
-            isError: true,
-          };
-        }
-        const res = await ctx.getServer(
-          `/api/agents/pods/${encodeURIComponent(id.id)}/knowledge/${encodeURIComponent(knowledgeId)}`,
-        );
-        if (res.status >= 200 && res.status < 300) {
-          return { content: [{ type: 'text', text: res.body }] };
-        }
-        return {
-          content: [
-            { type: 'text', text: `pc_knowledge_read failed (${res.status}): ${res.body}` },
-          ],
-          isError: true,
-        };
-      } catch (err) {
-        return {
-          content: [
-            { type: 'text', text: `pc_knowledge_read failed: ${(err as Error).message}` },
           ],
           isError: true,
         };

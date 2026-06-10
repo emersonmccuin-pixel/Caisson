@@ -1,41 +1,55 @@
 // Pure derivation: given a stream of WS envelopes, compute the set of
-// project IDs that currently have an active (live) orchestrator/chat session.
+// project IDs that currently have an actively running orchestrator process.
 //
-// A `session-changed` envelope carries the current session for its project.
-// The SERVER sends one on every WS connect (connect-snapshot) and broadcasts
-// one whenever a session opens, resumes, or closes. Both the active-project
+// A `runtime-state` envelope carries the current runtime health for its
+// project. The SERVER sends one on every WS connect (connect-snapshot) and
+// broadcasts one whenever the runtime health changes. Both the active-project
 // socket (materialized via chat-session-reducer into ws.events) and the
 // background activity sockets (raw envelopes in backgroundWs.events) deliver
 // these, so scanning both gives a complete cross-project picture.
 //
-// The LAST `session-changed` per project in each stream wins — the arrays
+// The LAST `runtime-state` per project in each stream wins — the arrays
 // grow chronologically, so the tail is always the freshest signal.
+//
+// NOTE: using `session-changed` for this was wrong — the durable session row
+// stays `status: 'active'` even when no Claude process is running, causing
+// every project that ever had a session to light up on boot. The
+// `runtime-state` health field is the truthful liveness signal.
 
+import type { OrchestratorRuntimeHealth } from '@/features/runtime/types';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 
-/** True when a `session-changed` envelope carries a non-null session whose
- *  status is 'active'. Exported for unit testing. */
-export function isActiveChatSession(env: WsEnvelope): boolean {
-  const session = (env as { session?: unknown }).session;
-  if (!session || typeof session !== 'object') return false;
-  return (session as { status?: unknown }).status === 'active';
+/** Health values that mean a Claude process is actually running right now. */
+const LIVE_HEALTH = new Set<OrchestratorRuntimeHealth>([
+  'spawning',
+  'ready',
+  'busy',
+  'respawning',
+]);
+
+/** True when a `runtime-state` envelope reports a health value that means an
+ *  orchestrator process is actively running. Exported for unit testing. */
+export function isLiveRuntimeHealth(env: WsEnvelope): boolean {
+  if (env.type !== 'runtime-state') return false;
+  const health = (env as { health?: unknown }).health;
+  return typeof health === 'string' && LIVE_HEALTH.has(health as OrchestratorRuntimeHealth);
 }
 
 /** Derive the set of project IDs that currently have a live orchestrator
- *  session. Scans both the active-project event stream and the background
- *  event stream; the last `session-changed` per project in either stream
+ *  process. Scans both the active-project event stream and the background
+ *  event stream; the last `runtime-state` per project in either stream
  *  determines the current state. */
 export function deriveActiveSessionProjectIds(
   activeEvents: readonly WsEnvelope[],
   backgroundEvents: readonly WsEnvelope[],
 ): ReadonlySet<string> {
-  const sessionActive = new Map<string, boolean>();
+  const runtimeLive = new Map<string, boolean>();
 
   for (const env of activeEvents) {
-    if (env.type !== 'session-changed') continue;
+    if (env.type !== 'runtime-state') continue;
     const projectId = typeof env.projectId === 'string' ? env.projectId : null;
     if (!projectId) continue;
-    sessionActive.set(projectId, isActiveChatSession(env));
+    runtimeLive.set(projectId, isLiveRuntimeHealth(env));
   }
 
   // Background events override active events for the same project — they are
@@ -43,15 +57,15 @@ export function deriveActiveSessionProjectIds(
   // fresh connect-snapshot when it first opens, superseding the stale active-
   // project state that was recorded before the user switched away).
   for (const env of backgroundEvents) {
-    if (env.type !== 'session-changed') continue;
+    if (env.type !== 'runtime-state') continue;
     const projectId = typeof env.projectId === 'string' ? env.projectId : null;
     if (!projectId) continue;
-    sessionActive.set(projectId, isActiveChatSession(env));
+    runtimeLive.set(projectId, isLiveRuntimeHealth(env));
   }
 
   const out = new Set<string>();
-  for (const [id, active] of sessionActive) {
-    if (active) out.add(id);
+  for (const [id, live] of runtimeLive) {
+    if (live) out.add(id);
   }
   return out;
 }

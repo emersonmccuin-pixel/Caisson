@@ -2,7 +2,6 @@ import type { ULID } from '@/features/projects/types';
 
 export type PodScope = 'global' | 'project';
 export type PodOrigin = 'stock' | 'user-created';
-export type PodKnowledgeKind = 'knowledge' | 'example';
 export type PodAuditActor = 'orchestrator' | 'user';
 export type PodAuditField =
   | 'prompt'
@@ -16,19 +15,15 @@ export type PodAuditField =
   | 'output_destination'
   | 'name'
   | 'dispatch_guidance'
+  // 'knowledge' — ☠ migration 0055 (merged into context docs); survives only
+  // in historical audit rows.
   | 'knowledge'
+  | 'context-doc'
   | 'secret'
   | 'mcp_server'
   | 'scope'
   | 'created'
   | 'deleted';
-
-export interface PodMcpServerConfig {
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  url?: string;
-}
 
 export interface Pod {
   id: ULID;
@@ -51,32 +46,29 @@ export interface Pod {
   deletedAt: number | null;
 }
 
-export interface PodKnowledge {
+/** Context doc attached to an agent (a `context_docs` row with the agent
+ *  scope pointer — migration 0055 merged the old knowledge table in).
+ *  Read stats (0056): `readCount === 0` renders as "never read". */
+export interface AgentContextDoc {
   id: ULID;
-  agentId: ULID;
-  scope: PodScope;
+  agentId: ULID | null;
   projectId: ULID | null;
-  name: string;
-  kind: PodKnowledgeKind;
-  content: string;
+  areaId: ULID | null;
+  workItemId: ULID | null;
+  title: string;
+  body: string;
+  author: string;
   createdAt: number;
   updatedAt: number;
+  deletedAt: number | null;
+  readCount: number;
+  lastReadAt: number | null;
 }
 
 export interface PodSecret {
   id: ULID;
   agentId: ULID;
   envVarName: string;
-  createdAt: number;
-}
-
-export interface PodMcpServer {
-  id: ULID;
-  agentId: ULID;
-  scope: PodScope;
-  projectId: ULID | null;
-  name: string;
-  config: PodMcpServerConfig;
   createdAt: number;
 }
 
@@ -95,9 +87,8 @@ export interface PodAuditEntry {
 
 export interface PodBundle {
   agent: Pod;
-  knowledge: PodKnowledge[];
+  contextDocs: AgentContextDoc[];
   secrets: PodSecret[];
-  mcpServers: PodMcpServer[];
 }
 
 export interface CreatePodInput {

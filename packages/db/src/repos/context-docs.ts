@@ -5,8 +5,12 @@
 // variants + getDb() wrappers.
 //
 // Scope-pointer invariant (belt-and-suspenders alongside the SQL CHECK):
-// exactly one of (projectId, areaId, workItemId) may be non-null. The writer
-// throws before touching the DB when the constraint is violated.
+// exactly one of (projectId, areaId, workItemId, agentId) may be non-null.
+// The writer throws before touching the DB when the constraint is violated.
+//
+// Agent scope (migration 0055): the old agent_knowledge table merged in here.
+// Agent-scoped mutations emit an `agent_audit` row (field 'context-doc') in
+// the same transaction — the pod History tab reads it.
 //
 // FTS5 search lives here too (Step 4). All FTS queries use getRawDb() because
 // Drizzle cannot model virtual tables.
@@ -16,7 +20,8 @@ import type { ULID } from '@pc/domain';
 import { getDb, getRawDb } from '../connection.ts';
 import type { DbExecutor } from '../connection.ts';
 import { newId } from '../id.ts';
-import { contextDocs, workItems } from '../schema.ts';
+import { agentAudit, contextDocs, workItems } from '../schema.ts';
+import { type AuditInput, buildAuditRow } from './pod-audit.ts';
 
 // ── Row types ────────────────────────────────────────────────────────────────
 
@@ -25,6 +30,7 @@ export interface ContextDocRow {
   projectId: ULID | null;
   areaId: ULID | null;
   workItemId: ULID | null;
+  agentId: ULID | null;
   title: string;
   body: string;
   author: string;
@@ -35,9 +41,10 @@ export interface ContextDocRow {
 
 /** One-scope constraint — exactly one field must be set. */
 export type ContextDocScope =
-  | { projectId: ULID; areaId?: undefined; workItemId?: undefined }
-  | { areaId: ULID; projectId?: undefined; workItemId?: undefined }
-  | { workItemId: ULID; projectId?: undefined; areaId?: undefined };
+  | { projectId: ULID; areaId?: undefined; workItemId?: undefined; agentId?: undefined }
+  | { areaId: ULID; projectId?: undefined; workItemId?: undefined; agentId?: undefined }
+  | { workItemId: ULID; projectId?: undefined; areaId?: undefined; agentId?: undefined }
+  | { agentId: ULID; projectId?: undefined; areaId?: undefined; workItemId?: undefined };
 
 export interface CreateContextDocInput {
   scope: ContextDocScope;
@@ -76,7 +83,9 @@ export interface ContextDocSearchResult {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function enforceScope(scope: ContextDocScope): void {
-  const set = [scope.projectId, scope.areaId, scope.workItemId].filter(Boolean).length;
+  const set = [scope.projectId, scope.areaId, scope.workItemId, scope.agentId].filter(
+    Boolean,
+  ).length;
   if (set !== 1) {
     throw new Error(
       `ContextDoc scope must have exactly one non-null pointer; got ${set}`,
@@ -88,23 +97,64 @@ function scopeToColumns(scope: ContextDocScope): {
   projectId: ULID | null;
   areaId: ULID | null;
   workItemId: ULID | null;
+  agentId: ULID | null;
 } {
   return {
     projectId: scope.projectId ?? null,
     areaId: scope.areaId ?? null,
     workItemId: scope.workItemId ?? null,
+    agentId: scope.agentId ?? null,
   };
+}
+
+/** Compact `{title, body}` snapshot — what 'context-doc' audit rows carry in
+ *  their value columns (mirrors the old knowledgeSnapshot shape). */
+function contextDocSnapshot(row: ContextDocRow): string {
+  return JSON.stringify({ title: row.title, body: row.body });
+}
+
+/** Audit emitted only for agent-scoped docs; non-agent scopes have no audit
+ *  surface (their history lands in Slice 2's outbox work). Callers that don't
+ *  pass one still get coverage via this default. */
+const DEFAULT_DOC_AUDIT: AuditInput = { actor: 'user', reason: 'context-doc-edit' };
+
+function emitAgentDocAudit(
+  db: DbExecutor,
+  row: ContextDocRow,
+  opts: { prior?: ContextDocRow | null; deleted?: boolean; audit?: AuditInput },
+): void {
+  if (!row.agentId) return;
+  const now = Date.now();
+  db.insert(agentAudit)
+    .values(
+      buildAuditRow(
+        {
+          agentId: row.agentId,
+          field: 'context-doc',
+          fieldRef: row.id,
+          priorValue: opts.prior ? contextDocSnapshot(opts.prior) : null,
+          newValue: opts.deleted ? null : contextDocSnapshot(row),
+          audit: opts.audit ?? DEFAULT_DOC_AUDIT,
+        },
+        now,
+      ),
+    )
+    .run();
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
 
-export function createContextDoc(input: CreateContextDocInput): ContextDocRow {
-  return createContextDocInDb(getDb(), input);
+export function createContextDoc(
+  input: CreateContextDocInput,
+  audit?: AuditInput,
+): ContextDocRow {
+  return getDb().transaction((tx) => createContextDocInDb(tx, input, audit));
 }
 
 export function createContextDocInDb(
   db: DbExecutor,
   input: CreateContextDocInput,
+  audit?: AuditInput,
 ): ContextDocRow {
   enforceScope(input.scope);
   const now = Date.now();
@@ -119,30 +169,41 @@ export function createContextDocInDb(
     deletedAt: null,
   };
   db.insert(contextDocs).values(row).run();
+  emitAgentDocAudit(db, row, { audit });
   return row;
 }
 
 export function updateContextDoc(
   id: ULID,
   input: UpdateContextDocInput,
+  audit?: AuditInput,
 ): ContextDocRow | null {
-  return updateContextDocInDb(getDb(), id, input);
+  return getDb().transaction((tx) => updateContextDocInDb(tx, id, input, audit));
 }
 
 export function updateContextDocInDb(
   db: DbExecutor,
   id: ULID,
   input: UpdateContextDocInput,
+  audit?: AuditInput,
 ): ContextDocRow | null {
   const existing = getContextDocInDb(db, id);
   if (!existing || existing.deletedAt !== null) return null;
   if (input.title === undefined && input.body === undefined) return existing;
+  if (
+    (input.title === undefined || input.title === existing.title) &&
+    (input.body === undefined || input.body === existing.body)
+  ) {
+    return existing;
+  }
   const now = Date.now();
   const patch: Partial<ContextDocRow> & { updatedAt: number } = { updatedAt: now };
   if (input.title !== undefined) patch.title = input.title;
   if (input.body !== undefined) patch.body = input.body;
   db.update(contextDocs).set(patch).where(eq(contextDocs.id, id)).run();
-  return getContextDocInDb(db, id);
+  const next = getContextDocInDb(db, id);
+  if (next) emitAgentDocAudit(db, next, { prior: existing, audit });
+  return next;
 }
 
 export function getContextDoc(id: ULID): ContextDocRow | null {
@@ -158,13 +219,14 @@ export function getContextDocInDb(db: DbExecutor, id: ULID): ContextDocRow | nul
   return row ?? null;
 }
 
-export function softDeleteContextDoc(id: ULID): ContextDocRow | null {
-  return softDeleteContextDocInDb(getDb(), id);
+export function softDeleteContextDoc(id: ULID, audit?: AuditInput): ContextDocRow | null {
+  return getDb().transaction((tx) => softDeleteContextDocInDb(tx, id, audit));
 }
 
 export function softDeleteContextDocInDb(
   db: DbExecutor,
   id: ULID,
+  audit?: AuditInput,
 ): ContextDocRow | null {
   const existing = getContextDocInDb(db, id);
   if (!existing) return null;
@@ -173,6 +235,7 @@ export function softDeleteContextDocInDb(
     .set({ deletedAt: now, updatedAt: now })
     .where(eq(contextDocs.id, id))
     .run();
+  emitAgentDocAudit(db, existing, { prior: existing, deleted: true, audit });
   return db
     .select()
     .from(contextDocs)
@@ -196,12 +259,14 @@ export function listContextDocsForScopeInDb(
   opts: ListContextDocsOptions,
 ): ContextDocRow[] {
   enforceScope(opts.scope);
-  const { projectId, areaId, workItemId } = scopeToColumns(opts.scope);
+  const { projectId, areaId, workItemId, agentId } = scopeToColumns(opts.scope);
   let whereClause;
   if (projectId) {
     whereClause = and(eq(contextDocs.projectId, projectId), isNull(contextDocs.deletedAt));
   } else if (areaId) {
     whereClause = and(eq(contextDocs.areaId, areaId), isNull(contextDocs.deletedAt));
+  } else if (agentId) {
+    whereClause = and(eq(contextDocs.agentId, agentId), isNull(contextDocs.deletedAt));
   } else {
     whereClause = and(eq(contextDocs.workItemId, workItemId!), isNull(contextDocs.deletedAt));
   }
@@ -211,6 +276,28 @@ export function listContextDocsForScopeInDb(
     .where(whereClause)
     .orderBy(asc(contextDocs.createdAt))
     .all() as ContextDocRow[];
+}
+
+/** Title-keyed lookup within one agent's docs — the stock seeder's "does this
+ *  doc already exist" probe (replaces the old getKnowledgeByName). Titles are
+ *  not unique-constrained post-merge; returns the oldest match. */
+export function getAgentContextDocByTitle(input: {
+  agentId: ULID;
+  title: string;
+}): ContextDocRow | null {
+  const row = getDb()
+    .select()
+    .from(contextDocs)
+    .where(
+      and(
+        eq(contextDocs.agentId, input.agentId),
+        eq(contextDocs.title, input.title),
+        isNull(contextDocs.deletedAt),
+      ),
+    )
+    .orderBy(asc(contextDocs.createdAt))
+    .get() as ContextDocRow | undefined;
+  return row ?? null;
 }
 
 // ── Chain read (project → area → ancestor WIs → leaf WI) ─────────────────────

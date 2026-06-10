@@ -24,14 +24,11 @@
 
 import { and, asc, eq, isNull, or } from 'drizzle-orm';
 import type {
+  AgentContextDoc,
   AgentEffort,
   AgentModel,
   PodAgentRow,
   PodAuditField,
-  PodKnowledgeKind,
-  PodKnowledgeRow,
-  PodMcpServerConfig,
-  PodMcpServerRow,
   PodOrigin,
   PodScope,
   PodSecretRow,
@@ -41,7 +38,8 @@ import type {
 import { mergeRequiredAgentTools } from '@pc/domain';
 import { getDb } from '../connection.ts';
 import { newId } from '../id.ts';
-import { agentAudit, agentKnowledge, agentMcpServers, agentSecrets, agents } from '../schema.ts';
+import { agentAudit, agentSecrets, agents, contextDocs } from '../schema.ts';
+import { type ContextDocRow, listContextDocsForScope } from './context-docs.ts';
 import { type AuditInput, buildAuditRow } from './pod-audit.ts';
 
 // --- agents -----------------------------------------------------------------
@@ -405,11 +403,11 @@ export interface CloneAgentToProjectInput {
 export interface CloneAgentResult {
   agent: PodAgentRow;
   /** Counts of content rows that were copied. */
-  copied: { knowledge: number; mcpServers: number };
+  copied: { contextDocs: number };
 }
 
 /** Clone a pod into a target project as a project-scope row. Copies the
- *  agent's scalar fields + every knowledge row + every mcp-server row.
+ *  agent's scalar fields + every attached context doc + every mcp-server row.
  *  Secrets are NOT copied — they're sensitive and the cloning user may not
  *  intend to share them. The target project re-creates whatever secrets the
  *  pod actually needs.
@@ -438,14 +436,7 @@ export function cloneAgentToProject(
     );
   }
 
-  const sourceKnowledge =
-    source.scope === 'project' && source.projectId
-      ? listKnowledge({ agentId: source.id, projectId: source.projectId })
-      : listKnowledge({ agentId: source.id, scope: 'global' });
-  const sourceMcp =
-    source.scope === 'project' && source.projectId
-      ? listMcpServers({ agentId: source.id, projectId: source.projectId })
-      : listMcpServers({ agentId: source.id, scope: 'global' });
+  const sourceDocs = listContextDocsForScope({ scope: { agentId: source.id } });
 
   const now = Date.now();
   const newAgentId = newId() as ULID;
@@ -475,42 +466,22 @@ export function cloneAgentToProject(
     reason: audit.reason ?? `cloned-from-${source.id}`,
   };
 
-  const knowledgeRows = sourceKnowledge.map((k) => ({
+  const docRows = sourceDocs.map((d) => ({
     insertRow: {
       id: newId() as ULID,
+      projectId: null,
+      areaId: null,
+      workItemId: null,
       agentId: newAgentId,
-      scope: 'project' as PodScope,
-      projectId: input.targetProjectId,
-      name: k.name,
-      kind: k.kind,
-      content: k.content,
+      title: d.title,
+      body: d.body,
+      author: d.author,
       createdAt: now,
       updatedAt: now,
+      deletedAt: null,
     },
-    auditField: 'knowledge' as PodAuditField,
-    snapshot: knowledgeSnapshot({
-      ...k,
-      scope: 'project',
-      projectId: input.targetProjectId,
-    }),
-  }));
-
-  const mcpRows = sourceMcp.map((m) => ({
-    insertRow: {
-      id: newId() as ULID,
-      agentId: newAgentId,
-      scope: 'project' as PodScope,
-      projectId: input.targetProjectId,
-      name: m.name,
-      config: m.config,
-      createdAt: now,
-    },
-    auditField: 'mcp_server' as PodAuditField,
-    snapshot: mcpSnapshot({
-      ...m,
-      scope: 'project',
-      projectId: input.targetProjectId,
-    }),
+    auditField: 'context-doc' as PodAuditField,
+    snapshot: JSON.stringify({ title: d.title, body: d.body }),
   }));
 
   const agentAuditRow = buildAuditRow(
@@ -526,33 +497,16 @@ export function cloneAgentToProject(
   getDb().transaction((tx) => {
     tx.insert(agents).values(agentRow).run();
     tx.insert(agentAudit).values(agentAuditRow).run();
-    for (const k of knowledgeRows) {
-      tx.insert(agentKnowledge).values(k.insertRow).run();
+    for (const d of docRows) {
+      tx.insert(contextDocs).values(d.insertRow).run();
       tx.insert(agentAudit)
         .values(
           buildAuditRow(
             {
               agentId: newAgentId,
-              field: k.auditField,
-              fieldRef: k.insertRow.id,
-              newValue: k.snapshot,
-              audit: cloneAudit,
-            },
-            now,
-          ),
-        )
-        .run();
-    }
-    for (const m of mcpRows) {
-      tx.insert(agentMcpServers).values(m.insertRow).run();
-      tx.insert(agentAudit)
-        .values(
-          buildAuditRow(
-            {
-              agentId: newAgentId,
-              field: m.auditField,
-              fieldRef: m.insertRow.name,
-              newValue: m.snapshot,
+              field: d.auditField,
+              fieldRef: d.insertRow.id,
+              newValue: d.snapshot,
               audit: cloneAudit,
             },
             now,
@@ -564,7 +518,7 @@ export function cloneAgentToProject(
 
   return {
     agent: newAgent,
-    copied: { knowledge: knowledgeRows.length, mcpServers: mcpRows.length },
+    copied: { contextDocs: docRows.length },
   };
 }
 
@@ -580,212 +534,6 @@ export function bumpAgentRev(id: ULID): void {
     .set({ rev: (existing.rev ?? 0) + 1, updatedAt: now })
     .where(eq(agents.id, id))
     .run();
-}
-
-// --- agent_knowledge --------------------------------------------------------
-
-export interface CreateKnowledgeInput {
-  id?: ULID;
-  agentId: ULID;
-  scope: PodScope;
-  projectId?: ULID | null;
-  name: string;
-  kind?: PodKnowledgeKind;
-  content?: string;
-}
-
-function rowToKnowledge(row: typeof agentKnowledge.$inferSelect): PodKnowledgeRow {
-  return {
-    id: row.id as ULID,
-    agentId: row.agentId as ULID,
-    scope: row.scope,
-    projectId: row.projectId ?? null,
-    name: row.name,
-    kind: row.kind,
-    content: row.content,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function knowledgeSnapshot(row: PodKnowledgeRow): string {
-  return JSON.stringify({ name: row.name, kind: row.kind, content: row.content });
-}
-
-export function createKnowledge(
-  input: CreateKnowledgeInput,
-  audit: AuditInput,
-): PodKnowledgeRow {
-  if (input.scope === 'project' && !input.projectId) {
-    throw new Error('createKnowledge: projectId is required when scope === "project"');
-  }
-  const now = Date.now();
-  const id = (input.id ?? newId()) as ULID;
-  const row = {
-    id,
-    agentId: input.agentId,
-    scope: input.scope,
-    projectId: input.scope === 'project' ? input.projectId ?? null : null,
-    name: input.name,
-    kind: input.kind ?? 'knowledge',
-    content: input.content ?? '',
-    createdAt: now,
-    updatedAt: now,
-  };
-  const out = rowToKnowledge(row as typeof agentKnowledge.$inferSelect);
-  const auditValues = buildAuditRow(
-    {
-      agentId: input.agentId,
-      field: 'knowledge',
-      fieldRef: id,
-      newValue: knowledgeSnapshot(out),
-      audit,
-    },
-    now,
-  );
-  getDb().transaction((tx) => {
-    tx.insert(agentKnowledge).values(row).run();
-    tx.insert(agentAudit).values(auditValues).run();
-  });
-  return out;
-}
-
-export function getKnowledge(id: ULID): PodKnowledgeRow | null {
-  const row = getDb()
-    .select()
-    .from(agentKnowledge)
-    .where(eq(agentKnowledge.id, id))
-    .get();
-  return row ? rowToKnowledge(row) : null;
-}
-
-export interface GetKnowledgeByNameInput {
-  agentId: ULID;
-  scope: PodScope;
-  projectId?: ULID | null;
-  name: string;
-}
-
-export function getKnowledgeByName(input: GetKnowledgeByNameInput): PodKnowledgeRow | null {
-  const projectCmp =
-    input.scope === 'project'
-      ? eq(agentKnowledge.projectId, input.projectId!)
-      : isNull(agentKnowledge.projectId);
-  const row = getDb()
-    .select()
-    .from(agentKnowledge)
-    .where(
-      and(
-        eq(agentKnowledge.agentId, input.agentId),
-        eq(agentKnowledge.scope, input.scope),
-        projectCmp,
-        eq(agentKnowledge.name, input.name),
-      ),
-    )
-    .get();
-  return row ? rowToKnowledge(row) : null;
-}
-
-export interface ListKnowledgeOptions {
-  agentId: ULID;
-  scope?: PodScope;
-  projectId?: ULID;
-}
-
-export function listKnowledge(opts: ListKnowledgeOptions): PodKnowledgeRow[] {
-  const conditions = [eq(agentKnowledge.agentId, opts.agentId)];
-  if (opts.projectId !== undefined) {
-    conditions.push(eq(agentKnowledge.scope, 'project'));
-    conditions.push(eq(agentKnowledge.projectId, opts.projectId));
-  } else if (opts.scope !== undefined) {
-    conditions.push(eq(agentKnowledge.scope, opts.scope));
-  }
-  const rows = getDb()
-    .select()
-    .from(agentKnowledge)
-    .where(and(...conditions))
-    .orderBy(asc(agentKnowledge.name))
-    .all();
-  return rows.map(rowToKnowledge);
-}
-
-export interface UpdateKnowledgeInput {
-  name?: string;
-  kind?: PodKnowledgeKind;
-  content?: string;
-}
-
-export function updateKnowledge(
-  id: ULID,
-  patch: UpdateKnowledgeInput,
-  audit: AuditInput,
-): PodKnowledgeRow | null {
-  const existing = getKnowledge(id);
-  if (!existing) return null;
-  const set: Record<string, unknown> = {};
-  let changed = false;
-  if (patch.name !== undefined && patch.name !== existing.name) {
-    set.name = patch.name;
-    changed = true;
-  }
-  if (patch.kind !== undefined && patch.kind !== existing.kind) {
-    set.kind = patch.kind;
-    changed = true;
-  }
-  if (patch.content !== undefined && patch.content !== existing.content) {
-    set.content = patch.content;
-    changed = true;
-  }
-  if (!changed) return existing;
-
-  const now = Date.now();
-  set.updatedAt = now;
-  const next: PodKnowledgeRow = {
-    ...existing,
-    name: patch.name ?? existing.name,
-    kind: patch.kind ?? existing.kind,
-    content: patch.content ?? existing.content,
-    updatedAt: now,
-  };
-  const auditValues = buildAuditRow(
-    {
-      agentId: existing.agentId,
-      field: 'knowledge',
-      fieldRef: id,
-      priorValue: knowledgeSnapshot(existing),
-      newValue: knowledgeSnapshot(next),
-      audit,
-    },
-    now,
-  );
-  getDb().transaction((tx) => {
-    tx.update(agentKnowledge).set(set).where(eq(agentKnowledge.id, id)).run();
-    tx.insert(agentAudit).values(auditValues).run();
-  });
-  return getKnowledge(id);
-}
-
-export function deleteKnowledge(id: ULID, audit: AuditInput): boolean {
-  const existing = getKnowledge(id);
-  if (!existing) return false;
-  const now = Date.now();
-  const auditValues = buildAuditRow(
-    {
-      agentId: existing.agentId,
-      field: 'knowledge',
-      fieldRef: id,
-      priorValue: knowledgeSnapshot(existing),
-      audit,
-    },
-    now,
-  );
-  let changed = false;
-  getDb().transaction((tx) => {
-    const result = tx.delete(agentKnowledge).where(eq(agentKnowledge.id, id)).run();
-    changed = (result.changes ?? 0) > 0;
-    if (changed) tx.insert(agentAudit).values(auditValues).run();
-  });
-  return changed;
 }
 
 // --- agent_secrets ----------------------------------------------------------
@@ -916,147 +664,6 @@ export function deleteSecret(id: ULID, audit: AuditInput): boolean {
   return changed;
 }
 
-// --- agent_mcp_servers ------------------------------------------------------
-
-export interface CreateMcpServerInput {
-  id?: ULID;
-  agentId: ULID;
-  scope: PodScope;
-  projectId?: ULID | null;
-  name: string;
-  config: PodMcpServerConfig;
-}
-
-function rowToMcpServer(row: typeof agentMcpServers.$inferSelect): PodMcpServerRow {
-  return {
-    id: row.id as ULID,
-    agentId: row.agentId as ULID,
-    scope: row.scope,
-    projectId: row.projectId ?? null,
-    name: row.name,
-    config: row.config,
-    createdAt: row.createdAt,
-  };
-}
-
-function mcpSnapshot(row: PodMcpServerRow): string {
-  return JSON.stringify({ name: row.name, config: row.config });
-}
-
-export function createMcpServer(
-  input: CreateMcpServerInput,
-  audit: AuditInput,
-): PodMcpServerRow {
-  if (input.scope === 'project' && !input.projectId) {
-    throw new Error('createMcpServer: projectId is required when scope === "project"');
-  }
-  const now = Date.now();
-  const id = (input.id ?? newId()) as ULID;
-  const row = {
-    id,
-    agentId: input.agentId,
-    scope: input.scope,
-    projectId: input.scope === 'project' ? input.projectId ?? null : null,
-    name: input.name,
-    config: input.config,
-    createdAt: now,
-  };
-  const out = rowToMcpServer(row as typeof agentMcpServers.$inferSelect);
-  const auditValues = buildAuditRow(
-    {
-      agentId: input.agentId,
-      field: 'mcp_server',
-      fieldRef: input.name,
-      newValue: mcpSnapshot(out),
-      audit,
-    },
-    now,
-  );
-  getDb().transaction((tx) => {
-    tx.insert(agentMcpServers).values(row).run();
-    tx.insert(agentAudit).values(auditValues).run();
-  });
-  return out;
-}
-
-export function getMcpServer(id: ULID): PodMcpServerRow | null {
-  const row = getDb().select().from(agentMcpServers).where(eq(agentMcpServers.id, id)).get();
-  return row ? rowToMcpServer(row) : null;
-}
-
-export interface GetMcpServerByNameInput {
-  agentId: ULID;
-  scope: PodScope;
-  projectId?: ULID | null;
-  name: string;
-}
-
-export function getMcpServerByName(input: GetMcpServerByNameInput): PodMcpServerRow | null {
-  const projectCmp =
-    input.scope === 'project'
-      ? eq(agentMcpServers.projectId, input.projectId!)
-      : isNull(agentMcpServers.projectId);
-  const row = getDb()
-    .select()
-    .from(agentMcpServers)
-    .where(
-      and(
-        eq(agentMcpServers.agentId, input.agentId),
-        eq(agentMcpServers.scope, input.scope),
-        projectCmp,
-        eq(agentMcpServers.name, input.name),
-      ),
-    )
-    .get();
-  return row ? rowToMcpServer(row) : null;
-}
-
-export interface ListMcpServersOptions {
-  agentId: ULID;
-  scope?: PodScope;
-  projectId?: ULID;
-}
-
-export function listMcpServers(opts: ListMcpServersOptions): PodMcpServerRow[] {
-  const conditions = [eq(agentMcpServers.agentId, opts.agentId)];
-  if (opts.projectId !== undefined) {
-    conditions.push(eq(agentMcpServers.scope, 'project'));
-    conditions.push(eq(agentMcpServers.projectId, opts.projectId));
-  } else if (opts.scope !== undefined) {
-    conditions.push(eq(agentMcpServers.scope, opts.scope));
-  }
-  const rows = getDb()
-    .select()
-    .from(agentMcpServers)
-    .where(and(...conditions))
-    .orderBy(asc(agentMcpServers.name))
-    .all();
-  return rows.map(rowToMcpServer);
-}
-
-export function deleteMcpServer(id: ULID, audit: AuditInput): boolean {
-  const existing = getMcpServer(id);
-  if (!existing) return false;
-  const now = Date.now();
-  const auditValues = buildAuditRow(
-    {
-      agentId: existing.agentId,
-      field: 'mcp_server',
-      fieldRef: existing.name,
-      priorValue: mcpSnapshot(existing),
-      audit,
-    },
-    now,
-  );
-  let changed = false;
-  getDb().transaction((tx) => {
-    const result = tx.delete(agentMcpServers).where(eq(agentMcpServers.id, id)).run();
-    changed = (result.changes ?? 0) > 0;
-    if (changed) tx.insert(agentAudit).values(auditValues).run();
-  });
-  return changed;
-}
-
 // --- pod bundle -------------------------------------------------------------
 
 /** Resolve a pod for dispatch: prefer a project-scoped row for this project,
@@ -1113,18 +720,26 @@ export function resolveAgentForDispatch(
 export function getPodForSpawn(name: string, projectId?: ULID | null): PodSpawnBundle | null {
   const agent = resolveAgentForDispatch(name, projectId);
   if (!agent) return null;
+  // Context docs hang off the agent row alone — the resolved agent's own
+  // scope already decided which row (project overlay vs global) we're on.
+  const docs = listContextDocsForScope({ scope: { agentId: agent.id } });
+  const contextDocsForSpawn: AgentContextDoc[] = docs.map(toAgentContextDoc);
   if (agent.scope === 'project' && agent.projectId) {
     return {
       agent,
-      knowledge: listKnowledge({ agentId: agent.id, projectId: agent.projectId }),
+      contextDocs: contextDocsForSpawn,
       secrets: listSecrets({ agentId: agent.id, projectId: agent.projectId }),
-      mcpServers: listMcpServers({ agentId: agent.id, projectId: agent.projectId }),
     };
   }
   return {
     agent,
-    knowledge: listKnowledge({ agentId: agent.id, scope: 'global' }),
+    contextDocs: contextDocsForSpawn,
     secrets: listSecrets({ agentId: agent.id, scope: 'global' }),
-    mcpServers: listMcpServers({ agentId: agent.id, scope: 'global' }),
   };
+}
+
+/** Project a full context_docs row down to the spawn-bundle shape the
+ *  materialiser consumes (@pc/runtime cannot import @pc/db). */
+export function toAgentContextDoc(row: ContextDocRow): AgentContextDoc {
+  return { id: row.id, title: row.title, body: row.body, updatedAt: row.updatedAt };
 }

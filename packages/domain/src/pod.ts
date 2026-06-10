@@ -1,9 +1,10 @@
 // Section 17 — Agent pods (DB-resident specialists).
 //
 // Pods are the long-lived storage shape for an agent: prompt + tools + model
-// settings live in `agents`, and per-pod content lives in `agent_knowledge`,
-// `agent_secrets`, and `agent_mcp_servers`. Every mutation writes an
-// `agent_audit` row for the History tab + revert.
+// settings live in `agents`; per-pod content lives in `agent_secrets`,
+// `agent_mcp_servers`, and agent-scoped `context_docs` rows (migration 0055
+// merged the old agent_knowledge table into the unified context-doc store).
+// Every mutation writes an `agent_audit` row for the History tab + revert.
 //
 // All content tables carry `scope` + `project_id` from v1 even though v1 is
 // global-only — so 17c (per-project overlay) lands without a schema migration.
@@ -20,18 +21,14 @@ export type PodScope = 'global' | 'project';
 
 export const POD_SCOPES: readonly PodScope[] = ['global', 'project'];
 
-export type PodKnowledgeKind = 'knowledge' | 'example';
-
-export const POD_KNOWLEDGE_KINDS: readonly PodKnowledgeKind[] = ['knowledge', 'example'];
-
 export type PodAuditActor = 'orchestrator' | 'user';
 
 export const POD_AUDIT_ACTORS: readonly PodAuditActor[] = ['orchestrator', 'user'];
 
 /** Audit `field` discriminates which slice of the pod changed. `field_ref`
- *  disambiguates list-shaped fields — e.g. for `knowledge` it's the knowledge
- *  row id, for `secret` it's the env-var name, for `mcp_server` it's the
- *  server name. Scalar fields on the `agents` row use `field_ref = null`. */
+ *  disambiguates list-shaped fields — e.g. for `context-doc` it's the doc id,
+ *  for `secret` it's the env-var name, for `mcp_server` it's the server name.
+ *  Scalar fields on the `agents` row use `field_ref = null`. */
 export type PodAuditField =
   | 'prompt'
   | 'description'
@@ -44,7 +41,11 @@ export type PodAuditField =
   | 'output_destination'
   | 'name'
   | 'dispatch_guidance'
+  // 'knowledge' — ☠ migration 0055 (knowledge merged into context_docs); the
+  // literal survives ONLY in historical audit rows, which keep rendering as-is.
   | 'knowledge'
+  /** Agent-scoped context doc edits (migration 0055+). fieldRef = doc id. */
+  | 'context-doc'
   | 'secret'
   | 'mcp_server'
   | 'scope'
@@ -62,6 +63,7 @@ export const POD_AUDIT_FIELDS: readonly PodAuditField[] = [
   'name',
   'dispatch_guidance',
   'knowledge',
+  'context-doc',
   'secret',
   'mcp_server',
   'scope',
@@ -127,15 +129,13 @@ export interface PodAgentRow {
   deletedAt: number | null;
 }
 
-export interface PodKnowledgeRow {
+/** Agent-scoped context doc as the spawn bundle / materialiser consume it.
+ *  Thin projection of a `context_docs` row (scope pointer = agent_id) —
+ *  @pc/runtime cannot import @pc/db, so the shape lives here. */
+export interface AgentContextDoc {
   id: ULID;
-  agentId: ULID;
-  scope: PodScope;
-  projectId: ULID | null;
-  name: string;
-  kind: PodKnowledgeKind;
-  content: string;
-  createdAt: number;
+  title: string;
+  body: string;
   updatedAt: number;
 }
 
@@ -179,13 +179,13 @@ export interface PodAuditRow {
   createdAt: number;
 }
 
-/** Aggregate read shape the materialiser (17a.3) consumes. v1 = global-only;
- *  17c upgrades the repo-level merge to overlay project-scoped rows on top. */
+/** Aggregate read shape the materialiser (17a.3) consumes.
+ *  MCP servers are no longer inline — they are resolved from the registry
+ *  via agent_mcp_attachments at spawn time (pc-pty-chat-359 P4b). */
 export interface PodSpawnBundle {
   agent: PodAgentRow;
-  knowledge: PodKnowledgeRow[];
+  contextDocs: AgentContextDoc[];
   secrets: PodSecretRow[];
-  mcpServers: PodMcpServerRow[];
 }
 
 // ── MCP Agent Attachments (P3 — pc-pty-chat-359.3) ───────────────────────────

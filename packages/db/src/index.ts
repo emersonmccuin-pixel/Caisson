@@ -175,51 +175,34 @@ export {
   bumpAgentRev,
   cloneAgentToProject,
   createAgent,
-  createKnowledge,
-  createMcpServer,
   createSecret,
-  deleteKnowledge,
-  deleteMcpServer,
   deleteSecret,
   getAgentById,
   getAgentByName,
-  getKnowledge,
-  getKnowledgeByName,
-  getMcpServer,
-  getMcpServerByName,
   getPodForSpawn,
   getSecret,
   getSecretByEnvVarName,
   isProjectDispatchable,
   listAgents,
   listProjectVisibleAgents,
-  listKnowledge,
-  listMcpServers,
   listSecrets,
   promoteAgentToGlobal,
   resolveAgentForDispatch,
   restoreAgent,
   softDeleteAgent,
+  toAgentContextDoc,
   updateAgent,
-  updateKnowledge,
 } from './repos/pods.ts';
 export type {
   CloneAgentResult,
   CloneAgentToProjectInput,
   CreateAgentInput,
-  CreateKnowledgeInput,
-  CreateMcpServerInput,
   CreateSecretInput,
   GetAgentByNameInput,
-  GetKnowledgeByNameInput,
-  GetMcpServerByNameInput,
   GetSecretByEnvInput,
   ListAgentsOptions,
-  ListKnowledgeOptions,
-  ListMcpServersOptions,
   ListSecretsOptions,
   UpdateAgentInput,
-  UpdateKnowledgeInput,
 } from './repos/pods.ts';
 export { buildAuditRow, listAgentAudit } from './repos/pod-audit.ts';
 export type {
@@ -347,6 +330,7 @@ export {
   getContextDocInDb,
   listContextChainDocs,
   listContextChainDocsInDb,
+  getAgentContextDocByTitle,
   listContextDocsForScope,
   listContextDocsForScopeInDb,
   sanitizeFts5Query,
@@ -366,6 +350,19 @@ export type {
   ListContextDocsOptions,
   UpdateContextDocInput,
 } from './repos/context-docs.ts';
+
+// Migration 0056 — context-doc read receipts (staleness/usage tracking).
+export {
+  getContextDocReadStats,
+  listContextDocReadsForRun,
+  recordContextDocReads,
+} from './repos/context-doc-reads.ts';
+export type {
+  ContextDocReadStats,
+  ContextDocReadVia,
+  ContextDocSessionKind,
+  RecordContextDocReadsInput,
+} from './repos/context-doc-reads.ts';
 
 export {
   cancelOpenOrchestratorSendsForSession,

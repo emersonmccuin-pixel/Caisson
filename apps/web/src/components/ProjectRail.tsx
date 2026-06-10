@@ -282,7 +282,11 @@ export function ProjectRail({
             {commandHasLiveSession && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute bottom-0 left-0 right-0 h-0.5 bg-primary"
+                className="pointer-events-none absolute bottom-0 left-0 right-0 h-px"
+                style={{
+                  background: 'linear-gradient(to right, transparent, var(--primary) 35%, var(--primary) 65%, transparent)',
+                  boxShadow: '0 0 8px 2px color-mix(in srgb, var(--primary) 40%, transparent)',
+                }}
               />
             )}
           </div>
@@ -364,7 +368,11 @@ export function ProjectRail({
                 {hasLiveSession && (
                   <div
                     aria-hidden="true"
-                    className="pointer-events-none absolute bottom-0 left-0 right-0 h-0.5 bg-primary"
+                    className="pointer-events-none absolute bottom-0 left-0 right-0 h-px"
+                    style={{
+                      background: 'linear-gradient(to right, transparent, var(--primary) 35%, var(--primary) 65%, transparent)',
+                      boxShadow: '0 0 8px 2px color-mix(in srgb, var(--primary) 40%, transparent)',
+                    }}
                   />
                 )}
                 {showLineAfter && (
