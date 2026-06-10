@@ -200,13 +200,13 @@ export function applyAgentRunTerminalEffects(
 
   deps.activeRunRegistry?.unregister(input.runId);
 
-  // Slice 013 — capture the deliverable onto the contract SYNCHRONOUSLY (a
-  // durable fact, like the terminal row write above). Returns the resolved
-  // result text the envelope surfaces (result, else the wi.body fallback —
-  // same bytes the old live wi.body surface produced, now sourced from the
-  // captured deliverable). Done here (not the async tail) so the contract row
+  // Slice 013/3 — capture the deliverable onto the contract SYNCHRONOUSLY (a
+  // durable fact, like the terminal row write above). Returns the authoritative
+  // deliverable text the envelope headlines, plus the demoted incidental note
+  // (the raw turn result, carried only when a submitted deliverable is present
+  // and its text differs). Done here (not the async tail) so the contract row
   // lands deterministically.
-  const resolvedResult = captureDeliverable(input, row, deps);
+  const { deliverableText, incidentalNote } = captureDeliverable(input, row, deps);
 
   try {
     input.cleanup?.();
@@ -220,7 +220,8 @@ export function applyAgentRunTerminalEffects(
     completedAt,
     failureCause,
     failureReason,
-    resolvedResult,
+    resolvedResult: deliverableText,
+    incidentalNote,
     deps,
   }).catch((err) => {
     const error = err instanceof Error ? err : new Error(String(err));
@@ -230,27 +231,38 @@ export function applyAgentRunTerminalEffects(
   return { applied: 1 };
 }
 
-/** Slice 020 — resolve the captured deliverable + return the result text the
+interface CapturedDeliverable {
+  /** The authoritative result text the envelope's Result: section surfaces. */
+  deliverableText: string;
+  /** The incidental free-text turn result, demoted to a secondary Note: when a
+   *  submitted deliverable is present and its text differs. Null otherwise. */
+  incidentalNote: string | null;
+}
+
+/** Slice 020/3 — resolve the captured deliverable + return the result text the
  *  terminal envelope surfaces. SUBMISSION is the source of truth: if the agent
  *  called `pc_submit_deliverable` (slice 014b), the contract already carries its
- *  typed deliverable + report — we do NOT overwrite it. When the agent submitted
- *  NOTHING we synthesize an `answer` deliverable from the free-text `result`
- *  (the `wi.body` fallback is retired — the deliverable has a contract home). */
+ *  typed deliverable + report — the typed output is ALWAYS the headline. The
+ *  free-text turn `result` is demoted to a secondary Note: when distinct.
+ *  When the agent submitted NOTHING we synthesize an `answer` deliverable from
+ *  the free-text `result` (the `wi.body` fallback is retired). */
 function captureDeliverable(
   input: AgentRunTerminalEffectsInput,
   row: AgentRunRow,
   deps: AgentRunTerminalEffectsDeps,
-): string {
+): CapturedDeliverable {
   const result = input.result ?? '';
-  if (input.status !== 'completed') return result;
+  if (input.status !== 'completed') return { deliverableText: result, incidentalNote: null };
 
   const service = deps.contractService ?? new ContractService();
   const contractId = input.contractId ?? row.contractId ?? null;
-  if (!contractId) return result;
+  if (!contractId) return { deliverableText: result, incidentalNote: null };
 
   // Submission-gated path: a deliverable submitted via pc_submit_deliverable is
-  // authoritative — keep it. Surface its text in the envelope when the agent
-  // left no free-text result.
+  // the authoritative output. Its text is ALWAYS the Result: headline — the
+  // free-text turn result is demoted to a secondary Note: when present and
+  // distinct (fixing the shadow: pre-fix, a non-empty `result` overwrote the
+  // submitted deliverable in the envelope).
   let existing: Contract | null = null;
   try {
     existing = service.get(contractId);
@@ -258,11 +270,16 @@ function captureDeliverable(
     existing = null;
   }
   if (existing?.deliverable) {
-    if (result.trim() === '') {
-      const submittedText = contractDeliverableText(existing.deliverable, existing.report);
-      if (submittedText.trim()) return submittedText;
-    }
-    return result;
+    const submittedText = contractDeliverableText(existing.deliverable, existing.report);
+    // Fall back to `result` only when the deliverable carries no readable text
+    // (e.g. a `repo` kind with no report field).
+    const deliverableText = submittedText.trim() ? submittedText : result;
+    // Demote the free-text turn result to a secondary note when it is present
+    // and distinct from the deliverable text.
+    const resultTrimmed = result.trim();
+    const incidentalNote =
+      resultTrimmed && resultTrimmed !== deliverableText.trim() ? result : null;
+    return { deliverableText, incidentalNote };
   }
 
   // Legacy fallback (no submission): the agent's free-text `result` IS the
@@ -276,7 +293,7 @@ function captureDeliverable(
       deps.onError?.(err instanceof Error ? err : new Error(String(err)));
     }
   }
-  return result;
+  return { deliverableText: result, incidentalNote: null };
 }
 
 /** Slice 014b — strip the MCP server prefix (`mcp__pc-rig__pc_ask_orchestrator`
@@ -336,13 +353,17 @@ async function finishTerminalEffects(args: {
   completedAt: number;
   failureCause: AgentRunFailureCause | null;
   failureReason: string | null;
-  /** Slice 013 — the deliverable text resolved synchronously by
-   *  `captureDeliverable` (result, else the wi.body fallback). The envelope
-   *  surfaces this. */
+  /** Slice 013/3 — the authoritative deliverable text (from the submitted
+   *  deliverable when present; the free-text result otherwise). The envelope
+   *  Result: section surfaces this. */
   resolvedResult: string;
+  /** Slice 3 — the incidental free-text turn result, carried only when a
+   *  submitted deliverable is present and its text differs. Rendered as a
+   *  secondary Note: in the envelope. */
+  incidentalNote: string | null;
   deps: AgentRunTerminalEffectsDeps;
 }): Promise<void> {
-  const { input, row, failureCause, failureReason, resolvedResult, deps } = args;
+  const { input, row, failureCause, failureReason, resolvedResult, incidentalNote, deps } = args;
   const project = safeGetProject(input.projectId);
   const contractId = input.contractId ?? row.contractId ?? null;
   const workItemId = input.workItemId !== undefined ? input.workItemId : row.parentWorkItemId;
@@ -523,6 +544,7 @@ async function finishTerminalEffects(args: {
       parentWorkItemId: row.parentWorkItemId,
       terminalStatus: input.status,
       result,
+      note: incidentalNote,
       failureCause,
       verification,
     });
@@ -546,6 +568,11 @@ interface EmitTerminalArgs {
   parentWorkItemId: ULID | null;
   terminalStatus: TerminalStatus;
   result: string;
+  /** Slice 3 — incidental free-text turn result, demoted to a secondary Note:
+   *  in the completed envelope when present and distinct from the deliverable.
+   *  Optional so the replay path (which reads the DB row) does not need to
+   *  change. */
+  note?: string | null;
   failureCause: AgentRunFailureCause | null;
   verification: VerificationBlock | null;
 }
@@ -561,6 +588,7 @@ function emitTerminalEnvelope(args: EmitTerminalArgs): void {
           agentName: args.podName,
           parentWorkItemId: args.parentWorkItemId,
           result: args.result,
+          note: args.note,
           verification: args.verification,
         })
       : buildAgentFailedBody({
