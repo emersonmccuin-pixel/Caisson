@@ -537,12 +537,14 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
   });
 
   app.get('/api/projects/:projectId/work-items/:wiId', (c) => {
-    const id = c.req.param('projectId') as ULID;
+    const handle = c.req.param('projectId');
     const ref = c.req.param('wiId');
-    const runtime = deps.resolveProject(id);
-    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    const runtime = deps.resolveProject(handle);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${handle}` }, 404);
+    // Use the canonical ULID from the resolved runtime — the handle may be a slug/name.
+    const projectId = runtime.project.id;
     const includeArchived = c.req.query('includeArchived') === '1';
-    const resolved = resolveWorkItemRef(id, ref);
+    const resolved = resolveWorkItemRef(projectId, ref);
     if (resolved) {
       if (includeArchived || resolved.deletedAt == null) {
         return c.json({ ok: true, workItem: resolved });
@@ -550,7 +552,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     }
     if (includeArchived && looksLikeUlid(ref)) {
       const archived = runtime.workItemService().get(ref as ULID, { includeArchived: true });
-      if (archived && archived.projectId === id) {
+      if (archived && archived.projectId === projectId) {
         return c.json({ ok: true, workItem: archived });
       }
     }
