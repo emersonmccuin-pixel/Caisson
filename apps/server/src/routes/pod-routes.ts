@@ -36,6 +36,7 @@ import {
   deleteMcpAttachmentByPair,
   getAgentById,
   getContextDoc,
+  getContextDocReadStats,
   getMcpServer,
   getMcpServerRegistry,
   getSecret,
@@ -67,6 +68,7 @@ import type {
   ULID,
 } from '@pc/domain';
 import { POD_AUDIT_ACTORS, POD_AUDIT_FIELDS } from '@pc/domain';
+import { recordToolReadFromQuery } from '../features/context-docs/routes.ts';
 import { parsePodMcpServerConfig } from '../services/pod-mcp-config.ts';
 import { announcePod, announcePodDeleted } from '../services/pod-writer.ts';
 
@@ -114,11 +116,33 @@ function publicSecret(row: PodSecretRow): PublicPodSecret {
   };
 }
 
+/** Context doc + its read stats (Phase B/0056). `readCount === 0` with
+ *  `lastReadAt === null` renders as "never read" in the UI. */
+export type ContextDocWithReadStats = ContextDocRow & {
+  readCount: number;
+  lastReadAt: number | null;
+};
+
 export interface PodBundle {
   agent: PodAgentRow;
-  contextDocs: ContextDocRow[];
+  contextDocs: ContextDocWithReadStats[];
   secrets: PublicPodSecret[];
   mcpServers: PodMcpServerRow[];
+}
+
+/** Join read receipts onto a doc list. Best-effort — stats default to
+ *  never-read if the receipt query fails. */
+function withReadStats(docs: ContextDocRow[]): ContextDocWithReadStats[] {
+  let stats = new Map<ULID, { readCount: number; lastReadAt: number }>();
+  try {
+    stats = getContextDocReadStats(docs.map((d) => d.id));
+  } catch {
+    /* best-effort */
+  }
+  return docs.map((d) => {
+    const s = stats.get(d.id);
+    return { ...d, readCount: s?.readCount ?? 0, lastReadAt: s?.lastReadAt ?? null };
+  });
 }
 
 /** Assemble the full bundle for the modal mount. Lives next to the routes so
@@ -128,7 +152,7 @@ export function getPodBundle(agentId: ULID): PodBundle | null {
   if (!agent) return null;
   return {
     agent,
-    contextDocs: listContextDocsForScope({ scope: { agentId: agent.id } }),
+    contextDocs: withReadStats(listContextDocsForScope({ scope: { agentId: agent.id } })),
     secrets: listSecrets({ agentId: agent.id, scope: agent.scope }).map(publicSecret),
     mcpServers: listMcpServers({ agentId: agent.id, scope: agent.scope }),
   };
@@ -624,7 +648,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
   app.get('/api/agents/pods/:id/context-docs', (c) => {
     const id = c.req.param('id') as ULID;
     if (!getAgentById(id)) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    const docs = listContextDocsForScope({ scope: { agentId: id } });
+    const docs = withReadStats(listContextDocsForScope({ scope: { agentId: id } }));
     return c.json({ ok: true, contextDocs: docs });
   });
 
@@ -657,7 +681,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     bumpAgentRev(id);
     announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
-    return c.json({ ok: true, contextDoc: row }, 201);
+    return c.json({ ok: true, contextDoc: withReadStats([row])[0] }, 201);
   });
 
   /** Read a single attached doc. Worker agents call this at runtime (via
@@ -671,7 +695,8 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     if (!row || row.agentId !== id) {
       return c.json({ ok: false, error: `unknown context doc: ${docId}` }, 404);
     }
-    return c.json({ ok: true, contextDoc: row });
+    recordToolReadFromQuery(docId, new URL(c.req.url).searchParams);
+    return c.json({ ok: true, contextDoc: withReadStats([row])[0] });
   });
 
   app.patch('/api/agents/pods/:id/context-docs/:docId', async (c) => {
@@ -706,7 +731,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     bumpAgentRev(id);
     announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
-    return c.json({ ok: true, contextDoc: updated });
+    return c.json({ ok: true, contextDoc: withReadStats([updated])[0] });
   });
 
   /** Soft delete (replaces the old hard delete — every read filters

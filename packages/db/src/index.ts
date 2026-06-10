@@ -359,6 +359,19 @@ export type {
   UpdateContextDocInput,
 } from './repos/context-docs.ts';
 
+// Migration 0056 — context-doc read receipts (staleness/usage tracking).
+export {
+  getContextDocReadStats,
+  listContextDocReadsForRun,
+  recordContextDocReads,
+} from './repos/context-doc-reads.ts';
+export type {
+  ContextDocReadStats,
+  ContextDocReadVia,
+  ContextDocSessionKind,
+  RecordContextDocReadsInput,
+} from './repos/context-doc-reads.ts';
+
 export {
   cancelOpenOrchestratorSendsForSession,
   cancelQueuedOrchestratorSend,

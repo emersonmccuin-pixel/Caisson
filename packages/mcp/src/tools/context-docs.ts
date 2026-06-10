@@ -75,9 +75,15 @@ export async function handleContextDocTool(
         };
       }
       try {
-        const docPath = targetProjectId
-          ? `/api/projects/${targetProjectId}/context-docs/${encodeURIComponent(docId)}`
-          : ctx.projectPath(`context-docs/${encodeURIComponent(docId)}`);
+        // Phase B (0056) — tool reads are read receipts. The route records a
+        // 'tool' row when readVia=tool is present; UI fetches never send it.
+        const reader = new URLSearchParams({ readVia: 'tool' });
+        if (ctx.agentRunId) reader.set('agentRunId', ctx.agentRunId);
+        const docPath = `${
+          targetProjectId
+            ? `/api/projects/${targetProjectId}/context-docs/${encodeURIComponent(docId)}`
+            : ctx.projectPath(`context-docs/${encodeURIComponent(docId)}`)
+        }?${reader.toString()}`;
         const res = await ctx.getServer(docPath);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };

@@ -37,6 +37,7 @@ function makeEntry(opts: {
     projectId: opts.scopeKind === 'project' ? ('PROJ' as import('@pc/domain').ULID) : null,
     areaId: opts.scopeKind === 'area' ? ('AREA' as import('@pc/domain').ULID) : null,
     workItemId: opts.scopeKind === 'work-item' ? (opts.id as import('@pc/domain').ULID) : null,
+    agentId: null,
     title: opts.title,
     body: opts.body,
     author: 'user',
@@ -55,8 +56,8 @@ function makeEntry(opts: {
 
 // ── renderChain ───────────────────────────────────────────────────────────────
 
-test('renderChain returns empty string for empty entries', () => {
-  assert.equal(renderChain([], 20_000), '');
+test('renderChain returns empty result for empty entries', () => {
+  assert.deepEqual(renderChain([], 20_000), { markdown: '', inlinedDocIds: [] });
 });
 
 test('renderChain under budget: all bodies inlined', () => {
@@ -64,13 +65,15 @@ test('renderChain under budget: all bodies inlined', () => {
     makeEntry({ id: 'A1', title: 'Leaf doc', body: 'Leaf content here', distanceRank: 0, scopeKind: 'work-item' }),
     makeEntry({ id: 'A2', title: 'Project doc', body: 'Project content here', distanceRank: 1, scopeKind: 'project' }),
   ];
-  const out = renderChain(entries, 20_000);
+  const { markdown: out, inlinedDocIds } = renderChain(entries, 20_000);
   assert.ok(out.includes('## Project & area context'), 'should have heading');
   assert.ok(out.includes('Leaf doc'), 'leaf doc in index');
   assert.ok(out.includes('Project doc'), 'project doc in index');
   // Both bodies should be inlined (under budget).
   assert.ok(out.includes('Leaf content here'), 'leaf body inlined');
   assert.ok(out.includes('Project content here'), 'project body inlined');
+  // 0056: both docs count as injected reads.
+  assert.deepEqual(inlinedDocIds, ['A1', 'A2']);
 });
 
 test('renderChain over budget: index complete, closest body survives, distant dropped', () => {
@@ -84,7 +87,7 @@ test('renderChain over budget: index complete, closest body survives, distant dr
     makeEntry({ id: 'B2', title: 'Project doc', body: projectBody, distanceRank: 1, scopeKind: 'project' }),
   ];
 
-  const out = renderChain(entries, smallBudget);
+  const { markdown: out, inlinedDocIds } = renderChain(entries, smallBudget);
 
   // Index must be complete (both entries).
   assert.ok(out.includes('Leaf doc'), 'leaf doc in index');
@@ -97,6 +100,12 @@ test('renderChain over budget: index complete, closest body survives, distant dr
   // index is never dropped, just bodies get cut.
   // At minimum, the index is intact:
   assert.ok(out.includes('Chain index'), 'index section present');
+  // 0056: every inlined id corresponds to a body actually present in the
+  // markdown — index-only docs are NOT counted as reads.
+  for (const id of inlinedDocIds) {
+    const body = id === 'B1' ? leafBody : projectBody;
+    assert.ok(out.includes(body), `inlined ${id} must have its body in the markdown`);
+  }
 });
 
 test('renderChain over budget: index-only path (index alone > budget)', () => {
@@ -105,11 +114,11 @@ test('renderChain over budget: index-only path (index alone > budget)', () => {
   const entries: IndexEntry[] = [
     makeEntry({ id: 'C1', title: 'Big doc', body: 'A'.repeat(200), distanceRank: 0, scopeKind: 'work-item' }),
   ];
-  const out = renderChain(entries, tinyBudget);
+  const { markdown: out, inlinedDocIds } = renderChain(entries, tinyBudget);
   // Index is always emitted even when it exceeds budget.
   assert.ok(out.includes('Big doc'), 'index always emitted');
-  // Body section may or may not appear — the test is just no throw.
-  assert.ok(typeof out === 'string');
+  // 0056: no body fit → no injection receipts.
+  assert.deepEqual(inlinedDocIds, []);
 });
 
 test('renderChain output is deterministic (same input → same output)', () => {
@@ -117,8 +126,8 @@ test('renderChain output is deterministic (same input → same output)', () => {
     makeEntry({ id: 'D1', title: 'Doc A', body: 'Content A', distanceRank: 0, scopeKind: 'work-item' }),
     makeEntry({ id: 'D2', title: 'Doc B', body: 'Content B', distanceRank: 1, scopeKind: 'project' }),
   ];
-  const out1 = renderChain(entries, 20_000);
-  const out2 = renderChain(entries, 20_000);
+  const { markdown: out1 } = renderChain(entries, 20_000);
+  const { markdown: out2 } = renderChain(entries, 20_000);
   assert.equal(out1, out2);
 });
 
@@ -134,7 +143,7 @@ test('renderChain: closest scope body survives when distant is dropped', () => {
     makeEntry({ id: 'E2', title: 'Project', body: projectBody, distanceRank: 1, scopeKind: 'project' }),
   ];
 
-  const out = renderChain(entries, budget);
+  const { markdown: out, inlinedDocIds } = renderChain(entries, budget);
   // Leaf body (closest) should be present; project body (farther) may be absent.
   assert.ok(out.includes(leafBody), 'closest body inlined');
   // Project body starts with 'X'.repeat(600); check it's dropped.
@@ -142,6 +151,8 @@ test('renderChain: closest scope body survives when distant is dropped', () => {
   // We just assert the order of inlining preserves the closest one.
   assert.ok(out.includes('Leaf'), 'leaf in index');
   assert.ok(out.includes('Project'), 'project in index');
+  // 0056: receipts mirror the budget decision — leaf in, oversized project out.
+  assert.deepEqual(inlinedDocIds, ['E1']);
 });
 
 test('CONTEXT_CHAIN_BUDGET_CHARS is exported and has reasonable value', () => {

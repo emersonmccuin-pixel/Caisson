@@ -170,3 +170,36 @@ test('POST without title 400s', async () => {
   });
   assert.equal(res.status, 400);
 });
+
+// ── Phase B (0056) — read receipts ────────────────────────────────────────────
+
+test('GET with readVia=tool records a receipt; plain GET does not', async () => {
+  const app = makeApp();
+  const agent = makeAgent();
+  const doc = await createDoc(app, agent.id, 'Tracked doc', 'body');
+
+  const freshList = await app.request(`/api/agents/pods/${agent.id}/context-docs`);
+  const fresh = (await freshList.json()) as {
+    contextDocs: { id: string; readCount: number; lastReadAt: number | null }[];
+  };
+  assert.equal(fresh.contextDocs[0]!.readCount, 0, 'starts never-read');
+  assert.equal(fresh.contextDocs[0]!.lastReadAt, null);
+
+  // Plain GET (UI shape) — never counted.
+  await app.request(`/api/agents/pods/${agent.id}/context-docs/${doc.id}`);
+  // Tool GET with a run id — counted as an agent-run tool read.
+  await app.request(
+    `/api/agents/pods/${agent.id}/context-docs/${doc.id}?readVia=tool&agentRunId=01RUN000000000000000000000`,
+  );
+  // Tool GET without a run id — counted as an orchestrator read.
+  await app.request(
+    `/api/agents/pods/${agent.id}/context-docs/${doc.id}?readVia=tool`,
+  );
+
+  const after = await app.request(`/api/agents/pods/${agent.id}/context-docs`);
+  const stats = (await after.json()) as {
+    contextDocs: { id: string; readCount: number; lastReadAt: number | null }[];
+  };
+  assert.equal(stats.contextDocs[0]!.readCount, 2, 'two tool reads, plain GET ignored');
+  assert.ok((stats.contextDocs[0]!.lastReadAt ?? 0) > 0);
+});

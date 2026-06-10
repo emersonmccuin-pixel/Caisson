@@ -54,7 +54,8 @@ export interface Pod {
 }
 
 /** Context doc attached to an agent (a `context_docs` row with the agent
- *  scope pointer — migration 0055 merged the old knowledge table in). */
+ *  scope pointer — migration 0055 merged the old knowledge table in).
+ *  Read stats (0056): `readCount === 0` renders as "never read". */
 export interface AgentContextDoc {
   id: ULID;
   agentId: ULID | null;
@@ -67,6 +68,8 @@ export interface AgentContextDoc {
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
+  readCount: number;
+  lastReadAt: number | null;
 }
 
 export interface PodSecret {

@@ -1097,3 +1097,27 @@ export const contextDocs = sqliteTable(
     index('context_docs_agent_idx').on(t.agentId),
   ],
 );
+
+/**
+ * Read receipts for context docs (migration 0056 — staleness/usage tracking).
+ * One row per consumption: 'injection' = the doc's BODY was inlined into an
+ * agent's spawn prompt by the context chain; 'tool' = fetched at runtime via
+ * pc_get_context_doc. UI fetches are never recorded. No FKs by design — reads
+ * are history and survive doc soft-delete and run pruning.
+ */
+export const contextDocReads = sqliteTable(
+  'context_doc_reads',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    docId: text('doc_id').notNull().$type<ULID>(),
+    /** Null for orchestrator-session reads (no agent run). */
+    agentRunId: text('agent_run_id').$type<ULID | null>(),
+    sessionKind: text('session_kind').notNull().$type<'agent-run' | 'orchestrator'>(),
+    readVia: text('read_via').notNull().$type<'injection' | 'tool'>(),
+    readAt: integer('read_at').notNull(),
+  },
+  (t) => [
+    index('context_doc_reads_doc_idx').on(t.docId, t.readAt),
+    index('context_doc_reads_run_idx').on(t.agentRunId),
+  ],
+);

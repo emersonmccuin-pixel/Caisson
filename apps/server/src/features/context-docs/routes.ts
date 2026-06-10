@@ -15,6 +15,7 @@ import {
   insertLiveEvent,
   listContextChainDocs,
   listContextDocsForScope,
+  recordContextDocReads,
   searchContextDocs,
   softDeleteContextDoc,
   updateContextDoc,
@@ -68,6 +69,24 @@ function announceAgentDocChange(doc: ContextDocRow): void {
   if (!doc.agentId) return;
   bumpAgentRev(doc.agentId);
   announcePod(doc.agentId, 'updated');
+}
+
+/** Phase B (0056) — record a 'tool' read receipt when the request carries
+ *  readVia=tool (the pc_get_context_doc handler appends it; UI fetches never
+ *  do). Best-effort: a receipt failure must never fail the read. */
+export function recordToolReadFromQuery(docId: ULID, qs: URLSearchParams): void {
+  if (qs.get('readVia') !== 'tool') return;
+  const agentRunId = qs.get('agentRunId');
+  try {
+    recordContextDocReads({
+      docIds: [docId],
+      agentRunId: agentRunId ? (agentRunId as ULID) : null,
+      sessionKind: agentRunId ? 'agent-run' : 'orchestrator',
+      readVia: 'tool',
+    });
+  } catch {
+    /* best-effort */
+  }
 }
 
 export function registerContextDocRoutes(app: Hono, deps: ContextDocRoutesDeps): void {
@@ -147,6 +166,7 @@ export function registerContextDocRoutes(app: Hono, deps: ContextDocRoutesDeps):
 
     const doc = getContextDoc(docId);
     if (!doc) return c.json({ ok: false, error: `unknown context doc: ${docId}` }, 404);
+    recordToolReadFromQuery(docId, new URL(c.req.url).searchParams);
     return c.json({ ok: true, doc });
   });
 

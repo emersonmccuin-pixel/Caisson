@@ -81,13 +81,13 @@ after(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('journal contains 0055 above the watermark max', () => {
+test('journal contains 0055 above the PRIOR watermark max', () => {
   const entry = journal.entries.find((e) => e.tag === MERGE_TAG);
   assert.ok(entry, '0055 missing from journal');
-  const maxOther = Math.max(
-    ...journal.entries.filter((e) => e.tag !== MERGE_TAG).map((e) => e.when),
+  const maxPrior = Math.max(
+    ...journal.entries.filter((e) => e.idx < entry!.idx).map((e) => e.when),
   );
-  assert.ok(entry!.when > maxOther, `0055 when=${entry!.when} must exceed ${maxOther}`);
+  assert.ok(entry!.when > maxPrior, `0055 when=${entry!.when} must exceed ${maxPrior}`);
 });
 
 test('pre-existing context doc survives the rebuild unchanged', () => {

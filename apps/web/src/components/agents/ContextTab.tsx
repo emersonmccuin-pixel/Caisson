@@ -275,8 +275,21 @@ function DocRow({
             </div>
           )}
 
-          <div className="mt-1 text-[10px] text-muted-foreground">
-            {row.body.length.toLocaleString()} chars
+          <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+            <span>{row.body.length.toLocaleString()} chars</span>
+            <span aria-hidden>·</span>
+            {row.readCount > 0 ? (
+              <span title="Times an agent run consumed this doc (injected at spawn or fetched at runtime)">
+                read {row.readCount}× · last {formatReadAge(row.lastReadAt)}
+              </span>
+            ) : (
+              <span
+                className="bg-amber-500/15 px-1 font-medium text-amber-500"
+                title="No agent has ever consumed this doc — neither injected at spawn nor fetched at runtime. Consider pruning or pointing the agent at it."
+              >
+                ⚠ never read
+              </span>
+            )}
           </div>
         </div>
         {!readOnly && (
@@ -302,6 +315,18 @@ function DocRow({
       </div>
     </div>
   );
+}
+
+function formatReadAge(lastReadAt: number | null): string {
+  if (!lastReadAt) return 'unknown';
+  const mins = Math.floor((Date.now() - lastReadAt) / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
 }
 
 function buildDocPreview(

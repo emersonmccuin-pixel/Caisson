@@ -87,6 +87,10 @@ export interface PodSpawnPrep {
   /** The project the resolved pod belongs to (when `podScope === 'project'`).
    *  Null for globals. */
   podProjectId: ULID | null;
+  /** Context docs whose FULL BODIES the chain inlined into the spawn prompt.
+   *  Phase B (0056): the dispatcher records these as 'injection' read receipts
+   *  AFTER the run row exists. Empty when no chain was built. */
+  injectedContextDocIds: ULID[];
 }
 
 /** Resolves the pod for `agentName` and materialises it. Returns `null` when
@@ -127,15 +131,19 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
   // block for injection into the system prompt when a work item is present.
   // Only the server has DB access; this is the right call site.
   let contextChain: string | undefined;
+  let injectedContextDocIds: ULID[] = [];
   if (input.workItem?.workItemId && input.projectId) {
     try {
-      contextChain = buildContextChain({
+      const chain = buildContextChain({
         workItemId: input.workItem.workItemId as ULID,
         projectId: input.projectId,
-      }) || undefined;
+      });
+      contextChain = chain.markdown || undefined;
+      injectedContextDocIds = chain.inlinedDocIds;
     } catch {
       // Non-fatal: missing context chain is better than a spawn failure.
       contextChain = undefined;
+      injectedContextDocIds = [];
     }
   }
 
@@ -171,6 +179,7 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
     },
     podScope: bundle.agent.scope,
     podProjectId: bundle.agent.projectId ?? null,
+    injectedContextDocIds,
   };
 }
 
