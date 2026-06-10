@@ -2,9 +2,9 @@
 
 **An AI-native project management platform, and a harness that builds harnesses.**
 
-Caisson is a local desktop app where you run your projects with a team of AI specialists you build yourself. Describe the **experts** you need and the **process** that connects them, in plain English, and Caisson stands up the scaffolding that turns a raw model into something that does the job, repeatedly, in your real systems.
+Caisson is a local desktop app where you run your projects with a team of AI specialists you build yourself. Describe the experts you need and the process that connects them, in plain English, and Caisson stands up the scaffolding that turns a raw model into something that does the job, repeatedly, in your real systems.
 
-A board, a project manager that dispatches the work, and a roster of experts behind it. The catch: the manager and the workers are AI, and you direct them. It's built to **drive agents through complex, multi-step tasks** and sustain **long-running agentic work**: not one-shot answers, but jobs that plan, execute, verify, and report back over time.
+A board, a project manager that dispatches the work, and a roster of experts behind it. The catch: the manager and the workers are AI, and you direct them. It's built to drive agents through complex, multi-step tasks and sustain long-running agentic work: not one-shot answers, but jobs that plan, execute, verify, and report back over time.
 
 The proof that it works: **Caisson builds itself.** It's the daily driver I use to develop Caisson. Bugs and polish become work items, its own build team plans/fixes/tests them, and the fix lands back in the app I'm using.
 
@@ -23,46 +23,6 @@ The proof that it works: **Caisson builds itself.** It's the daily driver I use 
 
 ![Caisson: talk to an orchestrator that runs your project, with a team of specialists behind it](docs/images/00-hero.png)
 
-## What it is
-
-Project management assumes the people are already hired. Caisson doesn't. You describe the specialist you need and it exists, then you put it on the board and direct it like any other team member.
-
-That's the leverage. I don't have a data team, but I have a **data analyst** and a **data engineer** wired into my warehouse. I'm not a finance person, but I have a **finance assistant** that runs the numbers. I have a **software developer** that ships code against a contract, and a **personal tutor** for whatever I'm learning. Whatever I need, built in a conversation, working in my real systems on my own Claude subscription.
-
-And these aren't chatbots that fire one reply. They're specialists you point at complex work and let run: planning, executing across many steps, calling real tools, and pushing through long jobs to a verified result while you do something else.
-
-Real leverage from AI has been gated by tech fluency. The people who can wire up an MCP server, write a system prompt, and hand a model real API access turn it into a teammate that operates their stack. Everyone else gets a chat box and re-explains their job every morning. Caisson closes that gap: the person who knows the work describes how it should be done, once, and the specialist carries the load from then on.
-
-Two things it lets anyone do without writing code:
-
-- **Build a team of agents.** Describe an expert in plain English (what it knows, what it can reach, how you want the work done) and Caisson stands it up. No prompt engineering, no MCP plumbing, no YAML.
-- **Automate your workflows.** Chain specialists and tools into a process with a trigger and a verified output. Set it up once in conversation; it runs the same way every time.
-
-## It builds itself
-
-The clearest demonstration of Caisson is that it's self-hosted. I run it every day as the daily driver, and its own specialists ship its development:
-
-1. **Use the app:** orchestrator chat, agent dispatch, workflows, the board.
-2. **Capture a bug or rough edge as a work item** the moment you hit it.
-3. **The build workflow picks it up:** a code-writer plans, writes, typechecks, and tests the change against a contract; a reviewer checks the result.
-4. **The fix lands back in the app you're using.** Close the loop, repeat.
-
-A harness that builds harnesses, pointed at itself. The build team that ships Caisson's own fixes is the same machinery you get to build *your* team.
-
-## What a specialist can be
-
-A specialist is an expert you configure: a focused role, the tools and credentials it needs, and the context that normally lives in your head. A few shapes the same machinery takes:
-
-**A data team.** A Snowflake / Redshift specialist with warehouse credentials, the query tools, and your semantic-layer rules: what "active user" means, where the data lives, how you'd actually answer. It runs the recurring analyses and writes up what changed, without you re-explaining the schema every time.
-
-**A platform / ops team.** Specialists wired into AWS, GCP, and your CI, handling the routine work (provisioning to spec, checking for drift, triaging the standard alerts) and escalating the calls that need a human.
-
-**A build team.** A code-writer that plans, writes, typechecks, and tests a change against a contract, with a reviewer checking the result. A bug or feature goes from a card to a verified diff. *(This is the team that builds Caisson.)*
-
-**A delivery team.** Specialists connected to Jira / Atlassian that triage inbound, groom the board, draft the specs, and run the status roll-ups.
-
-And the lighter end of the same engine: a sales rep whose specialist drafts post-call follow-ups in their voice; an HR coordinator whose onboarding runs itself out into a task tree. **Same tool. The ceiling is as high as the access you give it.** None of these ship as canned templates; you build the team *you* need by describing it.
-
 ## A look at it
 
 | The board | A workflow, visualized |
@@ -72,52 +32,6 @@ And the lighter end of the same engine: a sales rep whose specialist drafts post
 | Your roster of specialists | A task, inspected |
 | --- | --- |
 | ![Specialists](docs/images/04-specialists.png) | ![Work item inspector](docs/images/05-work-item.png) |
-
-## How you build it
-
-You have a conversation. An interview walks you through it, for both **specialists** and **workflows**:
-
-- **What is it expert in?** The role, in your words.
-- **What can it reach?** The tools, API access, and credentials it needs to operate your systems.
-- **What context does it need?** The rules, definitions, and runbook that live in your head.
-- **What triggers the work?** A schedule, an external event, a manual run, or a task crossing a stage on the board.
-- **What does "done" look like?** Shipped automatically, drafted for your approval, filed as a task, or routed to someone for sign-off.
-
-You answer in plain English. Caisson writes it. Want a change? Tell it in the same chat and it adjusts. No prompts, no YAML, no code.
-
-## How it's built
-
-The interesting engineering is in making agent work *trustworthy*. Agents that hang, lie about finishing, or quietly stomp each other are the default failure mode, and Caisson is built to refuse all three.
-
-| Piece | What it is |
-| --- | --- |
-| **Specialists** | Expert agents with their own role, model, tools, credentials, and context. Dispatchable, and every run is audited. |
-| **Tools & integrations** | How specialists reach the outside world (the MCP tool layer). Hand one the right tools and credentials and it drives that system's API: query a warehouse, open a PR, file a ticket, call a cloud control plane. |
-| **Workflows** | A trigger plus a series of steps plus a verified output. Steps dispatch specialists, call tools, move work across the board, or pause for your sign-off. |
-| **The board** | Tasks are the universal primitive. A workflow run produces a tree of them; the kanban board is one view of that tree. |
-
-Four principles keep it honest:
-
-- **Contracts + isolation.** Every dispatch carries a machine-checkable contract (what the output must be and how to verify it), and when isolation is declared it runs in its own provisioned git worktree or refuses to start. "Done" means *verified done*, and parallel agents can't corrupt each other's work.
-- **Positive receipt, never inference.** Done / ready / paused are explicit signals. A timeout or crash produces a typed failure *with a reason*, never a silent hang, never a fake success.
-- **One path only.** A refactor deletes the old path; no dual processes doing the same job, guarded by single-path tests. Discipline as a feature.
-- **The database is the source of truth.** Everything durable lives in one local SQLite database. Runtime processes emit facts; the UI projects them. Local-first, fully yours.
-
-## Your starting team
-
-Every project ships with nine built-in specialists as a starting kit. The Project Manager dispatches work to them; edit them, add your own wired to your systems, or promote a good one to use across all your projects.
-
-| Specialist | What it's for |
-| --- | --- |
-| **researcher** | Investigates on demand (reads files, fetches the web) and writes up findings |
-| **writer** | Drafts prose (emails, docs, summaries) in your voice |
-| **reviewer** | Critiques drafts, plans, or code against explicit criteria |
-| **planner** | Breaks a goal into ordered, verifiable steps |
-| **extractor** | Pulls structured data out of messy input |
-| **code-writer** | Writes or edits code to spec, then typechecks and tests it |
-| **workflow-builder** | Authors and edits your workflows through the build conversation |
-| **agent-designer** | Designs new specialists from a plain-language description |
-| **caisson** | The in-app guide: explains how Caisson works and adjusts your settings |
 
 ## What it costs
 
