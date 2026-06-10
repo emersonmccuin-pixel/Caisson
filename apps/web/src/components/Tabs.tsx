@@ -6,9 +6,11 @@
 
 // `patterns` is temporarily hidden from the nav — not ready for live. Re-add
 // 'patterns' here (and its LABEL entry + the Shell render branch) to restore it.
-export const TABS = ['orchestrator', 'work-items', 'agents', 'workflows', 'files'] as const;
-/** `project-settings` is reachable via the right-aligned gear, not the main strip. */
-export type Tab = (typeof TABS)[number] | 'project-settings';
+// Constants live in tabs-config.ts (no JSX) so tests can import them directly.
+import { TABS, COMMAND_TABS } from './tabs-config';
+import type { Tab } from './tabs-config';
+export type { Tab } from './tabs-config';
+export { TABS, COMMAND_TABS };
 
 const LABEL: Record<(typeof TABS)[number], string> = {
   orchestrator: 'chat',
@@ -26,16 +28,19 @@ export function tabLabel(t: Tab): string {
 export function TabBar({
   value,
   onChange,
+  tabs = TABS,
 }: {
   value: Tab;
   onChange: (t: Tab) => void;
+  /** Override the tab list (e.g. COMMAND_TABS for the Command surface). Defaults to TABS. */
+  tabs?: ReadonlyArray<(typeof TABS)[number]>;
 }) {
   return (
     <div
       className="flex items-stretch gap-0.5 border-b border-border bg-background px-4"
       style={{ height: 40 }}
     >
-      {TABS.map((t) => {
+      {tabs.map((t) => {
         const active = value === t;
         return (
           <button
