@@ -984,6 +984,14 @@
       }
     },
     {
+      "name": "pc_list_waiting_on_you",
+      "description": "Cross-project read: returns everything across ALL projects that is blocked on the human's input right now — paused agents waiting for an answer (pending asks), workflow runs paused at a human-review gate, and actionable inbox items (verification-review, workflow-review, agent-ask-escalated). Grouped by project with counts. No arguments. Use this at the start of a Command session to surface the full picture of 'what needs you today' before diving into individual projects. Returns { ok, totalCount, byProject: [{ projectId, projectName, projectSlug, pendingAsks: [{ askId, agentRunId, kind, promptBody, context, options, createdAt }], workflowReviews: [{ runId, workflowName, nodeId, workItemId }], inboxItems: [{ recipientId, messageId, kind, subject, payload, createdAt }] }] }.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
       "name": "pc_list_agents",
       "description": "List available agents for this project. Returns global pods plus project overrides/project-only pods. Use before pc_invoke_agent when deciding which specialist to delegate to.",
       "inputSchema": {
@@ -1895,6 +1903,7 @@
     "mcp__pc-rig__pc_write_claude_md",
     "mcp__pc-rig__pc_list_stages",
     "mcp__pc-rig__pc_list_projects",
+    "mcp__pc-rig__pc_list_waiting_on_you",
     "mcp__pc-rig__pc_list_agents",
     "mcp__pc-rig__pc_list_workflows",
     "mcp__pc-rig__pc_fire_workflow",
@@ -2195,6 +2204,12 @@
       "slug": "mcp__pc-rig__pc_list_projects",
       "label": "List all projects",
       "description": "List every project in the workspace (ids, slugs, stages).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_list_waiting_on_you",
+      "label": "List everything waiting on you",
+      "description": "Enumerate everything across ALL projects blocked on the human's input (paused agents, workflow review gates, inbox items).",
       "source": "pc-rig"
     },
     {
@@ -2515,6 +2530,9 @@
       "family": "project"
     },
     "pc_list_projects": {
+      "family": "project"
+    },
+    "pc_list_waiting_on_you": {
       "family": "project"
     },
     "pc_list_agents": {

@@ -4,13 +4,21 @@ import { resolve } from 'node:path';
 
 import type { Hono } from 'hono';
 import type { Project, ULID as DomainULID } from '@pc/domain';
-import { getProjectById, listProjects, updateProjectNotes } from '@pc/db';
+import {
+  getProjectById,
+  listOpenPendingAsksForProject,
+  listProjects,
+  listUserInboxRecipientsAllProjects,
+  updateProjectNotes,
+  workflowRunsV2Repo,
+} from '@pc/db';
 import type {
   ProjectChangedLiveEvent,
   ProjectChangedRefetchEnvelope,
   ProjectDto,
 } from '@pc/contracts';
 import {
+  isActionableMailboxKind,
   parseCreateProjectRequest,
   parseReorderProjectsRequest,
   parseUpdateProjectRequest,
@@ -59,6 +67,140 @@ export function registerProjectRoutes(app: Hono, deps: ProjectRoutesDeps): void 
   app.get('/api/projects', (c) => {
     const includeDeleted = c.req.query('include_deleted') === '1';
     return c.json(service.listProjects({ includeDeleted }));
+  });
+
+  // ── Cross-project "waiting on you" aggregation ────────────────────────────
+  // Three sources: open pending asks (paused agents), paused workflow runs
+  // that are at a human-review gate, and actionable + unactioned inbox items.
+  // All read-only; no auth gate (single-user app).
+  app.get('/api/waiting-on-you', (c) => {
+    const projects = listProjects();
+
+    // Map: projectId → byProject entry (built below)
+    const projectMap = new Map<
+      string,
+      {
+        projectId: string;
+        projectName: string;
+        projectSlug: string;
+        pendingAsks: Array<{
+          askId: string;
+          agentRunId: string;
+          kind: string;
+          promptBody: string;
+          context: string | null;
+          options: unknown;
+          createdAt: number;
+        }>;
+        workflowReviews: Array<{
+          runId: string;
+          workflowName: string;
+          nodeId: string;
+          workItemId: string | null;
+        }>;
+        inboxItems: Array<{
+          recipientId: string;
+          messageId: string;
+          kind: string;
+          subject: string | null;
+          payload: unknown;
+          createdAt: number;
+        }>;
+      }
+    >();
+
+    for (const project of projects) {
+      const pid = project.id as DomainULID;
+
+      // 1. Open pending asks: agents paused waiting for an answer.
+      const asks = listOpenPendingAsksForProject(pid);
+
+      // 2. Workflow runs paused at human-review nodes.
+      const allRuns = workflowRunsV2Repo.listRunsByProject(pid);
+      const workflowReviews: Array<{
+        runId: string;
+        workflowName: string;
+        nodeId: string;
+        workItemId: string | null;
+      }> = [];
+      for (const run of allRuns) {
+        if (run.status !== 'paused') continue;
+        let wf: { nodes?: Array<{ id: string; kind: string; reviewer?: string }> };
+        try {
+          wf = JSON.parse(run.workflowYamlSnapshot) as typeof wf;
+        } catch {
+          continue;
+        }
+        if (!Array.isArray(wf.nodes)) continue;
+        for (const [nodeId, nodeRec] of Object.entries(
+          run.dagState.nodes as Record<string, { state: string }>,
+        )) {
+          if (nodeRec.state !== 'awaiting-review') continue;
+          const wfNode = wf.nodes.find((n) => n.id === nodeId);
+          if (!wfNode || wfNode.kind !== 'review' || wfNode.reviewer !== 'human') continue;
+          workflowReviews.push({
+            runId: run.id,
+            workflowName: run.workflowName,
+            nodeId,
+            workItemId: run.workItemId,
+          });
+        }
+      }
+
+      if (asks.length > 0 || workflowReviews.length > 0) {
+        projectMap.set(project.id, {
+          projectId: project.id,
+          projectName: project.name,
+          projectSlug: project.slug ?? '',
+          pendingAsks: asks.map((a) => ({
+            askId: a.id,
+            agentRunId: a.agentRunId,
+            kind: a.kind,
+            promptBody: a.promptBody,
+            context: a.context,
+            options: a.options,
+            createdAt: a.createdAt,
+          })),
+          workflowReviews,
+          inboxItems: [],
+        });
+      }
+    }
+
+    // 3. Actionable + unactioned inbox items across all projects.
+    const inboxRows = listUserInboxRecipientsAllProjects();
+    for (const { recipient, message } of inboxRows) {
+      if (!isActionableMailboxKind(message.kind)) continue;
+      if (recipient.actionedAt !== null || recipient.dismissedAt !== null) continue;
+      const pid = message.projectId ?? '';
+      if (!projectMap.has(pid)) {
+        const project = projects.find((p) => p.id === pid);
+        if (!project) continue; // project-less or deleted — skip
+        projectMap.set(pid, {
+          projectId: project.id,
+          projectName: project.name,
+          projectSlug: project.slug ?? '',
+          pendingAsks: [],
+          workflowReviews: [],
+          inboxItems: [],
+        });
+      }
+      projectMap.get(pid)!.inboxItems.push({
+        recipientId: recipient.id,
+        messageId: message.id,
+        kind: message.kind,
+        subject: message.subject,
+        payload: message.payload,
+        createdAt: message.createdAt,
+      });
+    }
+
+    const byProject = [...projectMap.values()];
+    const totalCount = byProject.reduce(
+      (sum, p) => sum + p.pendingAsks.length + p.workflowReviews.length + p.inboxItems.length,
+      0,
+    );
+    return c.json({ ok: true, totalCount, byProject });
   });
 
   app.patch('/api/projects/reorder', async (c) => {
