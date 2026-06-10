@@ -1,9 +1,10 @@
 // Section 17e.1 — Stock-pod-seed module.
 //
-// Ten stock pods (researcher / agent-designer / caisson / code-writer /
-// extractor / planner / reviewer / workflow-builder / workflow-doctor / writer)
-// seeded into the global `agents` table at boot time, replacing the flat-file
-// loader that scanned `~/.project-companion/agents/*.md`.
+// Eleven stock pods (researcher / agent-designer / caisson / code-writer /
+// diagnostician / extractor / planner / reviewer / workflow-builder /
+// workflow-doctor / writer) seeded into the global `agents` table at boot
+// time, replacing the flat-file loader that scanned
+// `~/.project-companion/agents/*.md`.
 //
 // Contract (locked in 17e Planning):
 //   - INSERT IF NOT EXISTS. Rows that already exist are never touched,
@@ -23,6 +24,10 @@ import {
   type CreateAgentInput,
 } from '@pc/db';
 import { mergeRequiredAgentTools, type ULID } from '@pc/domain';
+import {
+  DIAGNOSTICIAN_KNOWLEDGE_DOCS,
+  DIAGNOSTICIAN_POD_CONTENT,
+} from './diagnostician-pod-content.ts';
 import { seedPodWithDriftReseed, type SeedPodAction } from './pod-seed-with-drift.ts';
 import { WORKFLOW_BUILDER_POD_CONTENT } from './workflow-builder-pod-content.ts';
 import { WORKFLOW_DOCTOR_POD_CONTENT } from './workflow-doctor-pod-content.ts';
@@ -1464,12 +1469,14 @@ const EXTRACTOR_POD_CONTENT: CreateAgentInput = {
 /** Ordered list of stock pod content the boot-time seed walks. Researcher
  *  first to keep parity with the 17e-starter seed order; rest alphabetical.
  *  agent-designer joined the roster in 17b.7; code-writer in 17e.5;
- *  caisson in 35.1; workflow-builder in 19.9; workflow-doctor in 2026-06-05. */
+ *  caisson in 35.1; workflow-builder in 19.9; workflow-doctor in 2026-06-05;
+ *  diagnostician in 2026-06-10. */
 export const STOCK_POD_CONTENT: readonly CreateAgentInput[] = [
   RESEARCHER_POD_CONTENT,
   AGENT_DESIGNER_POD_CONTENT,
   CAISSON_POD_CONTENT,
   CODE_WRITER_POD_CONTENT,
+  DIAGNOSTICIAN_POD_CONTENT,
   EXTRACTOR_POD_CONTENT,
   PLANNER_POD_CONTENT,
   REVIEWER_POD_CONTENT,
@@ -1630,6 +1637,17 @@ export function seedStockPods(): SeedStockPodsResult {
       const knowledge = seedStockKnowledgeDocs(
         result.agentId as ULID,
         AGENT_DESIGNER_KNOWLEDGE_DOCS,
+        { reasonTag: '17e', agentName: content.name },
+      );
+      knowledgeInsertedCount += knowledge.insertedCount;
+      knowledgeReseededCount += knowledge.reseededCount;
+      knowledgeSkippedCount += knowledge.skippedCount;
+    }
+
+    if (content.name === 'diagnostician') {
+      const knowledge = seedStockKnowledgeDocs(
+        result.agentId as ULID,
+        DIAGNOSTICIAN_KNOWLEDGE_DOCS,
         { reasonTag: '17e', agentName: content.name },
       );
       knowledgeInsertedCount += knowledge.insertedCount;
