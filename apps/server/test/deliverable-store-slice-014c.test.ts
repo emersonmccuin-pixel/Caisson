@@ -229,7 +229,10 @@ test('prose/repo_file: submit writes the file AND passes verification', async ()
   assert.equal(outcome!.verificationStatus, 'passed');
 });
 
-test('answer (explicit submit, no report): passes via the deliverable-text fallback', async () => {
+test('answer (must_address-only, no trust_end_turn): escalates to review after soundness fix (pc-pty-chat-371)', async () => {
+  // must_address[] is now agent guidance only — no longer compiled to
+  // report_contains predicates. The derived AC is therefore empty. An empty-AC
+  // answer without trust_end_turn escalates to review (pending), not auto-pass.
   const expected: ContractV2.ExpectedOutput = {
     kind: 'answer',
     must_address: ['latency', 'cost'],
@@ -237,7 +240,7 @@ test('answer (explicit submit, no report): passes via the deliverable-text fallb
   const { p, contract, runId } = seed('ans', expected, { withWorkItem: false });
   const app = mkApp();
 
-  // The answer text carries the topics; the agent passes NO separate report.
+  // Submission itself still succeeds.
   const res = await submit(app, p.id, runId, {
     kind: 'answer',
     text: 'On latency we are fine; on cost we are under budget.',
@@ -249,7 +252,8 @@ test('answer (explicit submit, no report): passes via the deliverable-text fallb
     worktreeDir: join(tmpDir, 'ans'),
     projectFolderPath: p.folderPath,
   });
-  assert.equal(outcome!.verificationStatus, 'passed');
+  // Honest outcome: empty decidable set + no trust_end_turn → escalated to review.
+  assert.equal(outcome!.verificationStatus, 'pending');
 });
 
 test('placement failure: prose/attachment with no linked WI returns 422 (retryable)', async () => {
