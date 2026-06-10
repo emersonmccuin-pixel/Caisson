@@ -1,6 +1,6 @@
 {
   "name": "caisson",
-  "version": "0.5.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "Local-first work-item + workflow companion. Persistent project Orchestrator chat + MCP tools as the differentiator.",
@@ -23,6 +23,8 @@
     "desktop:dist:mac": "pnpm --filter @pc/desktop dist:mac",
     "desktop:publish:win": "pnpm --filter @pc/desktop publish:win",
     "desktop:publish:mac": "pnpm --filter @pc/desktop publish:mac",
+    "desktop:publish:win:prerelease": "pnpm --filter @pc/desktop publish:win:prerelease",
+    "desktop:publish:mac:prerelease": "pnpm --filter @pc/desktop publish:mac:prerelease",
     "desktop:dist:mac:dir": "pnpm --filter @pc/desktop dist:mac:dir"
   },
   "pnpm": {

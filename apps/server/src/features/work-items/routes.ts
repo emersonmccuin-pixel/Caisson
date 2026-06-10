@@ -8,6 +8,7 @@ import {
   getWorkItem as dbGetWorkItem,
   getWorkItemByCallsignGlobal,
   listChildWorkItems,
+  listFocusedWorkItems as dbListFocusedWorkItems,
   listContractsForWorkItem,
   listWorkItems as dbListWorkItems,
   reassignStage,
@@ -94,6 +95,14 @@ function verificationDecisionStatus(code: ReviewDecisionErrorCode): 400 | 404 | 
 }
 
 export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): void {
+  // ── pc-pty-chat-355: cross-project focused work-items list.
+  // Read-only; no project scope required.  MUST be registered before
+  // /api/projects/:projectId/… routes so the literal segment doesn't bind.
+  app.get('/api/work-items/focused', (_c) => {
+    const items = dbListFocusedWorkItems();
+    return _c.json({ ok: true, workItems: items });
+  });
+
   // ── pc-pty-chat-356: cross-project work-item resolver for rich-link hover.
   // Resolves by ULID (globally) or callsign (globally, first live match).
   // Read-only; no project scope required.  MUST be registered before
@@ -537,12 +546,14 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
   });
 
   app.get('/api/projects/:projectId/work-items/:wiId', (c) => {
-    const id = c.req.param('projectId') as ULID;
+    const handle = c.req.param('projectId');
     const ref = c.req.param('wiId');
-    const runtime = deps.resolveProject(id);
-    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    const runtime = deps.resolveProject(handle);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${handle}` }, 404);
+    // Use the canonical ULID from the resolved runtime — the handle may be a slug/name.
+    const projectId = runtime.project.id;
     const includeArchived = c.req.query('includeArchived') === '1';
-    const resolved = resolveWorkItemRef(id, ref);
+    const resolved = resolveWorkItemRef(projectId, ref);
     if (resolved) {
       if (includeArchived || resolved.deletedAt == null) {
         return c.json({ ok: true, workItem: resolved });
@@ -550,7 +561,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     }
     if (includeArchived && looksLikeUlid(ref)) {
       const archived = runtime.workItemService().get(ref as ULID, { includeArchived: true });
-      if (archived && archived.projectId === id) {
+      if (archived && archived.projectId === projectId) {
         return c.json({ ok: true, workItem: archived });
       }
     }

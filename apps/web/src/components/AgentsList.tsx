@@ -411,7 +411,7 @@ function DetailPane({
       effort: pod.effort ?? '—',
       maxTurns: pod.maxTurns != null ? String(pod.maxTurns) : '∞',
       tools: pod.tools.length,
-      knowledge: bundle?.knowledge.length ?? null,
+      contextDocs: bundle?.contextDocs.length ?? null,
       edited: formatRelativeTime(pod.updatedAt),
     };
   }, [pod, bundle]);
@@ -489,8 +489,8 @@ function DetailPane({
           <Stat label="Max turns" value={stats.maxTurns} />
           <Stat label="Tools" value={String(stats.tools)} />
           <Stat
-            label="Knowledge"
-            value={stats.knowledge != null ? String(stats.knowledge) : '…'}
+            label="Context docs"
+            value={stats.contextDocs != null ? String(stats.contextDocs) : '…'}
           />
           <Stat label="Edited" value={stats.edited} />
         </div>
@@ -513,7 +513,7 @@ function DetailPane({
           )}
         </DetailSection>
 
-        <DetailSection title="Knowledge">
+        <DetailSection title="Context docs">
           <ContextTab
             podId={pod.id as ULID}
             bundle={bundle}
@@ -550,7 +550,7 @@ function DetailPane({
             <div className="flex w-full items-center justify-between gap-3">
               <span className="text-xs text-foreground">
                 Delete <span className="font-medium">{pod.name}</span>? Removes the agent and
-                its knowledge from this project.
+                its context docs from this project.
               </span>
               <div className="flex shrink-0 items-center gap-2">
                 <button

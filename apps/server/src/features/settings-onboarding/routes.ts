@@ -22,7 +22,9 @@ import {
   probeAuth as defaultProbeAuth,
   runPreflight as defaultRunPreflight,
 } from '../../services/preflight.ts';
+import { seedClaudeFirstRunSync } from '../../services/claude-firstrun-seed.ts';
 import {
+  configureGitIdentity as defaultConfigureGitIdentity,
   installClaude as defaultInstallClaude,
   installGit as defaultInstallGit,
 } from '../../services/onboarding-install.ts';
@@ -40,6 +42,7 @@ export interface SettingsOnboardingRouteDeps {
   probeAuth?: typeof defaultProbeAuth;
   installClaude?: typeof defaultInstallClaude;
   installGit?: typeof defaultInstallGit;
+  configureGitIdentity?: typeof defaultConfigureGitIdentity;
   startLogin?: typeof defaultStartLogin;
   getLoginState?: typeof defaultGetLoginState;
   cancelLogin?: typeof defaultCancelLogin;
@@ -67,6 +70,18 @@ export function applyClaudeRuntimeSettings(
 ): void {
   setConfiguredClaudeExe(settings.claudeExe);
   applyClaudeConfigDirOverride(settings.claudeConfigDir);
+  // Re-seed CC's onboarding-gate keys for whatever config dir is NOW
+  // effective. Runs at boot AND on every settings change — a claudeConfigDir
+  // override pointed at a fresh profile must never resurrect the interactive
+  // theme-picker (it stalls every spawned chat). Sync + idempotent + cheap.
+  try {
+    const seeded = seedClaudeFirstRunSync();
+    if (seeded.written) {
+      console.log(`[pc] claude-firstrun-seed(sync): wrote ${seeded.configPath}`);
+    }
+  } catch (err) {
+    console.warn(`[pc] claude-firstrun-seed(sync) failed: ${(err as Error).message}`);
+  }
 }
 
 function mergeSettingsPatch(body: Partial<GlobalSettings>, current: GlobalSettings): GlobalSettings {
@@ -165,6 +180,7 @@ export function registerSettingsOnboardingRoutes(
     probeAuth: deps.probeAuth ?? defaultProbeAuth,
     installClaude: deps.installClaude ?? defaultInstallClaude,
     installGit: deps.installGit ?? defaultInstallGit,
+    configureGitIdentity: deps.configureGitIdentity ?? defaultConfigureGitIdentity,
     startLogin: deps.startLogin ?? defaultStartLogin,
     getLoginState: deps.getLoginState ?? defaultGetLoginState,
     cancelLogin: deps.cancelLogin ?? defaultCancelLogin,
@@ -218,6 +234,20 @@ export function registerSettingsOnboardingRoutes(
       return c.json({ ok: true, ...r });
     } catch (e) {
       return c.json({ ok: false, error: (e as Error).message }, 500);
+    }
+  });
+
+  // Write the global git commit identity on the wizard's behalf (two text
+  // fields instead of two terminal commands for a non-technical user).
+  app.post('/api/onboarding/git-identity', async (c) => {
+    const raw = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const name = typeof raw['name'] === 'string' ? raw['name'] : '';
+    const email = typeof raw['email'] === 'string' ? raw['email'] : '';
+    try {
+      const r = await services.configureGitIdentity(name, email);
+      return c.json({ ok: true, ...r });
+    } catch (e) {
+      return c.json({ ok: false, error: (e as Error).message }, 400);
     }
   });
 

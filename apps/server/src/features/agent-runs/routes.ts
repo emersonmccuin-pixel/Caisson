@@ -22,6 +22,7 @@ import {
   listActiveAgentRunsForProject,
   listAgentRunsForSession,
   listContractsForRun,
+  listContractsForWorkItem,
   listProjectVisibleAgents,
   markAgentRunDelivered,
   resolveAgentForDispatch as defaultResolveAgentForDispatch,
@@ -740,6 +741,57 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         report: contract.report,
       },
     });
+  });
+
+  /** Slice 4 (FD-5 principle 3b) — `pc_get_deliverable`: orchestrator reads the
+   *  authoritative deliverable for any contract by contract id OR work-item id.
+   *  Symmetric read of the same Contract.deliverable the worker submits via
+   *  `pc_submit_deliverable` and the verifier reads in agent-verification.ts —
+   *  ONE authoritative object, no second store.
+   *
+   *  Resolution order: (1) try the id as a contract ULID (project-guarded);
+   *  (2) try the id as a work-item ULID → newest contract for that WI. */
+  app.get('/api/projects/:projectId/contracts/:id/deliverable', (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const project = getProjectById(projectId);
+    if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+
+    const id = c.req.param('id') as ULID;
+
+    // (1) Try as contract id.
+    const byContract = getContract(id);
+    if (byContract) {
+      // Project guard: refuse to serve a contract that belongs to another project.
+      if (byContract.projectId !== projectId) {
+        return c.json({ ok: false, error: `contract ${id} not found`, cause: 'not-found' }, 404);
+      }
+      return c.json({
+        ok: true,
+        deliverable: byContract.deliverable,
+        report: byContract.report,
+        status: byContract.status,
+        expectedOutput: byContract.expectedOutput,
+      });
+    }
+
+    // (2) Try as work-item id — return the newest contract for that WI.
+    // listContractsForWorkItem returns oldest-first; last = newest.
+    const wiContracts = listContractsForWorkItem(id);
+    const contract = wiContracts[wiContracts.length - 1] ?? null;
+    if (contract) {
+      if (contract.projectId !== projectId) {
+        return c.json({ ok: false, error: `work item ${id} not found`, cause: 'not-found' }, 404);
+      }
+      return c.json({
+        ok: true,
+        deliverable: contract.deliverable,
+        report: contract.report,
+        status: contract.status,
+        expectedOutput: contract.expectedOutput,
+      });
+    }
+
+    return c.json({ ok: false, error: `contract or work item ${id} not found`, cause: 'not-found' }, 404);
   });
 
   app.post('/api/projects/:projectId/agent-runs/:runId/deliverable', async (c) => {

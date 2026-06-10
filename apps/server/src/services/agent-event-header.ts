@@ -56,6 +56,10 @@ export function buildAgentCompletedBody(args: {
   agentName: string;
   parentWorkItemId: string | null;
   result: string;
+  /** Slice 3 — incidental free-text turn result demoted to a secondary note
+   *  when the contract carries an authoritative submitted deliverable. Rendered
+   *  after the Result: section so the deliverable is always the headline. */
+  note?: string | null;
   /** Section 26.5 — appended when the dispatch was a contract dispatch. The
    *  tags let the orchestrator's pod prompt branch on verification outcome
    *  without re-fetching the work item. */
@@ -73,6 +77,11 @@ export function buildAgentCompletedBody(args: {
   lines.push('Result:');
   lines.push(args.result || '(no output)');
   lines.push('');
+  if (args.note) {
+    lines.push('Note:');
+    lines.push(args.note);
+    lines.push('');
+  }
   if (args.verification) {
     lines.push(describeVerificationForPrompt(args.agentName, args.verification));
   } else {

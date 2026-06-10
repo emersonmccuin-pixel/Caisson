@@ -26,18 +26,27 @@ export interface IndexEntry {
   age: string;
 }
 
+/** Result of composing the chain block. `inlinedDocIds` lists the docs whose
+ *  FULL BODIES made it under the budget — Phase B records these as
+ *  'injection' read receipts (index-only mentions are NOT reads; those docs'
+ *  receipts arrive via the pc_get_context_doc tool when actually fetched). */
+export interface ContextChainResult {
+  markdown: string;
+  inlinedDocIds: ULID[];
+}
+
 /** Build the "## Project & area context" markdown string for injection into the
- *  agent system prompt. Returns an empty string when there are no docs in the
+ *  agent system prompt. Returns an empty markdown when there are no docs in the
  *  chain. The caller is responsible for the optional surrounding whitespace. */
 export function buildContextChain(input: {
   workItemId: ULID;
   projectId: ULID;
   budgetChars?: number;
-}): string {
+}): ContextChainResult {
   const budget = input.budgetChars ?? CONTEXT_CHAIN_BUDGET_CHARS;
   const docs = listContextChainDocs({ workItemId: input.workItemId, projectId: input.projectId });
 
-  if (docs.length === 0) return '';
+  if (docs.length === 0) return { markdown: '', inlinedDocIds: [] };
 
   const now = Date.now();
   const entries: IndexEntry[] = docs.map((doc) => ({
@@ -50,9 +59,9 @@ export function buildContextChain(input: {
 }
 
 /** Pure renderer — accepts pre-computed entries + budget so it's unit-testable
- *  without DB fixtures. Returns the full markdown block. */
-export function renderChain(entries: IndexEntry[], budgetChars: number): string {
-  if (entries.length === 0) return '';
+ *  without DB fixtures. Returns the full markdown block + the inlined doc ids. */
+export function renderChain(entries: IndexEntry[], budgetChars: number): ContextChainResult {
+  if (entries.length === 0) return { markdown: '', inlinedDocIds: [] };
 
   // 1. Render the full index first (always included).
   const indexLines = renderIndex(entries);
@@ -65,12 +74,14 @@ export function renderChain(entries: IndexEntry[], budgetChars: number): string 
   // 3. Inline bodies closest-scope-first (lowest distanceRank first).
   //    entries are already sorted leaf-first by listContextChainDocs.
   const bodySections: string[] = [];
+  const inlinedDocIds: ULID[] = [];
   let remaining = remainingAfterIndex;
   for (const entry of entries) {
     if (!entry.doc.body.trim()) continue; // no body to inline
     const section = renderBodySection(entry);
     if (remaining >= section.length) {
       bodySections.push(section);
+      inlinedDocIds.push(entry.doc.id);
       remaining -= section.length;
     }
     // else: this doc stays index-only (already in the index block)
@@ -89,7 +100,7 @@ export function renderChain(entries: IndexEntry[], budgetChars: number): string 
     parts.push(...bodySections);
   }
 
-  return parts.join('\n');
+  return { markdown: parts.join('\n'), inlinedDocIds };
 }
 
 // ── Pure helpers ──────────────────────────────────────────────────────────────

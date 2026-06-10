@@ -1,18 +1,16 @@
-// Section 17d.5 — Context (knowledge) tab.
+// Section 17d.5 — Context tab (the agent's attached context docs).
 //
-// List of knowledge docs the agent can reference via pc_knowledge_read (17b).
-// Row click expands inline with Save/Cancel. "Add" button appends a new
-// blank row pre-opened for editing. Delete asks for confirm.
-//
-// The `kind: 'knowledge' | 'example'` distinction is hidden from the UI per
-// buildout § 17d "Hides the internal kind distinction." New docs default to
-// 'knowledge'; existing 'example' rows render identically.
+// List of context docs attached to the agent (agent-scoped `context_docs`
+// rows — migration 0055 merged the old knowledge table in). The agent reads
+// them at runtime via pc_get_context_doc. Row click expands inline with
+// Save/Cancel. "Add" button appends a new blank row pre-opened for editing.
+// Delete asks for confirm (soft delete server-side).
 
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import type { ULID } from '@/features/projects/client';
-import { agentsApi, type PodBundle, type PodKnowledge } from '@/features/agents/client';
+import { agentsApi, type AgentContextDoc, type PodBundle } from '@/features/agents/client';
 import { Markdown } from '../Markdown';
 
 interface ContextTabProps {
@@ -35,7 +33,7 @@ interface EditState {
   /** New (unsaved) rows have a synthetic id and no real DB row yet. */
   id: string;
   isNew: boolean;
-  draft: { name: string; content: string };
+  draft: { title: string; body: string };
 }
 
 export function ContextTab({
@@ -57,16 +55,16 @@ export function ContextTab({
     setEdit({
       id: `__new__${Date.now()}`,
       isNew: true,
-      draft: { name: '', content: '' },
+      draft: { title: '', body: '' },
     });
   }
 
-  function startEdit(row: PodKnowledge) {
+  function startEdit(row: AgentContextDoc) {
     setOpError(null);
     setEdit({
       id: row.id,
       isNew: false,
-      draft: { name: row.name, content: row.content },
+      draft: { title: row.title, body: row.body },
     });
   }
 
@@ -77,20 +75,20 @@ export function ContextTab({
 
   async function save() {
     if (!edit || busy) return;
-    const name = edit.draft.name.trim();
-    if (!name) {
-      setOpError('Name is required.');
+    const title = edit.draft.title.trim();
+    if (!title) {
+      setOpError('Title is required.');
       return;
     }
     setBusy(true);
     setOpError(null);
     try {
       if (edit.isNew) {
-        await agentsApi.createKnowledge(podId, { name, content: edit.draft.content });
+        await agentsApi.createAgentDoc(podId, { title, body: edit.draft.body });
       } else {
-        await agentsApi.patchKnowledge(podId, edit.id as ULID, {
-          name,
-          content: edit.draft.content,
+        await agentsApi.patchAgentDoc(podId, edit.id as ULID, {
+          title,
+          body: edit.draft.body,
         });
       }
       setEdit(null);
@@ -102,13 +100,13 @@ export function ContextTab({
     }
   }
 
-  async function remove(row: PodKnowledge) {
-    const ok = window.confirm(`Delete knowledge "${row.name}"?`);
+  async function remove(row: AgentContextDoc) {
+    const ok = window.confirm(`Delete context doc "${row.title}"?`);
     if (!ok) return;
     setBusy(true);
     setOpError(null);
     try {
-      await agentsApi.deleteKnowledge(podId, row.id);
+      await agentsApi.deleteAgentDoc(podId, row.id);
       if (edit?.id === row.id) setEdit(null);
       onChanged();
     } catch (e) {
@@ -122,13 +120,13 @@ export function ContextTab({
   if (error) return <div className="text-xs text-destructive">{error}</div>;
   if (!bundle) return null;
 
-  const rows = bundle.knowledge;
+  const rows = bundle.contextDocs;
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <div className="text-xs text-muted-foreground">
-          {rows.length} knowledge {rows.length === 1 ? 'doc' : 'docs'}
+          {rows.length} context {rows.length === 1 ? 'doc' : 'docs'}
         </div>
         {!readOnly && (
           <button
@@ -149,7 +147,7 @@ export function ContextTab({
       )}
 
       {edit?.isNew && (
-        <KnowledgeEditor
+        <DocEditor
           edit={edit}
           busy={busy}
           onChange={(patch) =>
@@ -162,13 +160,13 @@ export function ContextTab({
 
       {rows.length === 0 && !edit?.isNew ? (
         <div className="border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
-          No knowledge docs yet. Add one to give this agent reference material.
+          No context docs yet. Add one to give this agent reference material.
         </div>
       ) : (
         <div className="flex flex-col gap-1">
           {rows.map((row) =>
             edit?.id === row.id && !edit.isNew ? (
-              <KnowledgeEditor
+              <DocEditor
                 key={row.id}
                 edit={edit}
                 busy={busy}
@@ -179,7 +177,7 @@ export function ContextTab({
                 onCancel={cancelEdit}
               />
             ) : (
-              <KnowledgeRow
+              <DocRow
                 key={row.id}
                 row={row}
                 disabled={busy || edit !== null}
@@ -197,7 +195,7 @@ export function ContextTab({
   );
 }
 
-function KnowledgeRow({
+function DocRow({
   row,
   disabled,
   readOnly,
@@ -206,7 +204,7 @@ function KnowledgeRow({
   onEdit,
   onDelete,
 }: {
-  row: PodKnowledge;
+  row: AgentContextDoc;
   disabled: boolean;
   readOnly?: boolean;
   collapseByDefault: boolean;
@@ -216,8 +214,8 @@ function KnowledgeRow({
 }) {
   const [expanded, setExpanded] = useState(!collapseByDefault);
   const preview = useMemo(
-    () => buildKnowledgePreview(row.content, previewLineCount),
-    [row.content, previewLineCount],
+    () => buildDocPreview(row.body, previewLineCount),
+    [row.body, previewLineCount],
   );
   const collapsible = collapseByDefault;
   const showFullContent = !collapsible || expanded;
@@ -234,7 +232,7 @@ function KnowledgeRow({
                 onClick={() => setExpanded((open) => !open)}
                 className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground"
                 aria-expanded={expanded}
-                aria-label={`${expanded ? 'Collapse' : 'Expand'} ${row.name}`}
+                aria-label={`${expanded ? 'Collapse' : 'Expand'} ${row.title}`}
                 title={expanded ? 'Collapse' : 'Expand'}
               >
                 <ToggleIcon className="h-3.5 w-3.5" aria-hidden />
@@ -247,19 +245,19 @@ function KnowledgeRow({
                 className="min-w-0 truncate text-left font-mono text-xs font-medium text-foreground hover:text-primary"
                 aria-expanded={expanded}
               >
-                {row.name}
+                {row.title}
               </button>
             ) : (
               <div className="min-w-0 truncate font-mono text-xs font-medium text-foreground">
-                {row.name}
+                {row.title}
               </div>
             )}
           </div>
 
           {showFullContent ? (
             <div className="mt-2 text-[12px] text-foreground">
-              {row.content ? (
-                <Markdown text={row.content} />
+              {row.body ? (
+                <Markdown text={row.body} />
               ) : (
                 <span className="italic text-muted-foreground">(empty)</span>
               )}
@@ -277,8 +275,21 @@ function KnowledgeRow({
             </div>
           )}
 
-          <div className="mt-1 text-[10px] text-muted-foreground">
-            {row.content.length.toLocaleString()} chars
+          <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+            <span>{row.body.length.toLocaleString()} chars</span>
+            <span aria-hidden>·</span>
+            {row.readCount > 0 ? (
+              <span title="Times an agent run consumed this doc (injected at spawn or fetched at runtime)">
+                read {row.readCount}× · last {formatReadAge(row.lastReadAt)}
+              </span>
+            ) : (
+              <span
+                className="bg-amber-500/15 px-1 font-medium text-amber-500"
+                title="No agent has ever consumed this doc — neither injected at spawn nor fetched at runtime. Consider pruning or pointing the agent at it."
+              >
+                ⚠ never read
+              </span>
+            )}
           </div>
         </div>
         {!readOnly && (
@@ -306,11 +317,23 @@ function KnowledgeRow({
   );
 }
 
-function buildKnowledgePreview(
-  content: string,
+function formatReadAge(lastReadAt: number | null): string {
+  if (!lastReadAt) return 'unknown';
+  const mins = Math.floor((Date.now() - lastReadAt) / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+function buildDocPreview(
+  body: string,
   maxLines: number,
 ): { text: string; truncated: boolean } {
-  const trimmed = content.replace(/\r\n/g, '\n').trim();
+  const trimmed = body.replace(/\r\n/g, '\n').trim();
   if (!trimmed) return { text: '', truncated: false };
   const lines = trimmed.split('\n').slice(0, Math.max(1, maxLines));
   const text = lines.join('\n').trimEnd();
@@ -320,7 +343,7 @@ function buildKnowledgePreview(
   };
 }
 
-function KnowledgeEditor({
+function DocEditor({
   edit,
   busy,
   onChange,
@@ -329,7 +352,7 @@ function KnowledgeEditor({
 }: {
   edit: EditState;
   busy: boolean;
-  onChange: (patch: Partial<{ name: string; content: string }>) => void;
+  onChange: (patch: Partial<{ title: string; body: string }>) => void;
   onSave: () => void;
   onCancel: () => void;
 }) {
@@ -338,13 +361,13 @@ function KnowledgeEditor({
       <div className="flex flex-col gap-2">
         <label className="flex flex-col gap-1">
           <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Name
+            Title
           </span>
           <input
             type="text"
-            value={edit.draft.name}
-            onChange={(e) => onChange({ name: e.target.value })}
-            placeholder="doc-name"
+            value={edit.draft.title}
+            onChange={(e) => onChange({ title: e.target.value })}
+            placeholder="doc-title"
             className="w-full border border-border bg-background px-2 py-1 font-mono text-xs text-foreground outline-none focus:border-primary"
           />
         </label>
@@ -353,8 +376,8 @@ function KnowledgeEditor({
             Content
           </span>
           <textarea
-            value={edit.draft.content}
-            onChange={(e) => onChange({ content: e.target.value })}
+            value={edit.draft.body}
+            onChange={(e) => onChange({ body: e.target.value })}
             rows={10}
             className="w-full border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground outline-none focus:border-primary"
           />

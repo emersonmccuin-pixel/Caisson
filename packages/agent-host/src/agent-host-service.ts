@@ -20,6 +20,10 @@ import {
 export const AGENT_HOST_PROTOCOL_VERSION = 1 as const;
 
 const DEFAULT_EVENT_BUFFER_LIMIT = 1_000;
+/** Terminal runs are kept 6h — the server's missed-terminal replay window —
+ *  then evicted (audit #1: the map otherwise grows forever). */
+const DEFAULT_TERMINAL_RUN_RETENTION_MS = 6 * 60 * 60 * 1_000;
+const DEFAULT_EVICTION_SWEEP_INTERVAL_MS = 15 * 60 * 1_000;
 
 export interface AgentHostServiceOptions {
   hostId?: string;
@@ -29,6 +33,13 @@ export interface AgentHostServiceOptions {
   eventBufferLimit?: number;
   spawnFactory?: SpawnFactory;
   now?: () => number;
+  /** How long a TERMINAL run stays in the in-memory map before eviction.
+   *  Must outlive the server's missed-terminal replay window (6h) so a
+   *  reattaching server can still see the terminal snapshot. */
+  terminalRunRetentionMs?: number;
+  /** Eviction sweep cadence. 0 disables the timer (tests call
+   *  `evictStaleTerminalRuns()` directly). */
+  evictionSweepIntervalMs?: number;
 }
 
 type HostRunRequest = AgentHostStartRunRequest | AgentHostResumeRunRequest;
@@ -57,10 +68,24 @@ export class AgentHostService extends EventEmitter {
   private seq = 0;
   private hostReadyEmitted = false;
   private shuttingDown = false;
+  private readonly terminalRunRetentionMs: number;
+  private evictionTimer: NodeJS.Timeout | null = null;
 
   constructor(options: AgentHostServiceOptions = {}) {
     super();
     this.now = options.now ?? (() => Date.now());
+    // Bounded memory (audit #1): terminal runs must eventually leave the map —
+    // a long-lived host otherwise grows one entry (+5 listeners) per dispatch
+    // forever. Retention is generous (6h, matching the server's S3
+    // missed-terminal replay window) so reattach/replay never miss a terminal.
+    this.terminalRunRetentionMs =
+      options.terminalRunRetentionMs ?? DEFAULT_TERMINAL_RUN_RETENTION_MS;
+    const sweepMs =
+      options.evictionSweepIntervalMs ?? DEFAULT_EVICTION_SWEEP_INTERVAL_MS;
+    if (sweepMs > 0) {
+      this.evictionTimer = setInterval(() => this.evictStaleTerminalRuns(), sweepMs);
+      if (typeof this.evictionTimer.unref === 'function') this.evictionTimer.unref();
+    }
     this.identity = {
       hostId: options.hostId ?? randomUUID(),
       pid: options.pid ?? process.pid,
@@ -411,8 +436,30 @@ export class AgentHostService extends EventEmitter {
     );
   }
 
+  /** Drop terminal runs older than the retention window. Returns the count
+   *  evicted. Listener teardown happens here (not at the terminal event) so
+   *  late consumers — server reattach, snapshot lists — see the terminal
+   *  snapshot for the full window. */
+  evictStaleTerminalRuns(): number {
+    const cutoff = this.now() - this.terminalRunRetentionMs;
+    let evicted = 0;
+    for (const [runId, entry] of this.runs) {
+      if (!entry.terminalResult) continue;
+      if (entry.updatedAt > cutoff) continue;
+      entry.run.removeAllListeners();
+      this.runs.delete(runId);
+      this.ccSessionIndex.delete(entry.request.ccSessionId);
+      evicted += 1;
+    }
+    return evicted;
+  }
+
   private shutdown(mode: 'host-exit' | 'cancel-runs'): AgentHostCommandResponse {
     this.shuttingDown = true;
+    if (this.evictionTimer) {
+      clearInterval(this.evictionTimer);
+      this.evictionTimer = null;
+    }
     if (mode === 'cancel-runs') {
       for (const entry of this.runs.values()) {
         if (!entry.run.isTerminal()) entry.run.cancel();

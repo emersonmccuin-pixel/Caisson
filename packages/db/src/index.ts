@@ -62,6 +62,7 @@ export {
   getWorkItemIncludingArchived,
   listArchivedWorkItems,
   listChildWorkItems,
+  listFocusedWorkItems,
   listWorkItems,
   moveWorkItemStage,
   patchWorkItem,
@@ -174,43 +175,34 @@ export {
   bumpAgentRev,
   cloneAgentToProject,
   createAgent,
-  createKnowledge,
   createSecret,
-  deleteKnowledge,
   deleteSecret,
   getAgentById,
   getAgentByName,
-  getKnowledge,
-  getKnowledgeByName,
   getPodForSpawn,
   getSecret,
   getSecretByEnvVarName,
   isProjectDispatchable,
   listAgents,
   listProjectVisibleAgents,
-  listKnowledge,
   listSecrets,
   promoteAgentToGlobal,
   resolveAgentForDispatch,
   restoreAgent,
   softDeleteAgent,
+  toAgentContextDoc,
   updateAgent,
-  updateKnowledge,
 } from './repos/pods.ts';
 export type {
   CloneAgentResult,
   CloneAgentToProjectInput,
   CreateAgentInput,
-  CreateKnowledgeInput,
   CreateSecretInput,
   GetAgentByNameInput,
-  GetKnowledgeByNameInput,
   GetSecretByEnvInput,
   ListAgentsOptions,
-  ListKnowledgeOptions,
   ListSecretsOptions,
   UpdateAgentInput,
-  UpdateKnowledgeInput,
 } from './repos/pods.ts';
 export { buildAuditRow, listAgentAudit } from './repos/pod-audit.ts';
 export type {
@@ -338,6 +330,7 @@ export {
   getContextDocInDb,
   listContextChainDocs,
   listContextChainDocsInDb,
+  getAgentContextDocByTitle,
   listContextDocsForScope,
   listContextDocsForScopeInDb,
   sanitizeFts5Query,
@@ -357,6 +350,19 @@ export type {
   ListContextDocsOptions,
   UpdateContextDocInput,
 } from './repos/context-docs.ts';
+
+// Migration 0056 — context-doc read receipts (staleness/usage tracking).
+export {
+  getContextDocReadStats,
+  listContextDocReadsForRun,
+  recordContextDocReads,
+} from './repos/context-doc-reads.ts';
+export type {
+  ContextDocReadStats,
+  ContextDocReadVia,
+  ContextDocSessionKind,
+  RecordContextDocReadsInput,
+} from './repos/context-doc-reads.ts';
 
 export {
   cancelOpenOrchestratorSendsForSession,

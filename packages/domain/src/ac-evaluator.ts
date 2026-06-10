@@ -58,12 +58,18 @@ export interface PredicateExecutors {
    *  by the timeout rather than exiting naturally, so callers can report
    *  "timed out" instead of "exited 124" in failure messages. The optional
    *  `timeoutMs` overrides the executor's built-in default for this one call
-   *  (used to apply per-predicate timeouts from `bash_exit_zero.timeout_ms`). */
+   *  (used to apply per-predicate timeouts from `bash_exit_zero.timeout_ms`).
+   *
+   *  Slice 5 (pc-pty-chat-374.4): production impls also return `stdoutTail` and
+   *  `stderrTail` — the LAST ~4 KB of each stream — so failure reasons carry
+   *  diagnostic output rather than a bare "exited N: <cmd>". Both fields are
+   *  OPTIONAL (undefined = no output captured / older mock executor) so existing
+   *  test fixtures remain valid without modification. */
   runBash: (
     command: string,
     cwd: 'worktree' | 'project',
     timeoutMs?: number,
-  ) => Promise<{ exitCode: number; timedOut: boolean }>;
+  ) => Promise<{ exitCode: number; timedOut: boolean; stdoutTail?: string; stderrTail?: string }>;
   /** True when the git tree has relevant changes vs its base.
    *
    *  For worktree dispatches (`cwd: 'worktree'`): returns true when the
@@ -84,6 +90,12 @@ export interface PredicateExecutors {
 export interface PredicateFailure {
   kind: AcceptancePredicateKind;
   reason: string;
+  /** Slice 7 (pc-pty-chat-374.5) — true when the predicate failed because the
+   *  executor could not run the command at all (exit 127 / spawn error, no
+   *  captured output). This is a VERIFICATION defect (environment), not a WORK
+   *  defect. The caller escalates to 'pending'/inconclusive instead of 'failed'.
+   *  Absent / false = genuine failure with observable evidence. */
+  inconclusive?: boolean;
 }
 
 export interface EvaluationResult {
@@ -100,7 +112,13 @@ export async function evaluateAcceptance(
   for (const pred of criteria) {
     const res = await evaluatePredicate(pred, ctx, executors);
     if (!res.pass) {
-      failures.push({ kind: pred.kind, reason: res.reason ?? 'predicate failed' });
+      failures.push({
+        kind: pred.kind,
+        reason: res.reason ?? 'predicate failed',
+        // Thread the inconclusive flag (slice 7): lets the server-side verifier
+        // distinguish "executor couldn't run" from "real check found a problem".
+        ...(res.inconclusive ? { inconclusive: true } : {}),
+      });
     }
   }
   return { pass: failures.length === 0, failures };
@@ -110,7 +128,7 @@ export async function evaluatePredicate(
   pred: AcceptancePredicate,
   ctx: EvaluationContext,
   executors: PredicateExecutors,
-): Promise<{ pass: boolean; reason?: string }> {
+): Promise<{ pass: boolean; reason?: string; inconclusive?: boolean }> {
   switch (pred.kind) {
     case 'fields_populated':
       return evalFieldsPopulated(pred, ctx);
@@ -396,9 +414,13 @@ async function evalFilesExist(
 async function evalBashExitZero(
   pred: Extract<AcceptancePredicate, { kind: 'bash_exit_zero' }>,
   executors: PredicateExecutors,
-): Promise<{ pass: boolean; reason?: string }> {
+): Promise<{ pass: boolean; reason?: string; inconclusive?: boolean }> {
   const cwd = pred.cwd ?? 'worktree';
-  const { exitCode, timedOut } = await executors.runBash(pred.command, cwd, pred.timeout_ms);
+  const { exitCode, timedOut, stdoutTail, stderrTail } = await executors.runBash(
+    pred.command,
+    cwd,
+    pred.timeout_ms,
+  );
   if (exitCode === 0) return { pass: true };
   if (timedOut) {
     // Distinguish a SIGKILL timeout from a genuine non-zero exit so the
@@ -407,9 +429,27 @@ async function evalBashExitZero(
     // misconfigured timeout (pc-pty-chat-370).
     return { pass: false, reason: `bash command timed out: ${pred.command}` };
   }
+  // Slice 7 (pc-pty-chat-374.5): exit 127 with NO captured output means the
+  // executor couldn't spawn the command at all (command not found / spawn
+  // error). Tag as inconclusive: this is a VERIFICATION environment defect,
+  // not proof that the agent's work is bad. The server-side verifier escalates
+  // to 'pending' instead of 'failed' when all failures carry this flag.
+  if (exitCode === 127 && !stdoutTail && !stderrTail) {
+    return {
+      pass: false,
+      reason: `bash command not found or spawn error (exit 127): ${pred.command}`,
+      inconclusive: true,
+    };
+  }
+  // Slice 5 (pc-pty-chat-374.4): include the captured output tail in the
+  // failure reason so verification notes carry actual diagnostic output, not
+  // just a bare "exited N: <cmd>" (Principle 2a — no verdict without evidence).
+  const parts: string[] = [`bash command exited ${exitCode}: ${pred.command}`];
+  if (stdoutTail && stdoutTail.length > 0) parts.push(`\nstdout:\n${stdoutTail}`);
+  if (stderrTail && stderrTail.length > 0) parts.push(`\nstderr:\n${stderrTail}`);
   return {
     pass: false,
-    reason: `bash command exited ${exitCode}: ${pred.command}`,
+    reason: parts.join(''),
   };
 }
 

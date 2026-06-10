@@ -49,6 +49,7 @@ function wiDto(id: string, version: number, updatedAt: number) {
     deletedAt: null,
     isWorkflowRoot: false,
     areaId: null,
+    focusedAt: null,
   };
 }
 

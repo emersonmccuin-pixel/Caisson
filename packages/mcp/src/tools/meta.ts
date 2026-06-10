@@ -47,7 +47,7 @@ export async function handleMetaTool(
           content: [
             {
               type: 'text',
-              text: `No catalog tool matches "${query}". The catalog covers work items, agents/knowledge/secrets config, workflows (run + authoring), project stages/fields, and run controls — try different keywords.`,
+              text: `No catalog tool matches "${query}". The catalog covers work items, agents/context-docs/secrets config, workflows (run + authoring), project stages/fields, and run controls — try different keywords.`,
             },
           ],
         };

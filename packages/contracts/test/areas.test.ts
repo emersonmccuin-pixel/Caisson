@@ -133,8 +133,11 @@ test('work-item DTO carries areaId (string or null)', () => {
     deletedAt: null,
     isWorkflowRoot: false,
     areaId: 'a1',
+    focusedAt: null,
   };
   assert.equal(isWorkItemDto(wi), true);
   assert.equal(isWorkItemDto({ ...wi, areaId: null }), true);
   assert.equal(isWorkItemDto({ ...wi, areaId: 5 }), false);
+  assert.equal(isWorkItemDto({ ...wi, focusedAt: 123 }), true);
+  assert.equal(isWorkItemDto({ ...wi, focusedAt: 'starred' }), false);
 });

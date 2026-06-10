@@ -41,6 +41,7 @@ import {
   listContractsForWorkItem,
   markAgentRunTerminal,
   newId,
+  recordContextDocReads,
   setAgentRunContractId,
   updateAgentRunStatus,
 } from '@pc/db';
@@ -439,6 +440,21 @@ export async function dispatchFreshAgent(
     queuedAt: now,
   });
 
+  // Phase B (0056) — record 'injection' read receipts for the docs whose
+  // bodies the context chain inlined into this spawn's prompt. AFTER the run
+  // row exists (the receipt references the run id); best-effort — a receipt
+  // failure must never fail a dispatch.
+  try {
+    recordContextDocReads({
+      docIds: podPrep.injectedContextDocIds,
+      agentRunId,
+      sessionKind: 'agent-run',
+      readVia: 'injection',
+    });
+  } catch {
+    /* best-effort */
+  }
+
   // Slice 017 Fix 2 — the raw `queued` insert had no announce, so the first
   // `queued` state never wrote a live_outbox row → never propagated live.
   // Announce immediately after the insert (gateway re-reads the post-write row).
@@ -677,6 +693,20 @@ export async function dispatchContinueAgent(
       cause: 'unknown-agent',
       error: `pod "${plan.plan.podName}" no longer in registry`,
     };
+  }
+
+  // Phase B (0056) — 'injection' receipts for the continuation's re-built
+  // chain. The continuation reuses the parent's run row, so the id is already
+  // known; best-effort like the fresh path.
+  try {
+    recordContextDocReads({
+      docIds: podPrep.injectedContextDocIds,
+      agentRunId: plan.plan.agentRunId,
+      sessionKind: 'agent-run',
+      readVia: 'injection',
+    });
+  } catch {
+    /* best-effort */
   }
 
   // Re-link the contract to the continuation run (same resolution as the fresh

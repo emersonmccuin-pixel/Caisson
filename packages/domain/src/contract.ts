@@ -173,6 +173,36 @@ export type AcceptancePredicateKind = (typeof ACCEPTANCE_PREDICATE_KINDS)[number
 
 export type AcceptanceCriteria = AcceptancePredicate[];
 
+// ── Predicate decidability classification ───────────────────────────────────
+// Marks each predicate kind as either 'decidable' (a machine-computable check)
+// or 'judgment' (requires a semantic judge — human or LLM). ALL current kinds
+// are decidable; 'judgment' is reserved for a future `coverage_addressed`
+// predicate that is NOT added now.
+//
+// This map is the canary: adding a new kind to ACCEPTANCE_PREDICATE_KINDS
+// without classifying it here causes the predicate-decidability guardrail test
+// to fail (packages/domain/test/predicate-decidability.test.ts).
+export const PREDICATE_DECIDABILITY: Record<AcceptancePredicateKind, 'decidable' | 'judgment'> = {
+  files_exist: 'decidable',
+  fields_populated: 'decidable',
+  field_matches: 'decidable',
+  bash_exit_zero: 'decidable',
+  attachments_present: 'decidable',
+  body_contains: 'decidable',
+  child_work_items_done: 'decidable',
+  schema_valid: 'decidable',
+  git_diff_nonempty: 'decidable',
+  external_handle_present: 'decidable',
+  tool_called: 'decidable',
+  pending_ask_created: 'decidable',
+  report_contains: 'decidable',
+  min_length: 'decidable',
+};
+
+export function isDecidablePredicate(kind: AcceptancePredicateKind): boolean {
+  return PREDICATE_DECIDABILITY[kind] === 'decidable';
+}
+
 export const CONTRACT_STATUSES = [
   'issued',
   'dispatched',

@@ -2,12 +2,13 @@
 //
 // Design §6.4 wants a stable signal for "this pod's content changed
 // between dispatch and resume." The agents table's `updated_at` is the
-// primary driver — every mutating route refreshes it. Knowledge rows have
-// their own `updated_at`, and since the v2 materialiser inlines knowledge
-// into the `.md` footer at spawn time, a knowledge edit also changes the
-// resumed agent's view; we incorporate it.
+// primary driver — every mutating route refreshes it. Agent-scoped context
+// docs (migration 0055 — formerly agent_knowledge) have their own
+// `updated_at`, and since the v2 materialiser lists them in the `.md` footer
+// at spawn time, a doc edit also changes the resumed agent's view; we
+// incorporate it.
 //
-// Format: `agent:<ts>.k:<max-knowledge-ts>`. Both epoch ms. The string is
+// Format: `agent:<ts>.k:<max-doc-ts>`. Both epoch ms. The string is
 // opaque — equality is the only consumer. NULL when the pod row doesn't
 // exist.
 
@@ -16,7 +17,7 @@ import { and, desc, eq, isNull, max } from 'drizzle-orm';
 import type { ULID } from '@pc/domain';
 
 import { getDb } from '../connection.ts';
-import { agentKnowledge, agents } from '../schema.ts';
+import { agents, contextDocs } from '../schema.ts';
 
 export interface ComputePodRevisionInput {
   podName: string;
@@ -45,14 +46,14 @@ export function computePodRevision(input: ComputePodRevisionInput): string | nul
 
   if (!agentRow) return null;
 
-  const knowledgeMax = db
-    .select({ ts: max(agentKnowledge.updatedAt) })
-    .from(agentKnowledge)
-    .where(eq(agentKnowledge.agentId, agentRow.id))
+  const docMax = db
+    .select({ ts: max(contextDocs.updatedAt) })
+    .from(contextDocs)
+    .where(and(eq(contextDocs.agentId, agentRow.id), isNull(contextDocs.deletedAt)))
     .get();
 
-  const knowledgeTs = knowledgeMax?.ts ?? 0;
-  return `agent:${agentRow.updatedAt}.k:${knowledgeTs}`;
+  const docTs = docMax?.ts ?? 0;
+  return `agent:${agentRow.updatedAt}.k:${docTs}`;
 }
 
 /** True iff both revisions are non-null and differ. */

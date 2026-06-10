@@ -429,6 +429,67 @@ export async function handleAgentRunTool(
       }
     }
 
+    case 'pc_get_deliverable': {
+      // Slice 4 (FD-5 principle 3b) — orchestrator reads the authoritative
+      // deliverable for any contract. Accepts a contract id OR a work-item id /
+      // callsign. Project-guarded. Does NOT require PC_AGENT_RUN_ID — this is the
+      // orchestrator read door, not the worker's self-read (that is pc_get_contract).
+      const ref = typeof args.id === 'string' ? args.id.trim() : '';
+      if (!ref) {
+        return {
+          content: [{ type: 'text', text: 'pc_get_deliverable: id required' }],
+          isError: true,
+        };
+      }
+      if (!ctx.projectId) {
+        return {
+          content: [{ type: 'text', text: 'pc_get_deliverable: PC_PROJECT_ID not set' }],
+          isError: true,
+        };
+      }
+      if (!ctx.dispatcherSessionId) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'pc_get_deliverable: PC_SESSION_ID not set — callable from an orchestrator session',
+            },
+          ],
+          isError: true,
+        };
+      }
+      // Resolve callsign → ULID if needed. ULIDs pass through as-is; unresolved
+      // callsigns become null so we can surface a clean error.
+      const resolvedId = await ctx.resolveWorkItemIdViaServer(ref);
+      if (!resolvedId) {
+        return {
+          content: [{ type: 'text', text: `pc_get_deliverable: unknown work item or contract: ${ref}` }],
+          isError: true,
+        };
+      }
+      try {
+        const res = await ctx.getServer(
+          `/api/projects/${ctx.projectId}/contracts/${encodeURIComponent(resolvedId)}/deliverable`,
+        );
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [
+            { type: 'text', text: `pc_get_deliverable failed (${res.status}): ${res.body}` },
+          ],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [
+            { type: 'text', text: `pc_get_deliverable failed: ${(err as Error).message}` },
+          ],
+          isError: true,
+        };
+      }
+    }
+
     case 'pc_submit_deliverable': {
       // Slice 014b — the agent submits its typed deliverable against its
       // contract. This BECOMES the verified output source (replacing the

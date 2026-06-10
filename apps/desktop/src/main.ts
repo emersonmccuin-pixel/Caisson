@@ -25,7 +25,7 @@ import {
   waitForPortsFree,
   type ExitInfo,
 } from '@pc/supervisor';
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   packagedAgentHostLockFilePath,
@@ -108,6 +108,9 @@ let windowUrl = '';
 // ── Supervisor wiring ────────────────────────────────────────────────────────
 
 let childrenLogPath: string | null = null;
+/** The stack's resolved data dir — set once in whenReady so every diagnostics
+ *  writer (children.log, renderer-console.log) shares one home. */
+let resolvedDataDir: string | null = null;
 
 function initChildrenLog(dataDir: string): void {
   try {
@@ -314,6 +317,37 @@ async function bootSupervisedStack(config: StackConfig): Promise<boolean> {
 // to the UI over IPC (`pc:update-state`). Only meaningful in a packaged build
 // (feed/signing exist); otherwise the status stays `unsupported` and every IPC
 // verb short-circuits.
+//
+// Beta channel: users opt in via a persisted JSON pref (update-prefs.json in
+// userData). When enabled, autoUpdater.channel='beta' so the updater checks
+// beta.yml instead of latest.yml. Beta users still receive stable releases
+// because stable is the lower channel.
+
+// ── Beta opt-in persistence ───────────────────────────────────────────────
+
+const UPDATE_PREFS_FILENAME = 'update-prefs.json';
+
+interface UpdatePrefs {
+  betaOptIn: boolean;
+}
+
+function readUpdatePrefs(dataDir: string): UpdatePrefs {
+  try {
+    const raw = readFileSync(join(dataDir, UPDATE_PREFS_FILENAME), 'utf8');
+    const parsed = JSON.parse(raw) as Partial<UpdatePrefs>;
+    return { betaOptIn: parsed.betaOptIn === true };
+  } catch {
+    return { betaOptIn: false };
+  }
+}
+
+function writeUpdatePrefs(dataDir: string, prefs: UpdatePrefs): void {
+  try {
+    writeFileSync(join(dataDir, UPDATE_PREFS_FILENAME), JSON.stringify(prefs, null, 2));
+  } catch {
+    /* best-effort */
+  }
+}
 
 type UpdateStatus =
   | 'unsupported'
@@ -359,6 +393,12 @@ function initAutoUpdater(): void {
   // lost.
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
+
+  // Apply persisted beta-channel preference before the first check.
+  if (resolvedDataDir) {
+    const { betaOptIn } = readUpdatePrefs(resolvedDataDir);
+    if (betaOptIn) autoUpdater.channel = 'beta';
+  }
 
   autoUpdater.on('checking-for-update', () =>
     pushUpdateState({ status: 'checking', error: null }),
@@ -407,15 +447,38 @@ ipcMain.handle('pc:update:download', async () => {
   return updateState;
 });
 
+// Beta opt-in: get/set the persisted preference and apply the channel live.
+ipcMain.handle('pc:update:getBetaOptIn', () => {
+  const dataDir = resolvedDataDir ?? app.getPath('userData');
+  return readUpdatePrefs(dataDir).betaOptIn;
+});
+
+ipcMain.handle('pc:update:setBetaOptIn', (_event, enabled: unknown) => {
+  const dataDir = resolvedDataDir ?? app.getPath('userData');
+  const betaOptIn = enabled === true;
+  writeUpdatePrefs(dataDir, { betaOptIn });
+  if (updaterEnabled()) {
+    autoUpdater.channel = betaOptIn ? 'beta' : 'latest';
+    autoUpdater
+      .checkForUpdates()
+      .catch((err) => pushUpdateState({ status: 'error', error: (err as Error).message }));
+  }
+  return betaOptIn;
+});
+
 // Native OS folder chooser — used by the onboarding wizard (and future pickers)
 // so desktop users get the familiar system dialog instead of the custom browser
 // picker. Returns the chosen absolute path, or null if the user cancelled.
 ipcMain.handle('pc:choose-folder', async (): Promise<string | null> => {
-  const win = mainWindow ?? undefined;
-  const result = await dialog.showOpenDialog(win!, {
-    properties: ['openDirectory', 'createDirectory'],
+  const options = {
+    properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>,
     title: 'Choose projects folder',
-  });
+  };
+  // mainWindow can be gone by the time the handler fires — fall back to the
+  // detached dialog instead of crashing the IPC call.
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0] ?? null;
 });
@@ -442,16 +505,14 @@ ipcMain.handle('pc:update:install', async () => {
 // Fresh per window launch (truncated on createWindow).
 
 function resolveDiagnosticsDir(): string {
+  // ONE diagnostics home: <dataDir>/diagnostics — the same folder children.log
+  // uses (initChildrenLog), so a post-mortem reads one directory. dataDir is
+  // resolved once in resolveStackConfig(); the fallback below only covers a
+  // window created before whenReady (not a real path today).
+  if (resolvedDataDir) return join(resolvedDataDir, 'diagnostics');
   const envDir = process.env.PC_DATA_DIR;
   if (envDir && envDir !== 'undefined') return join(envDir, 'diagnostics');
-  let dir = __dirname;
-  for (let i = 0; i < 8; i += 1) {
-    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) return join(dir, 'data', 'diagnostics');
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return app.getPath('logs');
+  return join(app.getPath('userData'), 'diagnostics');
 }
 
 function setupRendererDiagnostics(win: BrowserWindow): void {
@@ -564,6 +625,7 @@ async function createWindow(url: string): Promise<void> {
 void app.whenReady().then(async () => {
   const config = resolveStackConfig();
   windowUrl = config.windowUrl;
+  resolvedDataDir = config.dataDir;
   initChildrenLog(config.dataDir);
 
   try {

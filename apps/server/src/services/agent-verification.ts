@@ -34,7 +34,7 @@
 
 import { spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 
 import {
   applyRunOutcome,
@@ -129,6 +129,10 @@ export interface VerificationDeps {
   /** Slice 020 — the contract write door. Defaults to a fresh ContractService;
    *  injectable for tests. */
   contractService?: ContractService;
+  /** Slice 7 (pc-pty-chat-374.5) — flush-barrier check for worktree dispatches.
+   *  Returns true when the working tree has uncommitted changes. Injected in
+   *  tests; production falls back to the private `workingTreeDirty` helper. */
+  checkDirtyWorktree?: (worktreeDir: string) => Promise<boolean>;
   now?: () => number;
 }
 
@@ -207,7 +211,7 @@ export async function runVerificationOnTerminal(
   // auto-verifier with nothing to check on a side-effect contract escalates to
   // review instead of passing open.
   const specObj = contract.expectedOutput as
-    | { kind?: unknown; trust_end_turn?: unknown }
+    | { kind?: unknown; trust_end_turn?: unknown; isolation?: unknown }
     | null
     | undefined;
   const specKind = specObj?.kind;
@@ -279,6 +283,41 @@ export async function runVerificationOnTerminal(
   };
 
   const executors = (deps.executorsFor ?? createWorktreeExecutors)(input);
+
+  // Flush barrier (Principle 2c / pc-pty-chat-374.5): for worktree dispatches
+  // with side-effecting predicates (bash_exit_zero / files_exist), the agent's
+  // final file writes must be committed before these checks run. A dirty
+  // working tree at verification time means the worktree is not in a stable
+  // committed state — treat as inconclusive rather than running checks against
+  // a half-written tree and producing a potentially wrong verdict.
+  const hasSideEffectingPredicate = criteria.some(
+    (p) => p.kind === 'bash_exit_zero' || p.kind === 'files_exist',
+  );
+  if (specObj?.isolation === 'worktree' && hasSideEffectingPredicate) {
+    const isDirty = await (
+      deps.checkDirtyWorktree ??
+      ((dir) => workingTreeDirty(dir, DEFAULT_BASH_TIMEOUT_MS))
+    )(input.worktreeDir);
+    if (isDirty) {
+      const notes =
+        'verification inconclusive: worktree has uncommitted changes — side-effecting checks require committed state; not a work failure';
+      service.setVerification({
+        id: input.contractId,
+        verificationStatus: 'pending',
+        verificationNotes: notes,
+        verificationTier: tier,
+      });
+      return {
+        contractId: input.contractId,
+        workItemId,
+        verificationStatus: 'pending',
+        verificationTier: tier,
+        notes,
+        predicatesEvaluated: 0,
+      };
+    }
+  }
+
   const { pass, failures } = await evaluateAcceptance(criteria, evalCtx, executors);
 
   if (pass) {
@@ -293,6 +332,32 @@ export async function runVerificationOnTerminal(
       predicatesEvaluated: criteria.length,
       historyNote: `verification passed (tier-1, ${criteria.length} ${predicateWord})`,
     });
+  }
+
+  // Inconclusive classification (Principle 2c / pc-pty-chat-374.5): when EVERY
+  // failure is tagged inconclusive (exit 127 / spawn error, no captured output),
+  // the executor itself misbehaved — the contract outcome is unknown, not bad.
+  // Escalate to pending so the orchestrator can retry or inspect; do NOT flip to
+  // failed (which means the agent's WORK failed). A mix of inconclusive and
+  // genuine failures → genuine 'failed' (at least one check ran and found a
+  // real problem).
+  if (failures.length > 0 && failures.every((f) => f.inconclusive === true)) {
+    const cmdList = failures.map((f) => f.reason).join('; ');
+    const notes = `verification inconclusive: predicate executor(s) could not run — not a work failure: ${cmdList}`;
+    service.setVerification({
+      id: input.contractId,
+      verificationStatus: 'pending',
+      verificationNotes: notes,
+      verificationTier: tier,
+    });
+    return {
+      contractId: input.contractId,
+      workItemId,
+      verificationStatus: 'pending',
+      verificationTier: tier,
+      notes,
+      predicatesEvaluated: criteria.length,
+    };
   }
 
   // Tier-1 fail. Persist the per-predicate failure list as JSON; the
@@ -466,9 +531,42 @@ export function createWorktreeExecutors(input: {
       // executor-level default. Repo checks carry a 10-minute timeout_ms set
       // by ac-derivation; ad-hoc predicates fall back to bashTimeoutMs (30s).
       const effectiveTimeout = timeoutMs ?? bashTimeoutMs;
-      return await new Promise<{ exitCode: number; timedOut: boolean }>((resolveResult) => {
+      // Slice 5 (pc-pty-chat-374.4): buffer stdout + stderr so failure reasons
+      // carry actual diagnostic output (Principle 2a — no verdict without evidence).
+      const TAIL_CAP = 4096;
+      return await new Promise<{
+        exitCode: number;
+        timedOut: boolean;
+        stdoutTail?: string;
+        stderrTail?: string;
+      }>((resolveResult) => {
         let settled = false;
-        const child = spawn(command, { shell: true, cwd: cwdAbs });
+        const stdoutChunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
+        // Slice 6 (pc-pty-chat-374.6): build a deterministic, explicit env so
+        // local toolchain resolves consistently regardless of how the server
+        // was launched. Prepend the worktree and project-root node_modules/.bin
+        // dirs to PATH so pnpm/tsc/vitest binaries installed locally are found
+        // first. We start from process.env (never capture the agent's launch env
+        // or any secrets) and only mutate the PATH key.
+        // On Windows the PATH key may be stored as "Path" — find it case-insensitively.
+        const pathKey =
+          Object.keys(process.env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+        const binsToAdd = [
+          join(input.worktreeDir, 'node_modules', '.bin'),
+          join(input.projectFolderPath, 'node_modules', '.bin'),
+        ].join(delimiter);
+        const runEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          [pathKey]: binsToAdd + delimiter + (process.env[pathKey] ?? ''),
+        };
+        const child = spawn(command, { shell: true, cwd: cwdAbs, env: runEnv });
+        child.stdout?.on('data', (chunk: Buffer) => {
+          stdoutChunks.push(chunk);
+        });
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderrChunks.push(chunk);
+        });
         const timer = setTimeout(() => {
           if (settled) return;
           settled = true;
@@ -492,7 +590,11 @@ export function createWorktreeExecutors(input: {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          resolveResult({ exitCode: code ?? 0, timedOut: false });
+          const stdoutFull = Buffer.concat(stdoutChunks).toString('utf8');
+          const stderrFull = Buffer.concat(stderrChunks).toString('utf8');
+          const stdoutTail = tailBytes(stdoutFull, TAIL_CAP) || undefined;
+          const stderrTail = tailBytes(stderrFull, TAIL_CAP) || undefined;
+          resolveResult({ exitCode: code ?? 0, timedOut: false, stdoutTail, stderrTail });
         });
       });
     },
@@ -521,6 +623,14 @@ export function createWorktreeExecutors(input: {
       return workingTreeDirty(cwdAbs, bashTimeoutMs);
     },
   };
+}
+
+/** Returns the LAST `maxBytes` characters of `s`. Used to cap stdout/stderr
+ *  diagnostic tails before embedding them in failure reasons. Returns `s`
+ *  unchanged when it already fits within the cap. */
+function tailBytes(s: string, maxBytes: number): string {
+  if (s.length <= maxBytes) return s;
+  return s.slice(-maxBytes);
 }
 
 /** True iff `abs` resolves under `root` (exclusive of `root` itself). Reject

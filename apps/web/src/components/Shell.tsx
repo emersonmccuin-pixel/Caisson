@@ -45,7 +45,7 @@ import { ChatWorkItemModalMount } from './ChatWorkItemModalMount';
 import { ProjectSettingsPanel } from './ProjectSettingsPanel';
 import { RichLinkPreviewCard } from './RichLinkPreviewCard';
 import { DevControls } from './DevControls';
-import { TabBar } from './Tabs';
+import { COMMAND_TABS, TABS, TabBar } from './Tabs';
 import { WorkflowsList } from './WorkflowsList';
 
 // Section 32.1 — TabBar lifted to a topbar but spanning the full width
@@ -61,6 +61,7 @@ interface ShellProps {
   onProjectDeleted: (projectId: string) => void;
   onProjectReorder: (orderedIds: string[]) => void;
   unreadProjectIds: ReadonlySet<string>;
+  liveSessionProjectIds: ReadonlySet<string>;
   wsEvents: WsEnvelope[];
   /** Stable imperative subscription for raw PTY batches. Replaces the old
    *  wsRawEvents array prop — terminal frames bypass React state entirely. */
@@ -86,6 +87,7 @@ export function Shell({
   onProjectDeleted,
   onProjectReorder,
   unreadProjectIds,
+  liveSessionProjectIds,
   wsEvents,
   wsSubscribeRawTerminal,
   wsAggregates,
@@ -134,6 +136,7 @@ export function Shell({
             onProjectDeleted={onProjectDeleted}
             onProjectReorder={onProjectReorder}
             unreadProjectIds={unreadProjectIds}
+            liveSessionProjectIds={liveSessionProjectIds}
             showCommandSpace={showCommandSpace}
           />
         </Panel>
@@ -144,6 +147,7 @@ export function Shell({
         <Panel id="center" defaultSize="70%" minSize="30%">
           <Center
             activeProject={activeProject}
+            projects={projects}
             projectCount={projects.length}
             wsEvents={wsEvents}
             wsSubscribeRawTerminal={wsSubscribeRawTerminal}
@@ -222,6 +226,7 @@ function AgentTranscriptModalMount({
   events: WsEnvelope[];
 }) {
   const openRunId = useAgentTranscript((s) => s.runId);
+  const preloadedRun = useAgentTranscript((s) => s.preloadedRun);
   const close = useAgentTranscript((s) => s.close);
   const { runs: agentRuns } = useProjectAgentRuns(project, events);
 
@@ -231,6 +236,11 @@ function AgentTranscriptModalMount({
   // `events[]` for the deleted `agent-run-changed` envelope, which never matched
   // anymore, then fall back to the active list — so a just-completed run's
   // transcript opened empty. The store frame carries the full run snapshot.
+  //
+  // pc-pty-chat-365: final fallback is `preloadedRun` from the store, set when
+  // the caller (e.g. CommandActivityPanel) already has the AgentRunRecord and
+  // the run belongs to a DIFFERENT project than the active one. Lets cross-project
+  // transcript opens in Command work without routing into the home project's page.
   const agentRunFrames = useLiveEvents('agent-run', project.id);
   const transcriptRun = useMemo<AgentRunRecord | null>(() => {
     if (!openRunId) return null;
@@ -241,8 +251,11 @@ function AgentTranscriptModalMount({
         return { ...run, wait: false } as AgentRunRecord;
       }
     }
-    return agentRuns.find((r) => r.runId === openRunId) ?? null;
-  }, [openRunId, agentRunFrames, agentRuns]);
+    return (
+      agentRuns.find((r) => r.runId === openRunId) ??
+      (preloadedRun?.runId === openRunId ? preloadedRun : null)
+    );
+  }, [openRunId, agentRunFrames, agentRuns, preloadedRun]);
 
   if (!transcriptRun) return null;
   return <AgentTranscriptModal run={transcriptRun} events={events} onClose={close} />;
@@ -250,6 +263,7 @@ function AgentTranscriptModalMount({
 
 function Center({
   activeProject,
+  projects,
   projectCount,
   wsEvents,
   wsSubscribeRawTerminal,
@@ -264,6 +278,7 @@ function Center({
   defaultOrchestratorSurface,
 }: {
   activeProject: Project | null;
+  projects: Project[];
   projectCount: number;
   wsEvents: WsEnvelope[];
   wsSubscribeRawTerminal: (cb: (envs: WsEnvelope[]) => void) => () => void;
@@ -284,15 +299,22 @@ function Center({
     return <EmptyState projectCount={projectCount} onCreateProject={onCreateProject} />;
   }
 
+  const isCommand = activeProject.slug === COMMAND_PROJECT_SLUG;
+  const activeTabs = isCommand ? COMMAND_TABS : TABS;
+  // If the persisted tab is not in this surface's nav (e.g. stored 'workflows'
+  // then switched to Command), fall back to the orchestrator view.
+  const effectiveTab =
+    isCommand && (tab === 'workflows' || tab === 'files') ? 'orchestrator' : tab;
+
   return (
     <div className="flex h-full flex-col bg-background">
-      <TabBar value={tab} onChange={setTab} />
+      <TabBar value={effectiveTab} onChange={setTab} tabs={activeTabs} />
       <div className="flex-1 overflow-hidden">
-        {tab === 'work-items' ? (
+        {effectiveTab === 'work-items' ? (
           <ErrorBoundary key={activeProject.id} label="work items">
-            <WorkItemsPage project={activeProject} events={wsEvents} />
+            <WorkItemsPage project={activeProject} projects={projects} events={wsEvents} />
           </ErrorBoundary>
-        ) : tab === 'orchestrator' ? (
+        ) : effectiveTab === 'orchestrator' ? (
           <ErrorBoundary key={activeProject.id} label="chat">
             <Orchestrator
               project={activeProject}
@@ -306,13 +328,13 @@ function Center({
               defaultOrchestratorSurface={defaultOrchestratorSurface}
             />
           </ErrorBoundary>
-        ) : tab === 'workflows' ? (
+        ) : effectiveTab === 'workflows' ? (
           <WorkflowsList project={activeProject} events={wsEvents} />
-        ) : tab === 'agents' ? (
+        ) : effectiveTab === 'agents' ? (
           <AgentsList project={activeProject} events={wsEvents} />
-        ) : tab === 'files' ? (
+        ) : effectiveTab === 'files' ? (
           <FilesViewer project={activeProject} />
-        ) : tab === 'project-settings' ? (
+        ) : effectiveTab === 'project-settings' ? (
           <ProjectSettingsPanel
             project={activeProject}
             onProjectUpdated={onProjectUpdated}

@@ -43,7 +43,11 @@ import {
   getPtyActivityAt,
   recordPtyActivity,
 } from './pty-activity-store.ts';
-import { getAgentRunRow as defaultGetAgentRunRow } from '@pc/db';
+import {
+  getAgentRunRow as defaultGetAgentRunRow,
+  listNonTerminalAgentRuns as defaultListNonTerminalRuns,
+} from '@pc/db';
+import { applyAgentRunTerminalEffects } from './agent-run-terminal-effects.ts';
 
 /** What the reconciler needs from the host connection (host mode). The real
  *  `HostConnection` satisfies this; tests fake it. */
@@ -85,6 +89,12 @@ export interface AgentRunReconcilerDeps {
   applyHostEvent?: typeof applyAgentHostEvent;
   nudge?: typeof onWorkerTurnEndWithoutDeliverable;
   getAgentRun?: typeof defaultGetAgentRunRow;
+  /** Audit #3 — delivered-watchdog feeder + terminal door. Test seams. */
+  listNonTerminalRuns?: typeof defaultListNonTerminalRuns;
+  applyTerminalEffects?: typeof applyAgentRunTerminalEffects;
+  /** Grace after `deliveredAt` before the watchdog re-sends the complete-run
+   *  relay; local finalize follows after a second grace window. */
+  deliveredGraceMs?: number;
   /** Threaded into the sweeps (S3 envelope replay). Test seam. */
   replayEnvelopes?: AgentHostReattachDepsReplay;
 }
@@ -139,9 +149,13 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
   const notifiedRuns = new Set<string>();
   // P9 deliverable-skip nudge — strikes per run (1 = nudged, 2 = escalated).
   const nudgeStrikes = new Map<string, number>();
+  // Audit #3 — delivered-watchdog: runs whose complete-run relay was re-sent.
+  const deliveredRelayRetried = new Set<string>();
+  const deliveredGraceMs = deps.deliveredGraceMs ?? envInt('PC_DELIVERED_GRACE_MS', 60_000);
 
   let interval: NodeJS.Timeout | null = null;
   let subscribed = false;
+  let unsubscribeHostEvents: (() => void) | null = null;
 
   /** The ONE persistent host event consumer (rides the multiplexed
    *  HostConnection emitter, survives host respawns). Latency path only — the
@@ -149,7 +163,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
   function subscribeHostEvents(): void {
     if (subscribed || !deps.host.onEvent) return;
     subscribed = true;
-    deps.host.onEvent((event) => {
+    const maybeUnsubscribe = deps.host.onEvent((event) => {
       try {
         // PTY-activity heartbeat: run-chunk events arrive on every PTY byte
         // (spinner redraws, output, thinking UI). Record the timestamp (throttled
@@ -181,6 +195,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
         // orchestrator escalation. Never a kill.
         if (event.type === 'run-terminal') {
           nudgeStrikes.delete(event.run.runId);
+          deliveredRelayRetried.delete(event.run.runId);
         } else if (event.type === 'run-jsonl' && event.kind === 'jsonl-turn-end') {
           const row = (deps.getAgentRun ?? defaultGetAgentRunRow)(event.runId);
           if (row) {
@@ -207,6 +222,75 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
         warn(`[agent-runs] host event apply failed: ${(err as Error).message}`);
       }
     });
+    if (typeof maybeUnsubscribe === 'function') unsubscribeHostEvents = maybeUnsubscribe;
+  }
+
+  /** Audit #3 — the deliverable watchdog. A run whose deliverable landed
+   *  (`deliveredAt` stamped — a DURABLE positive receipt) but that is still
+   *  `running` past the grace window means the route's detached complete-run
+   *  relay was dropped AND the host's own terminal never arrived. Step 1:
+   *  re-send the relay (the host also kills the claude.exe child properly).
+   *  Step 2 (a further grace later): finalize locally through the ONE terminal
+   *  authority — completion on a positive receipt is exempt from HOLD, which
+   *  only forbids finalizing on ABSENCE of information. */
+  function sweepDeliveredUnfinalized(reachable: boolean): number {
+    const now = (deps.now ?? Date.now)();
+    let finalized = 0;
+    for (const row of (deps.listNonTerminalRuns ?? defaultListNonTerminalRuns)()) {
+      if (row.status !== 'running') continue; // FD-14: never touch paused
+      if (!row.deliveredAt) continue;
+      const sinceDelivered = now - row.deliveredAt;
+      if (sinceDelivered < deliveredGraceMs) continue;
+
+      if (!deliveredRelayRetried.has(row.id) && reachable) {
+        deliveredRelayRetried.add(row.id);
+        log(
+          `[agent-runs] delivered-watchdog: run ${row.id} delivered ${Math.round(sinceDelivered / 1000)}s ago, still running — re-sending complete-run`,
+        );
+        Promise.resolve(
+          deps.host.sendCommand({ type: 'complete-run', runId: row.id, result: '' }),
+        ).catch((err) =>
+          warn(
+            `[agent-runs] delivered-watchdog: complete-run re-send failed for ${row.id}: ${(err as Error).message}`,
+          ),
+        );
+        continue;
+      }
+
+      if (sinceDelivered < deliveredGraceMs * 2) continue;
+      log(
+        `[agent-runs] delivered-watchdog: run ${row.id} still unfinalized ${Math.round(sinceDelivered / 1000)}s after delivery — finalizing locally (completed)`,
+      );
+      (deps.applyTerminalEffects ?? applyAgentRunTerminalEffects)(
+        {
+          runId: row.id,
+          ccSessionId: row.ccSessionId,
+          podName: row.podName,
+          projectId: row.projectId,
+          dispatcherSessionId: row.dispatcherSessionId,
+          parentWorkItemId: row.parentWorkItemId,
+          worktreeDir: row.worktreeDir ?? '',
+          status: 'completed',
+          result: row.result ?? '',
+          completedAt: now,
+          startedAt: row.queuedAt,
+          workItemId: row.parentWorkItemId,
+          contractId: row.contractId,
+        },
+        {
+          activeRunRegistry: registry,
+          mailboxEnqueue: deps.mailboxEnqueue,
+          broadcast: deps.broadcast,
+          getAgentRun: deps.getAgentRun,
+          now: deps.now,
+          onError: deps.onTerminalError,
+          onMailboxEnqueued: deps.onMailboxEnqueued,
+        },
+      );
+      deliveredRelayRetried.delete(row.id);
+      finalized += 1;
+    }
+    return finalized;
   }
 
   async function tick(): Promise<ReconcileTickResult> {
@@ -264,6 +348,18 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
       ptyActivityAt: getPtyActivityAt,
     });
 
+    // Audit #3 — delivered-but-unfinalized watchdog (positive-receipt path;
+    // exempt from HOLD, see the sweep's doc comment). Isolated: a watchdog
+    // failure (e.g. transient DB error) must not take down the tick.
+    try {
+      const deliveredFinalized = sweepDeliveredUnfinalized(reachable);
+      if (deliveredFinalized > 0) {
+        log(`[agent-runs] delivered-watchdog: finalized=${deliveredFinalized}`);
+      }
+    } catch (err) {
+      warn(`[agent-runs] delivered-watchdog sweep failed: ${(err as Error).message}`);
+    }
+
     return { held, hostReconcile, stallWarn: stallWarnRes };
   }
 
@@ -317,6 +413,9 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
   function stop(): void {
     if (interval) clearInterval(interval);
     interval = null;
+    unsubscribeHostEvents?.();
+    unsubscribeHostEvents = null;
+    subscribed = false;
   }
 
   return { boot, tick, start, stop };

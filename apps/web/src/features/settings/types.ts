@@ -76,10 +76,18 @@ export interface AuthProbe {
   note: string;
 }
 
+export interface GitIdentityProbe {
+  name: string | null;
+  email: string | null;
+  configured: boolean;
+}
+
 export interface PreflightReport {
   claude: ClaudePreflight;
   auth: AuthProbe;
   git: DependencyProbe;
+  /** Optional in the type so a stale server build can't crash the wizard. */
+  gitIdentity?: GitIdentityProbe;
   soft: DependencyProbe[];
   ok: boolean;
 }

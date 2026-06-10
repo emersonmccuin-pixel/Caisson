@@ -1,14 +1,13 @@
 import { getJson, postJson, postJsonMethod } from '@/api/http';
 import type { ULID } from '@/features/projects/types';
 import type {
+  AgentContextDoc,
   CreatePodInput,
   ListAuditOptions,
   PatchPodInput,
   Pod,
   PodAuditEntry,
   PodBundle,
-  PodKnowledge,
-  PodKnowledgeKind,
   PodSecret,
 } from './types';
 
@@ -24,9 +23,9 @@ export const agentsApi = {
 
   getPod: (podId: ULID) =>
     getJson<{ ok: true } & PodBundle>(`/api/agents/pods/${podId}`).then(
-      ({ agent, knowledge, secrets }) => ({
+      ({ agent, contextDocs, secrets }) => ({
         agent,
-        knowledge,
+        contextDocs,
         secrets,
       }),
     ),
@@ -41,7 +40,7 @@ export const agentsApi = {
     ).then((r) => r.pod),
 
   clonePodToProject: (podId: ULID, projectId: ULID, name?: string) =>
-    postJson<{ ok: true; pod: Pod; copied: { knowledge: number } }>(
+    postJson<{ ok: true; pod: Pod; copied: { contextDocs: number } }>(
       `/api/agents/pods/${podId}/clone-to-project`,
       name ? { projectId, name } : { projectId },
     ).then((r) => ({ pod: r.pod, copied: r.copied })),
@@ -83,33 +82,30 @@ export const agentsApi = {
     }
   },
 
-  createKnowledge: (
-    podId: ULID,
-    input: { name: string; content?: string; kind?: PodKnowledgeKind },
-  ) =>
-    postJson<{ ok: true; knowledge: PodKnowledge }>(
-      `/api/agents/pods/${podId}/knowledge`,
+  createAgentDoc: (podId: ULID, input: { title: string; body?: string }) =>
+    postJson<{ ok: true; contextDoc: AgentContextDoc }>(
+      `/api/agents/pods/${podId}/context-docs`,
       input,
-    ).then((r) => r.knowledge),
+    ).then((r) => r.contextDoc),
 
-  patchKnowledge: (
+  patchAgentDoc: (
     podId: ULID,
-    knowledgeId: ULID,
-    patch: { name?: string; content?: string; kind?: PodKnowledgeKind },
+    docId: ULID,
+    patch: { title?: string; body?: string },
   ) =>
-    postJsonMethod<{ ok: true; knowledge: PodKnowledge }>(
-      `/api/agents/pods/${podId}/knowledge/${knowledgeId}`,
+    postJsonMethod<{ ok: true; contextDoc: AgentContextDoc }>(
+      `/api/agents/pods/${podId}/context-docs/${docId}`,
       patch,
       'PATCH',
-    ).then((r) => r.knowledge),
+    ).then((r) => r.contextDoc),
 
-  deleteKnowledge: async (podId: ULID, knowledgeId: ULID): Promise<void> => {
-    const res = await fetch(`/api/agents/pods/${podId}/knowledge/${knowledgeId}`, {
+  deleteAgentDoc: async (podId: ULID, docId: ULID): Promise<void> => {
+    const res = await fetch(`/api/agents/pods/${podId}/context-docs/${docId}`, {
       method: 'DELETE',
     });
     const data = (await res.json()) as { ok?: boolean; error?: string };
     if (!res.ok || data.ok === false) {
-      throw new Error(data.error ?? `delete knowledge → ${res.status}`);
+      throw new Error(data.error ?? `delete context doc → ${res.status}`);
     }
   },
 

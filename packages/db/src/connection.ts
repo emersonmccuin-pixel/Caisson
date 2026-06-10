@@ -20,6 +20,9 @@ export function getDb(): DB {
   _sqlite = new Database(join(dir, 'pc.sqlite'));
   _sqlite.pragma('journal_mode = WAL');
   _sqlite.pragma('foreign_keys = ON');
+  // Wait briefly on a locked DB instead of surfacing immediate SQLITE_BUSY
+  // when a second writer (tooling, a dev shell) touches the file.
+  _sqlite.pragma('busy_timeout = 5000');
   _db = drizzle(_sqlite, { schema });
   return _db;
 }

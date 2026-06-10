@@ -390,8 +390,22 @@
     {
       "idx": 55,
       "version": "6",
-      "when": 1781200000000,
-      "tag": "0055_migrate_inline_mcp_to_registry",
+      "when": 1782980400000,
+      "tag": "0055_unify_context_docs",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "6",
+      "when": 1782980500000,
+      "tag": "0056_context_doc_reads",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "6",
+      "when": 1782980600000,
+      "tag": "0057_migrate_inline_mcp_to_registry",
       "breakpoints": true
     }
   ]

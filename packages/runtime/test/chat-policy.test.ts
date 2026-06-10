@@ -7,6 +7,7 @@ import { test } from "node:test";
 
 import type { JsonlEvent } from "../src/jsonl-tailer.ts";
 import {
+  CC_INTERNAL_USER_TEXT_RE,
   INTERNAL_TOOLS,
   ensureSystemTurnMarker,
   parseSystemTurnMarker,
@@ -16,6 +17,11 @@ import {
 
 const FIXTURES: Array<{ label: string; ev: JsonlEvent }> = [
   { label: "user", ev: { kind: "jsonl-user", text: "hi" } },
+  { label: "user (isMeta)", ev: { kind: "jsonl-user", text: "injected", isMeta: true } },
+  { label: "user (compact summary)", ev: { kind: "jsonl-user", text: "This session is being continued…", isCompactSummary: true } },
+  { label: "user (command echo)", ev: { kind: "jsonl-user", text: "<command-name>/compact</command-name>\n<command-message>compact</command-message>" } },
+  { label: "user (local stdout)", ev: { kind: "jsonl-user", text: "<local-command-stdout>Compacted</local-command-stdout>" } },
+  { label: "user (caveat)", ev: { kind: "jsonl-user", text: "<local-command-caveat>Caveat: local commands</local-command-caveat>" } },
   { label: "turn-end (text)", ev: { kind: "jsonl-turn-end", text: "done", stopReason: null } },
   { label: "turn-end (empty)", ev: { kind: "jsonl-turn-end", text: "", stopReason: null } },
   { label: "tool-call (visible)", ev: { kind: "jsonl-tool-call", toolUseId: "t1", name: "Bash", input: {} } },
@@ -47,6 +53,9 @@ const FIXTURES: Array<{ label: string; ev: JsonlEvent }> = [
 
 function suppressedToday(ev: JsonlEvent): boolean {
   switch (ev.kind) {
+    case "jsonl-user":
+      return ev.isMeta === true || ev.isCompactSummary === true ||
+        CC_INTERNAL_USER_TEXT_RE.test(ev.text ?? "");
     case "jsonl-turn-end": return !ev.text;
     case "jsonl-tool-call": return INTERNAL_TOOLS.has(ev.name);
     case "jsonl-usage": return (!ev.speed || ev.speed === "standard") && !ev.cacheMissReason;
@@ -131,6 +140,27 @@ test("stripSystemTurnMarkerLine: drops only the marker line", () => {
   assert.equal(stripSystemTurnMarkerLine("[pc:system kind=x]\n\nline1"), "line1");
   assert.equal(stripSystemTurnMarkerLine("[pc:system kind=x]"), "");
   assert.equal(stripSystemTurnMarkerLine("plain text\nstays"), "plain text\nstays");
+});
+
+test("rowPolicy: CC-internal user rows are hidden, human text survives", () => {
+  // flags
+  assert.equal(rowPolicy({ kind: "jsonl-user", text: "x", isMeta: true }).visibility, "hidden");
+  assert.equal(rowPolicy({ kind: "jsonl-user", text: "This session is being continued…", isCompactSummary: true }).visibility, "hidden");
+  // XML plumbing wrappers — leading whitespace tolerated
+  for (const text of [
+    "<command-name>/compact</command-name>",
+    "  <local-command-stdout>ok</local-command-stdout>",
+    "<local-command-caveat>Caveat</local-command-caveat>",
+    "<bash-stdout>ls output</bash-stdout>",
+    "<tick/>",
+    "<task-notification>\n<task-id>t1</task-id>",
+    "<system-reminder>bg</system-reminder>",
+  ]) {
+    assert.deepEqual(rowPolicy({ kind: "jsonl-user", text }), { visibility: "hidden", lane: "internal" }, text);
+  }
+  // a human pasting XML mid-message (or unknown tags) still renders as chat
+  assert.equal(rowPolicy({ kind: "jsonl-user", text: "look at this: <command-name>x</command-name>" }).visibility, "shown");
+  assert.equal(rowPolicy({ kind: "jsonl-user", text: "<div>my html question</div>" }).visibility, "shown");
 });
 
 test("rowPolicy: marked user rows are system-lane and SHOWN; plain user rows stay chat-lane", () => {

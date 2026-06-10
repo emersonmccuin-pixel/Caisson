@@ -172,10 +172,14 @@ export class LowLevelSpawn extends EventEmitter {
   private resumeSummaryConfirmSent = false;
   private onboardingThemeSent = false;
   private onboardingSecuritySent = false;
+  private bypassPermissionsConfirmSent = false;
   private readonly input: LowLevelSpawnInput;
   private readonly gate: ReadyGate;
   private tailer: JsonlTailer | null = null;
   private jsonlPollTimer: NodeJS.Timeout | null = null;
+  /** Set the moment kill() is called — stops deferred tailer attaches from
+   *  re-arming the JSONL poll timer for a dying spawn. */
+  private killRequested = false;
   private transcriptStream: WriteStream | null = null;
   /** Resolved at start(). Stored so callers can introspect post-spawn. */
   private resolvedJsonlPath: string | null = null;
@@ -352,6 +356,7 @@ export class LowLevelSpawn extends EventEmitter {
   /** Kill the child. Sends Ctrl-C first, then SIGKILL after a grace window
    *  so CC's SessionEnd hook has time to fire its final JSONL write. */
   kill(graceMs = 500): void {
+    this.killRequested = true;
     if (this.readyTimer) {
       clearTimeout(this.readyTimer);
       this.readyTimer = null;
@@ -492,6 +497,27 @@ export class LowLevelSpawn extends EventEmitter {
       }
     }
 
+    // Auto-accept CC's bypass-permissions WARNING dialog (CC ≥2.1.170; spawns
+    // with --dangerously-skip-permissions hit it when the accepted flag is
+    // absent). "No, exit" is PRE-selected, so a bare Enter kills the session —
+    // press DOWN to "Yes, I accept" first. Defense-in-depth: the session
+    // settings template seeds skipDangerousModePermissionPrompt, so this
+    // should never fire for a PC-rendered settings file; it covers spawns
+    // whose --settings input omits the flag. (PR #4, Courtney Fohrman.)
+    // CC source: src/components/BypassPermissionsModeDialog.tsx +
+    // interactiveHelpers.tsx showSetupScreens (verified 2026-06-10).
+    if (
+      !this.bypassPermissionsConfirmSent &&
+      looksLikeBypassPermissionsDialog(this.rawBuffer)
+    ) {
+      this.bypassPermissionsConfirmSent = true;
+      try {
+        this.child?.write('\x1b[B\r');
+      } catch {
+        /* exited mid-press */
+      }
+    }
+
     this.gate.feedChunk(data);
   }
 
@@ -563,7 +589,10 @@ export class LowLevelSpawn extends EventEmitter {
     if (!path) return;
 
     const tryAttach = () => {
-      if (this.tailer || this.state === 'exited') return;
+      // killRequested guards the window where kill() already cleared the poll
+      // timer but the exit hasn't landed yet — a queued tryAttach would
+      // otherwise re-arm the timer and keep polling for a dead spawn.
+      if (this.tailer || this.state === 'exited' || this.killRequested) return;
       if (existsSync(path)) {
         let startLine = 0;
         if (this.input.jsonlStartLine !== undefined) {
@@ -572,11 +601,19 @@ export class LowLevelSpawn extends EventEmitter {
           try {
             const existing = readFileSync(path, 'utf-8');
             startLine = existing.split('\n').filter(Boolean).length;
-          } catch {
-            // Best-effort. Falling back to 0 inherits the replay bug on this
-            // run but doesn't hard-fail; surfaces as a premature complete()
-            // that the user can re-dispatch around.
-            startLine = 0;
+          } catch (err) {
+            // NEVER fall back to line 0: replaying the prior conversation
+            // re-emits old user rows + turn-ends (duplicate chat rows on the
+            // wire, a false resume receipt). A read failure right after
+            // existsSync()=true is transient (AV lock, vanish race) — retry on
+            // the poll cadence; a persistent failure leaves the run without a
+            // tailer and the stall ladder fails it with a typed reason.
+            ptyLog('jsonl-resume-read-failed', {
+              path,
+              error: (err as Error).message,
+            });
+            this.jsonlPollTimer = setTimeout(tryAttach, 250);
+            return;
           }
         }
         this.tailer = new JsonlTailer({ filePath: path, startLine });
@@ -635,6 +672,21 @@ export function looksLikeOnboardingSecurityStep(rawBuffer: string): boolean {
     .replace(/\s+/g, '')
     .toLowerCase();
   return compact.includes('pressentertocontinue');
+}
+
+/** True when the raw PTY buffer is showing CC's bypass-permissions WARNING
+ *  dialog ("WARNING: Claude Code running in Bypass Permissions mode" with a
+ *  "No, exit" / "Yes, I accept" Select). Requires BOTH the title and the
+ *  accept option so ordinary chat mentioning bypass permissions can't trip it.
+ *  Pure function so the match is testable in isolation.
+ *  CC source: src/components/BypassPermissionsModeDialog.tsx (verified 2026-06-10). */
+export function looksLikeBypassPermissionsDialog(rawBuffer: string): boolean {
+  const compact = collapseAnsiToWhitespace(rawBuffer)
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  return (
+    compact.includes('bypasspermissionsmode') && compact.includes('yes,iaccept')
+  );
 }
 
 export function buildLowLevelSpawnArgs(

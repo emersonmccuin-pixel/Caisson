@@ -336,6 +336,47 @@ test('pc_attach_to_work_item success: emits raw body; posts attachment payload',
   });
 });
 
+// pc-pty-chat-377 — cross-project reads via targetProjectId
+test('pc_get_work_item with targetProjectId: uses target project path, not current project', async () => {
+  const serverBody = JSON.stringify({ ok: true, workItem: { id: 'WI2', projectId: 'P02' } });
+  const { ctx, calls } = makeFakeContext({ responder: () => ok(serverBody) });
+  const res = await handleWorkItemTool('pc_get_work_item', { id: 'WI2', targetProjectId: 'P02' }, ctx);
+  assert.ok(res);
+  assert.equal(res!.content[0].text, serverBody);
+  assert.equal(res!.content[1].text, RICH_LINK_HINT);
+  assert.deepEqual(calls, [{ method: 'GET', path: '/api/projects/P02/work-items/WI2' }] as RecordedCall[]);
+});
+
+test('pc_get_work_item with targetProjectId slug: passes slug in path (server resolves)', async () => {
+  const { ctx, calls } = makeFakeContext({ responder: () => ok('{"ok":true,"workItem":{"id":"WI3"}}') });
+  await handleWorkItemTool('pc_get_work_item', { id: 'WI3', targetProjectId: 'my-project' }, ctx);
+  assert.equal(calls[0].path, '/api/projects/my-project/work-items/WI3');
+});
+
+test('pc_get_work_item without targetProjectId: still uses current project path', async () => {
+  const { ctx, calls } = makeFakeContext({ responder: () => ok('{}') });
+  await handleWorkItemTool('pc_get_work_item', { id: 'WI1' }, ctx);
+  assert.equal(calls[0].path, '/api/projects/P01/work-items/WI1');
+});
+
+test('pc_search_work_items with targetProjectId: uses target project path', async () => {
+  const serverBody = JSON.stringify({ ok: true, results: [{ id: 'WI5', title: 'hello' }] });
+  const { ctx, calls } = makeFakeContext({ responder: () => ok(serverBody) });
+  const res = await handleWorkItemTool('pc_search_work_items', { query: 'hello', targetProjectId: 'P02' }, ctx);
+  assert.equal(res!.content[0].text, serverBody);
+  assert.ok(calls[0].path.startsWith('/api/projects/P02/work-items/search?q=hello'));
+});
+
+test('pc_search_work_items with targetProjectId + filters: all forwarded', async () => {
+  const { ctx, calls } = makeFakeContext({ responder: () => ok('{}') });
+  await handleWorkItemTool('pc_search_work_items', { query: 'foo', targetProjectId: 'P02', area_id: 'A1', open: true }, ctx);
+  const url = new URL('http://x' + calls[0].path);
+  assert.ok(calls[0].path.startsWith('/api/projects/P02/'));
+  assert.equal(url.searchParams.get('q'), 'foo');
+  assert.equal(url.searchParams.get('areaId'), 'A1');
+  assert.equal(url.searchParams.get('open'), '1');
+});
+
 // ── project-config family ──────────────────────────────────────────────────
 
 test('pc_list_stages success: projects stages into ok-wrapped JSON', async () => {

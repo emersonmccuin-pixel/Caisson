@@ -27,8 +27,10 @@ export type {
 export {
   ACCEPTANCE_PREDICATE_KINDS,
   EXPECTED_OUTPUT_KINDS,
+  PREDICATE_DECIDABILITY,
   VERIFICATION_STATUSES,
   VERIFICATION_TIERS,
+  isDecidablePredicate,
   isVerificationTier,
 } from './contract.ts';
 // First-class contract v2 union. Also available namespaced as ContractV2.* for
@@ -184,6 +186,7 @@ export type {
 } from './agent-file.ts';
 export { parseAgentFile, serializeAgentFile } from './agent-file.ts';
 export type {
+  AgentContextDoc,
   AgentMcpAttachmentRow,
   McpDiscoveryStatus,
   McpServerRegistryRow,
@@ -191,8 +194,6 @@ export type {
   PodAuditActor,
   PodAuditField,
   PodAuditRow,
-  PodKnowledgeKind,
-  PodKnowledgeRow,
   PodMcpServerConfig,
   PodMcpServerRow,
   PodOrigin,
@@ -204,7 +205,6 @@ export {
   MCP_DISCOVERY_STATUSES,
   POD_AUDIT_ACTORS,
   POD_AUDIT_FIELDS,
-  POD_KNOWLEDGE_KINDS,
   POD_SCOPES,
 } from './pod.ts';
 export type { SubagentFailureCause, SubagentFailureSignal } from './subagent-failure.ts';

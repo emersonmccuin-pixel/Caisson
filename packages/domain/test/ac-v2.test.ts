@@ -142,36 +142,36 @@ test('action derives tool_called (+ pending_ask_created for the ask tools)', () 
   assert.deepEqual(other, [{ kind: 'tool_called', name: 'pc_create_work_item', min_count: 3 }]);
 });
 
-test('payload derives schema_valid; answer derives report_contains', () => {
+test('payload derives schema_valid; answer.must_address derives no predicates (guidance only, pc-pty-chat-371)', () => {
   const schema = { type: 'object' as const };
   assert.deepEqual(deriveAcceptanceCriteriaV2({ kind: 'payload', schema }), [
     { kind: 'schema_valid', schema },
   ]);
+  // must_address is agent guidance — no longer auto-emitted as report_contains.
+  // An answer+must_address-only contract derives an empty set; without
+  // trust_end_turn the server escalates it to review (honest, not auto-pass).
   assert.deepEqual(
     deriveAcceptanceCriteriaV2({ kind: 'answer', must_address: ['risk', 'cost'] }),
-    [
-      { kind: 'report_contains', pattern: 'risk' },
-      { kind: 'report_contains', pattern: 'cost' },
-    ],
+    [],
   );
 });
 
-test('prose AC source tracks the store (014c; M5 — ☠ work_item_body)', () => {
-  // attachment → asserts the doc landed (by name) AND searches the body+
-  // attachment corpus (body_contains spans both). Default name: deliverable.md.
+test('prose AC source tracks the store (014c; M5 — ☠ work_item_body); sections are guidance only (pc-pty-chat-371)', () => {
+  // sections[] is agent guidance — no longer auto-emitted as body_contains/report_contains.
+  // attachment → asserts the doc landed (by name). Default name: deliverable.md.
   assert.deepEqual(
     deriveAcceptanceCriteriaV2({ kind: 'prose', sections: ['Goal'], store: 'attachment' }),
-    [{ kind: 'attachments_present', names: ['deliverable.md'] }, { kind: 'body_contains', pattern: 'Goal' }],
+    [{ kind: 'attachments_present', names: ['deliverable.md'] }],
   );
   // attachment with a doc_type → <doc_type>.md.
   assert.deepEqual(
     deriveAcceptanceCriteriaV2({ kind: 'prose', sections: ['Goal'], store: 'attachment', doc_type: 'spec' }),
-    [{ kind: 'attachments_present', names: ['spec.md'] }, { kind: 'body_contains', pattern: 'Goal' }],
+    [{ kind: 'attachments_present', names: ['spec.md'] }],
   );
-  // contract → the contract report corpus.
+  // contract + sections only → empty (sections are guidance; no min_chars).
   assert.deepEqual(
     deriveAcceptanceCriteriaV2({ kind: 'prose', sections: ['Goal'], store: 'contract' }),
-    [{ kind: 'report_contains', pattern: 'Goal' }],
+    [],
   );
   // repo_file → the file must exist + be non-trivial (min_chars → min_size_bytes,
   // default 1). Section text isn't loaded from disk, so no content predicate.

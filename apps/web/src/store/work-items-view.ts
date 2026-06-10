@@ -43,9 +43,9 @@ interface WorkItemsViewState {
   /** "Parent items only" toggle (kept for potential future surfaces). */
   showTopLevelOnly: boolean;
   setShowTopLevelOnly: (value: boolean) => void;
-  /** Top-level Work tab view: Areas grid or Tasks (table/kanban). Default: areas. */
-  workView: 'areas' | 'tasks';
-  setWorkView: (view: 'areas' | 'tasks') => void;
+  /** Top-level Work tab view: Areas grid, Focus tree, or Tasks (table/kanban). Default: areas. */
+  workView: 'areas' | 'tasks' | 'focus';
+  setWorkView: (view: 'areas' | 'tasks' | 'focus') => void;
   /** Within Tasks: active surface. Default: table. */
   taskView: 'table' | 'kanban';
   setTaskView: (view: 'table' | 'kanban') => void;

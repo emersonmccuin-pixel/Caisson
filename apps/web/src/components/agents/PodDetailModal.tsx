@@ -99,7 +99,7 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pod]);
 
-  // Load the bundle (knowledge + secrets + mcp) once + on baseline-id change.
+  // Load the bundle (context docs + secrets + mcp) once + on baseline-id change.
   useEffect(() => {
     let cancelled = false;
     setBundleLoading(true);
@@ -214,6 +214,7 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
       } else {
         setError(err.message);
       }
+    } finally {
       setBusy(false);
     }
   }

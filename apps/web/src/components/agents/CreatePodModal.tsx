@@ -382,6 +382,7 @@ function ManualForm({
       onCreated(pod);
     } catch (err) {
       setError((err as Error).message);
+    } finally {
       setBusy(false);
     }
   }

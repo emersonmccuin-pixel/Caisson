@@ -24,6 +24,10 @@ export type JsonlEvent =
        *  (e.g. a webhook channel event written by PC itself). Read-only decode —
        *  the field is already on-disk; the tailer just surfaces it. */
       isMeta?: boolean;
+      /** True when this row is CC's post-compaction continuation summary
+       *  (`isCompactSummary: true` on disk) — machine-written, never typed by
+       *  the user. The compact boundary divider is the user-facing signal. */
+      isCompactSummary?: boolean;
       /** Channel / origin metadata. `kind === 'channel'` identifies messages
        *  injected via the PC channel server rather than typed by the user. */
       origin?: { kind?: string; server?: string } | null;
@@ -392,7 +396,12 @@ export class JsonlTailer extends EventEmitter {
       // User prompt: content is a plain string.
       if (typeof content === 'string') {
         if (content) {
-          this.emit('event', { kind: 'jsonl-user', text: content } satisfies JsonlEvent);
+          this.emit('event', {
+            kind: 'jsonl-user',
+            text: content,
+            ...(entry.isMeta === true ? { isMeta: true } : {}),
+            ...(entry.isCompactSummary === true ? { isCompactSummary: true } : {}),
+          } satisfies JsonlEvent);
         }
         return;
       }

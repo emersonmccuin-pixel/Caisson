@@ -23,6 +23,7 @@ import {
 } from '@/features/live/hooks';
 import { projectChangedLiveEventFromUnknown } from '@/features/projects/live-events';
 import { useAllProjectsWs } from '@/hooks/use-all-projects-ws';
+import { deriveActiveSessionProjectIds } from '@/hooks/live-session-project-ids';
 import { useProjectUnread } from '@/hooks/use-project-unread';
 import { useProjectWs } from '@/hooks/use-project-ws';
 import { useDing } from '@/hooks/use-ding';
@@ -195,6 +196,10 @@ export default function App() {
     activeEvents: ws.events,
     backgroundEvents: backgroundWs.events,
   });
+  const liveSessionProjectIds = useMemo(
+    () => deriveActiveSessionProjectIds(ws.events, backgroundWs.events),
+    [ws.events, backgroundWs.events],
+  );
   useDing({
     unreadProjectIds,
     activeProjectId: activeProject?.id ?? null,
@@ -547,6 +552,7 @@ export default function App() {
           onProjectDeleted={handleProjectDeleted}
           onProjectReorder={handleProjectReorder}
           unreadProjectIds={unreadProjectIds}
+          liveSessionProjectIds={liveSessionProjectIds}
           wsEvents={ws.events}
           wsSubscribeRawTerminal={ws.subscribeRawTerminal}
           wsAggregates={ws.aggregates}

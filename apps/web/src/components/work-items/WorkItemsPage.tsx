@@ -1,6 +1,8 @@
-// Work page: segmented sub-nav — "Areas" (grid) · "Tasks" (Table/Kanban).
+// Work page: segmented sub-nav — "Areas" (grid) · "Focus" · "Tasks" (Table/Kanban).
 // Default = Areas. The Tasks surface has a left Areas filter rail and a
 // Table|Kanban view switcher injected into the toolbar's rightSlot.
+// Focus (pc-pty-chat-355) shows all in-focus items across all projects,
+// nested: project → area → items.
 
 import { useEffect } from 'react';
 
@@ -9,14 +11,17 @@ import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useWorkItemsView } from '@/store/work-items-view';
 import { KanbanBoard } from '@/components/KanbanBoard';
 import { AreasTab } from './AreasTab';
+import { FocusTab } from './FocusTab';
 import { WorkItemsTable } from './WorkItemsTable';
 
 interface WorkItemsPageProps {
   project: Project;
+  /** All projects — required by the Focus tab for cross-project display. */
+  projects: Project[];
   events: WsEnvelope[];
 }
 
-export function WorkItemsPage({ project, events }: WorkItemsPageProps) {
+export function WorkItemsPage({ project, projects, events }: WorkItemsPageProps) {
   const setAreaFilter = useWorkItemsView((s) => s.setAreaFilter);
   const workView = useWorkItemsView((s) => s.workView);
   const setWorkView = useWorkItemsView((s) => s.setWorkView);
@@ -71,6 +76,9 @@ export function WorkItemsPage({ project, events }: WorkItemsPageProps) {
         <NavButton active={workView === 'areas'} onClick={() => setWorkView('areas')}>
           Areas
         </NavButton>
+        <NavButton active={workView === 'focus'} onClick={() => setWorkView('focus')}>
+          Focus
+        </NavButton>
         <NavButton active={workView === 'tasks'} onClick={() => setWorkView('tasks')}>
           Tasks
         </NavButton>
@@ -83,6 +91,8 @@ export function WorkItemsPage({ project, events }: WorkItemsPageProps) {
           ) : (
             <WorkItemsTable project={project} events={events} rightSlot={viewSwitcher} />
           )
+        ) : workView === 'focus' ? (
+          <FocusTab projects={projects} />
         ) : (
           <AreasTab project={project} events={events} />
         )}

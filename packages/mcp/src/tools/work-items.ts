@@ -559,12 +559,22 @@ export async function handleWorkItemTool(
     case 'pc_get_work_item': {
       const id = typeof args.id === 'string' ? args.id : '';
       const includeArchived = args.includeArchived === true;
+      const targetProjectId =
+        typeof args.targetProjectId === 'string' && args.targetProjectId.trim().length > 0
+          ? args.targetProjectId.trim()
+          : null;
       if (!id) {
         return { content: [{ type: 'text', text: 'pc_get_work_item: id required' }], isError: true };
       }
       try {
         const suffix = `work-items/${encodeURIComponent(id)}${includeArchived ? '?includeArchived=1' : ''}`;
-        const res = await ctx.client.getWorkItem(ctx.projectPath(suffix));
+        // Cross-project read: when targetProjectId is set use that project's route
+        // instead of the current project's. Fixes the 404 when a ULID/callsign
+        // belongs to another project (the route's project-scope guard returns null).
+        const getPath = targetProjectId
+          ? `/api/projects/${targetProjectId}/${suffix}`
+          : ctx.projectPath(suffix);
+        const res = await ctx.client.getWorkItem(getPath);
         if (res.status >= 200 && res.status < 300) {
           return ctx.withRichLinkHint(res.body);
         }
@@ -631,12 +641,19 @@ export async function handleWorkItemTool(
           isError: true,
         };
       }
+      const targetProjectId =
+        typeof args.targetProjectId === 'string' && args.targetProjectId.trim().length > 0
+          ? args.targetProjectId.trim()
+          : null;
       const q = new URLSearchParams({ q: query });
       if (typeof args.area_id === 'string' && args.area_id) q.set('areaId', args.area_id);
       if (typeof args.status === 'string' && args.status) q.set('status', args.status);
       if (args.open === true) q.set('open', '1');
       try {
-        const res = await ctx.getServer(ctx.projectPath(`work-items/search?${q.toString()}`));
+        const searchPath = targetProjectId
+          ? `/api/projects/${targetProjectId}/work-items/search?${q.toString()}`
+          : ctx.projectPath(`work-items/search?${q.toString()}`);
+        const res = await ctx.getServer(searchPath);
         if (res.status >= 200 && res.status < 300) {
           return ctx.withRichLinkHint(res.body);
         }
@@ -669,6 +686,30 @@ export async function handleWorkItemTool(
       } catch (err) {
         return {
           content: [{ type: 'text', text: `pc_list_projects failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
+    case 'pc_list_waiting_on_you': {
+      // Cross-project read: all pending asks + workflow human-review gates +
+      // actionable inbox items, grouped by project.
+      try {
+        const res = await ctx.getServer('/api/waiting-on-you');
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [
+            { type: 'text', text: `pc_list_waiting_on_you failed (${res.status}): ${res.body}` },
+          ],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [
+            { type: 'text', text: `pc_list_waiting_on_you failed: ${(err as Error).message}` },
+          ],
           isError: true,
         };
       }

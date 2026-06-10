@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {
   looksLikeOnboardingThemePicker,
   looksLikeOnboardingSecurityStep,
+  looksLikeBypassPermissionsDialog,
 } from '../src/low-level-spawn.ts';
 
 // ── looksLikeOnboardingThemePicker ──────────────────────────────────────────
@@ -130,4 +131,53 @@ test('security-step: does not fire on output with "enter" but not the full phras
 
 test('security-step: does not fire on empty buffer', () => {
   assert.equal(looksLikeOnboardingSecurityStep(''), false);
+});
+
+// ── looksLikeBypassPermissionsDialog ────────────────────────────────────────
+//
+// CC source: src/components/BypassPermissionsModeDialog.tsx (CC ≥2.1.170)
+// Dialog title: "WARNING: Claude Code running in Bypass Permissions mode"
+// Select options: "1. No, exit" (pre-selected) / "2. Yes, I accept"
+
+const BYPASS_DIALOG_SIMPLE =
+  '\x1b[31m WARNING: Claude Code running in Bypass Permissions mode\x1b[0m\r\n' +
+  ' In Bypass Permissions mode, Claude Code will not ask for your approval\r\n' +
+  ' before running potentially dangerous commands.\r\n' +
+  '  \x1b[36m❯\x1b[0m 1. No, exit\r\n' +
+  '    2. Yes, I accept\r\n';
+
+// Title with CC's cursor-right letter-splitting quirk.
+const BYPASS_DIALOG_CURSOR_SPLIT =
+  'B\x1b[1Cy\x1b[1Cp\x1b[1Ca\x1b[1Cs\x1b[1Cs\x1b[1C \x1b[1CP\x1b[1Ce\x1b[1Cr' +
+  '\x1b[1Cm\x1b[1Ci\x1b[1Cs\x1b[1Cs\x1b[1Ci\x1b[1Co\x1b[1Cn\x1b[1Cs\x1b[1C ' +
+  '\x1b[1Cm\x1b[1Co\x1b[1Cd\x1b[1Ce\r\n' +
+  '2. Y\x1b[1Ce\x1b[1Cs\x1b[1C,\x1b[1C \x1b[1CI\x1b[1C \x1b[1Ca\x1b[1Cc\x1b[1Cc\x1b[1Ce\x1b[1Cp\x1b[1Ct';
+
+test('bypass-dialog: fires on full buffer', () => {
+  assert.equal(looksLikeBypassPermissionsDialog(BYPASS_DIALOG_SIMPLE), true);
+});
+
+test('bypass-dialog: fires when phrases are cursor-right split', () => {
+  assert.equal(looksLikeBypassPermissionsDialog(BYPASS_DIALOG_CURSOR_SPLIT), true);
+});
+
+test('bypass-dialog: needs BOTH title and accept option (title alone is chat-mentionable)', () => {
+  assert.equal(
+    looksLikeBypassPermissionsDialog('Running in Bypass Permissions mode today.'),
+    false,
+  );
+  assert.equal(looksLikeBypassPermissionsDialog('Yes, I accept the plan.'), false);
+});
+
+test('bypass-dialog: does not fire on trust dialog', () => {
+  const trust =
+    'Quick safety check\r\n Is this a project you created or downloaded?\r\n' +
+    ' 1. Yes, I trust this folder\r\n' +
+    'Enter to confirm · Esc to cancel';
+  assert.equal(looksLikeBypassPermissionsDialog(trust), false);
+});
+
+test('bypass-dialog: does not fire on theme-picker or empty buffer', () => {
+  assert.equal(looksLikeBypassPermissionsDialog(THEME_PICKER_SIMPLE), false);
+  assert.equal(looksLikeBypassPermissionsDialog(''), false);
 });

@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" UserPromptSubmit"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" UserPromptSubmit"
           }
         ]
       }
@@ -32,7 +32,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/ask-intercept.cjs\""
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/ask-intercept.cjs\""
           }
         ]
       },
@@ -41,11 +41,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/path-guard.cjs\" gate-workflow"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/path-guard.cjs\" gate-workflow"
           },
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/path-guard.cjs\" bind"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/path-guard.cjs\" bind"
           }
         ]
       },
@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/path-guard.cjs\" enforce"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/path-guard.cjs\" enforce"
           }
         ]
       },
@@ -62,7 +62,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" PreToolUse"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" PreToolUse"
           }
         ]
       }
@@ -73,7 +73,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/path-guard.cjs\" unbind"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/path-guard.cjs\" unbind"
           }
         ]
       },
@@ -81,7 +81,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" PostToolUse"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" PostToolUse"
           }
         ]
       }
@@ -91,7 +91,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" Stop"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" Stop"
           }
         ]
       }
@@ -101,7 +101,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" SubagentStop"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" SubagentStop"
           }
         ]
       }
@@ -111,7 +111,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" SessionEnd"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" SessionEnd"
           }
         ]
       }
@@ -121,7 +121,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" StopFailure"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" StopFailure"
           }
         ]
       }
@@ -131,7 +131,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" Notification"
+            "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/event-capture.cjs\" Notification"
           }
         ]
       }
@@ -139,6 +139,6 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "node \"{{PROJECT_FOLDER}}/.claude/hooks/pc-statusline.cjs\""
+    "command": "{{NODE_CMD}} \"{{PROJECT_FOLDER}}/.claude/hooks/pc-statusline.cjs\""
   }
 }

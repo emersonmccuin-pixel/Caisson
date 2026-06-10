@@ -24,6 +24,7 @@ const WORK_ITEM: WorkItemDto = {
   deletedAt: null,
   isWorkflowRoot: false,
   areaId: null,
+  focusedAt: null,
 };
 
 function transportReturning(res: ServerResponse): TypedClientTransport {

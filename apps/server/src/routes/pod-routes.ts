@@ -28,27 +28,29 @@ import {
   bumpAgentRev,
   cloneAgentToProject,
   createAgent,
-  createKnowledge,
+  createContextDoc,
   createSecret,
-  deleteKnowledge,
   deleteSecret,
   deleteMcpAttachmentByPair,
   getAgentById,
-  getKnowledge,
+  getContextDoc,
+  getContextDocReadStats,
   getMcpServerRegistry,
   getSecret,
   listAgentAudit,
   listAgents,
+  listContextDocsForScope,
   listMcpAttachmentsForAgent,
   listProjectVisibleAgents,
-  listKnowledge,
   listSecrets,
   promoteAgentToGlobal,
   softDeleteAgent,
+  softDeleteContextDoc,
   updateAgent,
-  updateKnowledge,
+  updateContextDoc,
   upsertMcpAttachment,
 } from '@pc/db';
+import type { ContextDocRow } from '@pc/db';
 import type {
   AgentEffort,
   AgentMcpAttachmentRow,
@@ -56,17 +58,12 @@ import type {
   PodAgentRow,
   PodAuditActor,
   PodAuditField,
-  PodKnowledgeKind,
-  PodKnowledgeRow,
   PodScope,
   PodSecretRow,
   ULID,
 } from '@pc/domain';
-import {
-  POD_AUDIT_ACTORS,
-  POD_AUDIT_FIELDS,
-  POD_KNOWLEDGE_KINDS,
-} from '@pc/domain';
+import { POD_AUDIT_ACTORS, POD_AUDIT_FIELDS } from '@pc/domain';
+import { recordToolReadFromQuery } from '../features/context-docs/routes.ts';
 import { announcePod, announcePodDeleted } from '../services/pod-writer.ts';
 
 export type PodMutationKind = 'created' | 'updated' | 'deleted';
@@ -113,10 +110,32 @@ function publicSecret(row: PodSecretRow): PublicPodSecret {
   };
 }
 
+/** Context doc + its read stats (Phase B/0056). `readCount === 0` with
+ *  `lastReadAt === null` renders as "never read" in the UI. */
+export type ContextDocWithReadStats = ContextDocRow & {
+  readCount: number;
+  lastReadAt: number | null;
+};
+
 export interface PodBundle {
   agent: PodAgentRow;
-  knowledge: PodKnowledgeRow[];
+  contextDocs: ContextDocWithReadStats[];
   secrets: PublicPodSecret[];
+}
+
+/** Join read receipts onto a doc list. Best-effort — stats default to
+ *  never-read if the receipt query fails. */
+function withReadStats(docs: ContextDocRow[]): ContextDocWithReadStats[] {
+  let stats = new Map<ULID, { readCount: number; lastReadAt: number }>();
+  try {
+    stats = getContextDocReadStats(docs.map((d) => d.id));
+  } catch {
+    /* best-effort */
+  }
+  return docs.map((d) => {
+    const s = stats.get(d.id);
+    return { ...d, readCount: s?.readCount ?? 0, lastReadAt: s?.lastReadAt ?? null };
+  });
 }
 
 /** Assemble the full bundle for the modal mount. Lives next to the routes so
@@ -126,12 +145,12 @@ export function getPodBundle(agentId: ULID): PodBundle | null {
   if (!agent) return null;
   return {
     agent,
-    knowledge: listKnowledge({ agentId: agent.id, scope: agent.scope }),
+    contextDocs: withReadStats(listContextDocsForScope({ scope: { agentId: agent.id } })),
     secrets: listSecrets({ agentId: agent.id, scope: agent.scope }).map(publicSecret),
   };
 }
 
-/** Effort + audit-field + audit-actor + knowledge-kind validators. Routes
+/** Effort + audit-field + audit-actor validators. Routes
  *  use these to reject unknown enum strings before hitting the repo. */
 const KNOWN_EFFORTS: ReadonlySet<AgentEffort> = new Set([
   'low',
@@ -220,14 +239,6 @@ function asAuditField(v: unknown): PodAuditField | undefined {
     return v as PodAuditField;
   }
   throw new Error(`invalid field: ${JSON.stringify(v)}`);
-}
-
-function asKnowledgeKind(v: unknown): PodKnowledgeKind | undefined {
-  if (v === undefined) return undefined;
-  if (typeof v === 'string' && (POD_KNOWLEDGE_KINDS as readonly string[]).includes(v)) {
-    return v as PodKnowledgeKind;
-  }
-  throw new Error(`invalid kind: ${JSON.stringify(v)}`);
 }
 
 /** Register every pod route on `app`. Idempotent — call once per Hono
@@ -617,68 +628,74 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     return c.json({ ok: true });
   });
 
-  // --- knowledge ----------------------------------------------------------
+  // --- agent context docs ---------------------------------------------------
+  // Migration 0055: per-agent reference docs are agent-scoped context_docs
+  // rows. This route family replaces the old /knowledge routes 1:1 and is the
+  // reachable surface for GLOBAL pods (the project route family requires a
+  // projectId). Same repo underneath as the project routes — one path.
 
-  app.post('/api/agents/pods/:id/knowledge', async (c) => {
+  app.get('/api/agents/pods/:id/context-docs', (c) => {
     const id = c.req.param('id') as ULID;
-    const agent = getAgentById(id);
-    if (!agent) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    let body: Record<string, unknown>;
-    try {
-      body = (await c.req.json()) as Record<string, unknown>;
-    } catch {
-      return c.json({ ok: false, error: 'invalid JSON body' }, 400);
-    }
-    const name = typeof body.name === 'string' ? body.name.trim() : '';
-    if (!name) return c.json({ ok: false, error: 'name required' }, 400);
-    let row: PodKnowledgeRow;
-    try {
-      // Section 22.2 — child rows inherit the agent's scope + projectId.
-      // Hard-coding 'global' here meant project pods could not host project-
-      // scoped knowledge through the route (bundle reads filter by scope, so
-      // the entries appeared to save but never landed in the spawn bundle).
-      row = createKnowledge(
-        {
-          agentId: id,
-          scope: agent.scope,
-          projectId: agent.projectId ?? null,
-          name,
-          ...(body.kind !== undefined ? { kind: asKnowledgeKind(body.kind) } : {}),
-          content: typeof body.content === 'string' ? body.content : '',
-        },
-        auditFromBody(body, 'user', 'ui-create-knowledge'),
-      );
-    } catch (err) {
-      return c.json({ ok: false, error: (err as Error).message }, 400);
-    }
-    bumpAgentRev(id);
-    announcePod(id, 'updated');
-    deps.onPodChanged?.(agent.name, 'updated');
-    return c.json({ ok: true, knowledge: row }, 201);
-  });
-
-  /** Read a single knowledge doc (17b.4). Worker agents call this at runtime
-   *  to pull reference material; the orchestrator uses it to show knowledge
-   *  content inline ("what does cold-emailer know about pricing?"). */
-  app.get('/api/agents/pods/:id/knowledge/:knowledgeId', (c) => {
-    const id = c.req.param('id') as ULID;
-    const knowledgeId = c.req.param('knowledgeId') as ULID;
     if (!getAgentById(id)) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    const row = getKnowledge(knowledgeId);
-    if (!row || row.agentId !== id) {
-      return c.json({ ok: false, error: `unknown knowledge: ${knowledgeId}` }, 404);
-    }
-    return c.json({ ok: true, knowledge: row });
+    const docs = withReadStats(listContextDocsForScope({ scope: { agentId: id } }));
+    return c.json({ ok: true, contextDocs: docs });
   });
 
-  app.patch('/api/agents/pods/:id/knowledge/:knowledgeId', async (c) => {
+  app.post('/api/agents/pods/:id/context-docs', async (c) => {
     const id = c.req.param('id') as ULID;
-    const knowledgeId = c.req.param('knowledgeId') as ULID;
     const agent = getAgentById(id);
     if (!agent) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    const existing = getKnowledge(knowledgeId);
+    let body: Record<string, unknown>;
+    try {
+      body = (await c.req.json()) as Record<string, unknown>;
+    } catch {
+      return c.json({ ok: false, error: 'invalid JSON body' }, 400);
+    }
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    if (!title) return c.json({ ok: false, error: 'title required' }, 400);
+    let row: ContextDocRow;
+    try {
+      row = createContextDoc(
+        {
+          scope: { agentId: id },
+          title,
+          body: typeof body.body === 'string' ? body.body : '',
+          author: typeof body.author === 'string' && body.author ? body.author : 'user',
+        },
+        auditFromBody(body, 'user', 'ui-create-context-doc'),
+      );
+    } catch (err) {
+      return c.json({ ok: false, error: (err as Error).message }, 400);
+    }
+    bumpAgentRev(id);
+    announcePod(id, 'updated');
+    deps.onPodChanged?.(agent.name, 'updated');
+    return c.json({ ok: true, contextDoc: withReadStats([row])[0] }, 201);
+  });
+
+  /** Read a single attached doc. Worker agents call this at runtime (via
+   *  `pc_get_context_doc`) to pull reference material; the orchestrator uses
+   *  it to show doc content inline. */
+  app.get('/api/agents/pods/:id/context-docs/:docId', (c) => {
+    const id = c.req.param('id') as ULID;
+    const docId = c.req.param('docId') as ULID;
+    if (!getAgentById(id)) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
+    const row = getContextDoc(docId);
+    if (!row || row.agentId !== id) {
+      return c.json({ ok: false, error: `unknown context doc: ${docId}` }, 404);
+    }
+    recordToolReadFromQuery(docId, new URL(c.req.url).searchParams);
+    return c.json({ ok: true, contextDoc: withReadStats([row])[0] });
+  });
+
+  app.patch('/api/agents/pods/:id/context-docs/:docId', async (c) => {
+    const id = c.req.param('id') as ULID;
+    const docId = c.req.param('docId') as ULID;
+    const agent = getAgentById(id);
+    if (!agent) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
+    const existing = getContextDoc(docId);
     if (!existing || existing.agentId !== id) {
-      return c.json({ ok: false, error: `unknown knowledge: ${knowledgeId}` }, 404);
+      return c.json({ ok: false, error: `unknown context doc: ${docId}` }, 404);
     }
     let body: Record<string, unknown>;
     try {
@@ -686,45 +703,43 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     } catch {
       return c.json({ ok: false, error: 'invalid JSON body' }, 400);
     }
-    let updated: PodKnowledgeRow | null;
+    let updated: ContextDocRow | null;
     try {
-      const patch: Parameters<typeof updateKnowledge>[1] = {};
-      if (typeof body.name === 'string') patch.name = body.name.trim();
-      if (typeof body.content === 'string') patch.content = body.content;
-      if (body.kind !== undefined) {
-        const kind = asKnowledgeKind(body.kind);
-        if (kind !== undefined) patch.kind = kind;
-      }
-      updated = updateKnowledge(
-        knowledgeId,
+      const patch: { title?: string; body?: string } = {};
+      if (typeof body.title === 'string') patch.title = body.title.trim();
+      if (typeof body.body === 'string') patch.body = body.body;
+      updated = updateContextDoc(
+        docId,
         patch,
-        auditFromBody(body, 'user', 'ui-edit-knowledge'),
+        auditFromBody(body, 'user', 'ui-edit-context-doc'),
       );
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 400);
     }
-    if (!updated) return c.json({ ok: false, error: `unknown knowledge: ${knowledgeId}` }, 404);
+    if (!updated) return c.json({ ok: false, error: `unknown context doc: ${docId}` }, 404);
     bumpAgentRev(id);
     announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');
-    return c.json({ ok: true, knowledge: updated });
+    return c.json({ ok: true, contextDoc: withReadStats([updated])[0] });
   });
 
-  app.delete('/api/agents/pods/:id/knowledge/:knowledgeId', (c) => {
+  /** Soft delete (replaces the old hard delete — every read filters
+   *  deletedAt, and read-history survives for Phase B staleness). */
+  app.delete('/api/agents/pods/:id/context-docs/:docId', (c) => {
     const id = c.req.param('id') as ULID;
-    const knowledgeId = c.req.param('knowledgeId') as ULID;
+    const docId = c.req.param('docId') as ULID;
     const agent = getAgentById(id);
     if (!agent) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    const existing = getKnowledge(knowledgeId);
+    const existing = getContextDoc(docId);
     if (!existing || existing.agentId !== id) {
-      return c.json({ ok: false, error: `unknown knowledge: ${knowledgeId}` }, 404);
+      return c.json({ ok: false, error: `unknown context doc: ${docId}` }, 404);
     }
     const qs = new URL(c.req.url).searchParams;
-    const removed = deleteKnowledge(
-      knowledgeId,
-      auditFromQuery(qs, 'user', 'ui-delete-knowledge'),
+    const removed = softDeleteContextDoc(
+      docId,
+      auditFromQuery(qs, 'user', 'ui-delete-context-doc'),
     );
-    if (!removed) return c.json({ ok: false, error: `unknown knowledge: ${knowledgeId}` }, 404);
+    if (!removed) return c.json({ ok: false, error: `unknown context doc: ${docId}` }, 404);
     bumpAgentRev(id);
     announcePod(id, 'updated');
     deps.onPodChanged?.(agent.name, 'updated');

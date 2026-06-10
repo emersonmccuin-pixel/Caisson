@@ -1,4 +1,4 @@
-// pc-pty-chat-359 P4b — migration 0055 test.
+// pc-pty-chat-359 P4b — migration 0057 test.
 //
 // Uses an in-memory SQLite database to isolate the migration SQL from the full
 // chain. Sets up the before state (tables as of migration 0054), inserts test
@@ -14,7 +14,7 @@ import Database from 'better-sqlite3';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const MIGRATION_SQL = readFileSync(
-  join(__dirname, '..', 'drizzle', '0055_migrate_inline_mcp_to_registry.sql'),
+  join(__dirname, '..', 'drizzle', '0057_migrate_inline_mcp_to_registry.sql'),
   'utf8',
 );
 
