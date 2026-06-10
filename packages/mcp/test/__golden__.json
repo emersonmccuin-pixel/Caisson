@@ -1659,6 +1659,22 @@
       }
     },
     {
+      "name": "pc_get_deliverable",
+      "description": "Read the authoritative deliverable for any contract — the typed output the agent submitted and the verifier reads. `id` is a contract id (ULID) OR the linked work item's ULID / callsign (e.g. pc-2.1). Returns { ok, deliverable, report, status, expectedOutput }; `deliverable` is null when the agent hasn't submitted yet. Project-guarded: only reads contracts in the caller's project. Requires PC_SESSION_ID (orchestrator session); does NOT need PC_AGENT_RUN_ID. Use this before calling pc_resolve_work_item to read what the agent actually produced. This is the symmetric read of the same Contract.deliverable the worker submits via pc_submit_deliverable.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "contract id (ULID) or the linked work item's ULID / callsign (e.g. pc-2.1)"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
       "name": "pc_list_attachments",
       "description": "List the attachments on a work item (name, kind, content type, size, id — NOT the content; fetch one with pc_get_attachment). Use when your dispatch points you at a card whose attachments carry source material. Requires { workItemId }.",
       "inputSchema": {
@@ -1887,6 +1903,7 @@
     "mcp__pc-rig__pc_find_tool",
     "mcp__pc-rig__pc_call_tool",
     "mcp__pc-rig__pc_get_contract",
+    "mcp__pc-rig__pc_get_deliverable",
     "mcp__pc-rig__pc_list_attachments",
     "mcp__pc-rig__pc_list_context",
     "mcp__pc-rig__pc_get_context_doc",
@@ -2329,6 +2346,12 @@
       "source": "pc-rig"
     },
     {
+      "slug": "mcp__pc-rig__pc_get_deliverable",
+      "label": "Read a contract's deliverable",
+      "description": "Read a contract's typed deliverable + report (orchestrator read door; symmetric to pc_submit_deliverable).",
+      "source": "pc-rig"
+    },
+    {
       "slug": "mcp__pc-rig__pc_list_attachments",
       "label": "List a card's attachments",
       "description": "List a work item's attachments (names + ids; content via Get attachment).",
@@ -2556,6 +2579,9 @@
       "family": "none"
     },
     "pc_get_contract": {
+      "family": "agent-run"
+    },
+    "pc_get_deliverable": {
       "family": "agent-run"
     },
     "pc_list_attachments": {
