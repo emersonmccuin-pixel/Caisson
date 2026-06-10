@@ -34,7 +34,7 @@
 
 import { spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 
 import {
   applyRunOutcome,
@@ -543,7 +543,24 @@ export function createWorktreeExecutors(input: {
         let settled = false;
         const stdoutChunks: Buffer[] = [];
         const stderrChunks: Buffer[] = [];
-        const child = spawn(command, { shell: true, cwd: cwdAbs });
+        // Slice 6 (pc-pty-chat-374.6): build a deterministic, explicit env so
+        // local toolchain resolves consistently regardless of how the server
+        // was launched. Prepend the worktree and project-root node_modules/.bin
+        // dirs to PATH so pnpm/tsc/vitest binaries installed locally are found
+        // first. We start from process.env (never capture the agent's launch env
+        // or any secrets) and only mutate the PATH key.
+        // On Windows the PATH key may be stored as "Path" — find it case-insensitively.
+        const pathKey =
+          Object.keys(process.env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+        const binsToAdd = [
+          join(input.worktreeDir, 'node_modules', '.bin'),
+          join(input.projectFolderPath, 'node_modules', '.bin'),
+        ].join(delimiter);
+        const runEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          [pathKey]: binsToAdd + delimiter + (process.env[pathKey] ?? ''),
+        };
+        const child = spawn(command, { shell: true, cwd: cwdAbs, env: runEnv });
         child.stdout?.on('data', (chunk: Buffer) => {
           stdoutChunks.push(chunk);
         });
