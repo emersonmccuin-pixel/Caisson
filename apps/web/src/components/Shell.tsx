@@ -61,6 +61,7 @@ interface ShellProps {
   onProjectDeleted: (projectId: string) => void;
   onProjectReorder: (orderedIds: string[]) => void;
   unreadProjectIds: ReadonlySet<string>;
+  liveSessionProjectIds: ReadonlySet<string>;
   wsEvents: WsEnvelope[];
   /** Stable imperative subscription for raw PTY batches. Replaces the old
    *  wsRawEvents array prop — terminal frames bypass React state entirely. */
@@ -86,6 +87,7 @@ export function Shell({
   onProjectDeleted,
   onProjectReorder,
   unreadProjectIds,
+  liveSessionProjectIds,
   wsEvents,
   wsSubscribeRawTerminal,
   wsAggregates,
@@ -134,6 +136,7 @@ export function Shell({
             onProjectDeleted={onProjectDeleted}
             onProjectReorder={onProjectReorder}
             unreadProjectIds={unreadProjectIds}
+            liveSessionProjectIds={liveSessionProjectIds}
             showCommandSpace={showCommandSpace}
           />
         </Panel>

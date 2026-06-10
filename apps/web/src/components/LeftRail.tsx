@@ -22,6 +22,9 @@ interface LeftRailProps {
   onProjectDeleted: (projectId: string) => void;
   onProjectReorder: (orderedIds: string[]) => void;
   unreadProjectIds: ReadonlySet<string>;
+  /** Project IDs with an active (live) orchestrator session. Drives the gold
+   *  underline on project rows. */
+  liveSessionProjectIds: ReadonlySet<string>;
   /** When true, the Command space row is shown at the top of the project rail. */
   showCommandSpace: boolean;
 }
@@ -35,6 +38,7 @@ export function LeftRail({
   onProjectDeleted,
   onProjectReorder,
   unreadProjectIds,
+  liveSessionProjectIds,
   showCommandSpace,
 }: LeftRailProps) {
   const mode = useRailMode((s) => s.mode);
@@ -87,6 +91,7 @@ export function LeftRail({
       onProjectDeleted={onProjectDeleted}
       onProjectReorder={onProjectReorder}
       unreadProjectIds={unreadProjectIds}
+      liveSessionProjectIds={liveSessionProjectIds}
       showCommandSpace={showCommandSpace}
     />
   );

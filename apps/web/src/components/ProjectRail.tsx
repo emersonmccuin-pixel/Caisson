@@ -31,12 +31,16 @@ interface ProjectRailProps {
   onProjectDeleted: (projectId: string) => void;
   onProjectReorder: (orderedIds: string[]) => void;
   unreadProjectIds: ReadonlySet<string>;
+  /** Project IDs with an active (live) orchestrator/chat session. Drives the
+   *  gold underline on each project row so the user can see at a glance which
+   *  projects have an open conversation. */
+  liveSessionProjectIds?: ReadonlySet<string>;
   /** When false (the default), the Command space row is hidden — Command is an
    *  opt-in cross-project planning surface toggled in App Settings. */
   showCommandSpace: boolean;
 }
 
-const EMPTY_UNREAD: ReadonlySet<string> = new Set();
+const EMPTY_SET: ReadonlySet<string> = new Set();
 
 interface MenuPos {
   project: Project;
@@ -58,7 +62,8 @@ export function ProjectRail({
   onCreateProject,
   onProjectDeleted,
   onProjectReorder,
-  unreadProjectIds = EMPTY_UNREAD,
+  unreadProjectIds = EMPTY_SET,
+  liveSessionProjectIds = EMPTY_SET,
   showCommandSpace,
 }: ProjectRailProps) {
   const activeSlug = useActiveProject((s) => s.activeSlug);
@@ -85,6 +90,8 @@ export function ProjectRail({
   const commandActive = commandProject?.slug === activeSlug;
   const commandUnread =
     !!commandProject && !commandActive && unreadProjectIds.has(commandProject.id);
+  const commandHasLiveSession =
+    !!commandProject && liveSessionProjectIds.has(commandProject.id);
   const activeSnapshot = useStatuslineStore((s) =>
     activeProject ? s.byProject[activeProject.id] ?? null : null,
   );
@@ -240,37 +247,45 @@ export function ProjectRail({
       )}
       <div className="flex-1 overflow-y-auto">
         {commandProject && (
-          <button
-            onClick={() => setActiveSlug(commandProject.slug)}
-            title={
-              commandUnread
-                ? 'Command — plan across all projects\nUnread chat activity'
-                : 'Command — plan across all projects'
-            }
-            aria-label={
-              commandUnread ? 'Command has unread chat activity' : 'Command — plan across all projects'
-            }
-            className={
-              'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted ' +
-              (commandActive
-                ? 'border-l-2 border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary '
-                : 'border-l-2 border-transparent text-foreground/80 ')
-            }
-          >
-            <span
-              aria-hidden="true"
+          <div className="relative">
+            <button
+              onClick={() => setActiveSlug(commandProject.slug)}
+              title={[
+                'Command — plan across all projects',
+                commandHasLiveSession ? 'Live chat session active' : '',
+                commandUnread ? 'Unread chat activity' : '',
+              ].filter(Boolean).join('\n')}
+              aria-label={
+                commandUnread ? 'Command has unread chat activity' : 'Command — plan across all projects'
+              }
               className={
-                'pc-project-tile pc-project-tile-row shrink-0 ' +
-                (commandActive ? 'pc-project-tile-active' : 'pc-project-tile-inactive') +
-                (commandUnread ? ' pc-project-tile-unread' : '')
+                'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted ' +
+                (commandActive
+                  ? 'border-l-2 border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary '
+                  : 'border-l-2 border-transparent text-foreground/80 ')
               }
             >
-              <span className="text-[1.1rem] leading-none">★</span>
-            </span>
-            <span className="min-w-0 flex-1 truncate font-medium tracking-wide">
-              {commandProject.name}
-            </span>
-          </button>
+              <span
+                aria-hidden="true"
+                className={
+                  'pc-project-tile pc-project-tile-row shrink-0 ' +
+                  (commandActive ? 'pc-project-tile-active' : 'pc-project-tile-inactive') +
+                  (commandUnread ? ' pc-project-tile-unread' : '')
+                }
+              >
+                <span className="text-[1.1rem] leading-none">★</span>
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium tracking-wide">
+                {commandProject.name}
+              </span>
+            </button>
+            {commandHasLiveSession && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute bottom-0 left-0 right-0 h-0.5 bg-primary"
+              />
+            )}
+          </div>
         )}
         {commandProject && (
           <div aria-hidden="true" className="my-1 border-t-2 border-border" />
@@ -283,6 +298,7 @@ export function ProjectRail({
           filtered.map((p) => {
             const isActive = p.slug === activeSlug;
             const hasUnread = !isActive && unreadProjectIds.has(p.id);
+            const hasLiveSession = liveSessionProjectIds.has(p.id);
             const isDragging = draggingId === p.id;
             const isOver = dragOverId === p.id;
             const showLineBefore = isOver && dragOverPos === 'before';
@@ -309,7 +325,11 @@ export function ProjectRail({
                     e.stopPropagation();
                     setMenu({ project: p, x: e.clientX, y: e.clientY });
                   }}
-                  title={hasUnread ? `${p.folderPath}\nUnread chat activity` : p.folderPath}
+                  title={[
+                    p.folderPath,
+                    hasLiveSession ? 'Live chat session active' : '',
+                    hasUnread ? 'Unread chat activity' : '',
+                  ].filter(Boolean).join('\n')}
                   aria-label={hasUnread ? `${p.name} has unread chat activity` : p.name}
                   className={
                     'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted ' +
@@ -341,6 +361,12 @@ export function ProjectRail({
                     </span>
                   )}
                 </button>
+                {hasLiveSession && (
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute bottom-0 left-0 right-0 h-0.5 bg-primary"
+                  />
+                )}
                 {showLineAfter && (
                   <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-10 h-0.5 bg-primary" />
                 )}
