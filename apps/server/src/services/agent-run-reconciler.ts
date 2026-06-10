@@ -142,6 +142,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
 
   let interval: NodeJS.Timeout | null = null;
   let subscribed = false;
+  let unsubscribeHostEvents: (() => void) | null = null;
 
   /** The ONE persistent host event consumer (rides the multiplexed
    *  HostConnection emitter, survives host respawns). Latency path only — the
@@ -149,7 +150,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
   function subscribeHostEvents(): void {
     if (subscribed || !deps.host.onEvent) return;
     subscribed = true;
-    deps.host.onEvent((event) => {
+    const maybeUnsubscribe = deps.host.onEvent((event) => {
       try {
         // PTY-activity heartbeat: run-chunk events arrive on every PTY byte
         // (spinner redraws, output, thinking UI). Record the timestamp (throttled
@@ -207,6 +208,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
         warn(`[agent-runs] host event apply failed: ${(err as Error).message}`);
       }
     });
+    if (typeof maybeUnsubscribe === 'function') unsubscribeHostEvents = maybeUnsubscribe;
   }
 
   async function tick(): Promise<ReconcileTickResult> {
@@ -317,6 +319,9 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
   function stop(): void {
     if (interval) clearInterval(interval);
     interval = null;
+    unsubscribeHostEvents?.();
+    unsubscribeHostEvents = null;
+    subscribed = false;
   }
 
   return { boot, tick, start, stop };

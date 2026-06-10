@@ -183,7 +183,8 @@ export function isWorkItemDto(value: unknown): value is WorkItemDto {
     typeof value.updatedAt === 'number' &&
     (value.deletedAt === null || typeof value.deletedAt === 'number') &&
     typeof value.isWorkflowRoot === 'boolean' &&
-    (value.areaId === null || typeof value.areaId === 'string')
+    (value.areaId === null || typeof value.areaId === 'string') &&
+    (value.focusedAt === null || typeof value.focusedAt === 'number')
   );
 }
 

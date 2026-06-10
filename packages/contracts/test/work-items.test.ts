@@ -46,6 +46,7 @@ const workItem: WorkItemDto = {
   deletedAt: null,
   isWorkflowRoot: false,
   areaId: null,
+  focusedAt: null,
 };
 
 const attachment: AttachmentDto = {

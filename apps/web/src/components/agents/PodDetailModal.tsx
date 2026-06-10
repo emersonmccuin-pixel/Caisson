@@ -214,6 +214,7 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
       } else {
         setError(err.message);
       }
+    } finally {
       setBusy(false);
     }
   }
