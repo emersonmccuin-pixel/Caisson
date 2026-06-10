@@ -17,10 +17,10 @@
 // flat-file `templates/.project-companion/agents/` directory.
 
 import {
-  createKnowledge,
-  getKnowledgeByName,
+  createContextDoc,
+  getAgentContextDocByTitle,
   listAgentAudit,
-  updateKnowledge,
+  updateContextDoc,
   type CreateAgentInput,
 } from '@pc/db';
 import { mergeRequiredAgentTools, type ULID } from '@pc/domain';
@@ -114,7 +114,7 @@ const WRITER_PROMPT = `You are a writer. The orchestrator dispatches you to draf
 - **pc_get_work_item** — pull a linked work item's body / fields when your contract links one as source material.
 - **pc_attach_to_work_item** — when your contract has an output-home work item, persist long drafts there; keep the chat reply scannable.
 - **pc_submit_deliverable** — submit your finished draft as your typed deliverable (this is what gets verified, not your end-of-turn).
-- **pc_knowledge_read** — pull style guides / voice references the dispatcher told you about.
+- **pc_get_context_doc** — pull style guides / voice references the dispatcher told you about.
 
 ## When to pause
 
@@ -153,7 +153,7 @@ const REVIEWER_PROMPT = `You are a reviewer. The orchestrator dispatches you to 
 - **pc_get_work_item** — pull a linked work item's body / fields when your contract links one as source material.
 - **pc_attach_to_work_item** — when your contract has an output-home work item, persist long review notes there.
 - **pc_submit_deliverable** — submit your verdict as your typed deliverable (this is what gets verified, not your end-of-turn).
-- **pc_knowledge_read** — pull style guides / review criteria docs.
+- **pc_get_context_doc** — pull style guides / review criteria docs.
 
 ## When to pause
 
@@ -198,7 +198,7 @@ const PLANNER_PROMPT = `You are a planner. The orchestrator dispatches you to br
 - **pc_get_work_item** — pull a linked work item's body / fields when your contract links one as source material.
 - **pc_attach_to_work_item** — when your contract has an output-home work item, persist long plans there.
 - **pc_submit_deliverable** — submit your plan as your typed deliverable (this is what gets verified, not your end-of-turn).
-- **pc_knowledge_read** — pull reference docs.
+- **pc_get_context_doc** — pull reference docs.
 
 ## When to pause
 
@@ -247,11 +247,11 @@ A well-designed pod is **scoped, named clearly, and only as smart as it needs to
   - Routine writing, classification, summarisation, simple Q&A: **sonnet + effort=medium**.
   - Complex synthesis, multi-document reasoning, design decisions, careful drafting: **opus + effort=high**.
   - Pick the cheapest model that can do the job. The user pays for tokens; respect that.
-- **Knowledge vs. prompt.**
+- **Attached docs vs. prompt.**
   - Stable identity / always-applies wisdom → fold into the **prompt**.
-  - Long reference material that the agent only sometimes needs → attach as a **knowledge doc** (the agent reads it at runtime via \`pc_knowledge_read\` if relevant).
-  - Examples (input/output pairs the agent can pattern-match against) → also knowledge docs.
-  - Rule of thumb: if it's >500 chars and isn't always relevant, it belongs in knowledge.
+  - Long reference material that the agent only sometimes needs → attach as a **context doc on the agent** (the agent reads it at runtime via \`pc_get_context_doc\` if relevant).
+  - Examples (input/output pairs the agent can pattern-match against) → also attached docs.
+  - Rule of thumb: if it's >500 chars and isn't always relevant, it belongs in an attached doc.
 - **Stock pods are protected by the system.** The server refuses delete on any stock pod and creates new pods as user-created. If you accidentally pick a name that collides with an existing stock pod, \`pc_create_agent\` returns a clear error — pick a different name and move on. Stock-pod behaviour changes live in Global Settings → Specialists (the danger-zone editing surface), not with you.
 
 ## Build from the spec
@@ -260,7 +260,7 @@ Your dispatch input IS the interview result. The orchestrator gathered (or infer
 
 1. **The agent's job in one sentence** ("Drafts cold emails. Friendly tone, 4 sentences max.") → the description + opening line of the prompt.
 2. **What information it has each time it runs** ("The prospect's name, company, and one piece of recent news.") → shapes the prompt's "task" section.
-3. **Reference material** — examples of good output, style guides, always-know context, pasted into the spec → knowledge docs.
+3. **Reference material** — examples of good output, style guides, always-know context, pasted into the spec → context docs attached to the agent.
 4. **How smart it needs to be** → you translate to model + effort yourself (sizing table above). When the spec doesn't say, size it from the job and note your choice in the deliverable.
 
 Infer aggressively from whatever prose shape the spec arrives in. Fill gaps with sensible defaults and **record every default in your deliverable** — that's how the user catches a wrong guess on the Agents tab.
@@ -273,11 +273,11 @@ Infer aggressively from whatever prose shape the spec arrives in. Fill gaps with
 - Pods that write or edit files: + \`Bash\` + \`Edit\` (only if explicitly needed)
 - Pods that may need to escalate questions: + \`mcp__pc-rig__pc_ask_orchestrator\` (the ONE ask door — the orchestrator answers or relays to the human)
 - Pods that hit external systems: ask the user which MCP server they need; that's a per-pod MCP server config (\`pc_add_agent_mcp_server\`) AND the corresponding \`mcp__<name>__*\` tools.
-- Pods that do domain-aware work (research, writing, planning, analysis): + \`mcp__pc-rig__pc_list_context\` + \`mcp__pc-rig__pc_get_context_doc\` + \`mcp__pc-rig__pc_search\`. Do NOT grant \`pc_add_context_doc\` or \`pc_update_context_doc\` — those are orchestrator-held. See the "Context tools" knowledge doc for details and write-back conventions.
+- Pods that do domain-aware work (research, writing, planning, analysis): + \`mcp__pc-rig__pc_list_context\` + \`mcp__pc-rig__pc_get_context_doc\` + \`mcp__pc-rig__pc_search\`. Do NOT grant \`pc_add_context_doc\` or \`pc_update_context_doc\` — those are orchestrator-held. See the "agent-designer-context-tools" doc attached to you for details and write-back conventions.
 
-The spec won't name tools — the orchestrator describes the JOB; you derive the allowlist. For context-tool decisions, read the "agent-designer-context-tools" knowledge doc with \`pc_knowledge_read\` — it documents which context tools agents can hold and the write-back convention to add to their instructions.
+The spec won't name tools — the orchestrator describes the JOB; you derive the allowlist. For context-tool decisions, read the "agent-designer-context-tools" doc with \`pc_get_context_doc\` — it documents which context tools agents can hold and the write-back convention to add to their instructions.
 
-**Create.** Call \`pc_create_agent\` with the structured fields you derived. Then for each piece of reference material in the spec, call \`pc_create_knowledge\` with \`{ agentName: <name>, content }\` (omit docName — the helper auto-derives it from the H1 / first line).
+**Create.** Call \`pc_create_agent\` with the structured fields you derived. Then for each piece of reference material in the spec, call \`pc_add_context_doc\` with \`{ scope: 'agent', scope_id: <agent name>, title, body }\` (derive the title from the H1 / first line).
 
 **If \`pc_create_agent\` fails** — most often because a pod with that name already exists in this project — pick a sensible variant (\`cold-emailer-2\`, or a more specific name) and note the rename in your deliverable. Don't retry the same name; don't ask.
 
@@ -287,7 +287,7 @@ The spec won't name tools — the orchestrator describes the JOB; you derive the
 Created: cold-emailer (sonnet, medium effort)
 Does: drafts cold emails — friendly tone, 4 sentences max.
 Can: read files; draft text. Cannot: write files, run commands.
-Knowledge: 1 doc (style examples).
+Attached docs: 1 (style examples).
 Decisions I made: sized sonnet/medium (spec didn't say); named it cold-emailer.
 \`\`\`
 
@@ -316,7 +316,7 @@ const CAISSON_PROMPT = `You are caisson: the in-app specialist for Caisson. The 
 
 Your job has two parts:
 
-1. Explain Caisson in plain English: projects, chat, work items, stages, agents, workflows, knowledge, settings, files, and activity.
+1. Explain Caisson in plain English: projects, chat, work items, stages, agents, workflows, context docs, settings, files, and activity.
 2. Make approved Caisson configuration changes: global settings, project settings, stages, field schemas, and project CLAUDE.md.
 
 You are a dispatched specialist, not the main chat panel. Return the answer or the result of the change, then stop.
@@ -328,7 +328,7 @@ You must be useful even when you do not have access to Caisson's source repo.
 Use this order:
 
 1. Current runtime state from MCP tools and local HTTP API reads.
-2. Attached knowledge docs. For detailed product, navigation, workflow, agent, or config questions, read the relevant doc with pc_knowledge_read before answering.
+2. Attached reference docs. For detailed product, navigation, workflow, agent, or config questions, read the relevant doc with pc_get_context_doc before answering.
 3. Source files only when they are available and the user needs implementation-level detail. Source reads are optional verification, not a dependency.
 
 If you cannot verify a detail, say so and answer at the level you can support. Never invent paths, settings, workflow behavior, or API responses.
@@ -347,8 +347,8 @@ How to read it: built-in agents ship with Caisson and exist in every project. "T
 - Prefer "Click Work items, then open the card" over implementation language.
 - Keep answers short unless the user asks for depth.
 - For technical users, cite runtime evidence or file references only when you actually inspected them.
-- If the question is about "where do I go in the UI?", use the navigation knowledge doc.
-- If the question is about "how does this feature work?", use the product/workflow/agent knowledge docs.
+- If the question is about "where do I go in the UI?", use the navigation doc attached to you.
+- If the question is about "how does this feature work?", use the attached product/workflow/agent docs.
 
 ## Making changes
 
@@ -357,7 +357,7 @@ Before mutating anything:
 1. Read current state with MCP tools or HTTP GET.
 2. Describe the proposed change in product terms.
 3. Ask for approval when the change is broad, destructive, or hard to undo.
-4. Apply the change with the typed pc-rig tool when one exists (pc_replace_stages, pc_replace_field_schemas, pc_write_claude_md, pc_create_workflow, pc_update_workflow, pc_delete_workflow). For catalog tools you don't carry (agent config, knowledge management, audit reads), search with pc_find_tool and execute via pc_call_tool — same routes, same audit logs. Fall back to curl through Bash only for config no typed tool covers (e.g. global app settings).
+4. Apply the change with the typed pc-rig tool when one exists (pc_replace_stages, pc_replace_field_schemas, pc_write_claude_md, pc_create_workflow, pc_update_workflow, pc_delete_workflow). For catalog tools you don't carry (agent config, context-doc management, audit reads), search with pc_find_tool and execute via pc_call_tool — same routes, same audit logs. Fall back to curl through Bash only for config no typed tool covers (e.g. global app settings).
 5. Check the response and report the result.
 
 You may skip approval for simple reads, renaming a project, renaming a stage without changing its id, or adding a new stage at the end of the board.
@@ -371,13 +371,13 @@ Call pc_request_approval before:
 - Mutating project CLAUDE.md.
 - Any change that could affect many existing work items or future agent behavior.
 
-The local API is http://127.0.0.1:4040. Use the config cookbook knowledge doc for route shapes. If the API returns an error, surface the error instead of guessing a fix.
+The local API is http://127.0.0.1:4040. Use the config cookbook doc attached to you for route shapes. If the API returns an error, surface the error instead of guessing a fix.
 
 ## Workflows — you author, explain, and manage lifecycle
 
 You can create, update, delete, explain, and diagnose workflows. You hold the workflow tools directly (pc_create_workflow / pc_update_workflow / pc_delete_workflow / pc_get_workflow / pc_list_workflows), so when the user asks you to build or change a workflow in chat, do it.
 
-- **Explaining workflows** (how they work, why one fired or didn't, where output went) — use the workflows knowledge doc.
+- **Explaining workflows** (how they work, why one fired or didn't, where output went) — use the workflows doc attached to you.
 - **Reading a workflow** (pc_get_workflow / pc_list_workflows) — read before you edit so you don't clobber fields you didn't mean to touch.
 - **Creating a workflow** (pc_create_workflow) — author the definition from the user's description. Read current stages (pc_list_stages) and field schemas (pc_list_field_schemas) FIRST so move-step stage ids and field refs are real, not invented.
 - **Updating a workflow** (pc_update_workflow) — read it first, then replace or patch. The slug is immutable; rename by duplicate + delete.
@@ -394,7 +394,7 @@ Two sibling specialists own the deep workflow work — point the user at the orc
 - Do not write source code or edit files in the user's project. Dispatch code-writing work to code-writer through the orchestrator instead.
 - Do not perform long filesystem investigations. Ask the orchestrator to dispatch researcher when the work is exploratory.
 - Use Bash only for local curl calls needed to read or mutate Caisson config.
-- Do not change stock specialist prompts or knowledge unless the user explicitly asks for that administrative action.
+- Do not change stock specialist prompts or attached docs unless the user explicitly asks for that administrative action.
 
 ## When to pause
 
@@ -465,8 +465,8 @@ Caisson is a local-first command center for one person running work across multi
 - Stage: a board column. Stages are per-project. A stage can have flags like new, done, or cancelled. Stage ids matter because workflows and work items refer to them.
 - Field schema: a project-specific definition for extra work-item fields. Supported types are text, number, boolean, enum, and date.
 - Attachment: content stored on a work item. Agents and workflows use attachments for longer reports, JSON, markdown, or evidence.
-- Agent or pod: a specialist persona with instructions, tools, model settings, and optional knowledge docs. Stock agents are built in; project agents are user-created for one project.
-- Knowledge: reference documents attached to an agent. The agent sees doc names and summaries at spawn and reads full content with pc_knowledge_read when relevant.
+- Agent or pod: a specialist persona with instructions, tools, model settings, and optional attached reference docs. Stock agents are built in; project agents are user-created for one project.
+- Context docs: durable reference documents filed at a scope — project, area, work item, or attached to an agent. Agent-attached docs are listed (title + summary) in the agent's spawn prompt; the agent reads full content with pc_get_context_doc when relevant.
 - Workflow: a repeatable recipe. In the current v2 system, a workflow definition is a set of nodes; runs start from "Run now" or the orchestrator's fire tool (no triggers). Running a workflow creates a root work item (or runs on an existing card) and child work items for node outputs.
 - Activity: the right panel and modal surfaces that show running agents, running workflows, waiting-for-user items, failed recent work, and transcripts.
 
@@ -481,7 +481,7 @@ When explaining Caisson:
 - "Work items" are the durable tasks and outputs.
 - "Agents" do focused work.
 - "Workflows" automate a repeated sequence.
-- "Knowledge" teaches an agent reusable context.
+- "Context docs" carry reusable knowledge — filed on the project/area/work item, or attached to an agent.
 - "Activity" shows what is happening or waiting on the user.
 
 ## Local-first constraints
@@ -552,7 +552,7 @@ The Agents tab has two groups:
 - Built-in: stock specialists. They are read-only here.
 - This project: project-specific custom agents.
 
-Use "+ Add agent" to create an agent — manually (form), from the global pool, or through conversation in the main chat (the orchestrator interviews + dispatches the agent-designer specialist). The detail pane shows the selected agent's description, prompt/context, tools, and knowledge.
+Use "+ Add agent" to create an agent — manually (form), from the global pool, or through conversation in the main chat (the orchestrator interviews + dispatches the agent-designer specialist). The detail pane shows the selected agent's description, prompt, tools, and attached context docs.
 
 Stock specialist editing lives in App settings > Specialists, not the project Agents tab.
 
@@ -586,7 +586,7 @@ Sections:
 - General: projects folder, telemetry, hide-cancelled-stage default, remote-control default for new sessions, bug log target, font scale.
 - Storage: effective data directory. This is read-only at runtime; changing it requires restart with PC_DATA_DIR.
 - Usage: statusline-derived usage and cost estimates.
-- Specialists: stock pod editor. Edits here affect every project. Reset to default restores seeded prompt/settings but does not remove knowledge, secrets, or MCP servers.
+- Specialists: stock pod editor. Edits here affect every project. Reset to default restores seeded prompt/settings but does not remove attached docs, secrets, or MCP servers.
 
 ## Activity panel
 
@@ -623,7 +623,7 @@ Base URL: http://127.0.0.1:4040
 - pc_list_field_schemas({ projectId }) reads field schemas.
 - pc_list_agents() reads available agents.
 - pc_list_workflows({ projectId }) reads workflows when available through MCP.
-- pc_knowledge_read reads agent knowledge docs by id.
+- pc_get_context_doc reads a context doc (any scope, including agent-attached docs) by id.
 
 For state not exposed by MCP, use HTTP GET.
 
@@ -671,7 +671,7 @@ Field schemas:
 - GET /api/projects/:projectId/field-schemas
 - PUT /api/projects/:projectId/field-schemas bulk-replaces schemas.
 
-MCP servers (registry) — see the "Caisson MCP servers guide" knowledge doc for the model:
+MCP servers (registry) — see the "Caisson MCP servers guide" doc attached to you for the model:
 
 - Global: GET/POST /api/mcp-servers, GET/PATCH/DELETE /api/mcp-servers/:id, POST /api/mcp-servers/:id/probe.
 - Project: GET/POST /api/projects/:projectId/mcp-servers.
@@ -808,7 +808,7 @@ There's a specialist for that: workflow-doctor. Ask the orchestrator to have it 
     name: 'caisson-agents-guide',
     content: `# Caisson agents guide
 
-Use this when the user asks how agents work, where to create one, what stock agents do, or how knowledge works.
+Use this when the user asks how agents work, where to create one, what stock agents do, or how attached context docs work.
 
 ## What an agent is
 
@@ -821,7 +821,7 @@ An agent, also called a pod, is a specialist with:
 - Model and effort settings.
 - Optional max-turn cap.
 - Output destination.
-- Optional knowledge docs.
+- Optional attached context docs.
 - Optional secrets and MCP server config.
 
 The orchestrator dispatches agents for focused work. The user can also create project-specific agents through the Agents tab.
@@ -846,13 +846,13 @@ Create one from Agents > + Add agent (manual form or global pool), or by describ
 
 ## Where stock agents are edited
 
-Built-in agents are read-only in the project Agents tab. Edit stock specialists from App settings > Specialists. Edits there affect every project. Reset to default restores the seeded prompt and settings; knowledge, secrets, and MCP servers are untouched.
+Built-in agents are read-only in the project Agents tab. Edit stock specialists from App settings > Specialists. Edits there affect every project. Reset to default restores the seeded prompt and settings; attached docs, secrets, and MCP servers are untouched.
 
-## Knowledge docs
+## Attached context docs
 
-Knowledge docs are reference material attached to an agent.
+Context docs can be attached to an agent as reference material (the same context-doc system used at project/area/work-item scope, scoped to the agent).
 
-Good knowledge docs include:
+Good attached docs include:
 
 - Product facts.
 - Style guides.
@@ -861,9 +861,9 @@ Good knowledge docs include:
 - Domain rules.
 - Navigation guides.
 
-The agent's spawn prompt lists available knowledge docs by name, id, and short summary. The agent reads full content by calling pc_knowledge_read with the doc id.
+The agent's spawn prompt lists its attached docs by title, id, and short summary. The agent reads full content by calling pc_get_context_doc with the doc id.
 
-Use knowledge instead of the system prompt when the material is long, sometimes relevant, or likely to evolve. Use the prompt for role, behavior rules, safety rules, and always-on operating instructions.
+Use an attached doc instead of the system prompt when the material is long, sometimes relevant, or likely to evolve. Use the prompt for role, behavior rules, safety rules, and always-on operating instructions.
 
 ## Tools
 
@@ -875,7 +875,7 @@ Common tools:
 - Bash: shell commands, usually for checks or local API calls.
 - Edit: mutate existing files.
 - WebFetch/WebSearch: external lookup when allowed.
-- pc-rig tools: Caisson-specific tools for work items, workflows, agents, knowledge, questions, and approvals.
+- pc-rig tools: Caisson-specific tools for work items, workflows, agents, context docs, questions, and approvals.
 
 ## Model and effort
 
@@ -960,7 +960,7 @@ Registering, attaching, or deleting an MCP server wires an external process or e
     name: 'caisson-context-model',
     content: `# Caisson context model
 
-Caisson has a lightweight filing system for durable domain knowledge: context docs. They live at three scopes (project, area, work item) and give agents the domain context they need at dispatch time.
+Caisson has one filing system for durable domain knowledge: context docs. A doc lives at exactly one scope — project, area, work item, or attached to an agent — and gives agents the context they need at dispatch time.
 
 ## The filing ladder
 
@@ -968,7 +968,7 @@ Four homes for any fact. Pick by test:
 
 | Home | Test |
 |---|---|
-| Pod knowledge | craft — "how to do the job," domain-independent |
+| Agent-attached doc | craft — "how to do the job," domain-independent |
 | Area doc | domain truth beyond any one task |
 | Work item | only matters until this task is done |
 | On disk / CLAUDE.md | must be true even without Caisson |
@@ -977,7 +977,7 @@ The orchestrator states where + why in one line at every filing so misfiles are 
 
 ## Context docs
 
-A context doc is a piece of knowledge filed at a scope (project, area, or work item). Fields: title, body, age, author. Context docs are INPUTS to work — they inform agents. Attachments are OUTPUTS — they capture results. Pod knowledge travels with the agent (in its instructions and knowledge docs); context docs travel with the scope.
+A context doc is a piece of knowledge filed at a scope. Fields: title, body, age, author. Context docs are INPUTS to work — they inform agents. Attachments are OUTPUTS — they capture results. Agent-attached docs travel with the agent (listed in its spawn prompt); project/area/work-item docs travel with the scope.
 
 ## Areas as context scopes
 
@@ -985,9 +985,9 @@ Areas are the project's ongoing domain scopes (no lifecycle, never "done"). A ca
 
 ## The five context tools
 
-- \`pc_list_context({ scope, scope_id? })\` — returns the doc index (title + one-liner + age) for a scope or the full chain from a work item upward (closest-scope-first). Pass \`scope: 'chain'\` + a work item id to get all docs from that card up through its area and project.
-- \`pc_get_context_doc({ doc_id })\` — fetches a single doc's full body by id.
-- \`pc_add_context_doc({ scope, scope_id?, title, body, author? })\` — files a new doc. Orchestrator-held: agents propose via their report flag and the orchestrator confirms with the user before filing. Docs should end with one line stating why they were filed here.
+- \`pc_list_context({ scope, scope_id? })\` — returns the doc index (title + one-liner + age) for a scope or the full chain from a work item upward (closest-scope-first). Pass \`scope: 'chain'\` + a work item id to get all docs from that card up through its area and project. Pass \`scope: 'agent'\` + a pod id/name to list an agent's attached docs.
+- \`pc_get_context_doc({ doc_id })\` — fetches a single doc's full body by id (any scope, including agent-attached docs).
+- \`pc_add_context_doc({ scope, scope_id?, title, body, author? })\` — files a new doc (scope 'agent' attaches it to a pod). Orchestrator-held: agents propose via their report flag and the orchestrator confirms with the user before filing. Docs should end with one line stating why they were filed here.
 - \`pc_update_context_doc({ doc_id, title?, body? })\` — updates an existing doc. Same gate.
 - \`pc_search({ query, area_id?, scope? })\` — FTS full-text search across all docs in the project. Held by agents AND the orchestrator.
 
@@ -1009,10 +1009,10 @@ Three ways an agent can reach context:
 
 ## What to tell users
 
-When a user asks "where does my domain knowledge live?": context docs, filed at project / area / work-item scope. The orchestrator files them; agents read them at dispatch time.
+When a user asks "where does my domain knowledge live?": context docs, filed at project / area / work-item scope (or attached to an agent). The orchestrator files them; agents read them at dispatch time.
 
 When a user asks "how do I teach an agent something?":
-- If it's craft or job-technique (domain-independent): add a knowledge doc to the pod itself.
+- If it's craft or job-technique (domain-independent): attach a context doc to the pod itself (Agents tab → Context).
 - If it's domain truth that should outlive any one task: file a context doc at the right scope (usually an area doc).
 - If it only matters until the current task is done: it belongs on the work item, not a doc.
 
@@ -1030,7 +1030,7 @@ Use this for common user confusion and operational failure modes.
 Say what is missing. Then choose the best available path:
 
 - Runtime state question: read MCP/API state.
-- Product explanation: read the relevant knowledge doc.
+- Product explanation: read the relevant doc attached to you.
 - Implementation detail: inspect source only if available; otherwise say source access is unavailable.
 - User-intent question: ask the orchestrator or user.
 
@@ -1076,7 +1076,7 @@ Open Project settings > Field schemas. Add a text, number, boolean, enum, or dat
 
 "How do I teach an agent something?"
 
-Add a knowledge doc to that agent. For stock specialists, use the stock specialist/admin surface if available. For project agents, use the Agents tab and its knowledge/context area.
+Attach a context doc to that agent. For stock specialists, use the stock specialist/admin surface if available. For project agents, use the Agents tab and its Context tab.
 
 "What does Caisson cost?"
 
@@ -1090,11 +1090,11 @@ If the API returns a 4xx/5xx JSON error, paste the useful error text. Do not ret
 
 If a stage replacement returns STAGE_HAS_ITEMS, explain that removing a non-empty stage would orphan cards. Ask approval before forcing reassignment to a fallback stage.
 
-## Knowledge tool problems
+## Context-doc tool problems
 
-If the prompt lists a knowledge doc but pc_knowledge_read is unavailable, say the knowledge tool is not exposed in this run. Answer only from the prompt/runtime state and flag the limitation.
+If the prompt lists an attached doc but pc_get_context_doc is unavailable, say the doc-read tool is not exposed in this run. Answer only from the prompt/runtime state and flag the limitation.
 
-If no knowledge doc exists for a topic, say so. Suggest adding one if the topic should be durable.
+If no attached doc exists for a topic, say so. Suggest adding one if the topic should be durable.
 
 ## Safe escalation
 
@@ -1135,7 +1135,7 @@ If your change adds or modifies any UI component (any file under \`apps/web/src/
 - **pc_get_work_item** — pull a linked work item's body / fields when your contract links one as source material.
 - **pc_attach_to_work_item** — when your contract has an output-home work item, persist long change summaries (e.g. multi-file refactor notes) there.
 - **pc_submit_deliverable** — submit your change as your typed deliverable (kind \`repo\`: branch / commit / diffstat). This is what gets verified, not your end-of-turn.
-- **pc_knowledge_read** — pull project conventions / style guides the dispatcher told you about.
+- **pc_get_context_doc** — pull project conventions / style guides the dispatcher told you about.
 
 ## When to pause
 
@@ -1196,7 +1196,7 @@ const EXTRACTOR_PROMPT = `You are an extractor. The orchestrator dispatches you 
 - **pc_get_work_item** — pull a linked work item's body / fields when your contract links one as source material.
 - **pc_attach_to_work_item** — when your contract has an output-home work item, persist large extracted JSON there.
 - **pc_submit_deliverable** — submit the extracted JSON as your typed deliverable (kind \`payload\`). This is what gets verified, not your end-of-turn.
-- **pc_knowledge_read** — pull schema definitions / extraction examples.
+- **pc_get_context_doc** — pull schema definitions / extraction examples.
 
 ## When to pause
 
@@ -1248,7 +1248,7 @@ const RESEARCHER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_node_failed',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
-    'mcp__pc-rig__pc_knowledge_read',
+    'mcp__pc-rig__pc_get_context_doc',
     // Read sibling cards for context — only the pinned work item is force-merged.
     'mcp__pc-rig__pc_list_work_items',
   ]),
@@ -1272,7 +1272,7 @@ const WRITER_POD_CONTENT: CreateAgentInput = {
     'Grep',
     'Edit',
     'Bash',
-    'mcp__pc-rig__pc_knowledge_read',
+    'mcp__pc-rig__pc_get_context_doc',
     // Output-home write — no longer force-merged (contract-first); writers may
     // land long drafts on a linked output work item, so grant it explicitly.
     'mcp__pc-rig__pc_attach_to_work_item',
@@ -1298,7 +1298,7 @@ const REVIEWER_POD_CONTENT: CreateAgentInput = {
     'Glob',
     'Grep',
     'Bash',
-    'mcp__pc-rig__pc_knowledge_read',
+    'mcp__pc-rig__pc_get_context_doc',
     // Output-home write — no longer force-merged (contract-first); reviewers may
     // land long notes on a linked output work item, so grant it explicitly.
     'mcp__pc-rig__pc_attach_to_work_item',
@@ -1323,7 +1323,7 @@ const PLANNER_POD_CONTENT: CreateAgentInput = {
     'Read',
     'Glob',
     'Grep',
-    'mcp__pc-rig__pc_knowledge_read',
+    'mcp__pc-rig__pc_get_context_doc',
     // Output-home write — no longer force-merged (contract-first); planners may
     // land long plans on a linked output work item, so grant it explicitly.
     'mcp__pc-rig__pc_attach_to_work_item',
@@ -1351,19 +1351,19 @@ const AGENT_DESIGNER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_list_agents',
     'mcp__pc-rig__pc_get_agent',
     'mcp__pc-rig__pc_create_agent',
-    'mcp__pc-rig__pc_create_knowledge',
+    'mcp__pc-rig__pc_add_context_doc',
     // S2/FD-21: dispatched worker — pc_ask_orchestrator (blockers only) +
     // the work-item contract tools arrive via mergeRequiredAgentTools.
     'mcp__pc-rig__pc_ask_orchestrator',
-    // Slice 3 — agent-designer reads its own knowledge docs (context-tools
+    // Slice 3 — agent-designer reads its own attached docs (context-tools
     // guide) to make informed tool-allowlist decisions when designing pods.
-    'mcp__pc-rig__pc_knowledge_read',
+    'mcp__pc-rig__pc_get_context_doc',
   ]),
   model: 'sonnet',
   effort: 'medium',
   maxTurns: 30,
   description:
-    'Designs + creates a new agent pod from a complete spec (dispatched worker — the orchestrator interviews the user and dispatches this pod). Derives name, prompt, tool allowlist, model+effort sizing, and knowledge docs from the job description; creates via pc_create_agent + pc_create_knowledge; reports every defaulted decision in its deliverable.',
+    'Designs + creates a new agent pod from a complete spec (dispatched worker — the orchestrator interviews the user and dispatches this pod). Derives name, prompt, tool allowlist, model+effort sizing, and attached reference docs from the job description; creates via pc_create_agent + pc_add_context_doc; reports every defaulted decision in its deliverable.',
   dispatchGuidance:
     'creating a new agent. Dispatch with the FULL spec from your interview: the job in one sentence, what info the agent gets each run, any reference material (paste it in), and how smart it needs to be (or let it size). Fresh designs only — it does not edit existing pods.',
 };
@@ -1388,7 +1388,7 @@ const CAISSON_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_list_field_schemas',
     'mcp__pc-rig__pc_list_agents',
     'mcp__pc-rig__pc_list_workflows',
-    'mcp__pc-rig__pc_knowledge_read',
+    'mcp__pc-rig__pc_get_context_doc',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
     'mcp__pc-rig__pc_create_workflow',
@@ -1399,7 +1399,7 @@ const CAISSON_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_replace_field_schemas',
     'mcp__pc-rig__pc_write_claude_md',
     // FD-16 — the on-demand door: reach the rest of the catalog (agent config,
-    // knowledge mgmt, audit reads) without carrying it day-to-day.
+    // context-doc mgmt, audit reads) without carrying it day-to-day.
     'mcp__pc-rig__pc_find_tool',
     'mcp__pc-rig__pc_call_tool',
   ]),
@@ -1425,7 +1425,7 @@ const CODE_WRITER_POD_CONTENT: CreateAgentInput = {
     'Bash',
     'WebFetch',
     'WebSearch',
-    'mcp__pc-rig__pc_knowledge_read',
+    'mcp__pc-rig__pc_get_context_doc',
     // Output-home write — no longer force-merged (contract-first); code-writers
     // may land change summaries on a linked output work item, so grant it.
     'mcp__pc-rig__pc_attach_to_work_item',
@@ -1450,7 +1450,7 @@ const EXTRACTOR_POD_CONTENT: CreateAgentInput = {
     'Read',
     'Glob',
     'Grep',
-    'mcp__pc-rig__pc_knowledge_read',
+    'mcp__pc-rig__pc_get_context_doc',
     // Output-home write — no longer force-merged (contract-first); extractors
     // may land large JSON on a linked output work item, so grant it explicitly.
     'mcp__pc-rig__pc_attach_to_work_item',
@@ -1487,65 +1487,66 @@ export const STOCK_POD_CONTENT: readonly CreateAgentInput[] = [
 
 export type SeedStockPodAction = SeedPodAction;
 
-interface StockKnowledgeDoc {
+interface StockContextDoc {
   readonly name: string;
   readonly content: string;
 }
 
-interface SeedStockKnowledgeResult {
+interface SeedStockDocsResult {
   insertedCount: number;
   reseededCount: number;
   skippedCount: number;
 }
 
-function seedStockKnowledgeDocs(
+/** Seed a stock pod's attached context docs (agent-scoped context_docs rows —
+ *  migration 0055 merged the old agent_knowledge table in). Same drift
+ *  semantics as the pod scalars: insert when missing, auto-reseed on body
+ *  drift, leave user-edited docs alone. Lookup is by title; migrated docs
+ *  kept their ids, so legacy `field:'knowledge'` audit rows still guard them
+ *  (see hasNonSystemDocEdit). */
+function seedStockContextDocs(
   agentId: ULID,
-  docs: readonly StockKnowledgeDoc[],
+  docs: readonly StockContextDoc[],
   opts: { reasonTag: string; agentName: string },
-): SeedStockKnowledgeResult {
+): SeedStockDocsResult {
   let insertedCount = 0;
   let reseededCount = 0;
   let skippedCount = 0;
 
   for (const doc of docs) {
-    const content = doc.content.trim();
-    const existing = getKnowledgeByName({
-      agentId,
-      scope: 'global',
-      name: doc.name,
-    });
+    const body = doc.content.trim();
+    const existing = getAgentContextDocByTitle({ agentId, title: doc.name });
 
     if (!existing) {
-      createKnowledge(
+      createContextDoc(
         {
-          agentId,
-          scope: 'global',
-          name: doc.name,
-          kind: 'knowledge',
-          content,
+          scope: { agentId },
+          title: doc.name,
+          body,
+          author: 'orchestrator',
         },
         {
           actor: 'orchestrator',
-          reason: `system-seed:${opts.reasonTag} - ${opts.agentName} knowledge '${doc.name}' created at boot`,
+          reason: `system-seed:${opts.reasonTag} - ${opts.agentName} doc '${doc.name}' created at boot`,
         },
       );
       insertedCount += 1;
       continue;
     }
 
-    if (existing.kind === 'knowledge' && existing.content === content) continue;
+    if (existing.body === body) continue;
 
-    if (hasNonSystemKnowledgeEdit(agentId, existing.id)) {
+    if (hasNonSystemDocEdit(agentId, existing.id)) {
       skippedCount += 1;
       continue;
     }
 
-    updateKnowledge(
+    updateContextDoc(
       existing.id,
-      { kind: 'knowledge', content },
+      { body },
       {
         actor: 'orchestrator',
-        reason: `system-reseed:${opts.reasonTag} - ${opts.agentName} knowledge '${doc.name}' drift`,
+        reason: `system-reseed:${opts.reasonTag} - ${opts.agentName} doc '${doc.name}' drift`,
       },
     );
     reseededCount += 1;
@@ -1554,17 +1555,23 @@ function seedStockKnowledgeDocs(
   return { insertedCount, reseededCount, skippedCount };
 }
 
-function hasNonSystemKnowledgeEdit(agentId: ULID, knowledgeId: ULID): boolean {
-  const rows = listAgentAudit({ agentId, field: 'knowledge', limit: 1000 });
+/** A doc is user-edited when its NEWEST audit row isn't a system seed.
+ *  Scans BOTH the live `context-doc` field and the legacy `knowledge` field —
+ *  migration 0055 preserved doc ids, so pre-merge edit history still counts. */
+function hasNonSystemDocEdit(agentId: ULID, docId: ULID): boolean {
+  const rows = [
+    ...listAgentAudit({ agentId, field: 'context-doc', limit: 1000 }),
+    ...listAgentAudit({ agentId, field: 'knowledge', limit: 1000 }),
+  ].sort((a, b) => b.createdAt - a.createdAt);
   for (const row of rows) {
-    if (row.fieldRef !== knowledgeId) continue;
-    if (isSystemKnowledgeSeed(row.reason, row.actor)) return false;
+    if (row.fieldRef !== docId) continue;
+    if (isSystemDocSeed(row.reason, row.actor)) return false;
     return true;
   }
   return false;
 }
 
-function isSystemKnowledgeSeed(reason: string | null, actor: string): boolean {
+function isSystemDocSeed(reason: string | null, actor: string): boolean {
   if (actor !== 'orchestrator') return false;
   const r = reason ?? '';
   return r.startsWith('system-seed:') || r.startsWith('system-reseed:');
@@ -1588,12 +1595,12 @@ export interface SeedStockPodsResult {
   reseededCount: number;
   /** Convenience count of pods skipped because of user edits. */
   skippedCount: number;
-  /** Convenience count of stock knowledge docs inserted this call. */
-  knowledgeInsertedCount: number;
-  /** Convenience count of stock knowledge docs auto-reseeded this call. */
-  knowledgeReseededCount: number;
-  /** Convenience count of stock knowledge docs skipped because of user edits. */
-  knowledgeSkippedCount: number;
+  /** Convenience count of stock context docs inserted this call. */
+  docsInsertedCount: number;
+  /** Convenience count of stock context docs auto-reseeded this call. */
+  docsReseededCount: number;
+  /** Convenience count of stock context docs skipped because of user edits. */
+  docsSkippedCount: number;
 }
 
 /** Boot-time seed for the stock specialist pods. Insert-or-drift-reseed
@@ -1608,9 +1615,14 @@ export function seedStockPods(): SeedStockPodsResult {
   let insertedCount = 0;
   let reseededCount = 0;
   let skippedCount = 0;
-  let knowledgeInsertedCount = 0;
-  let knowledgeReseededCount = 0;
-  let knowledgeSkippedCount = 0;
+  let docsInsertedCount = 0;
+  let docsReseededCount = 0;
+  let docsSkippedCount = 0;
+  const STOCK_DOCS: Record<string, readonly StockContextDoc[]> = {
+    caisson: CAISSON_KNOWLEDGE_DOCS,
+    'agent-designer': AGENT_DESIGNER_KNOWLEDGE_DOCS,
+    diagnostician: DIAGNOSTICIAN_KNOWLEDGE_DOCS,
+  };
   for (const content of STOCK_POD_CONTENT) {
     const result = seedPodWithDriftReseed(content, { reasonTag: '17e' });
     entries.push({
@@ -1623,36 +1635,15 @@ export function seedStockPods(): SeedStockPodsResult {
     else if (result.action === 'reseeded') reseededCount += 1;
     else if (result.action === 'skipped-user-edited') skippedCount += 1;
 
-    if (content.name === 'caisson') {
-      const knowledge = seedStockKnowledgeDocs(result.agentId as ULID, CAISSON_KNOWLEDGE_DOCS, {
+    const stockDocs = STOCK_DOCS[content.name];
+    if (stockDocs) {
+      const docs = seedStockContextDocs(result.agentId as ULID, stockDocs, {
         reasonTag: '17e',
         agentName: content.name,
       });
-      knowledgeInsertedCount += knowledge.insertedCount;
-      knowledgeReseededCount += knowledge.reseededCount;
-      knowledgeSkippedCount += knowledge.skippedCount;
-    }
-
-    if (content.name === 'agent-designer') {
-      const knowledge = seedStockKnowledgeDocs(
-        result.agentId as ULID,
-        AGENT_DESIGNER_KNOWLEDGE_DOCS,
-        { reasonTag: '17e', agentName: content.name },
-      );
-      knowledgeInsertedCount += knowledge.insertedCount;
-      knowledgeReseededCount += knowledge.reseededCount;
-      knowledgeSkippedCount += knowledge.skippedCount;
-    }
-
-    if (content.name === 'diagnostician') {
-      const knowledge = seedStockKnowledgeDocs(
-        result.agentId as ULID,
-        DIAGNOSTICIAN_KNOWLEDGE_DOCS,
-        { reasonTag: '17e', agentName: content.name },
-      );
-      knowledgeInsertedCount += knowledge.insertedCount;
-      knowledgeReseededCount += knowledge.reseededCount;
-      knowledgeSkippedCount += knowledge.skippedCount;
+      docsInsertedCount += docs.insertedCount;
+      docsReseededCount += docs.reseededCount;
+      docsSkippedCount += docs.skippedCount;
     }
   }
   return {
@@ -1660,8 +1651,8 @@ export function seedStockPods(): SeedStockPodsResult {
     insertedCount,
     reseededCount,
     skippedCount,
-    knowledgeInsertedCount,
-    knowledgeReseededCount,
-    knowledgeSkippedCount,
+    docsInsertedCount,
+    docsReseededCount,
+    docsSkippedCount,
   };
 }

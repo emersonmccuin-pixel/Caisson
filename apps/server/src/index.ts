@@ -120,6 +120,7 @@ import { detectStockPodDrift, listCanonicalStockPodNames } from './services/pod-
 import { seedStockPods } from './services/stock-pod-seed.ts';
 import { ensureCommandProject } from './services/command-seed.ts';
 import { scrubDeadToolGrants } from './services/agent-tools-scrub.ts';
+import { remapRenamedToolSlugs } from './services/tool-slug-remap.ts';
 import { migrateStoredWorkflowDefsToV3 } from './services/workflow-def-migrate-v3.ts';
 import { cancelWorkflowRunCascade } from './services/workflow-run-cancel.ts';
 import { createAgentRunReconciler } from './services/agent-run-reconciler.ts';
@@ -207,6 +208,20 @@ applyClaudeRuntimeSettings(readSettings());
       break;
     case 'unchanged':
       break;
+  }
+}
+
+// Migration 0055 — remap renamed knowledge-tool slugs in EVERY stored agent
+// row (drift-reseed below only covers non-user-edited global stock pods;
+// user-created + user-edited pods would otherwise keep dead slugs and their
+// attached docs would go dark). Must run BEFORE seedStockPods so the
+// user-edit detector sees already-normalized tool arrays. Idempotent.
+{
+  const res = remapRenamedToolSlugs();
+  if (res.remapped > 0) {
+    console.log(
+      `[pc] 0055 tool-slug remap: rewrote knowledge→context-doc tool slugs on ${res.remapped}/${res.scanned} agents: ${res.rows.join(' · ')}`,
+    );
   }
 }
 

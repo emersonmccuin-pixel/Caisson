@@ -25,9 +25,9 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type {
+  AgentContextDoc,
   ExpectedOutput,
   PodAgentRow,
-  PodKnowledgeRow,
   PodMcpServerConfig,
   PodMcpServerRow,
   PodSecretRow,
@@ -167,7 +167,7 @@ function materializePodFiles(
     renderAgentMd(
       bundle.agent,
       expandedTools,
-      bundle.knowledge,
+      bundle.contextDocs,
       opts.workItem,
       variables,
       opts.contextChain,
@@ -197,26 +197,26 @@ function materializePodFiles(
   };
 }
 
-/** The MCP tool agents call to fetch a knowledge doc's full content. The
- *  materializer only emits the knowledge footer when this tool is present
+/** The MCP tool agents call to fetch a context doc's full content. The
+ *  materializer only emits the attached-docs footer when this tool is present
  *  in the agent's expanded tool list — otherwise the footer would tell the
  *  agent to call a tool it doesn't have access to. */
-const KNOWLEDGE_READ_TOOL = 'mcp__pc-rig__pc_knowledge_read';
+const CONTEXT_DOC_READ_TOOL = 'mcp__pc-rig__pc_get_context_doc';
 
 /** Render the `.claude/agents/<name>.md` body. Frontmatter mirrors PC's
  *  flat-file agent shape: name, description, tools (comma-separated), model,
  *  effort, maxTurns. Empty/null fields are omitted.
  *
- *  When `knowledge` rows exist AND the agent has `pc_knowledge_read` in its
- *  expanded tool list, appends a "Knowledge available" footer listing each
- *  doc + its id + a short summary. Worker agents pull full content at
- *  runtime via `pc_knowledge_read`. Pods with zero knowledge docs OR pods
- *  without the read tool get no footer (the latter prevents silently telling
- *  an agent to call a tool it can't reach). */
+ *  When agent-scoped context docs exist AND the agent has
+ *  `pc_get_context_doc` in its expanded tool list, appends a "Reference docs"
+ *  footer listing each doc + its id + a short summary. Worker agents pull
+ *  full content at runtime via `pc_get_context_doc`. Pods with zero attached
+ *  docs OR pods without the read tool get no footer (the latter prevents
+ *  silently telling an agent to call a tool it can't reach). */
 export function renderAgentMd(
   agent: PodAgentRow,
   tools: readonly string[],
-  knowledge: readonly PodKnowledgeRow[] = [],
+  contextDocs: readonly AgentContextDoc[] = [],
   workItem?: PodWorkItemContext,
   variables?: Record<string, string>,
   contextChain?: string,
@@ -233,8 +233,8 @@ export function renderAgentMd(
   // Slice 1: context chain goes between the prompt body and the contract section.
   const chainBlock = renderContextChainSection(contextChain);
   const assignment = workItem ? renderAssignment(workItem) : '';
-  const canReadKnowledge = tools.includes(KNOWLEDGE_READ_TOOL);
-  const footer = canReadKnowledge ? renderKnowledgeFooter(agent.id, knowledge) : '';
+  const canReadDocs = tools.includes(CONTEXT_DOC_READ_TOOL);
+  const footer = canReadDocs ? renderContextDocsFooter(contextDocs) : '';
   const toolsFooter = agent.prompt.includes('{{AVAILABLE_TOOLS}}')
     ? ''
     : renderAvailableToolsFooter(tools);
@@ -336,32 +336,31 @@ export function renderAssignment(workItem: PodWorkItemContext): string {
   ].join('\n');
 }
 
-/** Knowledge access footer appended to the rendered .md when the pod has
- *  knowledge docs. Lists ids + names + a short summary so the agent can
- *  decide which docs to read; full content is pulled at runtime via
- *  `pc_knowledge_read`. */
-export function renderKnowledgeFooter(
-  agentId: string,
-  knowledge: readonly PodKnowledgeRow[],
+/** Attached-docs footer appended to the rendered .md when the pod has
+ *  agent-scoped context docs. Lists ids + titles + a short summary so the
+ *  agent can decide which docs to read; full content is pulled at runtime via
+ *  `pc_get_context_doc`. */
+export function renderContextDocsFooter(
+  contextDocs: readonly AgentContextDoc[],
 ): string {
-  if (knowledge.length === 0) return '';
+  if (contextDocs.length === 0) return '';
   const lines: string[] = [
     '',
     '',
-    '## Knowledge available',
+    '## Reference docs attached to this agent',
     '',
-    `You have ${knowledge.length} reference document${knowledge.length === 1 ? '' : 's'} attached to your pod. Read any of them at runtime with:`,
+    `You have ${contextDocs.length} reference document${contextDocs.length === 1 ? '' : 's'} attached to your pod. Read any of them at runtime with:`,
     '',
     '```',
-    `pc_knowledge_read({ agentId: "${agentId}", knowledgeId: "<one of the ids below>" })`,
+    'pc_get_context_doc({ doc_id: "<one of the ids below>" })',
     '```',
     '',
     'Available docs:',
     '',
   ];
-  for (const doc of knowledge) {
-    const summary = summariseKnowledge(doc.content);
-    lines.push(`- **${doc.name}** (\`${doc.id}\`) — ${summary}`);
+  for (const doc of contextDocs) {
+    const summary = summariseKnowledge(doc.body);
+    lines.push(`- **${doc.title}** (\`${doc.id}\`) — ${summary}`);
   }
   return lines.join('\n');
 }

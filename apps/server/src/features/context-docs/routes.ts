@@ -6,8 +6,9 @@
 // for this thin feature). Mirrors the areas feature shape.
 
 import type { Hono } from 'hono';
-import type { ULID } from '@pc/domain';
+import type { PodAuditActor, ULID } from '@pc/domain';
 import {
+  bumpAgentRev,
   createContextDoc,
   getContextDoc,
   getDb,
@@ -15,10 +16,13 @@ import {
   listContextChainDocs,
   listContextDocsForScope,
   searchContextDocs,
+  softDeleteContextDoc,
   updateContextDoc,
+  type AuditInput,
   type ContextDocRow,
   type ContextDocScope,
 } from '@pc/db';
+import { announcePod } from '../../services/pod-writer.ts';
 
 export interface ContextDocRoutesDeps {
   /** Resolves a project runtime by id; null → 404. */
@@ -41,6 +45,29 @@ function emitContextDocChanged(projectId: ULID, doc: ContextDocRow): void {
   } catch {
     /* non-fatal — the HTTP response already carries the fresh doc */
   }
+}
+
+/** Optional audit identity from the request body (`actor` + `reason`).
+ *  Agent-scoped docs land an agent_audit row; the MCP handlers pass
+ *  actor:'orchestrator'. Non-agent docs ignore this entirely. */
+function auditFromBody(body: Record<string, unknown>): AuditInput | undefined {
+  const actor = body.actor === 'orchestrator' || body.actor === 'user'
+    ? (body.actor as PodAuditActor)
+    : undefined;
+  if (!actor) return undefined;
+  return {
+    actor,
+    reason: typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : null,
+  };
+}
+
+/** Doc-id mutations through the PROJECT route family can land on an
+ *  agent-scoped doc — keep the pod surfaces (rev counter, Agents tab) in
+ *  sync exactly like the pod route family does. */
+function announceAgentDocChange(doc: ContextDocRow): void {
+  if (!doc.agentId) return;
+  bumpAgentRev(doc.agentId);
+  announcePod(doc.agentId, 'updated');
 }
 
 export function registerContextDocRoutes(app: Hono, deps: ContextDocRoutesDeps): void {
@@ -184,13 +211,38 @@ export function registerContextDocRoutes(app: Hono, deps: ContextDocRoutesDeps):
       return c.json({ ok: false, error: 'at least one of title or body required' }, 400);
     }
 
-    const doc = updateContextDoc(docId, {
-      ...(typeof title === 'string' ? { title } : {}),
-      ...(typeof docBody === 'string' ? { body: docBody } : {}),
-    });
+    const doc = updateContextDoc(
+      docId,
+      {
+        ...(typeof title === 'string' ? { title } : {}),
+        ...(typeof docBody === 'string' ? { body: docBody } : {}),
+      },
+      auditFromBody(body as Record<string, unknown>),
+    );
     if (!doc) return c.json({ ok: false, error: `unknown context doc: ${docId}` }, 404);
+    announceAgentDocChange(doc);
     emitContextDocChanged(runtime.project.id, doc);
     return c.json({ ok: true, doc });
+  });
+
+  // ── DELETE /api/projects/:projectId/context-docs/:docId
+  // Soft delete (every read filters deletedAt). Accepts `actor` + `reason`
+  // via query string for the audit row on agent-scoped docs.
+  app.delete('/api/projects/:projectId/context-docs/:docId', (c) => {
+    const projectId = c.req.param('projectId');
+    const docId = c.req.param('docId') as ULID;
+    const runtime = deps.resolveProject(projectId);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+
+    const qs = new URL(c.req.url).searchParams;
+    const doc = softDeleteContextDoc(
+      docId,
+      auditFromBody({ actor: qs.get('actor'), reason: qs.get('reason') }),
+    );
+    if (!doc) return c.json({ ok: false, error: `unknown context doc: ${docId}` }, 404);
+    announceAgentDocChange(doc);
+    emitContextDocChanged(runtime.project.id, doc);
+    return c.json({ ok: true });
   });
 
 }

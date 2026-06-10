@@ -186,6 +186,7 @@ export type {
 } from './agent-file.ts';
 export { parseAgentFile, serializeAgentFile } from './agent-file.ts';
 export type {
+  AgentContextDoc,
   AgentMcpAttachmentRow,
   McpDiscoveryStatus,
   McpServerRegistryRow,
@@ -193,8 +194,6 @@ export type {
   PodAuditActor,
   PodAuditField,
   PodAuditRow,
-  PodKnowledgeKind,
-  PodKnowledgeRow,
   PodMcpServerConfig,
   PodMcpServerRow,
   PodOrigin,
@@ -206,7 +205,6 @@ export {
   MCP_DISCOVERY_STATUSES,
   POD_AUDIT_ACTORS,
   POD_AUDIT_FIELDS,
-  POD_KNOWLEDGE_KINDS,
   POD_SCOPES,
 } from './pod.ts';
 export type { SubagentFailureCause, SubagentFailureSignal } from './subagent-failure.ts';

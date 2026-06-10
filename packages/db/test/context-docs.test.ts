@@ -22,12 +22,15 @@ process.env.PC_DATA_DIR = tmpDir;
 const {
   assertSchemaIntact,
   closeDb,
+  createAgent,
   createArea,
   createContextDoc,
   createProject,
   createWorkItem,
+  getAgentContextDocByTitle,
   getContextDoc,
   getRawDb,
+  listAgentAudit,
   listContextChainDocs,
   listContextDocsForScope,
   runMigrations,
@@ -235,6 +238,79 @@ test('listContextChainDocs excludes soft-deleted docs', () => {
 
   const chain = listContextChainDocs({ workItemId: wi.id, projectId: p.id });
   assert.ok(!chain.some((d) => d.id === doc.id));
+});
+
+// ── Agent scope (migration 0055 — merged agent_knowledge) ─────────────────────
+
+test('agent-scoped CRUD round-trips and lists by agent', () => {
+  const agent = createAgent(
+    { name: 'pod-ctx-crud', scope: 'global' },
+    { actor: 'user' },
+  );
+  const doc = createContextDoc({
+    scope: { agentId: agent.id },
+    title: 'Voice rules',
+    body: 'Always terse.',
+  });
+  assert.equal(doc.agentId, agent.id);
+  assert.equal(doc.projectId, null);
+
+  const listed = listContextDocsForScope({ scope: { agentId: agent.id } });
+  assert.ok(listed.some((d) => d.id === doc.id));
+
+  const fetched = getContextDoc(doc.id);
+  assert.equal(fetched!.agentId, agent.id);
+});
+
+test('agent-scoped mutations emit context-doc audit rows', () => {
+  const agent = createAgent(
+    { name: 'pod-ctx-audit', scope: 'global' },
+    { actor: 'user' },
+  );
+  const doc = createContextDoc(
+    { scope: { agentId: agent.id }, title: 'Audited', body: 'v1' },
+    { actor: 'orchestrator', reason: 'seed' },
+  );
+  updateContextDoc(doc.id, { body: 'v2' }, { actor: 'user', reason: 'edit' });
+  softDeleteContextDoc(doc.id, { actor: 'user', reason: 'prune' });
+
+  const audit = listAgentAudit({ agentId: agent.id, field: 'context-doc' });
+  const forDoc = audit.filter((a) => a.fieldRef === doc.id);
+  assert.equal(forDoc.length, 3, 'create + update + delete should each audit');
+  // Newest-first: delete carries prior only; create carries new only.
+  assert.equal(forDoc[0]!.newValue, null);
+  assert.match(forDoc[1]!.newValue ?? '', /v2/);
+  assert.match(forDoc[2]!.newValue ?? '', /v1/);
+  assert.equal(forDoc[2]!.priorValue, null);
+});
+
+test('non-agent scopes emit no agent audit', () => {
+  const p = seedProject('p-no-audit');
+  const agent = createAgent(
+    { name: 'pod-ctx-noaudit', scope: 'global' },
+    { actor: 'user' },
+  );
+  const before = listAgentAudit({ agentId: agent.id, field: 'context-doc' }).length;
+  createContextDoc({ scope: { projectId: p.id }, title: 'Project doc', body: '' });
+  const after = listAgentAudit({ agentId: agent.id, field: 'context-doc' }).length;
+  assert.equal(after, before);
+});
+
+test('getAgentContextDocByTitle finds live docs only', () => {
+  const agent = createAgent(
+    { name: 'pod-ctx-title', scope: 'global' },
+    { actor: 'user' },
+  );
+  const doc = createContextDoc({
+    scope: { agentId: agent.id },
+    title: 'Seeded doc',
+    body: 'x',
+  });
+  assert.equal(getAgentContextDocByTitle({ agentId: agent.id, title: 'Seeded doc' })?.id, doc.id);
+  assert.equal(getAgentContextDocByTitle({ agentId: agent.id, title: 'Missing' }), null);
+
+  softDeleteContextDoc(doc.id);
+  assert.equal(getAgentContextDocByTitle({ agentId: agent.id, title: 'Seeded doc' }), null);
 });
 
 // ── searchContextDocs ─────────────────────────────────────────────────────────

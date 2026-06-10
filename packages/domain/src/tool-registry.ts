@@ -400,8 +400,8 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_get_agent",
     "family": "agent",
     "label": "Read an agent's config",
-    "description": "Fetch the full pod bundle for an agent: prompt + knowledge docs + secret env-var names (NEVER values) + MCP servers + scalar settings. Use when you need to read an agent's current configuration before recommending a change, answering 'what does <agent> know about X?', or auditing a pod's setup. Accepts either { id } (ULID) or { name } (resolved to id via list lookup).",
-    "catalogDescription": "Fetch a pod bundle: prompt + knowledge + secrets + MCP.",
+    "description": "Fetch the full pod bundle for an agent: prompt + attached context docs + secret env-var names (NEVER values) + MCP servers + scalar settings. Use when you need to read an agent's current configuration before recommending a change, answering 'what does <agent> know about X?', or auditing a pod's setup. Accepts either { id } (ULID) or { name } (resolved to id via list lookup).",
+    "catalogDescription": "Fetch a pod bundle: prompt + attached docs + secrets + MCP.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -520,7 +520,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_clone_agent_to_project",
     "family": "agent",
     "label": "Clone a pod into a project",
-    "description": "Clone a pod into a target project as a project-scoped copy (scalar fields + knowledge + MCP servers; secrets are NOT copied). Workflow agent steps require project-scoped pods — use this to bring a global pod into the project before wiring it into a workflow. 409 if the target name already exists in the project. Audits as actor='orchestrator'. Accepts either { id } or { name } for the source pod; projectId defaults to the calling session's project.",
+    "description": "Clone a pod into a target project as a project-scoped copy (scalar fields + attached context docs + MCP servers; secrets are NOT copied). Workflow agent steps require project-scoped pods — use this to bring a global pod into the project before wiring it into a workflow. 409 if the target name already exists in the project. Audits as actor='orchestrator'. Accepts either { id } or { name } for the source pod; projectId defaults to the calling session's project.",
     "catalogDescription": "Copy a pod into a project (workflows need project-scoped pods).",
     "inputSchema": {
       "type": "object",
@@ -552,7 +552,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_reset_agent_to_default",
     "family": "agent",
     "label": "Reset a stock pod to its default",
-    "description": "Reset a STOCK pod's scalar fields (prompt, description, model, tools, …) to the canonical seed content. Knowledge docs, secrets, and MCP servers are untouched. Non-stock pods return 400. Audits as actor='orchestrator'. Accepts either { id } or { name }.",
+    "description": "Reset a STOCK pod's scalar fields (prompt, description, model, tools, …) to the canonical seed content. Attached context docs, secrets, and MCP servers are untouched. Non-stock pods return 400. Audits as actor='orchestrator'. Accepts either { id } or { name }.",
     "catalogDescription": "Restore a stock pod's seeded content.",
     "inputSchema": {
       "type": "object",
@@ -570,138 +570,6 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
           "description": "optional one-line audit reason"
         }
       }
-    }
-  },
-  {
-    "name": "pc_create_knowledge",
-    "family": "agent",
-    "label": "Add a knowledge doc",
-    "description": "Attach a knowledge document to an agent (reference material the agent can read at runtime via pc_knowledge_read). Low-friction add path: paste the content, omit the docName and we'll auto-derive from the first markdown heading or first non-empty line. Use this when the user says 'teach <agent> about <topic>: …'. Accepts either { agentId } or { agentName }. Audits as actor='orchestrator'. Returns the new knowledge row including its id.",
-    "catalogDescription": "Attach a reference document to an agent.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "agentId": {
-          "type": "string",
-          "description": "pod ULID id (mutually exclusive with agentName)"
-        },
-        "agentName": {
-          "type": "string",
-          "description": "pod name (looked up if agentId absent)"
-        },
-        "content": {
-          "type": "string",
-          "description": "document body (markdown / plain text)"
-        },
-        "docName": {
-          "type": "string",
-          "description": "optional doc name — auto-derived from H1 / first line if omitted"
-        },
-        "reason": {
-          "type": "string",
-          "description": "optional one-line audit reason"
-        }
-      },
-      "required": [
-        "content"
-      ]
-    }
-  },
-  {
-    "name": "pc_update_knowledge",
-    "family": "agent",
-    "label": "Update a knowledge doc",
-    "description": "Wholesale-replace a knowledge document's content (and optionally its name). The prior version is preserved in the audit log for revert. Use for 'the pricing tiers changed — update <agent>'s pricing doc: …'. Audits as actor='orchestrator'. Accepts either { agentId } or { agentName } plus { knowledgeId }.",
-    "catalogDescription": "Replace a knowledge doc's content.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "agentId": {
-          "type": "string",
-          "description": "pod ULID id (mutually exclusive with agentName)"
-        },
-        "agentName": {
-          "type": "string",
-          "description": "pod name (looked up if agentId absent)"
-        },
-        "knowledgeId": {
-          "type": "string",
-          "description": "knowledge doc ULID id"
-        },
-        "content": {
-          "type": "string",
-          "description": "new document body"
-        },
-        "docName": {
-          "type": "string",
-          "description": "optional rename"
-        },
-        "reason": {
-          "type": "string",
-          "description": "optional one-line audit reason"
-        }
-      },
-      "required": [
-        "knowledgeId"
-      ]
-    }
-  },
-  {
-    "name": "pc_delete_knowledge",
-    "family": "agent",
-    "label": "Delete a knowledge doc",
-    "description": "Remove a knowledge document from an agent. Audits as actor='orchestrator'. Accepts either { agentId } or { agentName } plus { knowledgeId }.",
-    "catalogDescription": "Remove a knowledge doc from an agent.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "agentId": {
-          "type": "string",
-          "description": "pod ULID id (mutually exclusive with agentName)"
-        },
-        "agentName": {
-          "type": "string",
-          "description": "pod name (looked up if agentId absent)"
-        },
-        "knowledgeId": {
-          "type": "string",
-          "description": "knowledge doc ULID id"
-        },
-        "reason": {
-          "type": "string",
-          "description": "optional one-line audit reason"
-        }
-      },
-      "required": [
-        "knowledgeId"
-      ]
-    }
-  },
-  {
-    "name": "pc_knowledge_read",
-    "family": "agent",
-    "label": "Read a knowledge doc",
-    "description": "Read a single knowledge document's full content by id. Worker agents call this at runtime to pull reference material (the agent's spawn-time prompt lists available docs + their ids). The orchestrator uses it to surface knowledge content inline ('what does <agent> know about <topic>?'). Accepts either { agentId } or { agentName } plus { knowledgeId }.",
-    "catalogDescription": "Runtime: pull a knowledge doc by id (worker agents).",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "agentId": {
-          "type": "string",
-          "description": "pod ULID id (mutually exclusive with agentName)"
-        },
-        "agentName": {
-          "type": "string",
-          "description": "pod name (looked up if agentId absent)"
-        },
-        "knowledgeId": {
-          "type": "string",
-          "description": "knowledge doc ULID id"
-        }
-      },
-      "required": [
-        "knowledgeId"
-      ]
     }
   },
   {
@@ -862,7 +730,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_list_agent_audit",
     "family": "agent",
     "label": "Read an agent's change history",
-    "description": "Read an agent's change history. Returns audit rows newest-first. Filter by actor ('orchestrator' / 'user'), field ('prompt' / 'model' / 'effort' / 'tools' / 'description' / 'name' / 'maxTurns' / 'knowledge' / 'secret' / 'mcp-server'), limit (default 50), beforeCreatedAt (epoch ms — for paging). Use when reasoning about 'why does this agent behave this way?' or auditing recent changes. Accepts either { agentId } or { agentName }.",
+    "description": "Read an agent's change history. Returns audit rows newest-first. Filter by actor ('orchestrator' / 'user'), field ('prompt' / 'model' / 'effort' / 'tools' / 'description' / 'name' / 'maxTurns' / 'context-doc' / 'knowledge' [legacy rows] / 'secret' / 'mcp-server'), limit (default 50), beforeCreatedAt (epoch ms — for paging). Use when reasoning about 'why does this agent behave this way?' or auditing recent changes. Accepts either { agentId } or { agentName }.",
     "catalogDescription": "Inspect a pod's audit log (who changed what, when).",
     "inputSchema": {
       "type": "object",
@@ -1861,7 +1729,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_find_tool",
     "family": "none",
     "label": "Find a tool",
-    "description": "Search the full Caisson tool catalog by keyword when none of your granted tools fits the job. Returns up to 5 matches with each tool's tier: a tool you already hold (call it directly), an on-demand tool (call it via pc_call_tool — the match includes its input schema), or a worker-side tool (flows INTO you from dispatched agents; not callable from your seat). Use this for rare diagnostic/config work — reading a workflow definition, checking an agent's audit trail, inspecting knowledge — instead of guessing tool names.",
+    "description": "Search the full Caisson tool catalog by keyword when none of your granted tools fits the job. Returns up to 5 matches with each tool's tier: a tool you already hold (call it directly), an on-demand tool (call it via pc_call_tool — the match includes its input schema), or a worker-side tool (flows INTO you from dispatched agents; not callable from your seat). Use this for rare diagnostic/config work — reading a workflow definition, checking an agent's audit trail, inspecting attached docs — instead of guessing tool names.",
     "catalogDescription": "Search the full tool catalog for a tool you don't carry day-to-day.",
     "inputSchema": {
       "type": "object",
@@ -1952,19 +1820,19 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_list_context",
     "family": "work-item",
     "label": "List context docs for a scope",
-    "description": "Return the context-doc index (title + one-liner + age) for a scope (project | area | work-item) or the full chain from a work item upward. Use `scope='chain'` with `scope_id=<work_item_id>` to get all docs in closest-scope-first order — always call this before dispatching so you know what domain context is already filed. Use `scope='project'` (no scope_id needed) for project-level docs. Pass `targetProjectId` (ULID, slug, or name) to list context docs from a different project.",
-    "catalogDescription": "List context docs for a scope or chain.",
+    "description": "Return the context-doc index (title + one-liner + age) for a scope (project | area | work-item | agent) or the full chain from a work item upward. Use `scope='chain'` with `scope_id=<work_item_id>` to get all docs in closest-scope-first order — always call this before dispatching so you know what domain context is already filed. Use `scope='project'` (no scope_id needed) for project-level docs. Use `scope='agent'` with `scope_id=<pod id or name>` to list the reference docs attached to an agent. Pass `targetProjectId` (ULID, slug, or name) to list context docs from a different project.",
+    "catalogDescription": "List context docs for a scope, chain, or agent.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "scope": {
           "type": "string",
-          "enum": ["project", "area", "work-item", "chain"],
-          "description": "which scope to list: 'project' = project-level docs (no scope_id needed); 'area' = docs for an area; 'work-item' = docs for a work item; 'chain' = full chain from a work item upward (closest-scope-first)."
+          "enum": ["project", "area", "work-item", "chain", "agent"],
+          "description": "which scope to list: 'project' = project-level docs (no scope_id needed); 'area' = docs for an area; 'work-item' = docs for a work item; 'chain' = full chain from a work item upward (closest-scope-first); 'agent' = docs attached to an agent pod."
         },
         "scope_id": {
           "type": "string",
-          "description": "ULID of the area or work item (required when scope is 'area', 'work-item', or 'chain'; omit for 'project')."
+          "description": "ULID of the area or work item, or the pod id/name for scope='agent' (required when scope is 'area', 'work-item', 'chain', or 'agent'; omit for 'project')."
         },
         "targetProjectId": {
           "type": "string",
@@ -1978,8 +1846,8 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_get_context_doc",
     "family": "work-item",
     "label": "Get a context doc (full body)",
-    "description": "Fetch a single context document's full body by its id. Use this when the dispatch-time chain index listed a doc and you need to read its full content. The index always gives ids; call this for any doc whose body you need. Pass `targetProjectId` (ULID, slug, or name) to read a context doc from a different project.",
-    "catalogDescription": "Fetch a context doc's full body by id.",
+    "description": "Fetch a single context document's full body by its id — THE runtime read tool for any doc listed in your spawn prompt (the 'Reference docs attached to this agent' footer and the dispatch-time chain index both give ids), and for ids from pc_list_context / pc_search. Works for every scope, including agent-attached reference docs. Pass `targetProjectId` (ULID, slug, or name) to read a context doc from a different project.",
+    "catalogDescription": "Fetch a context doc's full body by id (any scope, incl. agent-attached).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1999,19 +1867,19 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_add_context_doc",
     "family": "work-item",
     "label": "Add a context doc",
-    "description": "File a new context document at a scope (project | area | work-item). Use the filing ladder to decide where: project = rules true for all work; area = domain truth beyond any one task; work-item = only matters until this task is done. Always state WHY in one line at the end of the doc so misfiled docs are visible. Orchestrator-held — agents propose via their report flag, the orchestrator confirms with the user before filing.",
-    "catalogDescription": "File a new context doc at a scope (project | area | work-item).",
+    "description": "File a new context document at a scope (project | area | work-item | agent). Use the filing ladder to decide where: project = rules true for all work; area = domain truth beyond any one task; work-item = only matters until this task is done; agent = craft/reference material attached to a specific pod (it rides into every one of that pod's runs). Always state WHY in one line at the end of the doc so misfiled docs are visible. Orchestrator-held for project/area/work-item scopes — agents propose via their report flag, the orchestrator confirms with the user before filing.",
+    "catalogDescription": "File a new context doc at a scope (project | area | work-item | agent).",
     "inputSchema": {
       "type": "object",
       "properties": {
         "scope": {
           "type": "string",
-          "enum": ["project", "area", "work-item"],
-          "description": "where to file the doc"
+          "enum": ["project", "area", "work-item", "agent"],
+          "description": "where to file the doc ('agent' attaches it to a pod)"
         },
         "scope_id": {
           "type": "string",
-          "description": "ULID of the area or work item (required when scope is 'area' or 'work-item'; omit for 'project')."
+          "description": "ULID of the area or work item, or the pod id/name for scope='agent' (required when scope is 'area', 'work-item', or 'agent'; omit for 'project')."
         },
         "title": {
           "type": "string",
@@ -2024,6 +1892,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "author": {
           "type": "string",
           "description": "who is filing (default: 'orchestrator')"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason (agent-scoped docs land in the pod's audit log)"
         }
       },
       "required": ["scope", "title"]
@@ -2033,7 +1905,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_update_context_doc",
     "family": "work-item",
     "label": "Update a context doc",
-    "description": "Update the title or body of an existing context document. Orchestrator-held — agents propose via their report; orchestrator confirms before writing. Use when domain truth has changed (pricing changed, architecture decision revised, etc.).",
+    "description": "Update the title or body of an existing context document (any scope, including agent-attached docs). Orchestrator-held for project/area/work-item scopes — agents propose via their report; orchestrator confirms before writing. Use when domain truth has changed (pricing changed, architecture decision revised, etc.).",
     "catalogDescription": "Update a context doc's title or body.",
     "inputSchema": {
       "type": "object",
@@ -2049,6 +1921,31 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "body": {
           "type": "string",
           "description": "new body (replaces entire body — include all content, not just the change)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason (agent-scoped docs land in the pod's audit log)"
+        }
+      },
+      "required": ["doc_id"]
+    }
+  },
+  {
+    "name": "pc_delete_context_doc",
+    "family": "work-item",
+    "label": "Delete a context doc",
+    "description": "Soft-delete a context document by id (any scope, including agent-attached docs). The doc disappears from every read and from agent spawn prompts; its read-history is kept. Agent-scoped deletions land in the pod's audit log.",
+    "catalogDescription": "Soft-delete a context doc by id.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "doc_id": {
+          "type": "string",
+          "description": "context doc ULID id"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional one-line audit reason"
         }
       },
       "required": ["doc_id"]
@@ -2151,10 +2048,13 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_get_context_doc: 'first-order',
   pc_add_context_doc: 'first-order',
   pc_update_context_doc: 'first-order',
+  // Migration 0055 — delete door for any scope (replaced pc_delete_knowledge).
+  pc_delete_context_doc: 'on-demand',
   pc_search: 'first-order',
   pc_find_tool: 'first-order',
   pc_call_tool: 'first-order',
-  // Agent config + knowledge + secrets + audit — specialist/UI-owned defaults.
+  // Agent config + secrets + audit — specialist/UI-owned defaults. (The old
+  // knowledge tools merged into the context-doc family — migration 0055.)
   pc_create_agent: 'on-demand',
   pc_get_agent: 'on-demand',
   pc_update_agent: 'on-demand',
@@ -2169,10 +2069,6 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_add_agent_mcp_server: 'on-demand',
   pc_delete_agent_mcp_server: 'on-demand',
   pc_list_agent_audit: 'on-demand',
-  pc_create_knowledge: 'on-demand',
-  pc_update_knowledge: 'on-demand',
-  pc_delete_knowledge: 'on-demand',
-  pc_knowledge_read: 'on-demand',
   // Workflow authoring — workflow-builder-owned default.
   pc_create_workflow: 'on-demand',
   pc_get_workflow: 'on-demand',

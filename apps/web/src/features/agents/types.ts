@@ -2,7 +2,6 @@ import type { ULID } from '@/features/projects/types';
 
 export type PodScope = 'global' | 'project';
 export type PodOrigin = 'stock' | 'user-created';
-export type PodKnowledgeKind = 'knowledge' | 'example';
 export type PodAuditActor = 'orchestrator' | 'user';
 export type PodAuditField =
   | 'prompt'
@@ -16,7 +15,10 @@ export type PodAuditField =
   | 'output_destination'
   | 'name'
   | 'dispatch_guidance'
+  // 'knowledge' — ☠ migration 0055 (merged into context docs); survives only
+  // in historical audit rows.
   | 'knowledge'
+  | 'context-doc'
   | 'secret'
   | 'mcp_server'
   | 'scope'
@@ -51,16 +53,20 @@ export interface Pod {
   deletedAt: number | null;
 }
 
-export interface PodKnowledge {
+/** Context doc attached to an agent (a `context_docs` row with the agent
+ *  scope pointer — migration 0055 merged the old knowledge table in). */
+export interface AgentContextDoc {
   id: ULID;
-  agentId: ULID;
-  scope: PodScope;
+  agentId: ULID | null;
   projectId: ULID | null;
-  name: string;
-  kind: PodKnowledgeKind;
-  content: string;
+  areaId: ULID | null;
+  workItemId: ULID | null;
+  title: string;
+  body: string;
+  author: string;
   createdAt: number;
   updatedAt: number;
+  deletedAt: number | null;
 }
 
 export interface PodSecret {
@@ -95,7 +101,7 @@ export interface PodAuditEntry {
 
 export interface PodBundle {
   agent: Pod;
-  knowledge: PodKnowledge[];
+  contextDocs: AgentContextDoc[];
   secrets: PodSecret[];
   mcpServers: PodMcpServer[];
 }

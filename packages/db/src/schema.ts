@@ -9,7 +9,6 @@ import type {
   McpDiscoveryStatus,
   PodAuditActor,
   PodAuditField,
-  PodKnowledgeKind,
   PodMcpServerConfig,
   PodScope,
   ProviderId,
@@ -651,38 +650,6 @@ export const agents = sqliteTable(
   ],
 );
 
-export const agentKnowledge = sqliteTable(
-  'agent_knowledge',
-  {
-    id: text('id').primaryKey().$type<ULID>(),
-    agentId: text('agent_id')
-      .notNull()
-      .$type<ULID>()
-      .references(() => agents.id),
-    scope: text('scope').notNull().$type<PodScope>(),
-    projectId: text('project_id').$type<ULID | null>(),
-    name: text('name').notNull(),
-    kind: text('kind').notNull().default('knowledge').$type<PodKnowledgeKind>(),
-    content: text('content').notNull().default(''),
-    createdAt: integer('created_at').notNull(),
-    updatedAt: integer('updated_at').notNull(),
-  },
-  (t) => [
-    index('agent_knowledge_agent_idx').on(t.agentId),
-    index('agent_knowledge_scope_project_idx').on(t.scope, t.projectId),
-    /** Unique knowledge-doc name per agent. Split into two partial indices
-     *  because sqlite treats NULL as distinct in unique indices — a single
-     *  composite index on `project_id` would let dup names slip through for
-     *  global rows (where project_id is NULL). */
-    uniqueIndex('agent_knowledge_global_name_idx')
-      .on(t.agentId, t.name)
-      .where(sql`scope = 'global'`),
-    uniqueIndex('agent_knowledge_project_name_idx')
-      .on(t.agentId, t.projectId, t.name)
-      .where(sql`scope = 'project'`),
-  ],
-);
-
 export const agentSecrets = sqliteTable(
   'agent_secrets',
   {
@@ -702,8 +669,9 @@ export const agentSecrets = sqliteTable(
   (t) => [
     index('agent_secrets_agent_idx').on(t.agentId),
     index('agent_secrets_scope_project_idx').on(t.scope, t.projectId),
-    /** Per-scope partial uniqueness — sqlite NULL-distinct gotcha (see
-     *  agent_knowledge note). */
+    /** Per-scope partial uniqueness — split into two partial indices because
+     *  sqlite treats NULL as distinct in unique indices (a single composite
+     *  index on project_id would let dup names slip through for global rows). */
     uniqueIndex('agent_secrets_global_env_idx')
       .on(t.agentId, t.envVarName)
       .where(sql`scope = 'global'`),
@@ -732,8 +700,8 @@ export const agentMcpServers = sqliteTable(
   (t) => [
     index('agent_mcp_servers_agent_idx').on(t.agentId),
     index('agent_mcp_servers_scope_project_idx').on(t.scope, t.projectId),
-    /** Per-scope partial uniqueness — sqlite NULL-distinct gotcha (see
-     *  agent_knowledge note). Project overlay wins per-server-name (17c). */
+    /** Per-scope partial uniqueness — sqlite NULL-distinct gotcha (see the
+     *  agent_secrets note). Project overlay wins per-server-name (17c). */
     uniqueIndex('agent_mcp_servers_global_name_idx')
       .on(t.agentId, t.name)
       .where(sql`scope = 'global'`),
@@ -1092,9 +1060,9 @@ export const mailboxAudit = sqliteTable(
 
 /**
  * Slice 1 (Areas + context model) — ContextDocs. ONE unified docs table
- * attachable to any scope (project | area | work item). Exactly one of
- * (project_id, area_id, work_item_id) must be non-null; enforced by a SQL
- * CHECK in the migration and by the repo writer in application code.
+ * attachable to any scope (project | area | work item | agent). Exactly one
+ * of (project_id, area_id, work_item_id, agent_id) must be non-null; enforced
+ * by a SQL CHECK in the migration and by the repo writer in application code.
  *
  * FTS5 virtual table (`context_docs_fts`) lives in the same migration but is
  * NOT modelled here — Drizzle cannot represent virtual tables. All FTS reads
@@ -1112,6 +1080,7 @@ export const contextDocs = sqliteTable(
     projectId: text('project_id').$type<ULID | null>(),
     areaId: text('area_id').$type<ULID | null>(),
     workItemId: text('work_item_id').$type<ULID | null>(),
+    agentId: text('agent_id').$type<ULID | null>(),
     title: text('title').notNull(),
     body: text('body').notNull().default(''),
     /** 'user' | 'orchestrator' | agent-run-id. */
@@ -1125,5 +1094,6 @@ export const contextDocs = sqliteTable(
     index('context_docs_project_idx').on(t.projectId),
     index('context_docs_area_idx').on(t.areaId),
     index('context_docs_work_item_idx').on(t.workItemId),
+    index('context_docs_agent_idx').on(t.agentId),
   ],
 );

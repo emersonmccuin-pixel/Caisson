@@ -34,7 +34,9 @@ const FIELD_FILTERS: { value: '' | PodAuditField; label: string }[] = [
   { value: 'max_turns', label: 'Max turns' },
   { value: 'tools', label: 'Tools' },
   { value: 'name', label: 'Name' },
-  { value: 'knowledge', label: 'Knowledge' },
+  { value: 'context-doc', label: 'Context doc' },
+  // Legacy filter — pre-0055 rows only (knowledge merged into context docs).
+  { value: 'knowledge', label: 'Knowledge (legacy)' },
   { value: 'secret', label: 'Secret' },
   { value: 'mcp_server', label: 'MCP server' },
 ];
@@ -365,24 +367,25 @@ function ValueDiff({ row }: { row: PodAuditEntry }) {
       <div className="mt-1 text-[11px] text-muted-foreground">Agent soft-deleted.</div>
     );
   }
-  if (row.field === 'knowledge') {
+  if (row.field === 'knowledge' || row.field === 'context-doc') {
+    const noun = row.field === 'knowledge' ? 'Knowledge doc' : 'Context doc';
     if (row.priorValue === null) {
       return (
         <div className="mt-1 text-[11px] text-muted-foreground">
-          Knowledge doc <span className="font-mono">{row.fieldRef ?? '(unnamed)'}</span> created.
+          {noun} <span className="font-mono">{row.fieldRef ?? '(unnamed)'}</span> created.
         </div>
       );
     }
     if (row.newValue === null) {
       return (
         <div className="mt-1 text-[11px] text-muted-foreground">
-          Knowledge doc <span className="font-mono">{row.fieldRef ?? '(unnamed)'}</span> deleted.
+          {noun} <span className="font-mono">{row.fieldRef ?? '(unnamed)'}</span> deleted.
         </div>
       );
     }
     return (
       <div className="mt-1 text-[11px] text-muted-foreground">
-        Knowledge doc <span className="font-mono">{row.fieldRef ?? '(unnamed)'}</span> updated.
+        {noun} <span className="font-mono">{row.fieldRef ?? '(unnamed)'}</span> updated.
       </div>
     );
   }
