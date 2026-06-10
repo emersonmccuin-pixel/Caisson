@@ -12,12 +12,18 @@ export async function handleContextDocTool(
     case 'pc_list_context': {
       const scope = typeof args.scope === 'string' ? args.scope : 'project';
       const scopeId = typeof args.scope_id === 'string' ? args.scope_id.trim() : '';
+      const targetProjectId =
+        typeof args.targetProjectId === 'string' && args.targetProjectId.trim().length > 0
+          ? args.targetProjectId.trim()
+          : null;
 
-      // Build query string.
-      let path = ctx.projectPath('context-docs');
+      // Cross-project read: when targetProjectId is set use that project's route.
+      const baseProjectPath = targetProjectId
+        ? `/api/projects/${targetProjectId}/context-docs`
+        : ctx.projectPath('context-docs');
       const params = new URLSearchParams({ scope });
       if (scopeId) params.set('scopeId', scopeId);
-      path = `${path}?${params.toString()}`;
+      const path = `${baseProjectPath}?${params.toString()}`;
 
       try {
         const res = await ctx.getServer(path);
@@ -38,6 +44,10 @@ export async function handleContextDocTool(
 
     case 'pc_get_context_doc': {
       const docId = typeof args.doc_id === 'string' ? args.doc_id.trim() : '';
+      const targetProjectId =
+        typeof args.targetProjectId === 'string' && args.targetProjectId.trim().length > 0
+          ? args.targetProjectId.trim()
+          : null;
       if (!docId) {
         return {
           content: [{ type: 'text', text: 'pc_get_context_doc: doc_id required' }],
@@ -45,7 +55,10 @@ export async function handleContextDocTool(
         };
       }
       try {
-        const res = await ctx.getServer(ctx.projectPath(`context-docs/${encodeURIComponent(docId)}`));
+        const docPath = targetProjectId
+          ? `/api/projects/${targetProjectId}/context-docs/${encodeURIComponent(docId)}`
+          : ctx.projectPath(`context-docs/${encodeURIComponent(docId)}`);
+        const res = await ctx.getServer(docPath);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }
@@ -136,6 +149,10 @@ export async function handleContextDocTool(
 
     case 'pc_search': {
       const query = typeof args.query === 'string' ? args.query : '';
+      const targetProjectId =
+        typeof args.targetProjectId === 'string' && args.targetProjectId.trim().length > 0
+          ? args.targetProjectId.trim()
+          : null;
       if (!query.trim()) {
         return {
           content: [{ type: 'text', text: 'pc_search: query required' }],
@@ -150,9 +167,10 @@ export async function handleContextDocTool(
         params.set('scope', args.scope);
       }
       try {
-        const res = await ctx.getServer(
-          `${ctx.projectPath('context-docs/search')}?${params.toString()}`,
-        );
+        const searchBase = targetProjectId
+          ? `/api/projects/${targetProjectId}/context-docs/search`
+          : ctx.projectPath('context-docs/search');
+        const res = await ctx.getServer(`${searchBase}?${params.toString()}`);
         if (res.status >= 200 && res.status < 300) {
           return { content: [{ type: 'text', text: res.body }] };
         }

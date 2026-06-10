@@ -73,7 +73,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "targetProjectId": {
           "type": "string",
-          "description": "optional project id (ULID) to write the work item into a different project. When absent the work item lands in the current project (PC_PROJECT_ID). Single-user app — no ownership gate; a future multi-user pass should revisit."
+          "description": "optional project handle (ULID, slug like 'pc-pty-chat', or display name) to write the work item into a different project. When absent the work item lands in the current project (PC_PROJECT_ID). Single-user app — no ownership gate; a future multi-user pass should revisit."
         },
         "area_id": {
           "type": "string",
@@ -898,7 +898,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_get_work_item",
     "family": "work-item",
     "label": "Read a work item",
-    "description": "Fetch the full work item by id or callsign — title, body, fields, stage, status, parent. Use this when you need to read a work item's content — e.g. the source material a dispatch points at, or where a deliverable landed. `id` accepts ULID or callsign (e.g. `pc-2.1`). Returns { ok: true, workItem } (the workItem includes `callsign` when present) or { ok: false, error } for unknown / archived ids.",
+    "description": "Fetch the full work item by id or callsign — title, body, fields, stage, status, parent. Use this when you need to read a work item's content — e.g. the source material a dispatch points at, or where a deliverable landed. `id` accepts ULID or callsign (e.g. `pc-2.1`). Returns { ok: true, workItem } (the workItem includes `callsign` when present) or { ok: false, error } for unknown / archived ids. Pass `targetProjectId` (ULID, slug, or name) to read a work item that lives in a different project — fixes the default 404 when a ULID or callsign belongs to another project.",
     "catalogDescription": "Fetch a card's full content + fields.",
     "inputSchema": {
       "type": "object",
@@ -910,6 +910,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "includeArchived": {
           "type": "boolean",
           "description": "when true, also returns soft-deleted work items"
+        },
+        "targetProjectId": {
+          "type": "string",
+          "description": "optional: read from a different project (ULID, slug like 'pc-pty-chat', or display name). Use when the work item belongs to a project other than the current one."
         }
       },
       "required": [
@@ -964,7 +968,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "targetProjectId": {
           "type": "string",
-          "description": "optional: read another project's work items by its ULID (cross-project read; default = this session's project). Used by the Command planner to see across every project."
+          "description": "optional: read another project's work items (ULID, slug like 'pc-pty-chat', or display name; default = this session's project). Used by the Command planner to see across every project."
         }
       }
     }
@@ -973,7 +977,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_search_work_items",
     "family": "work-item",
     "label": "Search work items",
-    "description": "Full-text search work items in this project using SQLite FTS5. Returns a slim projection with a snippet field showing matched context. Optional filters: `area_id` (Area ULID or `\"uncaptured\"`), `status` (exact status string), `open` (boolean — excludes complete/cancelled/archived). Results ranked by relevance, max 50. For structured browsing (by stage/parent/area) use `pc_list_work_items`. PC_PROJECT_ID env is the implicit scope.",
+    "description": "Full-text search work items using SQLite FTS5. Returns a slim projection with a snippet field showing matched context. Optional filters: `area_id` (Area ULID or `\"uncaptured\"`), `status` (exact status string), `open` (boolean — excludes complete/cancelled/archived). Results ranked by relevance, max 50. For structured browsing (by stage/parent/area) use `pc_list_work_items`. Pass `targetProjectId` (ULID, slug, or name) to search another project's work items.",
     "catalogDescription": "Full-text search work items by keyword.",
     "inputSchema": {
       "type": "object",
@@ -993,6 +997,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "open": {
           "type": "boolean",
           "description": "when true, exclude complete/cancelled/archived items"
+        },
+        "targetProjectId": {
+          "type": "string",
+          "description": "optional: search another project's work items (ULID, slug, or name). Default = this session's project."
         }
       },
       "required": ["query"]
@@ -1009,7 +1017,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
       "properties": {
         "targetProjectId": {
           "type": "string",
-          "description": "optional: read another project's Areas by its ULID (default = this session's project)"
+          "description": "optional: read another project's Areas (ULID, slug, or display name; default = this session's project)"
         }
       }
     }
@@ -1118,7 +1126,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_list_projects",
     "family": "project",
     "label": "List all projects",
-    "description": "List every project in this Caisson workspace (id, slug, name, stages). The cross-project read for the Command planner: call this first to discover project ids, then pass each id as targetProjectId to pc_list_work_items / pc_list_areas to see that project's work. Returns { projects: [{ id, slug, name, stages, ... }, ...] }. No arguments.",
+    "description": "List every project in this Caisson workspace (id, slug, name, stages). The cross-project read for the Command planner: call this first to discover project handles, then pass each id, slug, or name as targetProjectId to pc_list_work_items / pc_list_areas / pc_get_work_item / pc_search_work_items / pc_list_context / pc_get_context_doc / pc_search to see that project's work. Returns { projects: [{ id, slug, name, stages, ... }, ...] }. No arguments.",
     "catalogDescription": "List every project in the workspace (ids, slugs, stages).",
     "inputSchema": {
       "type": "object",
@@ -1933,7 +1941,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_list_context",
     "family": "work-item",
     "label": "List context docs for a scope",
-    "description": "Return the context-doc index (title + one-liner + age) for a scope (project | area | work-item) or the full chain from a work item upward. Use `scope='chain'` with `scope_id=<work_item_id>` to get all docs in closest-scope-first order — always call this before dispatching so you know what domain context is already filed. Use `scope='project'` (no scope_id needed) for project-level docs.",
+    "description": "Return the context-doc index (title + one-liner + age) for a scope (project | area | work-item) or the full chain from a work item upward. Use `scope='chain'` with `scope_id=<work_item_id>` to get all docs in closest-scope-first order — always call this before dispatching so you know what domain context is already filed. Use `scope='project'` (no scope_id needed) for project-level docs. Pass `targetProjectId` (ULID, slug, or name) to list context docs from a different project.",
     "catalogDescription": "List context docs for a scope or chain.",
     "inputSchema": {
       "type": "object",
@@ -1946,6 +1954,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "scope_id": {
           "type": "string",
           "description": "ULID of the area or work item (required when scope is 'area', 'work-item', or 'chain'; omit for 'project')."
+        },
+        "targetProjectId": {
+          "type": "string",
+          "description": "optional: read context docs from a different project (ULID, slug, or name). Default = this session's project."
         }
       },
       "required": ["scope"]
@@ -1955,7 +1967,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_get_context_doc",
     "family": "work-item",
     "label": "Get a context doc (full body)",
-    "description": "Fetch a single context document's full body by its id. Use this when the dispatch-time chain index listed a doc and you need to read its full content. The index always gives ids; call this for any doc whose body you need.",
+    "description": "Fetch a single context document's full body by its id. Use this when the dispatch-time chain index listed a doc and you need to read its full content. The index always gives ids; call this for any doc whose body you need. Pass `targetProjectId` (ULID, slug, or name) to read a context doc from a different project.",
     "catalogDescription": "Fetch a context doc's full body by id.",
     "inputSchema": {
       "type": "object",
@@ -1963,6 +1975,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "doc_id": {
           "type": "string",
           "description": "context doc ULID id (from pc_list_context or the chain index in your system prompt)"
+        },
+        "targetProjectId": {
+          "type": "string",
+          "description": "optional: read from a different project (ULID, slug, or name). Default = this session's project."
         }
       },
       "required": ["doc_id"]
@@ -2031,7 +2047,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_search",
     "family": "work-item",
     "label": "Search context docs",
-    "description": "FTS5 full-text search across all context docs in the project. Searches titles and bodies. Use when you suspect a domain fact is filed somewhere but don't know which scope. Repeated searches for the same doc = a filing failure → promote the doc with pc_add_context_doc. Filters: area_id (narrow to an area), scope ('project'|'area'|'work-item'). Results are ranked by relevance (FTS rank).",
+    "description": "FTS5 full-text search across context docs. Searches titles and bodies. Use when you suspect a domain fact is filed somewhere but don't know which scope. Repeated searches for the same doc = a filing failure → promote the doc with pc_add_context_doc. Filters: area_id (narrow to an area), scope ('project'|'area'|'work-item'). Pass `targetProjectId` (ULID, slug, or name) to search a different project's context docs. Results are ranked by relevance (FTS rank).",
     "catalogDescription": "Full-text search across context docs in the project.",
     "inputSchema": {
       "type": "object",
@@ -2048,6 +2064,10 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
           "type": "string",
           "enum": ["project", "area", "work-item"],
           "description": "optional: narrow results to a specific scope kind"
+        },
+        "targetProjectId": {
+          "type": "string",
+          "description": "optional: search a different project's context docs (ULID, slug, or name). Default = this session's project."
         }
       },
       "required": ["query"]

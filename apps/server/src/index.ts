@@ -23,6 +23,7 @@ import {
   getMailboxRecipient,
   insertPostTurnSummary,
   getProjectById,
+  getProjectBySlug,
   listProjects,
   newId,
   pruneLiveOutbox,
@@ -651,9 +652,21 @@ const pendingAsks = createPendingAskStore();
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-/** Look up the runtime for `projectId`. Returns null if unknown. */
+/** Look up the runtime for a project handle (ULID | slug | name). Returns null
+ *  if unknown. Slug and case-insensitive name lookups power cross-project tools
+ *  so orchestrators can target a project by its human-readable handle. */
 function resolveProject(projectId: string): ProjectRuntime | null {
-  return projectRegistry.ensure(projectId as ULID);
+  // 1. Fast path: exact ULID.
+  const byId = projectRegistry.ensure(projectId as ULID);
+  if (byId) return byId;
+  // 2. Slug lookup (e.g. 'pc-pty-chat').
+  const bySlug = getProjectBySlug(projectId);
+  if (bySlug) return projectRegistry.ensure(bySlug.id);
+  // 3. Case-insensitive name lookup (last resort).
+  const lower = projectId.toLowerCase();
+  const byName = listProjects().find((p) => p.name.toLowerCase() === lower);
+  if (byName) return projectRegistry.ensure(byName.id);
+  return null;
 }
 
 registerMcpBridgeRoutes(app, {
