@@ -125,3 +125,18 @@ export function updateCredentialAuthState(
 export function deleteCredential(id: ULID): void {
   getDb().delete(credentials).where(eq(credentials.id, id)).run();
 }
+
+// --- lookup by server + kind (Slice 3 — connector-auth) ----------------------
+
+/** Return the first credential row matching (ownerServerId, kind), or null. */
+export function getCredentialByServerAndKind(
+  ownerServerId: ULID,
+  kind: CredentialKind,
+): CredentialRow | null {
+  const row = getDb()
+    .select()
+    .from(credentials)
+    .where(and(eq(credentials.ownerServerId, ownerServerId), eq(credentials.kind, kind)))
+    .get();
+  return row ? rowToCredential(row) : null;
+}

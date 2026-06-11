@@ -389,11 +389,13 @@ export type {
 } from './repos/orchestrator-send-queue.ts';
 
 // Connector-auth Slice 1 (pc-pty-chat-400.2) — Credentials vault repo.
+// Connector-auth Slice 3 (pc-pty-chat-400.4) — added getCredentialByServerAndKind.
 export {
   createCredential,
   deleteCredential,
   getCredential,
   getCredentialByServer,
+  getCredentialByServerAndKind,
   listCredentialsByScope,
   updateCredentialAuthState,
 } from './repos/credentials.ts';
