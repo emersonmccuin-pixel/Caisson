@@ -405,6 +405,7 @@ export {
   getMcpServerRegistry,
   listMcpServersRegistry,
   patchMcpServerRegistry,
+  replaceTransportOnly,
   setMcpServerDiscovery,
   softDeleteMcpServerRegistry,
 } from './repos/mcp-servers.ts';

@@ -9,6 +9,7 @@ import type {
   FieldSchemaType,
   GlobalSettings,
   McpDiscoveryStatus,
+  McpServerTransport,
   PodAuditActor,
   PodAuditField,
   PodMcpServerConfig,
@@ -748,8 +749,9 @@ export const mcpServers = sqliteTable(
       .references(() => projects.id),
     name: text('name').notNull(),
     description: text('description').notNull().default(''),
-    /** Validated stdio (command/args/env) or HTTP (url/headers) transport. */
-    transport: text('transport', { mode: 'json' }).notNull().$type<PodMcpServerConfig>(),
+    /** Stored transport — may contain SecretRef objects in headers/env
+     *  (Slice 2+). Resolve via resolveTransportSecrets before using. */
+    transport: text('transport', { mode: 'json' }).notNull().$type<McpServerTransport>(),
     /** Tool list populated by the P2 discovery probe. Null until discovered. */
     discoveredTools: text('discovered_tools', { mode: 'json' }).$type<string[] | null>(),
     discoveryStatus: text('discovery_status')

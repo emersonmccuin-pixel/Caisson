@@ -207,7 +207,11 @@ export function buildRegistryMcpConfig(agentId: ULID): {
     for (const att of attachments) {
       const row = getMcpServerRegistry(att.mcpServerId);
       if (!row) continue;
-      servers[row.name] = row.transport;
+      // Slice 7+ will call resolveTransportSecrets here. Until then, cast to
+      // PodMcpServerConfig — safe after the Slice 2 migration runs (no plain
+      // tokens remain in the DB; SecretRefs are opaque to the spawn path until
+      // injection is wired in Slice 7).
+      servers[row.name] = row.transport as unknown as PodMcpServerConfig;
       catalog[row.name] =
         att.enabledTools === '*' ? (row.discoveredTools ?? []) : att.enabledTools;
     }
