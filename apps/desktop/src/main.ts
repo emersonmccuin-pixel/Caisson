@@ -29,7 +29,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, join } from 'node:path';
 import {
   packagedAgentHostLockFilePath,
-  removePackagedAgentHostLockFile,
+  reapStaleAgentHost,
   requestPackagedAgentHostShutdown,
 } from './agent-host-process';
 import { findPortConflicts, freeCaissonPorts, type PortConflict } from './port-conflict';
@@ -188,9 +188,13 @@ function buildSupervisor(config: StackConfig): Supervisor {
     },
     deps: { log: supervisorLog },
     hooks: {
-      // A stale lock from a dead host must never count as ready.
+      // A stale lock from a dead host must never count as ready — and a stale
+      // lock from a LIVE host (Electron hard-killed last run; the host's port
+      // is random, so the port guard can't see it) is an orphan to reap, not
+      // just a file to delete. reapStaleAgentHost verifies the pid's command
+      // line, stops it (polite HTTP, then tree-kill), and removes the lock.
       preSpawn: async () => {
-        removePackagedAgentHostLockFile(lockFilePath);
+        await reapStaleAgentHost(lockFilePath, { log: supervisorLog });
         hostSpawnedAt = Date.now();
       },
       onReady: () =>
