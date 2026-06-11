@@ -188,6 +188,9 @@ export { parseAgentFile, serializeAgentFile } from './agent-file.ts';
 export type {
   AgentContextDoc,
   AgentMcpAttachmentRow,
+  CredentialAuthState,
+  CredentialKind,
+  CredentialRow,
   McpDiscoveryStatus,
   McpServerRegistryRow,
   PodAgentRow,
@@ -202,6 +205,7 @@ export type {
   PodSpawnBundle,
 } from './pod.ts';
 export {
+  CREDENTIAL_AUTH_STATES,
   MCP_DISCOVERY_STATUSES,
   POD_AUDIT_ACTORS,
   POD_AUDIT_FIELDS,

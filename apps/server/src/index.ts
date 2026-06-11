@@ -1,4 +1,9 @@
 import './diagnostics.ts'; // FIRST — arm crash capture before anything else loads
+import { initVaultFromStdin } from './services/secrets-vault.ts';
+// Connector-auth Slice 1: read the vault master key from stdin (sent by Electron
+// main via a private pipe) before any other module uses the vault. No-ops when
+// PC_VAULT_USE_STDIN is not set (dev mode, tests).
+initVaultFromStdin();
 
 import { serve } from '@hono/node-server';
 import { RESPONSE_ALREADY_SENT } from '@hono/node-server/utils/response';

@@ -407,6 +407,13 @@
       "when": 1782980600000,
       "tag": "0057_migrate_inline_mcp_to_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1782980700000,
+      "tag": "0058_credentials_vault",
+      "breakpoints": true
     }
   ]
 }

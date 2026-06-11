@@ -203,6 +203,45 @@ export interface AgentMcpAttachmentRow {
   updatedAt: number;
 }
 
+// ── Credentials vault (Slice 1 — pc-pty-chat-400.2) ─────────────────────────
+
+/** What the encrypted blob holds. */
+export type CredentialKind = 'oauth_tokens' | 'provider_tokens' | 'static';
+
+/** Auth lifecycle state for a stored credential. */
+export type CredentialAuthState = 'none' | 'needs-auth' | 'connected' | 'expired' | 'error';
+
+export const CREDENTIAL_AUTH_STATES: readonly CredentialAuthState[] = [
+  'none',
+  'needs-auth',
+  'connected',
+  'expired',
+  'error',
+];
+
+/** Row in the `credentials` table — AES-256-GCM encrypted token blob. */
+export interface CredentialRow {
+  id: ULID;
+  ownerScope: 'global' | 'project';
+  /** FK to `mcp_servers.id`. Nullable — credential may not yet be bound to a
+   *  server (e.g. during initial OAuth flow). */
+  ownerServerId: ULID | null;
+  kind: CredentialKind;
+  /** Base64-encoded ciphertext. */
+  ciphertext: string;
+  /** Base64-encoded 12-byte IV. */
+  iv: string;
+  /** Base64-encoded 16-byte GCM auth tag. */
+  authTag: string;
+  authState: CredentialAuthState;
+  lastError: string | null;
+  /** Epoch-ms token expiry, or null for non-expiring credentials. */
+  expiresAt: number | null;
+  rev: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 // ── MCP Server Registry (P1 — pc-pty-chat-359) ───────────────────────────────
 
 /** Discovery lifecycle for a registry server entry. `stale` = never probed or

@@ -388,6 +388,17 @@ export type {
   RecordDeliveredOrchestratorSendInput,
 } from './repos/orchestrator-send-queue.ts';
 
+// Connector-auth Slice 1 (pc-pty-chat-400.2) — Credentials vault repo.
+export {
+  createCredential,
+  deleteCredential,
+  getCredential,
+  getCredentialByServer,
+  listCredentialsByScope,
+  updateCredentialAuthState,
+} from './repos/credentials.ts';
+export type { CreateCredentialInput } from './repos/credentials.ts';
+
 // pc-pty-chat-359 P1/P2 — MCP Server Registry repo.
 export {
   createMcpServerRegistry,
