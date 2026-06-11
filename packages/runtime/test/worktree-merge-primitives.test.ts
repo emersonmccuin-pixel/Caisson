@@ -234,6 +234,54 @@ test('integration machinery works on a repo whose integration branch is "trunk"'
   }
 });
 
+// ── cherry-pick (patch-equivalence) landing — the CIA-NEXT flow ─────────────
+
+test('branchMergedInto: cherry-picked work counts as landed; un-picked commits do not', async () => {
+  const repo3 = mkdtempSync(join(tmpdir(), 'pc-cherry-repo-'));
+  const g = (...args: string[]) => execFileSync('git', args, { cwd: repo3, stdio: 'ignore' });
+  try {
+    g('init', '-b', 'phase-branch');
+    g('config', 'user.email', 't@t');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(repo3, 'a.txt'), 'a\n');
+    g('add', '.');
+    g('commit', '-m', 'initial');
+
+    // Agent branch with one commit.
+    g('checkout', '-b', 'agent-cp');
+    writeFileSync(join(repo3, 'work.txt'), 'agent work\n');
+    g('add', '.');
+    g('commit', '-m', 'agent work');
+    const tip = execFileSync('git', ['rev-parse', 'agent-cp'], { cwd: repo3 }).toString().trim();
+
+    // Integrate by CHERRY-PICK (not merge) — tip is NOT an ancestor.
+    g('checkout', 'phase-branch');
+    g('cherry-pick', tip);
+
+    assert.equal(
+      await branchMergedInto(repo3, 'agent-cp', 'phase-branch'),
+      true,
+      'patch-equivalent (cherry-picked) work is landed — safe to reap',
+    );
+
+    // A second commit on the agent branch that was NEVER picked → kept.
+    g('checkout', 'agent-cp');
+    writeFileSync(join(repo3, 'more.txt'), 'unlanded\n');
+    g('add', '.');
+    g('commit', '-m', 'unlanded work');
+    g('checkout', 'phase-branch');
+
+    assert.equal(
+      await branchMergedInto(repo3, 'agent-cp', 'phase-branch'),
+      false,
+      'any commit without an upstream equivalent keeps the branch',
+    );
+  } finally {
+    rmSync(repo3, { recursive: true, force: true });
+  }
+});
+
 // ── detectIntegrationBranch ──────────────────────────────────────────────────
 
 test('detectIntegrationBranch: prefers a local dev branch', async () => {

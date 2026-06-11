@@ -110,10 +110,19 @@ export async function pruneWorktrees(workspaceDir: string): Promise<void> {
 }
 
 /**
- * True when `branch`'s tip is an ancestor of the local integration branch or
- * its origin counterpart (i.e. the branch's work has landed). False when the
- * branch doesn't exist or isn't merged — callers use this as the safety gate
- * before teardown.
+ * True when `branch`'s work has landed on the integration branch (local or
+ * origin counterpart). Two positive forms, both conservative:
+ *
+ *  1. ANCESTRY — the branch tip is an ancestor (a real `git merge` landed it).
+ *  2. PATCH EQUIVALENCE — `git cherry <target> <branch>` reports every branch
+ *     commit as `-` (an equivalent patch exists upstream). This is how
+ *     cherry-pick / rebase-style integration flows land work: the commits are
+ *     COPIED, so the tip is never an ancestor, but deleting the branch loses
+ *     nothing. Any `+` line (a commit with no upstream equivalent) → NOT
+ *     landed → kept.
+ *
+ * False when the branch doesn't exist or isn't landed — callers use this as
+ * the safety gate before teardown.
  */
 export async function branchMergedInto(
   workspaceDir: string,
@@ -123,12 +132,24 @@ export async function branchMergedInto(
   assertBranchName(branch);
   assertIntegrationBranch(integrationBranch);
   const cwd = resolve(workspaceDir);
-  for (const target of [integrationBranch, `origin/${integrationBranch}`]) {
+  const targets = [integrationBranch, `origin/${integrationBranch}`];
+  for (const target of targets) {
     try {
       await exec('git', ['merge-base', '--is-ancestor', branch, target], { cwd });
       return true;
     } catch {
       /* not an ancestor of this target (or ref missing) — try the next */
+    }
+  }
+  for (const target of targets) {
+    try {
+      const { stdout } = await exec('git', ['cherry', target, branch], { cwd });
+      const lines = stdout.split(/\r?\n/).filter((l) => l.trim() !== '');
+      // Zero lines = nothing ahead of the merge-base (ancestry would normally
+      // have caught this); all '-' = every commit has an upstream equivalent.
+      if (lines.every((l) => l.startsWith('-'))) return true;
+    } catch {
+      /* target ref missing — try the next */
     }
   }
   return false;
