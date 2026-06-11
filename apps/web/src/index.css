@@ -807,7 +807,7 @@ button:disabled {
   flex-shrink: 0;
   transition: opacity 140ms, color 140ms, border-color 140ms;
 }
-.pc-project-tile-active {
+.pc-project-tile-unread {
   border-color: var(--gold-deep);
   color: #f1d796;
   background:
@@ -830,8 +830,9 @@ button:disabled {
   color: var(--cream);
   border-color: var(--cream-soft);
 }
-.pc-project-tile-unread {
+.pc-project-tile-chat-open {
   opacity: 1;
+  border-width: 1px;
   color: var(--cream);
   border-color: var(--primary);
   animation: pc-project-unread-pulse 1.8s ease-in-out infinite;
@@ -852,7 +853,7 @@ button:disabled {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .pc-project-tile-unread {
+  .pc-project-tile-chat-open {
     animation: none;
     box-shadow:
       0 0 0 1px var(--paper),
