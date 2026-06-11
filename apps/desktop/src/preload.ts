@@ -31,6 +31,13 @@ const UPDATE_STATE_CHANNEL = 'pc:update-state';
 contextBridge.exposeInMainWorld('pcDesktop', {
   isDesktop: true,
   platform: process.platform,
+  /**
+   * Open a URL in the system browser via Electron shell.openExternal.
+   * Used by the OAuth broker flow: after auth/start returns an authorizationUrl,
+   * the renderer calls this so the user's default browser opens the provider's
+   * login page. Only https:// / http:// URLs are accepted by main.
+   */
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('pc:shell:openExternal', url),
   /** Open the native OS folder chooser. Returns the chosen path, or null if cancelled. */
   chooseFolder: (): Promise<string | null> => ipcRenderer.invoke('pc:choose-folder'),
   updates: {

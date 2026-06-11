@@ -239,3 +239,7 @@ export class InMemoryOAuthStorage implements OAuthProviderStorage {
     if (scope === 'all' || scope === 'discovery') this._discoveryState = undefined;
   }
 }
+
+// Re-export the SDK's auth orchestrator so server code can import it via
+// @pc/mcp/oauth/provider without a direct @modelcontextprotocol/sdk dep.
+export { auth, type AuthResult } from '@modelcontextprotocol/sdk/client/auth.js';

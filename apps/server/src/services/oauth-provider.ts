@@ -1,13 +1,16 @@
-// Connector-auth Slice 3 (pc-pty-chat-400.4) — vault-backed OAuth storage + provider factory.
+// Connector-auth Slices 3+4 (pc-pty-chat-400.4/400.5) — vault-backed OAuth storage + provider factory.
 //
 // VaultOAuthStorage wires OAuthProviderStorage to SecretsVault:
 //   tokens (kind='oauth_tokens') and client info (kind='static') are persisted
 //   via AES-256-GCM through the vault.
 //   codeVerifier and discoveryState are held in memory (ephemeral).
 //
-// Note: Slice 4 (loopback callback broker) will need the codeVerifier to survive
-// across two HTTP requests; VaultOAuthStorage should be enhanced to persist it
-// at that point.
+// codeVerifier across two HTTP requests (Slice 4):
+//   The PKCE codeVerifier is stored in-memory on the VaultOAuthProvider instance.
+//   oauth-routes.ts keeps the provider alive in a module-level pendingAuthSessions
+//   map (keyed by OAuth state, TTL 10 min) — the same instance is reused for both
+//   the auth/start request and the oauth/callback request. Both always hit the same
+//   API process, so in-memory bridging is correct for v1.
 //
 // Factory: createOAuthProvider(input) builds a ready-to-use VaultOAuthProvider
 // for a registered MCP server.
@@ -15,8 +18,10 @@
 import type { ULID } from '@pc/domain';
 import { getCredentialByServerAndKind } from '@pc/db';
 import {
+  auth,
   InMemoryOAuthStorage,
   VaultOAuthProvider,
+  type AuthResult,
   type OAuthClientInformationMixed,
   type OAuthClientMetadata,
   type OAuthDiscoveryState,
@@ -170,5 +175,5 @@ export function createOAuthProvider(input: CreateOAuthProviderInput): VaultOAuth
 }
 
 // Re-export from @pc/mcp for server-internal convenience
-export { InMemoryOAuthStorage, VaultOAuthProvider };
-export type { OAuthProviderStorage, VaultOAuthProviderConfig };
+export { auth, InMemoryOAuthStorage, VaultOAuthProvider };
+export type { AuthResult, OAuthProviderStorage, VaultOAuthProviderConfig };
