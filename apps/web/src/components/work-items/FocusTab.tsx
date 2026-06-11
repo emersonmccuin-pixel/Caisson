@@ -1,15 +1,19 @@
 // pc-pty-chat-355 — Focus view in the WORK section.
 //
-// Shows all starred/focused work items (focusedAt != null) across every project,
+// In Command: shows focused work items across all projects (cross-project),
 // nested: Project → Area → Work items.
+// In a regular project: shows only THAT project's focused work items
+// (pc-pty-chat-390).
 //
-// Hierarchy always reads true: a focused work item appears under its real project
-// and real area even when neither the project nor the area is itself starred.
+// Hierarchy always reads true: a focused work item appears under its real
+// project and real area even when neither is itself starred.
 //
 // Live: refetches when work-item or project frames change in the live store
 // (which is the write path for setFocus mutations via the live relay).
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+
+import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
 
 import type { Area } from '@/features/areas/client';
 import { areasApi } from '@/features/areas/client';
@@ -22,10 +26,14 @@ import {
 import { buildFocusTree, type FocusProject } from './focus-group';
 
 interface Props {
+  /** The active project — used to detect Command and to scope non-Command fetches. */
+  project: Project;
   projects: Project[];
 }
 
-export function FocusTab({ projects }: Props) {
+export function FocusTab({ project, projects }: Props) {
+  const isCommand = project.slug === COMMAND_PROJECT_SLUG;
+
   const [focusedItems, setFocusedItems] = useState<WorkItem[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,14 +43,19 @@ export function FocusTab({ projects }: Props) {
   const wiSig = useLiveEntitySignatureAllProjects('work-item');
   const projSig = useLiveGlobalSignature('project');
 
+  // Dependency key: in Command, depends on the full project list; in a regular
+  // project, depends only on the current project's id.
   const projectIds = projects.map((p) => p.id).join(',');
+  const loadKey = isCommand ? projectIds : project.id;
 
   const load = useCallback(async () => {
     setError(null);
     try {
+      // Command = cross-project (no projectId filter); regular = scoped.
+      const targetProjects = isCommand ? projects : [project];
       const [items, ...areaGroups] = await Promise.all([
-        workItemsApi.focusedWorkItems(),
-        ...projects.map((p) =>
+        workItemsApi.focusedWorkItems(isCommand ? undefined : project.id),
+        ...targetProjects.map((p) =>
           areasApi.listAreas(p.id).catch(() => [] as Area[]),
         ),
       ]);
@@ -53,7 +66,7 @@ export function FocusTab({ projects }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [projectIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setLoading(true);

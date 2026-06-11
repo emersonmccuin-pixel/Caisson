@@ -417,13 +417,19 @@ export function setWorkItemFocus(id: ULID, focused: boolean): WorkItem | null {
   return toDomain({ ...existing, focusedAt, updatedAt: now, version });
 }
 
-/** FOCUS — all live work items with focusedAt set, across every project.
+/** FOCUS — live work items with focusedAt set.
+ *  Pass `projectId` to scope to a single project (regular-project Focus view);
+ *  omit for the cross-project view (Command only).
  *  Ordered by focusedAt ascending (earliest-starred first). */
-export function listFocusedWorkItems(): WorkItem[] {
+export function listFocusedWorkItems(projectId?: ULID): WorkItem[] {
+  const conditions = [isNull(workItems.deletedAt), isNotNull(workItems.focusedAt)];
+  if (projectId !== undefined) {
+    conditions.push(eq(workItems.projectId, projectId));
+  }
   const rows = getDb()
     .select()
     .from(workItems)
-    .where(and(isNull(workItems.deletedAt), isNotNull(workItems.focusedAt)))
+    .where(and(...conditions))
     .orderBy(asc(workItems.focusedAt))
     .all() as WorkItemRow[];
   return rows.map(toDomain);

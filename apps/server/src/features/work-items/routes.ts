@@ -96,11 +96,14 @@ function verificationDecisionStatus(code: ReviewDecisionErrorCode): 400 | 404 | 
 
 export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): void {
   // ── pc-pty-chat-355: cross-project focused work-items list.
+  // Optional ?projectId= scopes to a single project (regular-project Focus view);
+  // omitting it returns all projects (Command-only cross-project view).
   // Read-only; no project scope required.  MUST be registered before
   // /api/projects/:projectId/… routes so the literal segment doesn't bind.
-  app.get('/api/work-items/focused', (_c) => {
-    const items = dbListFocusedWorkItems();
-    return _c.json({ ok: true, workItems: items });
+  app.get('/api/work-items/focused', (c) => {
+    const projectId = (c.req.query('projectId') || undefined) as ULID | undefined;
+    const items = dbListFocusedWorkItems(projectId);
+    return c.json({ ok: true, workItems: items });
   });
 
   // ── pc-pty-chat-356: cross-project work-item resolver for rich-link hover.

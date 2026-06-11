@@ -97,12 +97,16 @@ export const workItemsApi = {
     return data.note;
   },
 
-  /** pc-pty-chat-355 — cross-project list of all work items that are currently
-   *  in focus (focusedAt non-null), ordered by focusedAt ascending. */
-  focusedWorkItems: () =>
-    getJson<{ ok: true; workItems: WorkItem[] }>('/api/work-items/focused').then(
+  /** pc-pty-chat-355 — list work items currently in focus (focusedAt non-null),
+   *  ordered by focusedAt ascending.
+   *  Pass `projectId` to scope to a single project (regular-project Focus view);
+   *  omit for the cross-project Command view. */
+  focusedWorkItems: (projectId?: string) => {
+    const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+    return getJson<{ ok: true; workItems: WorkItem[] }>(`/api/work-items/focused${qs}`).then(
       (r) => r.workItems,
-    ),
+    );
+  },
 
   // includeBody=1: the web UI's list feeds the detail modal (which edits body),
   // so it needs the full WorkItem shape. The slim projection (pc-pty-chat-254)
