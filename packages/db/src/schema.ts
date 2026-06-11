@@ -3,6 +3,8 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-or
 import type {
   AgentEffort,
   AgentModel,
+  CredentialAuthState,
+  CredentialKind,
   ExpectedOutput,
   FieldSchemaType,
   GlobalSettings,
@@ -1068,6 +1070,41 @@ export const contextDocs = sqliteTable(
     index('context_docs_area_idx').on(t.areaId),
     index('context_docs_work_item_idx').on(t.workItemId),
     index('context_docs_agent_idx').on(t.agentId),
+  ],
+);
+
+/**
+ * Connector-auth Slice 1 (pc-pty-chat-400.2) — Credentials vault.
+ *
+ * One row per token set, encrypted at rest with AES-256-GCM. The master key
+ * lives in Electron main (safeStorage), handed to the API child via a secure
+ * stdio init message at spawn (never an env var). Ciphertext, IV, and auth tag
+ * are base64 text. `owner_server_id` soft-links to `mcp_servers.id` (no DB FK
+ * — credential may precede the server row during initial OAuth flow).
+ */
+export const credentials = sqliteTable(
+  'credentials',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    /** `'global'` = shared across all projects; `'project'` = project-local. */
+    ownerScope: text('owner_scope').notNull().$type<'global' | 'project'>(),
+    /** Soft FK to `mcp_servers.id` — no cascade, no DB constraint. */
+    ownerServerId: text('owner_server_id').$type<ULID | null>(),
+    kind: text('kind').notNull().$type<CredentialKind>(),
+    ciphertext: text('ciphertext').notNull(),
+    iv: text('iv').notNull(),
+    authTag: text('auth_tag').notNull(),
+    authState: text('auth_state').notNull().default('none').$type<CredentialAuthState>(),
+    lastError: text('last_error'),
+    expiresAt: integer('expires_at'),
+    /** Monotonic write counter — incremented on every mutating write. */
+    rev: integer('rev').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [
+    index('credentials_owner_server_idx').on(t.ownerServerId),
+    index('credentials_owner_scope_idx').on(t.ownerScope),
   ],
 );
 
