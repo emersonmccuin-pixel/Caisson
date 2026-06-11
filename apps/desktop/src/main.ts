@@ -554,6 +554,17 @@ ipcMain.handle('pc:update:setBetaOptIn', (_event, enabled: unknown) => {
   return betaOptIn;
 });
 
+// OAuth broker — open the authorization URL in the system browser.
+// The web UI calls this IPC after POST /api/mcp-servers/:id/auth/start returns
+// { status: 'redirect', authorizationUrl }. Electron main relays it via
+// shell.openExternal so the API child (plain Node) never needs to call Electron APIs.
+// Only https:// and http:// URLs are accepted; all others are silently dropped.
+ipcMain.handle('pc:shell:openExternal', (_event, url: unknown): Promise<void> => {
+  if (typeof url !== 'string') return Promise.resolve();
+  if (!url.startsWith('https://') && !url.startsWith('http://')) return Promise.resolve();
+  return shell.openExternal(url);
+});
+
 // Native OS folder chooser — used by the onboarding wizard (and future pickers)
 // so desktop users get the familiar system dialog instead of the custom browser
 // picker. Returns the chosen absolute path, or null if the user cancelled.
