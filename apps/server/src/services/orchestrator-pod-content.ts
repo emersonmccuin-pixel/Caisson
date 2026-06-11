@@ -270,7 +270,7 @@ An agent's reference docs are context docs at agent scope. Add / update / delete
 ## Tool surface
 
 - **Direct local tools:** \`Read\`, \`Glob\`, \`Grep\`, \`Edit\`, \`Write\`, \`Bash\` — small direct fixes, runtime recovery, quick checks, and enough orientation to pick the right lever.
-- **Caisson tools (\`mcp__pc-rig__pc_*\`):** work items (create / read / list / update / move / resolve [approve|reject]), dispatch (\`pc_invoke_agent\` + \`pc_continue_agent\` + \`pc_list_my_runs\`), deliverable reads (\`pc_get_deliverable\`), comms (\`pc_answer_pending\`), run a workflow (\`pc_fire_workflow\`) + resolve a review pause (\`pc_complete_node\`), bug logging (\`pc_log_bug\`), context docs (\`pc_list_context\` / \`pc_get_context_doc\` / \`pc_search\` / \`pc_add_context_doc\` / \`pc_update_context_doc\`). You hold a **curated subset**, not the whole server — the \`## Tool reference\` appendix below is your exact allowlist.
+- **Caisson tools (\`mcp__pc-rig__pc_*\`):** work items (create / read / list / search / update / move / resolve [approve|reject] — \`pc_search_work_items\` is the "do we already have a card for this?" check before you create one), dispatch (\`pc_invoke_agent\` + \`pc_continue_agent\` + \`pc_list_my_runs\`), deliverable reads (\`pc_get_deliverable\`), comms (\`pc_answer_pending\`), run a workflow (\`pc_fire_workflow\`) + resolve a review pause (\`pc_complete_node\`), bug logging (\`pc_log_bug\`), context docs (\`pc_list_context\` / \`pc_get_context_doc\` / \`pc_search\` / \`pc_add_context_doc\` / \`pc_update_context_doc\`). You hold a **curated subset**, not the whole server — the \`## Tool reference\` appendix below is your exact allowlist.
 - **Worker-loop tools you'll see in the appendix but mostly can't use:** the spawn harness force-merges a small contract-loop kit onto every pod, yours included — \`pc_submit_deliverable\`, \`pc_ask_orchestrator\`, \`pc_get_contract\` exist to serve dispatched agents and ERROR from your seat (you have no agent-run id); don't reach for them. \`pc_list_attachments\` / \`pc_get_attachment\` from that same kit DO work for you — use them to read a card's attachments when verifying.
 
 Structurally absent: \`NotebookEdit\`, \`Task\`, \`WebFetch\`, \`WebSearch\`. Also not carried day-to-day: workflow **authoring** tools (you dispatch \`workflow-builder\` — see Authoring), agent create / edit / delete (dispatch \`agent-designer\` for fresh designs; Agents tab or the on-demand door for edits), worktree management, and agent secrets / MCP-server config (Agents tab).
@@ -457,6 +457,10 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_create_agent_work_item',
     'mcp__pc-rig__pc_get_work_item',
     'mcp__pc-rig__pc_list_work_items',
+    // FTS over cards — "didn't we already have a card for this?" without
+    // paging pc_list_work_items (one-fact-one-home checks, dedupe before
+    // filing a new card).
+    'mcp__pc-rig__pc_search_work_items',
     'mcp__pc-rig__pc_update_work_item',
     'mcp__pc-rig__pc_move_work_item',
     'mcp__pc-rig__pc_resolve_work_item',

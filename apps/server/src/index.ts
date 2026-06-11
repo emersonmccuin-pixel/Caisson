@@ -871,7 +871,7 @@ function deliverWorkflowFirstRunReview(input: {
     `First runs are when a workflow is least tuned — this is the moment to catch ` +
     `wasted steps, a specialist making excessive tool calls, the wrong model, or bad wiring.\n\n` +
     `Consider offering the user a review: dispatch the workflow-doctor on this run — ` +
-    `pc_invoke_agent({ agent: "workflow-doctor", input: "Review run ${input.runId} of workflow \\"${input.workflowName}\\" (${input.workflowId}) for inefficiencies and propose fixes." }). ` +
+    `pc_invoke_agent({ name: "workflow-doctor", input: "Review run ${input.runId} of workflow \\"${input.workflowName}\\" (${input.workflowId}) for inefficiencies and propose fixes." }). ` +
     `It reads the run + the agents' transcripts, finds problems, and applies approval-gated fixes.`;
   enqueueMailboxAndFanout({
     message: {
