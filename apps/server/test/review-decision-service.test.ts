@@ -69,7 +69,7 @@ function makeDagOpts(project: import('@pc/domain').Project): DagRunServiceOption
       getProject: () => project,
       getFieldSchemas: () => [],
     }),
-    worktrees: new WorktreeService(tmpDir, tmpDir),
+    worktrees: new WorktreeService(tmpDir, tmpDir, async () => 'dev'),
     sessionDirFor: () => tmpDir,
     broadcast: () => {},
   };

@@ -23,16 +23,16 @@ import { readdir, rm } from 'node:fs/promises';
 
 import {
   attachWorktree as _attachWorktree,
-  branchMergedIntoDev as _branchMergedIntoDev,
+  branchMergedInto as _branchMergedInto,
   createWorktree as _createWorktree,
   deleteBranch as _deleteBranch,
   destroyWorktree as _destroyWorktree,
-  ensureDevWorktree as _ensureDevWorktree,
+  ensureMergeWorktree as _ensureMergeWorktree,
   gitMergeState as _gitMergeState,
   getWorktreeStatus as _getWorktreeStatus,
   listBranchesByPrefix as _listBranchesByPrefix,
   listWorktrees as _listWorktrees,
-  mergeBranchIntoDev as _mergeBranchIntoDev,
+  mergeBranchIntoHead as _mergeBranchIntoHead,
   pruneWorktrees as _pruneWorktrees,
   pushBranch as _pushBranch,
   type GitMergeState,
@@ -75,24 +75,37 @@ export interface WorktreeServiceDeps {
     wtPath: string,
     opts?: { force?: boolean },
   ) => Promise<void>;
-  /** Override for `mergeBranchIntoDev` (avoids real git in tests). */
-  mergeBranchIntoDev?: (workspaceDir: string, branch: string) => Promise<void>;
+  /** Override for `mergeBranchIntoHead` (avoids real git in tests). */
+  mergeBranchIntoHead?: (workspaceDir: string, branch: string) => Promise<void>;
   /** Override for `pushBranch` (avoids real git in tests). */
   pushBranch?: (workspaceDir: string, ref: string) => Promise<void>;
   /** Override for `gitMergeState` (avoids real git in tests). */
-  gitMergeState?: (workspaceDir: string, branch: string) => Promise<GitMergeState>;
+  gitMergeState?: (
+    workspaceDir: string,
+    branch: string,
+    integrationBranch: string,
+  ) => Promise<GitMergeState>;
   /**
-   * Override for `ensureDevWorktree` — skips real git worktree creation in
-   * tests. The real impl creates/attaches a worktree on `dev` under `baseDir`.
+   * Override for `ensureMergeWorktree` — skips real git worktree creation in
+   * tests. The real impl creates/reuses a detached worktree at the integration
+   * tip under `baseDir` (with the lineage guard).
    */
-  ensureDevWorktree?: (workspaceDir: string, devWtPath: string) => Promise<void>;
+  ensureMergeWorktree?: (
+    workspaceDir: string,
+    wtPath: string,
+    integrationBranch: string,
+  ) => Promise<void>;
   /**
    * Override for `getWorktreeStatus` — returns synthetic branch/cleanliness in
    * tests without inspecting a real git worktree.
    */
   getWorktreeStatus?: (wtPath: string) => Promise<{ branch: string | null; clean: boolean }>;
-  /** Override for `branchMergedIntoDev` (avoids real git in tests). */
-  branchMergedIntoDev?: (workspaceDir: string, branch: string) => Promise<boolean>;
+  /** Override for `branchMergedInto` (avoids real git in tests). */
+  branchMergedInto?: (
+    workspaceDir: string,
+    branch: string,
+    integrationBranch: string,
+  ) => Promise<boolean>;
   /** Override for `deleteBranch` (avoids real git in tests). */
   deleteBranch?: (workspaceDir: string, branch: string) => Promise<void>;
   /** Override for `listBranchesByPrefix` (avoids real git in tests). */
@@ -113,8 +126,11 @@ export interface WorktreeSweepResult {
   deletedBranches: string[];
   /** Unregistered leftover directories deleted from baseDir. */
   removedHusks: string[];
-  /** Worktrees kept (in use by a run, or branch not merged yet). */
-  kept: string[];
+  /** Deliberate keeps, each with its reason (positive receipt). */
+  kept: { name: string; reason: 'in-use' | 'unmerged' }[];
+  /** Removal attempts that FAILED (locked files etc.) — distinct from kept:
+   *  these should have been removed and will be retried next sweep. */
+  failed: { name: string; op: 'worktree-remove' | 'branch-delete' | 'husk-remove'; message: string }[];
 }
 
 /**
@@ -187,15 +203,24 @@ export class WorktreeService {
    * @param baseDir Absolute path under which this project's worktrees live —
    *   `<data_dir>/worktrees/<slug>/` per the multi-tenancy design §4. Each
    *   worktree directory becomes `<baseDir>/<name>/`.
+   * @param getIntegrationBranch Resolver for the project's integration branch
+   *   (the merge target + landed-predicate base). REQUIRED — there is no
+   *   hardcoded fallback; the resolver throws loudly when unresolvable.
    * @param deps Optional overrides for git primitives and the install runner
    *   (for testing without real git or pnpm processes).
    */
   constructor(
     private readonly workspaceDir: string,
     private readonly baseDir: string,
+    private readonly getIntegrationBranch: () => Promise<string>,
     deps: WorktreeServiceDeps = {},
   ) {
     this.deps = deps;
+  }
+
+  /** The project's resolved integration branch (for receipts/error strings). */
+  integrationBranch(): Promise<string> {
+    return this.getIntegrationBranch();
   }
 
   async list(): Promise<WorktreeEntry[]> {
@@ -235,17 +260,19 @@ export class WorktreeService {
   }
 
   /**
-   * Tear down a run worktree after its branch has verifiably landed on dev:
-   * remove the worktree (force — node_modules is untracked) and delete the
-   * local branch. Refuses loudly if the branch is NOT merged — never deletes
-   * unlanded work. Called by the workflow merge node after both positive
-   * merge receipts; the boot sweep is the backstop for anything missed.
+   * Tear down a run worktree after its branch has verifiably landed on the
+   * integration branch: remove the worktree (force — node_modules is
+   * untracked) and delete the local branch. Refuses loudly if the branch is
+   * NOT merged — never deletes unlanded work. Called by the workflow merge
+   * node after both positive merge receipts; the sweep is the backstop for
+   * anything missed.
    */
   async teardownAfterMerge(branch: string): Promise<void> {
-    const mergedFn = this.deps.branchMergedIntoDev ?? _branchMergedIntoDev;
-    if (!(await mergedFn(this.workspaceDir, branch))) {
+    const integration = await this.getIntegrationBranch();
+    const mergedFn = this.deps.branchMergedInto ?? _branchMergedInto;
+    if (!(await mergedFn(this.workspaceDir, branch, integration))) {
       throw new Error(
-        `TEARDOWN GUARD: branch "${branch}" is not merged into dev — refusing to tear down`,
+        `TEARDOWN GUARD: branch "${branch}" is not merged into "${integration}" — refusing to tear down`,
       );
     }
     // Worktree dir name === branch name (ensureWorktree contract). The dir may
@@ -264,20 +291,25 @@ export class WorktreeService {
   }
 
   /**
-   * Boot-time backstop sweep. Reaps, under this project's baseDir only:
-   *  1. registered `agent-*`/`wf-*` worktrees whose branch is merged into dev
-   *     and which no live run references,
+   * Backstop sweep (boot + periodic). Reaps, under this project's baseDir only:
+   *  1. registered `agent-*`/`wf-*` worktrees whose branch is merged into the
+   *     integration branch and which no live run references,
    *  2. merged local `agent-*`/`wf-*` branches with no worktree left,
    *  3. unregistered leftover directories (husks from interrupted removals —
    *     Windows file locks abort `git worktree remove` partway).
    * Never touches `__dev-merge`, unmerged branches, or in-use paths.
+   *
+   * Positive receipt: every keep carries a reason; every failure (locked dir,
+   * git error) lands in `failed` with the real message — nothing is swallowed.
    */
   async sweepStale(inUsePaths: Iterable<string>): Promise<WorktreeSweepResult> {
+    const integration = await this.getIntegrationBranch();
     const result: WorktreeSweepResult = {
       removedWorktrees: [],
       deletedBranches: [],
       removedHusks: [],
       kept: [],
+      failed: [],
     };
     const inUse = new Set<string>();
     const inUseNames = new Set<string>();
@@ -298,22 +330,28 @@ export class WorktreeService {
       );
     });
 
-    const mergedFn = this.deps.branchMergedIntoDev ?? _branchMergedIntoDev;
+    const mergedFn = this.deps.branchMergedInto ?? _branchMergedInto;
     const survivors = new Set<string>();
     for (const entry of entries) {
       const name = nameFromPath(entry.path)!;
       const branch = entry.branch ?? name;
-      if (inUse.has(normalize(entry.path)) || !(await mergedFn(this.workspaceDir, branch))) {
-        result.kept.push(name);
+      if (inUse.has(normalize(entry.path))) {
+        result.kept.push({ name, reason: 'in-use' });
+        survivors.add(name);
+        continue;
+      }
+      if (!(await mergedFn(this.workspaceDir, branch, integration))) {
+        result.kept.push({ name, reason: 'unmerged' });
         survivors.add(name);
         continue;
       }
       try {
         await this.destroy(entry.path, true);
         result.removedWorktrees.push(name);
-      } catch {
-        // Locked dir etc. — keep; the next boot sweep retries.
-        result.kept.push(name);
+      } catch (err) {
+        // Locked dir etc. — keep the dir; the next sweep retries. The failure
+        // is RECORDED, not swallowed (the 4-silent-keeps incident, 2026-06-11).
+        result.failed.push({ name, op: 'worktree-remove', message: (err as Error).message });
         survivors.add(name);
       }
     }
@@ -326,12 +364,12 @@ export class WorktreeService {
     const deleteFn = this.deps.deleteBranch ?? _deleteBranch;
     for (const branch of branches) {
       if (survivors.has(branch) || inUseNames.has(branch)) continue;
-      if (!(await mergedFn(this.workspaceDir, branch))) continue;
+      if (!(await mergedFn(this.workspaceDir, branch, integration))) continue;
       try {
         await deleteFn(this.workspaceDir, branch);
         result.deletedBranches.push(branch);
-      } catch {
-        /* best-effort — retried next boot */
+      } catch (err) {
+        result.failed.push({ name: branch, op: 'branch-delete', message: (err as Error).message });
       }
     }
 
@@ -357,8 +395,8 @@ export class WorktreeService {
       try {
         await removeDirFn(resolve(this.baseDir, name));
         result.removedHusks.push(name);
-      } catch {
-        /* locked — retried next boot */
+      } catch (err) {
+        result.failed.push({ name, op: 'husk-remove', message: (err as Error).message });
       }
     }
 
@@ -411,95 +449,105 @@ export class WorktreeService {
 
   // ── Merge / push wrappers (pc-pty-chat-270) ──────────────────────────────
   //
-  // ALL merge operations run inside a dedicated, engine-controlled dev
+  // ALL merge operations run inside a dedicated, engine-controlled merge
   // worktree (`<baseDir>/__dev-merge/`) — NEVER in `workspaceDir` (the
   // user's main checkout). This eliminates the bug where `git merge` would
   // run in the user's repo regardless of which branch they had checked out
   // or whether their tree was dirty.
   //
-  // The dev worktree is a plain `git worktree add <path> dev` — no dep
-  // install. It is created lazily and reused across merge steps.
+  // The merge worktree is detached at the integration branch's tip — no dep
+  // install. It is created lazily and reused across merge steps (the lineage
+  // guard in ensureMergeWorktree recreates it when stale).
   //
-  // `mergeBranchIntoDev` additionally asserts that the worktree is on `dev`
-  // and clean before touching anything (belt-and-suspenders guard). A
-  // violation returns loudly — never silently merges into the wrong place.
+  // `mergeBranchIntoIntegration` additionally asserts that the worktree is on
+  // the integration branch (or detached) and clean before touching anything
+  // (belt-and-suspenders guard). A violation returns loudly — never silently
+  // merges into the wrong place.
 
   /**
-   * Absolute path to the engine-controlled dev merge worktree. Lives under
-   * the same `baseDir` as run worktrees but is NOT dep-provisioned.
+   * Absolute path to the engine-controlled merge worktree. Lives under the
+   * same `baseDir` as run worktrees but is NOT dep-provisioned. The dir is
+   * still NAMED `__dev-merge` for historical reasons: renaming would orphan a
+   * git-registered worktree per project on upgrade (REAPABLE_NAME_RE matches
+   * neither name, so the sweep would never collect the old one).
    */
-  get devWorktreePath(): string {
+  get mergeWorktreePath(): string {
     return resolve(this.baseDir, '__dev-merge');
   }
 
-  /** Ensure the dev merge worktree exists and is on `dev`. Idempotent. */
-  private async ensureDevWorktreeReady(): Promise<string> {
-    const devWtPath = this.devWorktreePath;
-    const fn = this.deps.ensureDevWorktree ?? _ensureDevWorktree;
-    await fn(this.workspaceDir, devWtPath);
-    return devWtPath;
+  /** Ensure the merge worktree exists at the integration tip. Idempotent. */
+  private async ensureMergeWorktreeReady(): Promise<{ wtPath: string; integration: string }> {
+    const integration = await this.getIntegrationBranch();
+    const wtPath = this.mergeWorktreePath;
+    const fn = this.deps.ensureMergeWorktree ?? _ensureMergeWorktree;
+    await fn(this.workspaceDir, wtPath, integration);
+    return { wtPath, integration };
   }
 
   /**
-   * Merge `branch` into dev (`--no-ff`) in the engine-controlled dev
-   * worktree (NOT in the user's main working tree). The dev worktree is in
-   * detached HEAD at dev's current commit; the merge advances HEAD. Asserts
-   * the dev worktree is clean before merging; throws loudly on any violation.
-   * Callers should call `mergeState` first for idempotency.
+   * Merge `branch` into the integration branch (`--no-ff`) in the
+   * engine-controlled merge worktree (NOT in the user's main working tree).
+   * The worktree is in detached HEAD at the integration tip; the merge
+   * advances HEAD. Asserts the worktree is clean before merging; throws
+   * loudly on any violation. Callers should call `mergeState` first for
+   * idempotency.
    */
-  async mergeBranchIntoDev(branch: string): Promise<void> {
-    const devWtPath = await this.ensureDevWorktreeReady();
+  async mergeBranchIntoIntegration(branch: string): Promise<void> {
+    const { wtPath, integration } = await this.ensureMergeWorktreeReady();
 
-    // Belt-and-suspenders: assert the dev worktree is in a valid state before
-    // any destructive git command. Valid states: detached HEAD (branch === null,
-    // our normal creation mode via --detach) or tracking 'dev' directly.
-    // Any OTHER branch means something is badly wrong — refuse loudly.
+    // Belt-and-suspenders: assert the merge worktree is in a valid state
+    // before any destructive git command. Valid states: detached HEAD
+    // (branch === null, our normal creation mode via --detach) or tracking
+    // the integration branch directly. Any OTHER branch means something is
+    // badly wrong — refuse loudly.
     const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
-    const { branch: currentBranch, clean } = await statusFn(devWtPath);
-    if (currentBranch !== null && currentBranch !== 'dev') {
+    const { branch: currentBranch, clean } = await statusFn(wtPath);
+    if (currentBranch !== null && currentBranch !== integration) {
       throw new Error(
-        `MERGE GUARD: dev merge worktree is on branch "${currentBranch}", expected detached HEAD or "dev" — refusing to merge`,
+        `MERGE GUARD: merge worktree is on branch "${currentBranch}", expected detached HEAD or "${integration}" — refusing to merge`,
       );
     }
     if (!clean) {
       throw new Error(
-        `MERGE GUARD: dev merge worktree has uncommitted changes — refusing to merge into a dirty tree`,
+        `MERGE GUARD: merge worktree has uncommitted changes — refusing to merge into a dirty tree`,
       );
     }
 
-    const fn = this.deps.mergeBranchIntoDev ?? _mergeBranchIntoDev;
-    // Pass devWtPath as the cwd — the user's workspaceDir is never touched.
-    await fn(devWtPath, branch);
+    const fn = this.deps.mergeBranchIntoHead ?? _mergeBranchIntoHead;
+    // Pass wtPath as the cwd — the user's workspaceDir is never touched.
+    await fn(wtPath, branch);
   }
 
   /**
-   * Push `dev` to `origin/dev` from the engine-controlled dev worktree.
-   * When the dev worktree is in detached HEAD (the normal case after --detach),
-   * pushes `HEAD:dev` so the merge commit (not the stale local `dev` pointer)
-   * reaches origin. Call after a verified merge.
+   * Push the integration branch to its origin counterpart from the
+   * engine-controlled merge worktree. When the worktree is in detached HEAD
+   * (the normal case after --detach), pushes `HEAD:<integration>` so the
+   * merge commit (not a stale local branch pointer) reaches origin. Call
+   * after a verified merge.
    */
-  async pushDev(): Promise<void> {
-    const devWtPath = await this.ensureDevWorktreeReady();
+  async pushIntegration(): Promise<void> {
+    const { wtPath, integration } = await this.ensureMergeWorktreeReady();
     const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
-    const { branch } = await statusFn(devWtPath);
-    // Detached HEAD (standard dev merge worktree): push HEAD (the merge commit)
-    // to origin/dev. Branch-tracking worktree: push dev normally.
-    const refspec = branch === null ? 'HEAD:dev' : 'dev';
+    const { branch } = await statusFn(wtPath);
+    // Detached HEAD (standard merge worktree): push HEAD (the merge commit)
+    // to the origin integration branch. Branch-tracking worktree: push the
+    // branch normally.
+    const refspec = branch === null ? `HEAD:${integration}` : integration;
     const fn = this.deps.pushBranch ?? _pushBranch;
-    await fn(devWtPath, refspec);
+    await fn(wtPath, refspec);
   }
 
   /**
-   * Read-only inspection of merge / push state for `branch` relative to
-   * `dev`, run from the engine-controlled dev worktree. All checks are
-   * non-destructive. MERGE_HEAD is read from the dev worktree (each worktree
-   * has its own MERGE_HEAD), so it correctly reflects conflicts that occurred
-   * in the dev worktree.
+   * Read-only inspection of merge / push state for `branch` relative to the
+   * integration branch, run from the engine-controlled merge worktree. All
+   * checks are non-destructive. MERGE_HEAD is read from the merge worktree
+   * (each worktree has its own MERGE_HEAD), so it correctly reflects
+   * conflicts that occurred there.
    */
   async mergeState(branch: string): Promise<GitMergeState> {
-    const devWtPath = await this.ensureDevWorktreeReady();
+    const { wtPath, integration } = await this.ensureMergeWorktreeReady();
     const fn = this.deps.gitMergeState ?? _gitMergeState;
-    return fn(devWtPath, branch);
+    return fn(wtPath, branch, integration);
   }
 
   // ── private ───────────────────────────────────────────────────────────────

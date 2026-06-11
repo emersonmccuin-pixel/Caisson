@@ -51,7 +51,7 @@ after(() => {
 test('provision/create: installRunner is called with the new worktree path', async () => {
   const installed: string[] = [];
 
-  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'dev', {
     createWorktree: async (_ws, _path, name) => fakeEntry(name),
     listWorktrees: mainOnly,
     installRunner: async (cwd) => { installed.push(cwd); },
@@ -64,7 +64,7 @@ test('provision/create: installRunner is called with the new worktree path', asy
 });
 
 test('provision/create: install failure propagates — caller never gets a half-provisioned entry', async () => {
-  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'dev', {
     createWorktree: async (_ws, _path, name) => fakeEntry(name),
     listWorktrees: mainOnly,
     installRunner: async () => {
@@ -85,7 +85,7 @@ test('provision/attach: installRunner is called when branch already exists (orph
   const installed: string[] = [];
   const name = 'agent-orphan';
 
-  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'dev', {
     pruneWorktrees: async () => {},
     // No match in the initial list → triggers create() attempt.
     listWorktrees: mainOnly,
@@ -103,7 +103,7 @@ test('provision/attach: installRunner is called when branch already exists (orph
 });
 
 test('provision/attach: install failure propagates — orphan recovery does not swallow the error', async () => {
-  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'dev', {
     pruneWorktrees: async () => {},
     listWorktrees: mainOnly,
     createWorktree: async () => { throw new Error('fatal: already exists'); },
@@ -127,7 +127,7 @@ test('provision/match: installRunner is NOT called for an already-attached workt
   const name = 'agent-existing';
   const existingEntry = fakeEntry(name);
 
-  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'dev', {
     pruneWorktrees: async () => {},
     // Match found in the initial list → short-circuit return, no provision.
     listWorktrees: async () => [
