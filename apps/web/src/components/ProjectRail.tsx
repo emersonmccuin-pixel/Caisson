@@ -270,7 +270,7 @@ export function ProjectRail({
                 className={[
                   'pc-project-tile pc-project-tile-row shrink-0',
                   commandActive
-                    ? ''
+                    ? 'pc-project-tile-unread'
                     : commandUnread
                       ? 'pc-project-tile-unread'
                       : commandHasLiveSession
@@ -356,7 +356,7 @@ export function ProjectRail({
                     className={[
                       'pc-project-tile pc-project-tile-row shrink-0',
                       isActive
-                        ? ''
+                        ? 'pc-project-tile-unread'
                         : hasUnread
                           ? 'pc-project-tile-unread'
                           : hasLiveSession
