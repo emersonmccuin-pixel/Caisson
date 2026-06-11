@@ -267,11 +267,16 @@ export function ProjectRail({
             >
               <span
                 aria-hidden="true"
-                className={
-                  'pc-project-tile pc-project-tile-row shrink-0 ' +
-                  (commandActive ? 'pc-project-tile-active' : 'pc-project-tile-inactive') +
-                  (commandUnread ? ' pc-project-tile-unread' : '')
-                }
+                className={[
+                  'pc-project-tile pc-project-tile-row shrink-0',
+                  commandActive
+                    ? 'pc-project-tile-unread'
+                    : commandUnread
+                      ? 'pc-project-tile-unread'
+                      : commandHasLiveSession
+                        ? 'pc-project-tile-chat-open'
+                        : 'pc-project-tile-inactive',
+                ].join(' ')}
               >
                 <span className="text-[1.1rem] leading-none">★</span>
               </span>
@@ -279,7 +284,7 @@ export function ProjectRail({
                 {commandProject.name}
               </span>
             </button>
-            {commandHasLiveSession && (
+            {commandActive && (
               <div
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-0"
@@ -348,11 +353,16 @@ export function ProjectRail({
                 >
                   <span
                     aria-hidden="true"
-                    className={
-                      'pc-project-tile pc-project-tile-row shrink-0 ' +
-                      (isActive ? 'pc-project-tile-active' : 'pc-project-tile-inactive') +
-                      (hasUnread ? ' pc-project-tile-unread' : '')
-                    }
+                    className={[
+                      'pc-project-tile pc-project-tile-row shrink-0',
+                      isActive
+                        ? 'pc-project-tile-unread'
+                        : hasUnread
+                          ? 'pc-project-tile-unread'
+                          : hasLiveSession
+                            ? 'pc-project-tile-chat-open'
+                            : 'pc-project-tile-inactive',
+                    ].join(' ')}
                   >
                     {initials(p.name)}
                   </span>
@@ -367,7 +377,7 @@ export function ProjectRail({
                     </span>
                   )}
                 </button>
-                {hasLiveSession && (
+                {isActive && (
                   <div
                     aria-hidden="true"
                     className="pointer-events-none absolute inset-0"
