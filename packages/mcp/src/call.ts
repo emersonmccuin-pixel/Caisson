@@ -9,9 +9,8 @@
 // completed with output; failed → typed step failure).
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { PodMcpServerConfig } from '@pc/domain';
+import { buildTransport } from './transport.js';
 
 export const CALL_TOOL_TIMEOUT_MS = 120_000;
 
@@ -72,26 +71,11 @@ export async function callMcpTool(
 
   const callPromise = (async (): Promise<CallToolOutcome> => {
     const client = new Client({ name: 'pc-workflow-call', version: '0.0.0' }, { capabilities: {} });
-    let transport: StdioClientTransport | StreamableHTTPClientTransport | null = null;
 
     try {
-      if (config.command) {
-        const spawnEnv = config.env
-          ? { ...getDefaultEnvironment(), ...config.env }
-          : undefined;
-        transport = new StdioClientTransport({
-          command: config.command,
-          args: config.args,
-          env: spawnEnv,
-          stderr: 'pipe',
-        });
-      } else if (config.url) {
-        transport = new StreamableHTTPClientTransport(new URL(config.url), {
-          requestInit: config.headers ? { headers: config.headers } : undefined,
-        });
-      } else {
-        return { status: 'failed', error: 'transport has neither command nor url' };
-      }
+      const built = buildTransport(config);
+      if (!built.ok) return { status: 'failed', error: built.error };
+      const transport = built.transport;
 
       closeTransport = () => client.close();
 
