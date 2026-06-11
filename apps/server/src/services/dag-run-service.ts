@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
-import type { ExpectedOutput, Project, ULID, WorkflowV2 } from '@pc/domain';
+import type { ExpectedOutput, PodMcpServerConfig, Project, ULID, WorkflowV2 } from '@pc/domain';
 import {
   substituteRefs,
   substituteInputs,
@@ -20,11 +20,13 @@ import {
 } from '@pc/workflows';
 import {
   getWorkItem,
+  listMcpServersRegistry,
   moveWorkItemStage,
   newId,
   resolveAgentForDispatch,
   workflowRunsV2Repo,
 } from '@pc/db';
+import { callMcpTool, type CallToolOutcome } from '@pc/mcp/call';
 import { DagExecutor, type DagExecutorDeps, type DagNodeContext, type NodeOutcome } from './dag-executor.ts';
 import { announceRunCreated, writeDagAndStatus } from './workflow-run-writer.ts';
 import {
@@ -188,6 +190,14 @@ export interface DagRunServiceOptions {
    *  that gate, so they never linger. Snapshot-before-decide: a card the
    *  decision itself mints (ceiling escalation, same source) stays open. */
   reviewInbox?: ReviewInboxResolution;
+  /** `call` node MCP invocation seam — live default is callMcpTool (@pc/mcp).
+   *  Injectable so dag-run tests exercise call nodes without a real server. */
+  mcpToolCaller?: (
+    config: PodMcpServerConfig,
+    tool: string,
+    args: Record<string, unknown>,
+    timeoutMs?: number,
+  ) => Promise<CallToolOutcome>;
 }
 
 /** M8 (FD-7) — the MailboxService collect/action pair, structural so runtime
@@ -201,6 +211,9 @@ export interface ReviewInboxResolution {
 function toRunStatus(s: RunStatus): WorkflowV2.WorkflowRunStatus {
   return s === 'awaiting-review' ? 'paused' : (s as WorkflowV2.WorkflowRunStatus);
 }
+
+/** Cap on a `call` node's captured output stored in dag_state. */
+const CALL_OUTPUT_MAX_CHARS = 32_000;
 
 /** Apply `$carry.X` substitution on top of `$nodeId.output` resolution. */
 function render(template: string, ctx: DagNodeContext, escapedForBash = false): string {
@@ -256,10 +269,22 @@ export function makeExecutorDeps(
         return typeof v === 'string' ? v : JSON.stringify(v);
       }
       const rec = state.nodes[nodeId];
-      // Legacy captured-stdout nodes (no work item) expose bare output. Field-
-      // form refs on one have nothing structured to read, so resolve to empty.
+      // Captured-output nodes (no work item — `call` steps): bare refs read the
+      // output whole; field-form refs read a key off a JSON-object output (a
+      // structured tool result), resolving to '' when the output isn't one.
       if (rec?.workItemId === undefined && rec?.output !== undefined) {
-        return field ? '' : rec.output;
+        if (!field) return rec.output;
+        try {
+          const parsed: unknown = JSON.parse(rec.output);
+          if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const fv = (parsed as Record<string, unknown>)[field];
+            if (fv == null) return '';
+            return typeof fv === 'string' ? fv : JSON.stringify(fv);
+          }
+        } catch {
+          // not JSON — fall through to empty
+        }
+        return '';
       }
       const wiId = rec?.workItemId;
       if (!wiId) return '';
@@ -423,10 +448,86 @@ export function makeExecutorDeps(
     };
   };
 
-  // Card-move TRANSITION EFFECT (locked decision 1) — move the run-root card to
-  // `stage` WITHOUT firing that stage's on-entry workflows (loop-safe). Replaces
-  // the old move-work-item node. Best-effort: returns ok/error so the executor
-  // can log a failed move without failing the (already-completed) step.
+  // `call` node — engine-executed MCP tool call (no agent in the loop).
+  // Resolve the registered server (project scope shadows global), render the
+  // args with the same substitution agent tasks get, invoke through the typed
+  // client, and capture the result as the node's output (feeds downstream
+  // `$nodeId.output[.field]` refs). Every failure mode — unknown server, tool
+  // error, transport failure, timeout — settles as a TYPED failed node.
+  const callTool = async (
+    node: WorkflowV2.CallNode,
+    ctx: DagNodeContext,
+  ): Promise<NodeOutcome> => {
+    const servers = listMcpServersRegistry({ projectId: opts.projectId, includeGlobals: true });
+    const row =
+      servers.find((s) => s.name === node.server && s.scope === 'project') ??
+      servers.find((s) => s.name === node.server) ??
+      null;
+    if (!row) {
+      return {
+        state: 'failed',
+        error: `MCP server "${node.server}" is not registered (project or global) — add it under Settings → MCP Servers before using it in a workflow`,
+      };
+    }
+
+    // Render args: every string leaf gets the same substitution pipeline as an
+    // agent task ($refs + $carry.* + {{input}} ports); other JSON passes through.
+    const resolvedInputs: Record<string, string> = {};
+    for (const [name, expr] of Object.entries(node.input ?? {})) {
+      resolvedInputs[name] = render(expr, ctx);
+    }
+    const renderArg = (value: unknown): unknown => {
+      if (typeof value === 'string') {
+        return substituteInputs(render(value, ctx), resolvedInputs);
+      }
+      if (Array.isArray(value)) return value.map(renderArg);
+      if (value !== null && typeof value === 'object') {
+        return Object.fromEntries(
+          Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, renderArg(v)]),
+        );
+      }
+      return value;
+    };
+    const args = renderArg(node.args ?? {}) as Record<string, unknown>;
+
+    const caller = opts.mcpToolCaller ?? callMcpTool;
+    const startedAt = Date.now();
+    const result = await caller(row.transport, node.tool, args, node.timeout);
+    const durationMs = Date.now() - startedAt;
+
+    // Diary line: which external action ran, where, and how it went — the
+    // call-node analogue of agent_dispatched (FD-11 debugging cross-link).
+    runGateway.appendRunEvent({
+      projectId: opts.projectId,
+      runId: run.id,
+      type: 'tool_called',
+      nodeId: node.id,
+      data: {
+        server: node.server,
+        tool: node.tool,
+        ok: result.status === 'ok',
+        durationMs,
+        ...(result.status === 'failed' ? { error: result.error } : {}),
+      },
+    });
+
+    if (result.status === 'failed') {
+      return {
+        state: 'failed',
+        error: `call ${node.server}.${node.tool} failed: ${result.error}`,
+      };
+    }
+    // Cap the captured output so a huge tool result can't bloat dag_state (the
+    // sidecar row is re-read and re-written on every persist).
+    const output =
+      result.output.length > CALL_OUTPUT_MAX_CHARS
+        ? `${result.output.slice(0, CALL_OUTPUT_MAX_CHARS)}\n…[truncated ${String(result.output.length - CALL_OUTPUT_MAX_CHARS)} chars]`
+        : result.output;
+    return { state: 'completed', output };
+  };
+
+  // Card-move step (FD-9 — a drawn step, not a hidden property). Returns
+  // ok/error; the executor fails the step honestly on a failed move.
   const moveCard = async (stage: string): Promise<{ ok: boolean; error?: string }> => {
     if (!run.workItemId) return { ok: false, error: 'run has no root work item' };
     const stages = opts.getProject().stages ?? [];
@@ -437,13 +538,19 @@ export function makeExecutorDeps(
       return { ok: false, error: `run root work item ${run.workItemId} not found` };
     }
     // FD-12 — move + receipt in one gateway transaction; row gone → no event.
-    workItemGateway.tryCommitWorkItemChange({
+    const committed = workItemGateway.tryCommitWorkItemChange({
       projectId: opts.projectId,
       mutate: () => {
         const moved = moveWorkItemStage(run.workItemId!, stage);
         return moved ? { row: moved, reason: 'moved' } : null;
       },
     });
+    // Positive receipt: a move the gateway didn't commit (row vanished between
+    // the pre-checks and the txn, or the repo rejected it) must not read as
+    // success — the executor fails the step honestly (FD-9).
+    if (!committed) {
+      return { ok: false, error: `card move to stage "${stage}" did not commit` };
+    }
     return { ok: true };
   };
 
@@ -717,6 +824,7 @@ export function makeExecutorDeps(
   return {
     resolveRef,
     dispatchAgent,
+    callTool,
     moveCard,
     mergeToDev,
     requestReview,
@@ -993,7 +1101,16 @@ export async function resumeFailedDagRun(
     };
   }
 
-  const compat = resumeCompatErrors(currentDefinition, run.dagState);
+  // Compat-check against the FROZEN snapshot too: a settled node whose kind
+  // changed in the edit must not carry its kept state into a different kind
+  // of step.
+  let previousDef: WorkflowV2.Workflow | undefined;
+  try {
+    previousDef = JSON.parse(run.workflowYamlSnapshot) as WorkflowV2.Workflow;
+  } catch {
+    previousDef = undefined; // unreadable snapshot — existence check still runs
+  }
+  const compat = resumeCompatErrors(currentDefinition, run.dagState, previousDef);
   if (compat.length > 0) {
     return {
       ok: false,

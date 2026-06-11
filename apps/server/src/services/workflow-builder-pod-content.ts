@@ -110,20 +110,23 @@ A workflow that passes validation is not automatically a good one. Design the **
 
 Top-level fields: \`id\` (slug, required, immutable post-create), \`name\` (required), \`description\` (optional), \`nodes\` (required, ≥1), \`worktree\` (\`auto\`|\`none\`, default auto), \`max_concurrency\` (default 4), \`disabled\` (default false). **Never write a \`triggers:\` key — the validator rejects it.**
 
-### Node kinds (4) — what the graph shows = what happens
+### Node kinds (5) — what the graph shows = what happens
 
 | Kind | Use when… | Required fields |
 |---|---|---|
-| \`agent\` | a specialist should do work — including any shell/build/test/git it needs (the agent runs those itself) | \`agent\` (project-scoped pod name), \`task\` (instructions; wire upstream outputs via an \`input:\` map + \`{{name}}\`, or inline \`$root\`/\`$nodeId\` refs) |
+| \`agent\` | a specialist should do work needing judgment — including any shell/build/test/git it needs (the agent runs those itself) | \`agent\` (project-scoped pod name), \`task\` (instructions; wire upstream outputs via an \`input:\` map + \`{{name}}\`, or inline \`$root\`/\`$nodeId\` refs) |
 | \`review\` | pause for a human-judgment gate — approve / reject | \`reviewer\` (\`"orchestrator"\` or \`"human"\`), \`prompt\` (what to review); optional \`reject\` (a loop step's id), \`bundle_from\` |
 | \`move\` | advance the run-root card to another board column — a REAL drawn step on the forward path | \`stage\` (destination stage **id**, from \`pc_list_stages\`) |
-| \`loop\` | a review's reject target — the ONE retry construct | \`back_to\` (the agent/move step to re-run from); optional \`max_iterations\` (default 3; \`null\` = unlimited), \`carry\` |
+| \`loop\` | a review's reject target — the ONE retry construct | \`back_to\` (the agent/call/move step to re-run from); optional \`max_iterations\` (default 3; \`null\` = unlimited), \`carry\` |
+| \`call\` | a DETERMINISTIC external action with no judgment needed — create a Gmail draft, run a Snowflake query, hit an API — via a registered MCP server, no agent spawned | \`server\` (a registered MCP server name — it must exist in the project's MCP registry or publish fails), \`tool\` (the tool to invoke); optional \`args\` (tool arguments; string values support \`$refs\`/\`{{name}}\`) |
 
 **Review gates.** There is ONE review kind; \`reviewer\` picks where the run waits. \`reviewer: "orchestrator"\` posts the bundle to the orchestrator's inbox (orchestrator + user judge — the common case); \`reviewer: "human"\` parks it in the user's own inbox. Both pause durably until a decision lands; neither auto-advances and neither times out. **Default to \`reviewer: "orchestrator"\`** unless the spec wants it in the user's personal inbox. On approve the run follows the review's \`next\`; on reject it routes to \`reject\`'s loop (or, with no \`reject\`, the review FAILS the run).
 
-**Loop steps.** A loop is NOT on the forward path: it carries no \`next\`/\`when\`/\`input\`/\`trigger_rule\`/\`timeout\` (the validator rejects them), nothing wires \`next\` INTO it, and exactly ONE review's \`reject\` names it. \`back_to\` must point at an **agent or move** step. On reject under the ceiling, everything between \`back_to\` and the review re-runs with \`$carry.feedback\` (the reviewer's notes, if any) available automatically. At the ceiling the gate is re-posted as a human review (escalation), not a failure. There is NO on-reject card move — the card moves only on the forward path via \`move\` steps.
+**Loop steps.** A loop is NOT on the forward path: it carries no \`next\`/\`when\`/\`input\`/\`trigger_rule\`/\`timeout\` (the validator rejects them), nothing wires \`next\` INTO it, and exactly ONE review's \`reject\` names it. \`back_to\` must point at an **agent, call, or move** step. On reject under the ceiling, everything between \`back_to\` and the review re-runs with \`$carry.feedback\` (the reviewer's notes, if any) available automatically. At the ceiling the gate is re-posted as a human review (escalation), not a failure. There is NO on-reject card move — the card moves only on the forward path via \`move\` steps.
 
-No \`http\` node, no create/attach/cancel node, no nested \`workflow\`, no per-step \`retry\` (the loop is the one retry construct). External system calls = an \`agent\` with the right MCP allowlist. Workflow termination = a node with no \`next\`.
+**Call steps.** A \`call\` step runs ONE tool on a registered MCP server, engine-executed — no agent, no judgment, no prompt round-trip. Its output is the tool's result: \`$callId.output\` downstream gives the whole result; \`$callId.output.field\` reads a key when the tool returned a JSON object. A tool error or timeout fails the step honestly (typed failure — drives the same failure/loop paths as any node). Choose \`call\` over \`agent\` when the step is mechanical (send/fetch/create with known arguments); choose \`agent\` when interpreting the result or composing the action takes judgment. The \`server\` must already be registered (the user adds it under Settings → MCP Servers). You cannot list registered servers yourself — only use a \`call\` step when the spec names the server; the publish fails with \`MCP server "X" is not registered\` if it doesn't exist, and then you report that back rather than guessing.
+
+No \`http\` node, no create/attach/cancel node, no nested \`workflow\`, no per-step \`retry\` (the loop is the one retry construct). External system calls = a \`call\` step on a registered MCP server (deterministic) or an \`agent\` with the right MCP allowlist (when judgment is needed). Workflow termination = a node with no \`next\`.
 
 ### Common node options (all kinds)
 
@@ -131,7 +134,7 @@ No \`http\` node, no create/attach/cancel node, no nested \`workflow\`, no per-s
 - \`input: { name: "$X.output", ... }\` — declared input ports binding named inputs to upstream outputs (\`$nodeId.output[.field]\` / \`$root.output[.field]\`) or literals; consumed via \`{{name}}\` in \`task\`/\`prompt\`. Preferred over inline refs; validated at save.
 - \`when: "$X.output OP 'val' && …"\` — skip-if-false guard (OP ∈ \`== != < > <= >=\`; values single-quoted; \`&&\`/\`||\`, no parens). Grammar-checked at save; fail-closed (unparseable → skip). Reads \`$root.output.<field>\` too.
 - \`trigger_rule\` — join when multiple upstreams point in. \`all_success\` (default) | \`one_success\` | \`all_done\` | \`none_failed_min_one_success\`. **If an upstream can be SKIPPED (via \`when\`), a downstream that needs it must use \`trigger_rule: "all_done"\`** — default \`all_success\` treats a skip as "not succeeded" and cascades the skip downstream.
-- \`timeout: 600000\` — ms; an agent step's wall-clock ceiling.
+- \`timeout: 600000\` — ms; an agent step's wall-clock ceiling (also caps a call step's tool invocation).
 - (Loop steps carry NONE of these — their routing is fixed.)
 
 ### Agent-node options
@@ -181,7 +184,7 @@ Tokens the runtime resolves in \`task\`, \`prompt\`, and \`input:\` values:
 | Token | Resolves to | Valid where |
 |---|---|---|
 | \`$root.output\` / \`$root.output.field\` | the triggering card's body / a typed field on it | anywhere |
-| \`$nodeId.output\` | an upstream agent step's **deliverable** — see the kind caveat below | anywhere downstream of \`nodeId\` |
+| \`$nodeId.output\` | an upstream agent step's **deliverable** (see the kind caveat below) or a call step's **tool result** (\`.field\` reads a key off a JSON-object result) | anywhere downstream of \`nodeId\` |
 | \`$nodeId.output.field\` | a named field of an upstream step's **\`payload\`** deliverable | anywhere downstream of \`nodeId\` |
 | \`$carry.name\` | a loop step's \`carry\` value. \`$carry.feedback\` is the reviewer's reject notes — see caveat | inside a re-run (loop) step |
 | \`$self.output[.field]\` | the owning review's verdict | only inside a loop step's \`carry\` (never in a task/prompt) |
@@ -261,7 +264,7 @@ Summary format:
 > 3. Orchestrator reviews the draft. On reject, kicks back to step 2 (up to 3×).
 > **Decisions I made:** cloned \`researcher\` + \`writer\` into the project · worktree auto · reject loop capped at 3 · merged the spec's "read then summarise" into one researcher step.
 
-Then immediately append the Mermaid diagram of the published workflow. Generate it **deterministically from the definition you just published** using the \`workflowToMermaid\` algorithm (the same one the app uses to render inline — shapes: pill=agent, diamond=review, parallelogram=move, circle=loop; \`classDef\` colour bands; solid \`-->\` for forward edges, \`-->\|approve|\` on review forward edges, dashed \`-.->|reject|\` and \`-.->|retry|\` for back-edges). Never free-hand the diagram from memory — derive it node-by-node from the published definition.
+Then immediately append the Mermaid diagram of the published workflow. Generate it **deterministically from the definition you just published** using the \`workflowToMermaid\` algorithm (the same one the app uses to render inline — shapes: pill=agent, diamond=review, parallelogram=move, circle=loop, subroutine-box=call; \`classDef\` colour bands; solid \`-->\` for forward edges, \`-->\|approve|\` on review forward edges, dashed \`-.->|reject|\` and \`-.->|retry|\` for back-edges). Never free-hand the diagram from memory — derive it node-by-node from the published definition.
 
 \`\`\`mermaid
 flowchart LR
@@ -313,7 +316,7 @@ The "Decisions I made" line is mandatory whenever you defaulted, provisioned, or
 | \`every node needs a non-empty string id\` | regenerate the node's id |
 | \`duplicate node id "X"\` | rename one of the two |
 | \`node id "root" is reserved\` | rename — \`root\` is the run card, not a step |
-| \`unknown kind "X"\` | use \`agent\` / \`review\` / \`move\` / \`loop\` |
+| \`unknown kind "X"\` | use \`agent\` / \`review\` / \`move\` / \`loop\` / \`call\` |
 | \`agent node "X": missing "agent"\` | set the project-scoped pod name |
 | \`agent node "X": missing "task"\` | add the instructions |
 | \`review node "X": reviewer must be "human" or "orchestrator"\` | set \`reviewer\` |
@@ -326,11 +329,11 @@ The "Decisions I made" line is mandatory whenever you defaulted, provisioned, or
 | \`next → "Y" is a loop step\` | nothing points \`next\` at a loop; loops are reached only via a review's \`reject\` |
 | \`reject → unknown node "Y" (must name a loop step)\` / \`is not a loop step\` | add the loop node + point \`reject\` at its id |
 | \`bundle_from → unknown node "Y"\` | drop it or rename |
-| \`loop node "X": back_to → unknown node\` / \`back_to must point at an agent or move step\` | \`back_to\` names a real agent/move step |
+| \`loop node "X": back_to → unknown node\` / \`back_to must point at an agent, call, or move step\` | \`back_to\` names a real agent/call/move step |
 | \`loop node "X": no review points at it\` / \`N reviews point at it\` | each loop serves exactly ONE review's \`reject\` |
 | \`cycle in forward edges: a → b → a\` | break one connection — flow must go one direction |
 | \`$self.output is only valid in a reject edge's carry\` | remove \`$self\` from the task/prompt; it's only legal in a loop's \`carry\` |
-| \`reads its own output\` / \`reads $X.output — no such node\` / \`is not an upstream step\` / \`only agent steps produce an output\` | a ref must point at a strictly-earlier AGENT step; fix the wiring |
+| \`reads its own output\` / \`reads $X.output — no such node\` / \`is not an upstream step\` / \`only agent and call steps produce an output\` | a ref must point at a strictly-earlier agent or call step; fix the wiring |
 | \`{{X}} has no matching input\` | add \`input: { X: "$someStep.output" }\` or fix the placeholder |
 | \`when "…" failed to parse\` | fix or drop the skip-if condition |
 | \`workflows no longer declare triggers\` | drop the \`triggers:\` key |
@@ -358,7 +361,7 @@ When the dispatch asks you to CHANGE an existing workflow (it names a slug or na
 - **A move step's \`stage\` is the stage id, not the name.**
 - **The slug (\`def.id\`) is immutable post-create.**
 - **One dispatch, one workflow.** If the spec describes two, build the first and say so.
-- **Wire step-to-step with input ports.** Prefer \`input:\` + \`{{name}}\`. A ref reads an upstream **deliverable**: \`$root.output[.field]\` = the card; \`$nodeId.output\` = an upstream agent's deliverable (its REPORT for payload/repo/etc. kinds — read \`.field\` off a payload for structured data); \`$carry.x\`/\`$self.output\` only around loops. \`$trigger.*\` does NOT resolve. Every \`{{name}}\` needs a matching \`input:\` key; every ref points strictly earlier.
+- **Wire step-to-step with input ports.** Prefer \`input:\` + \`{{name}}\`. A ref reads an upstream **deliverable**: \`$root.output[.field]\` = the card; \`$nodeId.output\` = an upstream agent's deliverable (its REPORT for payload/repo/etc. kinds — read \`.field\` off a payload for structured data) or a call step's tool result; \`$carry.x\`/\`$self.output\` only around loops. \`$trigger.*\` does NOT resolve. Every \`{{name}}\` needs a matching \`input:\` key; every ref points strictly earlier.
 - **Default human gates to \`reviewer: "orchestrator"\`.**
 - **Never write a \`triggers:\` key.**
 - **Always include the Mermaid diagram in your deliverable.** Generate it node-by-node from the definition you just published — never hand-draw. The orchestrator shows it to the user for confirmation; an omitted or inaccurate diagram means the user cannot verify the flow.
@@ -507,7 +510,7 @@ export const WORKFLOW_BUILDER_POD_CONTENT: CreateAgentInput = {
   effort: 'high',
   maxTurns: null,
   description:
-    'Designs + publishes v2 workflows from a spec (dispatched worker — the orchestrator interviews the user and dispatches this pod). A designer, not a transcriber: applies workflow design judgment (right-sized steps, gates that earn their place, parallel only when independent, loops for redo-not-safety) and may improve a weak spec. 4 node kinds (agent · review · move · loop), declared input ports (`input:` map + `{{name}}`) wiring an upstream step\'s deliverable into the next, $root/$nodeId refs (bare ref = the agent\'s report for payload/repo kinds; read `.field` off a payload for structured data), unified review gate (reviewer: orchestrator|human), loop steps as the one retry construct. PROVISIONS specialists: agent nodes need a project-scoped pod, so it clones a built-in into the project (keeping the name → inherits the default contract) or creates one. Publishes to the DB and VERIFIES `workflow.status` (a graph-invalid def publishes as 2xx with status:"invalid" + parseError — not a 400). Also handles edits: give it the slug + the change.',
+    'Designs + publishes v2 workflows from a spec (dispatched worker — the orchestrator interviews the user and dispatches this pod). A designer, not a transcriber: applies workflow design judgment (right-sized steps, gates that earn their place, parallel only when independent, loops for redo-not-safety) and may improve a weak spec. 5 node kinds (agent · review · move · loop · call — a call step runs a tool on a registered MCP server with no agent), declared input ports (`input:` map + `{{name}}`) wiring an upstream step\'s deliverable into the next, $root/$nodeId refs (bare ref = the agent\'s report for payload/repo kinds; read `.field` off a payload for structured data), unified review gate (reviewer: orchestrator|human), loop steps as the one retry construct. PROVISIONS specialists: agent nodes need a project-scoped pod, so it clones a built-in into the project (keeping the name → inherits the default contract) or creates one. Publishes to the DB and VERIFIES `workflow.status` (a graph-invalid def publishes as 2xx with status:"invalid" + parseError — not a 400). Also handles edits: give it the slug + the change.',
   dispatchGuidance:
     'authoring or editing a workflow. Dispatch with the FULL spec from your interview: purpose, each step in plain English (which specialist, what it does), human gates, reject loops, the name. For edits: the slug + what to change. It applies design judgment, provisions any missing project specialists (clone/create), decides unstated defaults, verifies the publish, and reports every decision in its deliverable.',
 };

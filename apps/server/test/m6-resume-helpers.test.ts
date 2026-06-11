@@ -35,6 +35,36 @@ test('compat: an edit that removes a settled node is refused by name', () => {
   assert.deepEqual(resumeCompatErrors(WF, state), []);
 });
 
+test('compat: an edit that changes a settled node KIND is refused (snapshot supplied)', () => {
+  const state: WorkflowV2.WorkflowDagState = {
+    nodes: { a: { state: 'completed' }, b: { state: 'failed' } },
+  };
+  const edited: WorkflowV2.Workflow = {
+    ...WF,
+    nodes: WF.nodes.map((n) =>
+      n.id === 'a' ? ({ id: 'a', kind: 'move', stage: 'st-1', next: ['b'] } as WorkflowV2.MoveNode) : n,
+    ),
+  };
+  const errors = resumeCompatErrors(edited, state, WF);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]!, /"a".*kind "agent" → "move"/);
+
+  // A kind change on a node that never ran is fine.
+  const editedPending: WorkflowV2.Workflow = {
+    ...WF,
+    nodes: WF.nodes.map((n) =>
+      n.id === 'b' ? ({ id: 'b', kind: 'move', stage: 'st-1', next: ['gate'] } as WorkflowV2.MoveNode) : n,
+    ),
+  };
+  const pendingState: WorkflowV2.WorkflowDagState = {
+    nodes: { a: { state: 'completed' }, b: { state: 'pending' } },
+  };
+  assert.deepEqual(resumeCompatErrors(editedPending, pendingState, WF), []);
+
+  // Without the snapshot the existence check still runs (back-compat).
+  assert.deepEqual(resumeCompatErrors(edited, state), []);
+});
+
 test('reset: failed/skipped/ghost nodes → pending; completed + loop bookkeeping kept', () => {
   const state: WorkflowV2.WorkflowDagState = {
     nodes: {

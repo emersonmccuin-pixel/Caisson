@@ -53,6 +53,8 @@ function buildNodeLabel(node: WorkflowNode): string {
     }
     case 'merge':
       return escapeMermaidLabel('Merge to dev');
+    case 'call':
+      return escapeMermaidLabel(`Call: ${node.server} · ${node.tool}`);
   }
 }
 
@@ -65,11 +67,12 @@ function buildNodeLabel(node: WorkflowNode): string {
  *
  * - **Deterministic** — same definition → same string every call.
  * - **Reflects the real graph** — all node kinds (agent / review / move / loop /
- *   merge), forward edges, and reject-loops as dashed edges. Never hand-drawn.
+ *   merge / call), forward edges, and reject-loops as dashed edges. Never hand-drawn.
  * - **Browser-safe, zero runtime deps** — import from server or web app alike.
  *
  * Node shapes encode kind: pill = agent · diamond = review · parallelogram =
- * move · circle = loop · hexagon = merge. Colors match the app's Vellum palette.
+ * move · circle = loop · hexagon = merge · subroutine box = call. Colors match
+ * the app's Vellum palette.
  * Reject / retry back-edges render as dashed arrows (`-.->`) so they are visually
  * distinct from forward flow.
  */
@@ -84,6 +87,7 @@ export function workflowToMermaid(workflow: Workflow): string {
   lines.push('  classDef moveNode fill:#0c1a08,stroke:#8cb06a,color:#dcf0c8');
   lines.push('  classDef loopNode fill:#181410,stroke:#9a8e7a,color:#c8c0b0');
   lines.push('  classDef mergeNode fill:#181614,stroke:#f5e8c8,color:#f5e8c8');
+  lines.push('  classDef callNode fill:#101a1e,stroke:#7ab8cc,color:#cfe8f0');
 
   // Node definitions — shape encodes kind.
   for (const node of workflow.nodes) {
@@ -109,6 +113,10 @@ export function workflowToMermaid(workflow: Workflow): string {
       case 'merge':
         // Hexagon — special engine operation.
         lines.push(`  ${id}{{"${label}"}}`);
+        break;
+      case 'call':
+        // Subroutine box — engine-executed external tool call.
+        lines.push(`  ${id}[["${label}"]]`);
         break;
     }
   }

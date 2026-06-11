@@ -18,6 +18,10 @@
     "./probe": {
       "types": "./src/probe.ts",
       "import": "./src/probe.ts"
+    },
+    "./call": {
+      "types": "./src/call.ts",
+      "import": "./src/call.ts"
     }
   },
   "scripts": {

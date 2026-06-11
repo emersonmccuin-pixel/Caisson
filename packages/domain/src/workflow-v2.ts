@@ -23,13 +23,16 @@ import type { VerificationTier } from './contract.ts';
 // Node kinds
 // ---------------------------------------------------------------------------
 
-/** Node kinds — FD-9 (M6 slice B) + pc-pty-chat-270: five visible step kinds,
+/** Node kinds — FD-9 (M6 slice B) + pc-pty-chat-270: six visible step kinds,
  *  each doing one thing. `agent` (hand a job to an agent) · `review`
  *  (human-judgment gate; `reviewer` = human | orchestrator) · `move` (move the
  *  run-root card — a step drawn in the graph, NOT a hidden property) · `loop`
  *  (the one retry construct: a review's reject target; counts iterations up to a
  *  ceiling) · `merge` (engine-executed git merge into dev, positive-receipt
- *  verified; conflict parks the run at a durable review gate).
+ *  verified; conflict parks the run at a durable review gate) · `call`
+ *  (engine-executed tool call on a registered MCP server — deterministic
+ *  external work, e.g. a Gmail draft or a Snowflake query, with no agent in
+ *  the loop; error/timeout is a typed step failure, never a silent hang).
  *  What the graph shows = what happens. */
 export const WORKFLOW_NODE_KINDS = [
   'agent',
@@ -37,6 +40,7 @@ export const WORKFLOW_NODE_KINDS = [
   'move',
   'loop',
   'merge',
+  'call',
 ] as const;
 export type WorkflowNodeKind = (typeof WORKFLOW_NODE_KINDS)[number];
 
@@ -213,7 +217,32 @@ export interface MergeNode extends WorkflowNodeBase {
   on_conflict_stage?: string;
 }
 
-export type WorkflowNode = AgentNode | ReviewNode | MoveNode | LoopNode | MergeNode;
+/** Engine-executed MCP tool call (no agent in the loop). The server connects to
+ *  the registered MCP server named by `server` (project scope wins over global),
+ *  invokes `tool` with the rendered `args`, captures the result as this node's
+ *  output (`$nodeId.output`; `.field` reads a key from a JSON-object result),
+ *  and disconnects. Built for deterministic external work inside a workflow —
+ *  create a Gmail draft, run a Snowflake query, hit an internal API — where
+ *  dispatching a whole agent would be waste and judgment isn't needed.
+ *
+ *  Positive receipt: a tool error, transport failure, or timeout settles the
+ *  node as a TYPED failure with the error text — never a silent hang and never
+ *  a fake success. `timeout` (WorkflowNodeBase) caps the call wall-clock. */
+export interface CallNode extends WorkflowNodeBase {
+  kind: 'call';
+  /** Registered MCP server name (the `mcp_servers` registry; project-scoped
+   *  rows shadow global rows of the same name). */
+  server: string;
+  /** Tool name on that server (as discovered by the registry probe). */
+  tool: string;
+  /** Tool arguments. String values (at any nesting depth) support the same
+   *  substitution as agent tasks: `$nodeId.output[.field]`, `$root.output`,
+   *  `$carry.*`, and `{{name}}` input placeholders. Non-string values pass
+   *  through as-is (numbers, booleans, nested objects/arrays). */
+  args?: Record<string, unknown>;
+}
+
+export type WorkflowNode = AgentNode | ReviewNode | MoveNode | LoopNode | MergeNode | CallNode;
 
 // Type guards
 export function isReviewNode(n: WorkflowNode): n is ReviewNode {
@@ -227,6 +256,9 @@ export function isLoopNode(n: WorkflowNode): n is LoopNode {
 }
 export function isMergeNode(n: WorkflowNode): n is MergeNode {
   return n.kind === 'merge';
+}
+export function isCallNode(n: WorkflowNode): n is CallNode {
+  return n.kind === 'call';
 }
 
 // ---------------------------------------------------------------------------
@@ -284,9 +316,10 @@ export interface NodeRunRecord {
   iteration?: number;
   /** Reason when `state` is `failed`. */
   error?: string;
-  /** Captured stdout for bash/script nodes (truncated). Lets `$nodeId.output`
-   *  refs resolve to a real value instead of empty string — see F#1. Agent
-   *  nodes resolve via `workItemId` → child work-item body and don't use this. */
+  /** Captured output for non-agent producing nodes (truncated): a `call`
+   *  node's tool result (JSON or text). Lets `$nodeId.output` refs resolve to
+   *  a real value instead of empty string — see F#1. Agent nodes resolve via
+   *  `workItemId` → contract deliverable and don't use this. */
   output?: string;
   startedAt?: number;
   endedAt?: number;
@@ -348,6 +381,10 @@ export const WORKFLOW_EVENT_TYPES = [
   'run_resumed',
   /** A move STEP fired (FD-9 — card-move is a drawn step since M6 slice B). */
   'card_moved',
+  /** A `call` step invoked a tool on a registered MCP server; `data` carries
+   *  `server`, `tool`, `ok`, `durationMs` (+ `error` on failure) so the diary
+   *  explains exactly what external action ran and how it went. */
+  'tool_called',
   /** pc-pty-chat-270: the engine ran `git merge --no-ff` into dev, verified
    *  the commit landed, pushed, and verified origin/dev == dev. */
   'git_merged',
