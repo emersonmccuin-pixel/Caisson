@@ -16,16 +16,17 @@ export type {
 
 export {
   attachWorktree,
-  branchMergedIntoDev,
+  branchMergedInto,
   createWorktree,
   deleteBranch,
   destroyWorktree,
-  ensureDevWorktree,
+  detectIntegrationBranch,
+  ensureMergeWorktree,
   gitMergeState,
   getWorktreeStatus,
   listBranchesByPrefix,
   listWorktrees,
-  mergeBranchIntoDev,
+  mergeBranchIntoHead,
   pruneWorktrees,
   pushBranch,
 } from './worktree.ts';

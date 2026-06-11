@@ -1,27 +1,26 @@
 // pc-pty-chat-270 Chunk A — runtime git primitive tests.
 //
-// Verifies `gitMergeState`, `mergeBranchIntoDev`, and `pushBranch` against a
-// throwaway temp git repo without touching the real project repository.
+// Verifies `gitMergeState`, `mergeBranchIntoHead`, `pushBranch`,
+// `ensureMergeWorktree`, `branchMergedInto`, and `detectIntegrationBranch`
+// against throwaway temp git repos without touching the real project repo.
 //
-// Test coverage:
-// - State before any merge: alreadyMerged=false, mergeInProgress=false, pushed=false
-// - Clean merge: mergeBranchIntoDev succeeds; gitMergeState reports alreadyMerged=true
-// - Already-merged idempotency: mergeState after merge correctly reports true, not false
-// - Conflicting merge: throws; MERGE_HEAD is present → mergeInProgress=true; abort → false
-// - Push + pushed state: after pushBranch, gitMergeState reports pushed=true
+// Two fixtures: a `dev`-named integration repo (the historical default) and a
+// `trunk`-named one (proves nothing assumes the literal 'dev' anymore).
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  ensureDevWorktree,
+  branchMergedInto,
+  detectIntegrationBranch,
+  ensureMergeWorktree,
   getWorktreeStatus,
   gitMergeState,
-  mergeBranchIntoDev,
+  mergeBranchIntoHead,
   pushBranch,
 } from '../src/worktree.ts';
 
@@ -30,6 +29,9 @@ let originDir: string;
 
 function git(...args: string[]): void {
   execFileSync('git', args, { cwd: repoDir, stdio: 'ignore' });
+}
+function gitOut(...args: string[]): string {
+  return execFileSync('git', args, { cwd: repoDir }).toString().trim();
 }
 function gitOrigin(...args: string[]): void {
   execFileSync('git', args, { cwd: originDir, stdio: 'ignore' });
@@ -81,76 +83,184 @@ after(() => {
 });
 
 test('gitMergeState: initial state — not merged, no conflict, not pushed', async () => {
-  const state = await gitMergeState(repoDir, 'feature-clean');
+  const state = await gitMergeState(repoDir, 'feature-clean', 'dev');
   assert.equal(state.alreadyMerged, false, 'not yet merged');
   assert.equal(state.mergeInProgress, false, 'no merge in progress');
   assert.equal(state.pushed, false, 'not pushed yet');
 });
 
-test('mergeBranchIntoDev: clean merge succeeds', async () => {
+test('branchMergedInto: false before merge, true after', async () => {
+  assert.equal(await branchMergedInto(repoDir, 'feature-clean', 'dev'), false);
+});
+
+test('mergeBranchIntoHead: clean merge succeeds', async () => {
   await assert.doesNotReject(
-    () => mergeBranchIntoDev(repoDir, 'feature-clean'),
+    () => mergeBranchIntoHead(repoDir, 'feature-clean'),
     'clean merge must not throw',
   );
 });
 
 test('gitMergeState: alreadyMerged=true after clean merge', async () => {
-  const state = await gitMergeState(repoDir, 'feature-clean');
+  const state = await gitMergeState(repoDir, 'feature-clean', 'dev');
   assert.equal(state.alreadyMerged, true, 'branch tip is now an ancestor of dev');
   assert.equal(state.mergeInProgress, false, 'no lingering MERGE_HEAD');
+  assert.equal(await branchMergedInto(repoDir, 'feature-clean', 'dev'), true);
 });
 
-test('mergeBranchIntoDev: conflicting merge throws', async () => {
+test('mergeBranchIntoHead: conflicting merge throws', async () => {
   await assert.rejects(
-    () => mergeBranchIntoDev(repoDir, 'feature-conflict'),
+    () => mergeBranchIntoHead(repoDir, 'feature-conflict'),
     'conflicting merge must throw',
   );
 });
 
 test('gitMergeState: mergeInProgress=true during a conflict', async () => {
-  const state = await gitMergeState(repoDir, 'feature-conflict');
+  const state = await gitMergeState(repoDir, 'feature-conflict', 'dev');
   assert.equal(state.mergeInProgress, true, 'MERGE_HEAD must be present after conflict');
   assert.equal(state.alreadyMerged, false, 'conflicted branch is not yet merged');
 });
 
 test('gitMergeState: mergeInProgress=false after aborting the conflict', async () => {
   git('merge', '--abort');
-  const state = await gitMergeState(repoDir, 'feature-conflict');
+  const state = await gitMergeState(repoDir, 'feature-conflict', 'dev');
   assert.equal(state.mergeInProgress, false, 'MERGE_HEAD must be gone after abort');
 });
 
 test('pushBranch + gitMergeState: pushed=true after push', async () => {
   await pushBranch(repoDir, 'dev');
-  const state = await gitMergeState(repoDir, 'feature-clean');
+  const state = await gitMergeState(repoDir, 'feature-clean', 'dev');
   assert.equal(state.pushed, true, 'origin/dev should match local dev after push');
 });
 
-// ── ensureDevWorktree ────────────────────────────────────────────────────────
+// ── ensureMergeWorktree ──────────────────────────────────────────────────────
 
-let devWtDir: string;
+let mergeWtDir: string;
 
-test('ensureDevWorktree: creates a detached-HEAD worktree at dev commit', async () => {
-  devWtDir = mkdtempSync(join(tmpdir(), 'pc-dev-wt-'));
-  const devWtPath = join(devWtDir, 'dev-merge');
+test('ensureMergeWorktree: creates a detached-HEAD worktree at the integration tip', async () => {
+  mergeWtDir = mkdtempSync(join(tmpdir(), 'pc-merge-wt-'));
+  const wtPath = join(mergeWtDir, 'dev-merge');
 
   await assert.doesNotReject(
-    () => ensureDevWorktree(repoDir, devWtPath),
-    'ensureDevWorktree must not throw for a clean creation',
+    () => ensureMergeWorktree(repoDir, wtPath, 'dev'),
+    'ensureMergeWorktree must not throw for a clean creation',
   );
 
-  // Worktree is created with --detach so it works even when the main checkout
-  // is already on dev. Branch is null (detached HEAD); tree is clean.
-  const status = await getWorktreeStatus(devWtPath);
-  assert.equal(status.branch, null, 'dev worktree is in detached HEAD (--detach mode)');
-  assert.equal(status.clean, true, 'freshly created dev worktree must be clean');
+  const status = await getWorktreeStatus(wtPath);
+  assert.equal(status.branch, null, 'merge worktree is in detached HEAD (--detach mode)');
+  assert.equal(status.clean, true, 'freshly created merge worktree must be clean');
 });
 
-test('ensureDevWorktree: idempotent — calling twice with detached worktree does not error', async () => {
-  const devWtPath = join(devWtDir, 'dev-merge');
-  await assert.doesNotReject(
-    () => ensureDevWorktree(repoDir, devWtPath),
-    'second call must be a no-op when worktree already exists in detached HEAD',
+test('ensureMergeWorktree: idempotent — reuses an up-to-date detached worktree', async () => {
+  const wtPath = join(mergeWtDir, 'dev-merge');
+  const headBefore = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: wtPath })
+    .toString()
+    .trim();
+  await assert.doesNotReject(() => ensureMergeWorktree(repoDir, wtPath, 'dev'));
+  const headAfter = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: wtPath })
+    .toString()
+    .trim();
+  assert.equal(headAfter, headBefore, 'up-to-date worktree must be reused, not recreated');
+});
+
+test('ensureMergeWorktree: LINEAGE GUARD — stale worktree is recreated at the new tip', async () => {
+  const wtPath = join(mergeWtDir, 'dev-merge');
+  // Advance dev in the main checkout (an out-of-band merge / commit).
+  writeFileSync(join(repoDir, 'advance.txt'), 'moved on\n');
+  git('add', '.');
+  git('commit', '-m', 'advance dev past the merge worktree');
+  const devTip = gitOut('rev-parse', 'dev');
+
+  await ensureMergeWorktree(repoDir, wtPath, 'dev');
+  const wtHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: wtPath }).toString().trim();
+  assert.equal(wtHead, devTip, 'stale worktree must be recreated at the current dev tip');
+});
+
+test('ensureMergeWorktree: MERGE_HEAD guard — a parked conflict is never destroyed', async () => {
+  const wtPath = join(mergeWtDir, 'dev-merge');
+  // Park a conflict inside the merge worktree.
+  try {
+    execFileSync('git', ['merge', '--no-ff', 'feature-conflict'], { cwd: wtPath, stdio: 'ignore' });
+  } catch {
+    /* expected: conflict */
+  }
+  // Advance dev again so the worktree is ALSO stale — conflict must still win.
+  writeFileSync(join(repoDir, 'advance2.txt'), 'moved on again\n');
+  git('add', '.');
+  git('commit', '-m', 'advance dev again');
+
+  await ensureMergeWorktree(repoDir, wtPath, 'dev');
+  assert.ok(
+    existsSync(join(wtPath, 'shared.txt')),
+    'worktree must survive (parked conflict state)',
   );
+  const state = await gitMergeState(wtPath, 'feature-conflict', 'dev');
+  assert.equal(state.mergeInProgress, true, 'MERGE_HEAD must still be present');
+  execFileSync('git', ['merge', '--abort'], { cwd: wtPath, stdio: 'ignore' });
+});
+
+// ── non-dev integration branch (proves the literal is gone) ─────────────────
+
+test('integration machinery works on a repo whose integration branch is "trunk"', async () => {
+  const repo2 = mkdtempSync(join(tmpdir(), 'pc-trunk-repo-'));
+  const g = (...args: string[]) => execFileSync('git', args, { cwd: repo2, stdio: 'ignore' });
+  try {
+    g('init');
+    g('config', 'user.email', 't@t');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(repo2, 'a.txt'), 'a\n');
+    g('add', '.');
+    g('commit', '-m', 'initial');
+    g('branch', '-m', 'trunk');
+    g('checkout', '-b', 'agent-x');
+    writeFileSync(join(repo2, 'b.txt'), 'b\n');
+    g('add', '.');
+    g('commit', '-m', 'work');
+    g('checkout', 'trunk');
+
+    assert.equal(await branchMergedInto(repo2, 'agent-x', 'trunk'), false);
+    g('merge', '--no-ff', 'agent-x');
+    assert.equal(await branchMergedInto(repo2, 'agent-x', 'trunk'), true);
+
+    const state = await gitMergeState(repo2, 'agent-x', 'trunk');
+    assert.equal(state.alreadyMerged, true);
+
+    const wt = join(mkdtempSync(join(tmpdir(), 'pc-trunk-wt-')), 'merge');
+    await ensureMergeWorktree(repo2, wt, 'trunk');
+    const status = await getWorktreeStatus(wt);
+    assert.equal(status.branch, null, 'detached at trunk tip');
+  } finally {
+    rmSync(repo2, { recursive: true, force: true });
+  }
+});
+
+// ── detectIntegrationBranch ──────────────────────────────────────────────────
+
+test('detectIntegrationBranch: prefers a local dev branch', async () => {
+  assert.equal(await detectIntegrationBranch(repoDir), 'dev');
+});
+
+test('detectIntegrationBranch: falls back to origin/HEAD, then current branch', async () => {
+  const repo2 = mkdtempSync(join(tmpdir(), 'pc-detect-repo-'));
+  const g = (...args: string[]) => execFileSync('git', args, { cwd: repo2, stdio: 'ignore' });
+  try {
+    g('init', '-b', 'main');
+    g('config', 'user.email', 't@t');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(repo2, 'a.txt'), 'a\n');
+    g('add', '.');
+    g('commit', '-m', 'initial');
+
+    // No dev, no origin → current branch.
+    assert.equal(await detectIntegrationBranch(repo2), 'main');
+
+    // Simulate a clone's origin/HEAD pointing at main while checked out elsewhere.
+    g('checkout', '-b', 'work-branch');
+    assert.equal(await detectIntegrationBranch(repo2), 'work-branch');
+  } finally {
+    rmSync(repo2, { recursive: true, force: true });
+  }
 });
 
 // ── getWorktreeStatus ────────────────────────────────────────────────────────
