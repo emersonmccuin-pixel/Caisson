@@ -28,7 +28,8 @@ import type { VerificationTier } from './contract.ts';
  *  (human-judgment gate; `reviewer` = human | orchestrator) · `move` (move the
  *  run-root card — a step drawn in the graph, NOT a hidden property) · `loop`
  *  (the one retry construct: a review's reject target; counts iterations up to a
- *  ceiling) · `merge` (engine-executed git merge into dev, positive-receipt
+ *  ceiling) · `merge` (engine-executed git merge into the project's
+ *  integration branch, positive-receipt
  *  verified; conflict parks the run at a durable review gate) · `call`
  *  (engine-executed tool call on a registered MCP server — deterministic
  *  external work, e.g. a Gmail draft or a Snowflake query, with no agent in
@@ -195,10 +196,11 @@ export interface LoopNode {
   timeout?: never;
 }
 
-/** Engine-executed git merge into `dev` (pc-pty-chat-270). The engine runs
- *  `git merge --no-ff <run-branch>`, asserts the branch tip is an ancestor of
- *  dev (positive receipt #1), pushes, and asserts `origin/dev == dev` (positive
- *  receipt #2). A conflict parks the run at a durable review gate (reviewer =
+/** Engine-executed git merge into the project's configured integration branch
+ *  (pc-pty-chat-270). The engine runs `git merge --no-ff <run-branch>`, asserts
+ *  the branch tip is an ancestor of the integration branch (positive receipt
+ *  #1), pushes, and asserts the origin counterpart matches (positive receipt
+ *  #2). A conflict parks the run at a durable review gate (reviewer =
  *  `conflict_reviewer`, default `'orchestrator'`) — approving re-runs the step
  *  idempotently. The run never advances on an unverified side-effect.
  *
@@ -206,8 +208,11 @@ export interface LoopNode {
  *  which defaults to `'auto'`). Validated at save time. */
 export interface MergeNode extends WorkflowNodeBase {
   kind: 'merge';
-  /** The only valid merge target. Reserved for future multi-branch support. */
-  target: 'dev';
+  /** LEGACY token — the engine always merges into the project's configured
+   *  integration branch (settings.integrationBranch); this field is never
+   *  read. Optional + literal so stored defs and run snapshots that carry
+   *  `target: 'dev'` keep validating (re-drivable runs must not brick). */
+  target?: 'dev';
   /** Who reviews if there's a merge conflict. Defaults to `'orchestrator'`.
    *  `'orchestrator'` keeps the gate off the user's clickable inbox
    *  (pc-pty-chat-267). `'human'` surfaces it there directly. */
@@ -385,8 +390,9 @@ export const WORKFLOW_EVENT_TYPES = [
    *  `server`, `tool`, `ok`, `durationMs` (+ `error` on failure) so the diary
    *  explains exactly what external action ran and how it went. */
   'tool_called',
-  /** pc-pty-chat-270: the engine ran `git merge --no-ff` into dev, verified
-   *  the commit landed, pushed, and verified origin/dev == dev. */
+  /** pc-pty-chat-270: the engine ran `git merge --no-ff` into the project's
+   *  integration branch, verified the commit landed, pushed, and verified the
+   *  origin counterpart matches. */
   'git_merged',
   /** pc-pty-chat-270: the engine attempted a merge but hit a conflict (or a
    *  rejected push). The run is paused at a review gate pending resolution. */

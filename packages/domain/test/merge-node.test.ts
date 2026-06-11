@@ -68,3 +68,9 @@ test('MergeNode: optional fields are truly optional (minimal shape)', () => {
   assert.equal(node.next, undefined);
   assert.equal(isMergeNode(node), true);
 });
+
+test('MergeNode: target itself is optional (legacy token, engine never reads it)', () => {
+  const node: WorkflowV2.MergeNode = { id: 'merge-4', kind: 'merge' };
+  assert.equal(node.target, undefined);
+  assert.equal(isMergeNode(node), true);
+});

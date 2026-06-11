@@ -1,8 +1,10 @@
 // pc-pty-chat-270 Chunk A — validation of merge node at save time.
 //
 // A `merge` node requires `workflow.worktree !== 'none'`.
-// The `target` field must be 'dev'. Optional `on_conflict_stage` must be
-// a non-empty string when set. Merge nodes do not produce output ($ref blocked).
+// `target` is a LEGACY field: absent is preferred; the literal 'dev' is
+// accepted (stored defs + run snapshots carry it); anything else is rejected.
+// Optional `on_conflict_stage` must be a non-empty string when set. Merge
+// nodes do not produce output ($ref blocked).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -46,20 +48,24 @@ test('merge node with no worktree field (defaults to auto) is valid', () => {
   assert.equal(r.ok, true, r.errors.join('; '));
 });
 
-// ── target field ────────────────────────────────────────────────────────────
+// ── target field (legacy) ────────────────────────────────────────────────────
 
-test('merge node with wrong target is rejected', () => {
+test('merge node with a non-legacy target is rejected', () => {
   const bad = { ...mergeNode, target: 'main' as unknown as 'dev' };
   const r = validateWorkflowV2(wf([bad]));
   assert.equal(r.ok, false);
-  assert.ok(r.errors.some((e) => /target.*dev/i.test(e)), r.errors.join('; '));
+  assert.ok(r.errors.some((e) => /target.*legacy/i.test(e)), r.errors.join('; '));
 });
 
-test('merge node with no target is rejected', () => {
-  const bad = { id: 'merge-1', kind: 'merge' } as unknown as WorkflowV2.WorkflowNode;
-  const r = validateWorkflowV2(wf([bad]));
-  assert.equal(r.ok, false);
-  assert.ok(r.errors.some((e) => /target.*dev/i.test(e)), r.errors.join('; '));
+test('merge node with no target is valid (preferred authoring shape)', () => {
+  const node = { id: 'merge-1', kind: 'merge' } as unknown as WorkflowV2.WorkflowNode;
+  const r = validateWorkflowV2(wf([node]));
+  assert.equal(r.ok, true, r.errors.join('; '));
+});
+
+test('merge node with the legacy target "dev" is still valid (stored defs must not brick)', () => {
+  const r = validateWorkflowV2(wf([mergeNode]));
+  assert.equal(r.ok, true, r.errors.join('; '));
 });
 
 // ── on_conflict_stage ────────────────────────────────────────────────────────

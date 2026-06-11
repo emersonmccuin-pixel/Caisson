@@ -117,8 +117,13 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
       }
     }
     if (kind === 'merge') {
-      if ((n.target as unknown) !== 'dev')
-        errors.push(`merge node "${id}": target must be "dev"`);
+      // `target` is a legacy token (the engine merges into the project's
+      // configured integration branch). Absent is preferred; the literal
+      // 'dev' is accepted so stored defs + run snapshots keep validating.
+      if (n.target !== undefined && (n.target as unknown) !== 'dev')
+        errors.push(
+          `merge node "${id}": target is a legacy field — omit it (the engine merges into the project's integration branch)`,
+        );
       if (
         n.on_conflict_stage !== undefined &&
         (typeof n.on_conflict_stage !== 'string' || n.on_conflict_stage === '')

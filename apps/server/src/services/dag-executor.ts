@@ -66,11 +66,12 @@ export interface DagExecutorDeps {
    *  drawn step, not a hidden property). A failed move fails the step. */
   moveCard(stage: string): Promise<{ ok: boolean; error?: string }>;
   /** Execute the git merge for a `merge` node (pc-pty-chat-270 Chunk B).
-   *  Reads git state first (idempotent reconcile), then merge+verify+push+verify.
+   *  Merges into the project's configured integration branch. Reads git state
+   *  first (idempotent reconcile), then merge+verify+push+verify.
    *  `merged`   → node completes, advance proceeds;
    *  `conflict` → arm a review gate via requestReview, pause the run;
    *  `failed`   → fail the node (hard git or infra error). */
-  mergeToDev(
+  mergeToIntegration(
     node: WorkflowV2.MergeNode,
     ctx: DagNodeContext,
   ): Promise<{ outcome: 'merged' | 'conflict' | 'failed'; error?: string }>;
@@ -295,7 +296,7 @@ export class DagExecutor {
             // This is the ONE non-review node that can pause the run, kept
             // NARROW: only merge nodes, only via the existing requestReview door.
             if (node.kind === 'merge') {
-              const r = await this.deps.mergeToDev(node, this.ctx(resolve));
+              const r = await this.deps.mergeToIntegration(node, this.ctx(resolve));
               if (r.outcome === 'merged') {
                 return { id, outcome: { state: 'completed' as const } };
               }

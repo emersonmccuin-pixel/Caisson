@@ -27,7 +27,7 @@ test('FD-13 guard: replaying the diary reproduces the executor node states (reje
       return { state: 'completed', workItemId: `wi-${dispatched}` as ULID };
     },
     moveCard: async () => ({ ok: true }),
-    mergeToDev: async () => ({ outcome: 'merged' as const }),
+    mergeToIntegration: async () => ({ outcome: 'merged' as const }),
     requestReview: async () => {},
     persist: () => {},
     event: (ev) => diary.push({ type: ev.type, nodeId: ev.nodeId ?? null, data: ev.data ?? null }),
@@ -66,7 +66,7 @@ test('FD-13 guard: ceiling escalation + held-gate approve replay to the same sta
     resolveRef: () => () => '',
     dispatchAgent: async (): Promise<NodeOutcome> => ({ state: 'completed' }),
     moveCard: async () => ({ ok: true }),
-    mergeToDev: async () => ({ outcome: 'merged' as const }),
+    mergeToIntegration: async () => ({ outcome: 'merged' as const }),
     requestReview: async () => {},
     persist: () => {},
     event: (ev) => diary.push({ type: ev.type, nodeId: ev.nodeId ?? null, data: ev.data ?? null }),

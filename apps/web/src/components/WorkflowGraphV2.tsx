@@ -125,7 +125,7 @@ export function nodeLabel(node: WorkflowV2.WorkflowNode): {
       return { title: 'If rejected, retry', subtitle: max };
     }
     case 'merge':
-      return { title: 'Merge into dev', subtitle: humanizeId(node.id) };
+      return { title: 'Merge into integration branch', subtitle: humanizeId(node.id) };
     case 'call':
       return {
         title: humanizeId(node.id),

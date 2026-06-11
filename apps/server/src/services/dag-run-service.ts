@@ -571,7 +571,7 @@ export function makeExecutorDeps(
   // Idempotent: reads git state FIRST so a re-entry (after conflict resolution,
   // or after a mid-merge crash + boot reconcile re-drive) handles every case
   // without re-doing work already done.
-  const mergeToDev = async (
+  const mergeToIntegration = async (
     node: WorkflowV2.MergeNode,
     _ctx: DagNodeContext,
   ): Promise<{ outcome: 'merged' | 'conflict' | 'failed'; error?: string }> => {
@@ -584,16 +584,26 @@ export function makeExecutorDeps(
       return { outcome: 'failed', error: `cannot derive branch name from worktree path: ${run.worktreePath}` };
     }
 
+    // Resolve the merge target up front. A resolver failure (no configured
+    // branch + nothing detectable, or a configured branch missing from the
+    // repo) fails the node LOUDLY with the fix-it message on the run.
+    let into: string;
+    try {
+      into = await opts.worktrees.integrationBranch();
+    } catch (err) {
+      return { outcome: 'failed', error: (err as Error).message };
+    }
+
     // Worktree teardown — the branch has verifiably landed (both positive
     // receipts), so the run worktree + branch have no further purpose.
     // Best-effort: a teardown failure (Windows file lock, etc.) must never
-    // fail an already-merged node; the boot sweep retries leftovers.
+    // fail an already-merged node; the sweep retries leftovers.
     const teardownBestEffort = async (): Promise<void> => {
       try {
         await opts.worktrees.teardownAfterMerge(branch);
       } catch (err) {
         console.warn(
-          `[dag-run] worktree teardown after merge failed for "${branch}" (boot sweep will retry): ${(err as Error).message}`,
+          `[dag-run] worktree teardown after merge failed for "${branch}" (sweep will retry): ${(err as Error).message}`,
         );
       }
     };
@@ -632,22 +642,26 @@ export function makeExecutorDeps(
       }
 
       if (state.alreadyMerged) {
-        // Branch tip is already an ancestor of dev — skip the merge itself.
+        // Branch tip is already an ancestor of the integration branch — skip
+        // the merge itself.
         if (!state.pushed) {
           // Push + positive receipt #2.
           try {
-            await opts.worktrees.pushDev();
+            await opts.worktrees.pushIntegration();
           } catch (pushErr) {
             const msg = (pushErr as Error).message ?? '';
             if (/rejected|non-fast-forward/i.test(msg)) {
               await emitConflict();
               return { outcome: 'conflict' };
             }
-            return { outcome: 'failed', error: `push to origin/dev failed: ${msg}` };
+            return { outcome: 'failed', error: `push to origin/${into} failed: ${msg}` };
           }
           const afterPush = await opts.worktrees.mergeState(branch);
           if (!afterPush.pushed) {
-            return { outcome: 'failed', error: 'push to origin/dev completed but origin/dev != dev' };
+            return {
+              outcome: 'failed',
+              error: `push to origin/${into} completed but origin/${into} != ${into}`,
+            };
           }
         }
         runGateway.appendRunEvent({
@@ -655,42 +669,43 @@ export function makeExecutorDeps(
           runId: run.id,
           type: 'git_merged',
           nodeId: node.id,
-          data: { branch, idempotent: true },
+          data: { branch, into, idempotent: true },
         });
         await teardownBestEffort();
         return { outcome: 'merged' };
       }
 
       // Fresh merge: merge → positive receipt #1 → push → positive receipt #2.
-      await opts.worktrees.mergeBranchIntoDev(branch);
+      await opts.worktrees.mergeBranchIntoIntegration(branch);
 
-      // Positive receipt #1: branch tip must now be an ancestor of dev.
+      // Positive receipt #1: branch tip must now be an ancestor of the
+      // integration branch.
       const afterMerge = await opts.worktrees.mergeState(branch);
       if (!afterMerge.alreadyMerged) {
         return {
           outcome: 'failed',
-          error: 'merge ran but branch tip is not an ancestor of dev — merge commit not found',
+          error: `merge ran but branch tip is not an ancestor of ${into} — merge commit not found`,
         };
       }
 
-      // Push to origin/dev.
+      // Push to the origin integration branch.
       try {
-        await opts.worktrees.pushDev();
+        await opts.worktrees.pushIntegration();
       } catch (pushErr) {
         const msg = (pushErr as Error).message ?? '';
         if (/rejected|non-fast-forward/i.test(msg)) {
           await emitConflict();
           return { outcome: 'conflict' };
         }
-        return { outcome: 'failed', error: `push to origin/dev failed: ${msg}` };
+        return { outcome: 'failed', error: `push to origin/${into} failed: ${msg}` };
       }
 
-      // Positive receipt #2: origin/dev must equal local dev.
+      // Positive receipt #2: the origin integration branch must equal local.
       const afterPush = await opts.worktrees.mergeState(branch);
       if (!afterPush.pushed) {
         return {
           outcome: 'failed',
-          error: 'push to origin/dev completed but origin/dev != dev',
+          error: `push to origin/${into} completed but origin/${into} != ${into}`,
         };
       }
 
@@ -699,14 +714,14 @@ export function makeExecutorDeps(
         runId: run.id,
         type: 'git_merged',
         nodeId: node.id,
-        data: { branch },
+        data: { branch, into },
       });
       await teardownBestEffort();
       return { outcome: 'merged' };
 
     } catch (err) {
       const msg = (err as Error).message ?? 'unknown error';
-      // Conflict thrown by mergeBranchIntoDev (git exits non-zero on conflict).
+      // Conflict thrown by mergeBranchIntoIntegration (git exits non-zero).
       if (/conflict|CONFLICT|Automatic merge failed/i.test(msg)) {
         await emitConflict();
         return { outcome: 'conflict' };
@@ -846,7 +861,7 @@ export function makeExecutorDeps(
     dispatchAgent,
     callTool,
     moveCard,
-    mergeToDev,
+    mergeToIntegration,
     requestReview,
     persist,
     // M3a — every executor diary line through THE door: event row +

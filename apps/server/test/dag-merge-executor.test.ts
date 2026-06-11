@@ -12,7 +12,7 @@ function baseDeps(over: Partial<DagExecutorDeps> = {}): DagExecutorDeps {
     dispatchAgent: async (): Promise<NodeOutcome> => ({ state: "completed" }),
     callTool: async (): Promise<NodeOutcome> => ({ state: "completed", output: "" }),
     moveCard: async () => ({ ok: true }),
-    mergeToDev: async (): Promise<MergeOutcome> => ({ outcome: "merged" }),
+    mergeToIntegration: async (): Promise<MergeOutcome> => ({ outcome: "merged" }),
     requestReview: async () => {},
     persist: () => {},
     event: () => {},
@@ -45,14 +45,14 @@ test("clean merge: node settles completed, run advances to completed", async () 
   const events: string[] = [];
   const persisted: string[] = [];
   const deps = baseDeps({
-    mergeToDev: async (node): Promise<MergeOutcome> => { mergeCalls.push(node); return { outcome: "merged" }; },
+    mergeToIntegration: async (node): Promise<MergeOutcome> => { mergeCalls.push(node); return { outcome: "merged" }; },
     event: (ev) => events.push(ev.type),
     persist: (_s, status) => persisted.push(status),
   });
   const exec = DagExecutor.start(mergeWorkflow(), deps, ctxBase);
   const status = await exec.advance();
   assert.equal(status, "completed", "run completes after a clean merge");
-  assert.equal(mergeCalls.length, 1, "mergeToDev called exactly once");
+  assert.equal(mergeCalls.length, 1, "mergeToIntegration called exactly once");
   assert.equal(mergeCalls[0]!.kind, "merge");
   assert.ok(events.includes("node_completed"), "node_completed event emitted");
   assert.ok(events.includes("workflow_completed"), "workflow_completed event emitted");
@@ -61,7 +61,7 @@ test("clean merge: node settles completed, run advances to completed", async () 
 
 test("agent-then-merge: both nodes complete, run completes", async () => {
   let mergeCount = 0;
-  const deps = baseDeps({ mergeToDev: async (): Promise<MergeOutcome> => { mergeCount += 1; return { outcome: "merged" }; } });
+  const deps = baseDeps({ mergeToIntegration: async (): Promise<MergeOutcome> => { mergeCount += 1; return { outcome: "merged" }; } });
   const exec = DagExecutor.start(agentThenMergeWorkflow(), deps, ctxBase);
   const status = await exec.advance();
   assert.equal(status, "completed");
@@ -73,7 +73,7 @@ test("conflict: run pauses awaiting-review, requestReview called once", async ()
   const events: string[] = [];
   const persisted: string[] = [];
   const deps = baseDeps({
-    mergeToDev: async (): Promise<MergeOutcome> => ({ outcome: "conflict" }),
+    mergeToIntegration: async (): Promise<MergeOutcome> => ({ outcome: "conflict" }),
     requestReview: async (node) => { reviews.push(node); },
     event: (ev) => events.push(ev.type),
     persist: (_s, status) => persisted.push(status),
@@ -91,7 +91,7 @@ test("conflict: run pauses awaiting-review, requestReview called once", async ()
 test("conflict with human reviewer: gate uses human reviewer", async () => {
   const reviews: WorkflowV2.ReviewNode[] = [];
   const deps = baseDeps({
-    mergeToDev: async (): Promise<MergeOutcome> => ({ outcome: "conflict" }),
+    mergeToIntegration: async (): Promise<MergeOutcome> => ({ outcome: "conflict" }),
     requestReview: async (node) => { reviews.push(node); },
   });
   const exec = DagExecutor.start(mergeWorkflow("human"), deps, ctxBase);
@@ -103,7 +103,7 @@ test("hard error: run fails with the returned error message", async () => {
   const events: string[] = [];
   const persisted: string[] = [];
   const deps = baseDeps({
-    mergeToDev: async (): Promise<MergeOutcome> => ({ outcome: "failed", error: "git push: permission denied" }),
+    mergeToIntegration: async (): Promise<MergeOutcome> => ({ outcome: "failed", error: "git push: permission denied" }),
     event: (ev) => events.push(ev.type),
     persist: (_s, status) => persisted.push(status),
   });
@@ -122,7 +122,7 @@ test("conflict gate: approve without resolving re-arms gate (no false advance)",
   let mergeCallCount = 0;
   let reviewCallCount = 0;
   const deps = baseDeps({
-    mergeToDev: async (): Promise<MergeOutcome> => { mergeCallCount += 1; return { outcome: "conflict" }; },
+    mergeToIntegration: async (): Promise<MergeOutcome> => { mergeCallCount += 1; return { outcome: "conflict" }; },
     requestReview: async () => { reviewCallCount += 1; },
   });
   const exec = DagExecutor.start(mergeWorkflow(), deps, ctxBase);
@@ -140,7 +140,7 @@ test("conflict gate: approve without resolving re-arms gate (no false advance)",
 test("conflict gate: approve after resolution -> run advances and completes", async () => {
   let mergeCallCount = 0;
   const deps = baseDeps({
-    mergeToDev: async (): Promise<MergeOutcome> => {
+    mergeToIntegration: async (): Promise<MergeOutcome> => {
       mergeCallCount += 1;
       return mergeCallCount === 1 ? { outcome: "conflict" } : { outcome: "merged" };
     },

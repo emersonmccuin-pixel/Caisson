@@ -52,7 +52,7 @@ function buildNodeLabel(node: WorkflowNode): string {
       return escapeMermaidLabel(`Retry (${max})`);
     }
     case 'merge':
-      return escapeMermaidLabel('Merge to dev');
+      return escapeMermaidLabel('Merge to integration');
     case 'call':
       return escapeMermaidLabel(`Call: ${node.server} · ${node.tool}`);
   }

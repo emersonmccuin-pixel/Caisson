@@ -511,6 +511,11 @@ export function createWorktreeExecutors(input: {
   worktreeDir: string;
   projectFolderPath: string;
   bashTimeoutMs?: number;
+  /** Full project record (present when called with RunVerificationInput).
+   *  Carries settings.integrationBranch — the authoritative committed-diff
+   *  base for worktree dispatches. Optional: project-less test paths fall
+   *  back to the literal base list. */
+  project?: Project | null;
 }): PredicateExecutors {
   const bashTimeoutMs = input.bashTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS;
   return {
@@ -603,12 +608,17 @@ export function createWorktreeExecutors(input: {
 
       if (cwd === 'worktree') {
         // Worktree dispatches: assert COMMITTED changes vs the provisioning base.
-        // The worktree branch was created from a base branch (commonly dev, main,
-        // or master). Try each in order; the first that resolves determines the
-        // result. A count > 0 means committed changes exist — working-tree
-        // dirtiness is intentionally IGNORED so a clean commit does NOT
-        // false-fail the predicate (pc-pty-chat-207 / pc-pty-chat-281).
-        for (const base of ['dev', 'main', 'master', 'trunk']) {
+        // The project's configured integration branch is the authoritative base;
+        // the literal list is a fallback for project-less test paths. Try each
+        // in order; the first that resolves determines the result. A count > 0
+        // means committed changes exist — working-tree dirtiness is
+        // intentionally IGNORED so a clean commit does NOT false-fail the
+        // predicate (pc-pty-chat-207 / pc-pty-chat-281).
+        const configured = input.project?.settings.integrationBranch;
+        const bases = [...new Set([configured, 'dev', 'main', 'master', 'trunk'])].filter(
+          (b): b is string => typeof b === 'string' && b.length > 0,
+        );
+        for (const base of bases) {
           const count = await countCommitsAhead(cwdAbs, base, bashTimeoutMs);
           if (count !== null) return count > 0;
         }
