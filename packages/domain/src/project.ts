@@ -52,10 +52,19 @@ export interface ProjectSettings {
    *  orchestrator sessions. `'use-global'` (default) inherits the global flag;
    *  `'on'` always launches sessions remote-ready; `'off'` never does. */
   remoteControl: 'use-global' | 'on' | 'off';
+  /** The branch finished work is merged into (worktree merge target + the
+   *  "is this run branch landed?" predicate for sweep/teardown). `null` =
+   *  not yet resolved; the integration-branch resolver auto-detects once and
+   *  persists the result here, making it visible + editable in settings. */
+  integrationBranch: string | null;
 }
 
+/** Git ref-name shape for the integration branch. Unlike the runtime's
+ *  generated run-branch guard, this allows `/` (e.g. `release/2026`). */
+export const INTEGRATION_BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
 export function defaultProjectSettings(): ProjectSettings {
-  return { cancelledVisibility: 'use-global', remoteControl: 'use-global' };
+  return { cancelledVisibility: 'use-global', remoteControl: 'use-global', integrationBranch: null };
 }
 
 /** Backfill missing keys on a stored project-settings JSON blob. */
@@ -66,6 +75,7 @@ export function withProjectSettingsDefaults(
   if (!stored) return defaults;
   const v = stored.cancelledVisibility;
   const rc = stored.remoteControl;
+  const ib = typeof stored.integrationBranch === 'string' ? stored.integrationBranch.trim() : null;
   return {
     cancelledVisibility:
       v === 'force-visible' || v === 'force-hidden' || v === 'use-global'
@@ -73,6 +83,7 @@ export function withProjectSettingsDefaults(
         : defaults.cancelledVisibility,
     remoteControl:
       rc === 'on' || rc === 'off' || rc === 'use-global' ? rc : defaults.remoteControl,
+    integrationBranch: ib && INTEGRATION_BRANCH_RE.test(ib) ? ib : null,
   };
 }
 

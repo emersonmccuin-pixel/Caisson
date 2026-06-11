@@ -28,7 +28,12 @@ export interface ProjectStageDto {
 export interface ProjectSettingsDto {
   cancelledVisibility: 'use-global' | 'force-visible' | 'force-hidden';
   remoteControl: 'use-global' | 'on' | 'off';
+  /** Branch finished work merges into. Null = auto-detect on next use. */
+  integrationBranch?: string | null;
 }
+
+/** Mirrors @pc/domain INTEGRATION_BRANCH_RE (contracts can't import domain). */
+const INTEGRATION_BRANCH_DTO_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 export interface ProjectDto {
   id: ULID;
@@ -171,6 +176,16 @@ export function parseUpdateProjectRequest(input: unknown): ParseResult<UpdatePro
       }
       settings.remoteControl = rc;
     }
+    const ib = input.settings.integrationBranch;
+    if (ib !== undefined) {
+      if (ib === null || (typeof ib === 'string' && ib.trim() === '')) {
+        settings.integrationBranch = null; // blank = re-detect on next use
+      } else if (typeof ib === 'string' && INTEGRATION_BRANCH_DTO_RE.test(ib.trim())) {
+        settings.integrationBranch = ib.trim();
+      } else {
+        return parseErr('invalid integrationBranch');
+      }
+    }
     request.settings = settings;
   }
   return parseOk(request);
@@ -215,7 +230,11 @@ export function isProjectSettingsDto(value: unknown): value is ProjectSettingsDt
     value.remoteControl === 'use-global' ||
     value.remoteControl === 'on' ||
     value.remoteControl === 'off';
-  return cancelledOk && remoteOk;
+  const ibOk =
+    value.integrationBranch === undefined ||
+    value.integrationBranch === null ||
+    typeof value.integrationBranch === 'string';
+  return cancelledOk && remoteOk && ibOk;
 }
 
 export function isProjectDto(value: unknown): value is ProjectDto {

@@ -66,6 +66,23 @@ test('update project parser keeps compatibility normalization', () => {
   });
 });
 
+test('update parser handles integrationBranch: trim, blank→null, bad ref rejected', () => {
+  const set = parseUpdateProjectRequest({ settings: { integrationBranch: '  release/2026  ' } });
+  assert.equal(set.ok, true);
+  if (set.ok) assert.deepEqual(set.value.settings, { integrationBranch: 'release/2026' });
+
+  const clear = parseUpdateProjectRequest({ settings: { integrationBranch: '' } });
+  assert.equal(clear.ok, true);
+  if (clear.ok) assert.deepEqual(clear.value.settings, { integrationBranch: null });
+
+  const nulled = parseUpdateProjectRequest({ settings: { integrationBranch: null } });
+  assert.equal(nulled.ok, true);
+  if (nulled.ok) assert.deepEqual(nulled.value.settings, { integrationBranch: null });
+
+  assert.equal(parseUpdateProjectRequest({ settings: { integrationBranch: '-bad' } }).ok, false);
+  assert.equal(parseUpdateProjectRequest({ settings: { integrationBranch: 42 } }).ok, false);
+});
+
 test('reorder parser requires orderedIds as strings', () => {
   assert.deepEqual(parseReorderProjectsRequest({ orderedIds: ['a', 'b'] }), {
     ok: true,

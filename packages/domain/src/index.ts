@@ -81,6 +81,7 @@ export { validateFields } from './field-schema.ts';
 export type { Project, ProjectSettings, Stage } from './project.ts';
 export {
   defaultProjectSettings,
+  INTEGRATION_BRANCH_RE,
   postMoveStatusForStage,
   resolveCancelledHidden,
   resolveRemoteControlEnabled,
