@@ -1267,6 +1267,10 @@ function diaryLine(ev: V2RunEvent): string {
     case 'node_failed': return `Step ${node} failed${d.error ? ` — ${String(d.error)}` : ''}.`;
     case 'node_skipped': return `Step ${node} skipped${d.reason ? ` (${String(d.reason)})` : ''}.`;
     case 'agent_dispatched': return `Step ${node}: agent ${String(d.agent ?? '?')} dispatched.`;
+    case 'tool_called':
+      return d.ok
+        ? `Step ${node}: called ${String(d.tool ?? '?')} on ${String(d.server ?? '?')} (${String(d.durationMs ?? '?')}ms).`
+        : `Step ${node}: call to ${String(d.tool ?? '?')} on ${String(d.server ?? '?')} failed${d.error ? ` — ${String(d.error)}` : ''}.`;
     case 'review_requested': return `Review requested at ${node}.`;
     case 'review_approved': return `Review ${node} approved.`;
     case 'review_rejected': return `Review ${node} rejected — sent back.`;

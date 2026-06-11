@@ -10,6 +10,7 @@ function baseDeps(over: Partial<DagExecutorDeps> = {}): DagExecutorDeps {
   return {
     resolveRef: () => () => "",
     dispatchAgent: async (): Promise<NodeOutcome> => ({ state: "completed" }),
+    callTool: async (): Promise<NodeOutcome> => ({ state: "completed", output: "" }),
     moveCard: async () => ({ ok: true }),
     mergeToDev: async (): Promise<MergeOutcome> => ({ outcome: "merged" }),
     requestReview: async () => {},

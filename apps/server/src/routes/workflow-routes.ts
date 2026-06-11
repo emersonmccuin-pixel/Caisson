@@ -31,6 +31,7 @@ import {
   getDb,
   getProjectById,
   insertLiveEvent,
+  listMcpServersRegistry,
   listWorkflowAudit,
   workflowsRepo,
   type WorkflowAuditInput,
@@ -320,6 +321,7 @@ function validateAgentNodesProjectScoped(
  *   (1) every agent node resolves an `expected_output` (node override → pod row
  *       → stock default) — the contract the dispatch door requires;
  *   (2) every move step's `stage` is a real stage in the project;
+ *   (2b) every call step's MCP server is registered (project ∪ global);
  *   (3) every `$node.output` reference points at a real node (or `root`).
  *  Returns one error string per problem; empty when the workflow is runnable. */
 function validateWorkflowFeasibility(
@@ -357,6 +359,23 @@ function validateWorkflowFeasibility(
       );
     }
   }
+  // (2b) call nodes' MCP servers are registered (project scope ∪ globals) —
+  // mirrors what the executor's callTool dep requires at run time.
+  const callNodes = nodes.filter((n) => n.kind === 'call');
+  if (callNodes.length > 0) {
+    const registered = new Set(
+      listMcpServersRegistry({ projectId, includeGlobals: true }).map((s) => s.name),
+    );
+    for (const node of callNodes) {
+      const server = typeof node.server === 'string' ? node.server : '';
+      if (server && !registered.has(server)) {
+        errors.push(
+          `call node "${String(node.id ?? '?')}": MCP server "${server}" is not registered for this project — add it under Settings → MCP Servers first`,
+        );
+      }
+    }
+  }
+
   // (3) `$node.output` refs point at a real node (or the synthetic `root`/`self`).
   const ids = new Set<string>(
     nodes.map((n) => (typeof n.id === 'string' ? n.id : '')).filter(Boolean),
