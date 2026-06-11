@@ -99,6 +99,10 @@ Pics/
 # Archived planning / scratch (local-only; kept out of the repo)
 archive/
 
+# Secrets / keys (never commit)
+*.p8
+cia_next_agent.*
+
 # OS / editor noise
 .DS_Store
 .AppleDouble
