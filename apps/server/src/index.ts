@@ -64,6 +64,7 @@ import { announceSessionTitle } from './services/session-title-writer.ts';
 import { createHostConnection, toHostHealthSnapshot } from './services/host-connection.ts';
 import { announceHostHealth } from './services/host-health-writer.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
+import { createWorktreeSweepRunner } from './services/worktree-sweep-runner.ts';
 import { backfillStageFlags } from './services/stage-flags-backfill.ts';
 import { seedClaudeFirstRun } from './services/claude-firstrun-seed.ts';
 import { ProjectCreate } from './services/project-create.ts';
@@ -662,43 +663,40 @@ try {
   }
 }
 
-// Worktree boot sweep — backstop for the merge-node teardown. Reaps run
-// worktrees whose branch already landed on dev, merged orphan branches, and
-// husk dirs left by interrupted removals. Worktrees referenced by any live
-// run (agent: non-terminal; workflow: anything not completed/cancelled —
-// failed runs keep theirs for resume/re-drive) are never touched.
-// Fire-and-forget per project so a slow git/disk can't block startup.
-{
-  const inUse: string[] = [];
-  try {
+// Worktree sweep — backstop for the merge-node teardown. Reaps run worktrees
+// whose branch already landed on the project's integration branch, merged
+// orphan branches, and husk dirs left by interrupted removals. Worktrees
+// referenced by any live run (agent: non-terminal; workflow: anything not
+// completed/cancelled — failed runs keep theirs for resume/re-drive) are
+// never touched.
+//
+// Runs at boot AND on an interval: out-of-band merges (orchestrator-run git)
+// produce no event to hook, and the packaged daily driver rarely restarts —
+// boot-only sweeping let merged worktrees pile up between reboots
+// (2026-06-11 incident). This janitor is distinct from the ONE-RECONCILER
+// run-state loop; see worktree-sweep-runner.ts.
+const worktreeSweep = createWorktreeSweepRunner({
+  listProjects: () => listProjects().map((p) => ({ id: p.id, slug: p.slug })),
+  getRuntime: (projectId) => projectRegistry.get(projectId as ULID) ?? null,
+  collectInUse: () => {
+    const inUse: string[] = [];
     for (const run of listNonTerminalAgentRuns()) {
       if (run.worktreeDir) inUse.push(run.worktreeDir);
     }
     for (const run of workflowRunsV2Repo.listRunsByStatus(['pending', 'running', 'paused', 'failed'])) {
       if (run.worktreePath) inUse.push(run.worktreePath);
     }
-  } catch (err) {
-    console.warn(`[worktree-sweep] in-use scan failed, skipping sweep: ${(err as Error).message}`);
-  }
-  for (const p of listProjects()) {
-    const runtime = projectRegistry.get(p.id);
-    // No worktree dir on disk = this project never dispatched isolated runs.
-    if (!runtime || !existsSync(runtime.worktreeBaseDir)) continue;
-    void runtime
-      .worktrees()
-      .sweepStale(inUse)
-      .then((r) => {
-        if (r.removedWorktrees.length || r.deletedBranches.length || r.removedHusks.length) {
-          console.log(
-            `[worktree-sweep] ${p.slug}: removed ${r.removedWorktrees.length} worktrees, ` +
-              `${r.deletedBranches.length} branches, ${r.removedHusks.length} husks` +
-              (r.kept.length ? ` (kept ${r.kept.length})` : ''),
-          );
-        }
-      })
-      .catch((err) => {
-        console.warn(`[worktree-sweep] ${p.slug} failed: ${(err as Error).message}`);
-      });
+    return inUse;
+  },
+  dirExists: (p) => existsSync(p),
+});
+// Boot pass: fire-and-forget so a slow git/disk can't block startup.
+void worktreeSweep.runOnce();
+{
+  const intervalMs = Number(process.env['PC_WORKTREE_SWEEP_INTERVAL_MS'] ?? 30 * 60_000);
+  if (Number.isFinite(intervalMs) && intervalMs > 0) {
+    const worktreeSweepTimer = setInterval(() => void worktreeSweep.runOnce(), intervalMs);
+    if (typeof worktreeSweepTimer.unref === 'function') worktreeSweepTimer.unref();
   }
 }
 
