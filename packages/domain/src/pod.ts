@@ -74,7 +74,10 @@ export const POD_AUDIT_FIELDS: readonly PodAuditField[] = [
 /** Inline MCP server config stored on `agent_mcp_servers.config_json`.
  *  Mirrors the on-disk `.mcp.json` `mcpServers` value shape — `command + args
  *  + env` for stdio, `type:'http' + url + headers` for HTTP (FD-2: the pc-rig
- *  baseline is an HTTP entry). Validated at materialisation time. */
+ *  baseline is an HTTP entry). Validated at materialisation time.
+ *
+ *  This is the RESOLVED form — all values are plain strings. Pass to
+ *  `buildTransport` / the SDK transport layer directly. */
 export interface PodMcpServerConfig {
   command?: string;
   args?: string[];
@@ -82,6 +85,37 @@ export interface PodMcpServerConfig {
   type?: string;
   url?: string;
   headers?: Record<string, string>;
+}
+
+// ── Secret-ref indirection (Slice 2 — pc-pty-chat-400.3) ─────────────────────
+
+/** Sentinel value stored in place of a live secret in a registry transport.
+ *  `$secretRef` holds a `CredentialRow` id (ULID); resolved to the live
+ *  plaintext string by `resolveTransportSecrets` at connect / spawn time.
+ *
+ *  Convention chosen: an object with a single `$secretRef` key so it is
+ *  unambiguous in JSON, type-safe, and easy to detect with a type guard. */
+export interface SecretRef {
+  $secretRef: string; // CredentialRow id (ULID)
+}
+
+/** A transport header / env value in its stored form: either a plain string
+ *  (non-secret, or already resolved) or a vault reference. */
+export type TransportValue = string | SecretRef;
+
+/** Storage form of a registry MCP server transport. May contain `SecretRef`
+ *  objects in `headers` and `env` — these are vault references that
+ *  `resolveTransportSecrets` swaps for live strings before the transport layer
+ *  sees them.  All other fields are identical to `PodMcpServerConfig`. */
+export interface McpServerTransport {
+  command?: string;
+  args?: string[];
+  /** Env vars; values may be plain strings or vault refs. */
+  env?: Record<string, TransportValue>;
+  type?: string;
+  url?: string;
+  /** HTTP request headers; values may be plain strings or vault refs. */
+  headers?: Record<string, TransportValue>;
 }
 
 /** Provenance of an agent row. `'stock'` rows are seeded by PC at boot;
@@ -260,8 +294,9 @@ export interface McpServerRegistryRow {
   projectId: ULID | null;
   name: string;
   description: string;
-  /** Stdio: command + optional args/env. HTTP: url + optional headers. */
-  transport: PodMcpServerConfig;
+  /** Stored transport — may contain SecretRef objects in headers/env.
+   *  Resolve via `resolveTransportSecrets` before passing to the SDK. */
+  transport: McpServerTransport;
   /** Cached tool list from the last successful discovery probe. Null until P2. */
   discoveredTools: string[] | null;
   discoveryStatus: McpDiscoveryStatus;

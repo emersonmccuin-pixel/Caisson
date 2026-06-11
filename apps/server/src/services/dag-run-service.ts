@@ -492,7 +492,11 @@ export function makeExecutorDeps(
 
     const caller = opts.mcpToolCaller ?? callMcpTool;
     const startedAt = Date.now();
-    const result = await caller(row.transport, node.tool, args, node.timeout);
+    // Slice 8+ will call resolveTransportSecrets here. Until then, cast to
+    // PodMcpServerConfig (safe for plain-string transports; Slice 2 migrated
+    // any pre-existing plaintext to refs, so this only fires for un-migrated
+    // servers — which cannot exist after migration runs at boot).
+    const result = await caller(row.transport as unknown as PodMcpServerConfig, node.tool, args, node.timeout);
     const durationMs = Date.now() - startedAt;
 
     // Diary line: which external action ran, where, and how it went — the

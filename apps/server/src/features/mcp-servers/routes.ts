@@ -13,7 +13,7 @@
 //   PATCH marks discoveryStatus='stale' when transport changes (handled in repo).
 
 import type { Hono } from 'hono';
-import type { McpServerRegistryRow, PodMcpServerConfig, PodScope, ULID } from '@pc/domain';
+import type { McpServerRegistryRow, McpServerTransport, PodMcpServerConfig, PodScope, ULID } from '@pc/domain';
 import {
   createMcpServerRegistry,
   getProjectById,
@@ -45,8 +45,12 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
 
   // ── Shared helper: run probe + persist result ────────────────────────────────
 
-  async function runAndStoreProbe(id: ULID, config: PodMcpServerConfig): Promise<McpServerRegistryRow | null> {
-    const probeResult = await deps.probe!(config);
+  // Slice 5+ will call resolveTransportSecrets before probing. Until then the
+  // stored McpServerTransport is cast to PodMcpServerConfig (safe for servers
+  // with no SecretRef values; ref-carrying transports are migrated by Slice 2,
+  // auth-aware probe wired in Slice 5).
+  async function runAndStoreProbe(id: ULID, config: McpServerTransport): Promise<McpServerRegistryRow | null> {
+    const probeResult = await deps.probe!(config as unknown as PodMcpServerConfig);
     return setMcpServerDiscovery(id, {
       status: probeResult.status,
       tools: probeResult.status === 'ok' ? (probeResult.tools ?? []) : null,

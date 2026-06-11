@@ -193,6 +193,7 @@ export type {
   CredentialRow,
   McpDiscoveryStatus,
   McpServerRegistryRow,
+  McpServerTransport,
   PodAgentRow,
   PodAuditActor,
   PodAuditField,
@@ -203,6 +204,8 @@ export type {
   PodScope,
   PodSecretRow,
   PodSpawnBundle,
+  SecretRef,
+  TransportValue,
 } from './pod.ts';
 export {
   CREDENTIAL_AUTH_STATES,
