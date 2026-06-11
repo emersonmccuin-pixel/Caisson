@@ -22,6 +22,7 @@ import {
   deleteCredential,
   getCredential,
   getCredentialByServer,
+  getCredentialByServerAndKind,
   updateCredentialAuthState,
 } from '@pc/db';
 
@@ -103,6 +104,31 @@ export class SecretsVault {
 
   delete(credentialId: ULID): void {
     deleteCredential(credentialId);
+  }
+
+  /** Load and decrypt the credential matching (ownerServerId, kind).
+   *  Returns `null` when no matching row exists. */
+  getByServerAndKind(ownerServerId: ULID, kind: CredentialKind): unknown | null {
+    const row = getCredentialByServerAndKind(ownerServerId, kind);
+    if (!row) return null;
+    return this.decrypt(row.ciphertext, row.iv, row.authTag);
+  }
+
+  /**
+   * Upsert a credential for (ownerServerId, kind): replaces any existing row
+   * with a freshly encrypted one.  Uses delete + insert to keep the crypto
+   * path simple (avoids an in-place update of ciphertext/iv/authTag).
+   */
+  upsertForServer(
+    ownerServerId: ULID,
+    kind: CredentialKind,
+    ownerScope: 'global' | 'project',
+    plaintext: unknown,
+    expiresAt?: number | null,
+  ): CredentialRow {
+    const existing = getCredentialByServerAndKind(ownerServerId, kind);
+    if (existing) deleteCredential(existing.id);
+    return this.store({ ownerScope, ownerServerId, kind, plaintext, expiresAt });
   }
 
   /** Persist a new auth state (+ optional error message). Bumps rev. */
