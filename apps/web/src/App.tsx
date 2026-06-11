@@ -188,7 +188,6 @@ export default function App() {
   const ws = useProjectWs(activeProject);
   const backgroundWs = useAllProjectsWs(
     projects ?? [],
-    activeProject?.id ?? null,
     (projects?.length ?? 0) > 1,
   );
   const unreadProjectIds = useProjectUnread({
