@@ -282,10 +282,12 @@ export function ProjectRail({
             {commandHasLiveSession && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute bottom-0 left-0 right-0 h-px"
+                className="pointer-events-none absolute inset-0"
                 style={{
-                  background: 'linear-gradient(to right, transparent, var(--primary) 35%, var(--primary) 65%, transparent)',
-                  boxShadow: '0 0 8px 2px color-mix(in srgb, var(--primary) 40%, transparent)',
+                  background: [
+                    'repeating-linear-gradient(0deg, color-mix(in srgb, var(--primary) 15%, transparent) 0px, color-mix(in srgb, var(--primary) 15%, transparent) 1px, transparent 1px, transparent 4px)',
+                    'color-mix(in srgb, var(--primary) 9%, transparent)',
+                  ].join(', '),
                 }}
               />
             )}
@@ -368,10 +370,12 @@ export function ProjectRail({
                 {hasLiveSession && (
                   <div
                     aria-hidden="true"
-                    className="pointer-events-none absolute bottom-0 left-0 right-0 h-px"
+                    className="pointer-events-none absolute inset-0"
                     style={{
-                      background: 'linear-gradient(to right, transparent, var(--primary) 35%, var(--primary) 65%, transparent)',
-                      boxShadow: '0 0 8px 2px color-mix(in srgb, var(--primary) 40%, transparent)',
+                      background: [
+                        'repeating-linear-gradient(0deg, color-mix(in srgb, var(--primary) 15%, transparent) 0px, color-mix(in srgb, var(--primary) 15%, transparent) 1px, transparent 1px, transparent 4px)',
+                        'color-mix(in srgb, var(--primary) 9%, transparent)',
+                      ].join(', '),
                     }}
                   />
                 )}
