@@ -8,13 +8,17 @@
 // so multiple projects don't fight for the same `worktrees/` dir and so
 // nothing leaks into the user's actual repo.
 //
-// Provisioning: every worktree is fully dep-installed (pnpm install
-// --frozen-lockfile) BEFORE being returned to any caller. This guarantees
-// typecheck / build commands inside the worktree have a complete node_modules
-// and never false-fail with "Cannot find module" errors (pc-pty-chat-305).
+// Provisioning: every worktree is fully dep-installed BEFORE being returned
+// to any caller. This guarantees typecheck / build commands inside the
+// worktree have a complete node_modules and never false-fail with "Cannot
+// find module" errors (pc-pty-chat-305). The install command is detected
+// from the lockfile at the worktree root (pnpm/yarn/npm); repos with no
+// root lockfile (polyglot, non-Node) skip the install instead of failing
+// the run on a bootstrap step they never declared.
 
 import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { readdir, rm } from 'node:fs/promises';
 
 import {
@@ -49,8 +53,9 @@ export interface WorktreeRegistry {
 export interface WorktreeServiceDeps {
   /**
    * Run dependency install in a freshly created/attached worktree directory.
-   * Default: `pnpm install --frozen-lockfile` (shell: true so pnpm.cmd
-   * resolves on Windows).
+   * Default: lockfile-detected install (`pnpm install --frozen-lockfile` /
+   * `yarn install --frozen-lockfile` / `npm ci`; shell: true so the .cmd
+   * shims resolve on Windows). No root lockfile → no-op.
    */
   installRunner?: (cwd: string) => Promise<void>;
   createWorktree?: (
@@ -113,13 +118,42 @@ export interface WorktreeSweepResult {
 }
 
 /**
- * Default install runner: `pnpm install --frozen-lockfile` inside the
- * worktree. Uses shell: true so the pnpm.cmd shim resolves on Windows
- * (mirrors the pattern in scripts/dev-staging.mjs).
+ * Lockfile → install command, in detection order. Frozen/ci variants only:
+ * provisioning must never rewrite a lockfile inside a run worktree.
  */
-function defaultInstallRunner(cwd: string): Promise<void> {
+const LOCKFILE_INSTALL_COMMANDS: ReadonlyArray<{ lockfile: string; command: string }> = [
+  { lockfile: 'pnpm-lock.yaml', command: 'pnpm install --frozen-lockfile' },
+  { lockfile: 'yarn.lock', command: 'yarn install --frozen-lockfile' },
+  { lockfile: 'package-lock.json', command: 'npm ci' },
+];
+
+/**
+ * Detect the dependency-install command for a worktree from the lockfile at
+ * its root. Returns null when no known lockfile exists — polyglot / non-Node
+ * repos (or Node projects nested in a subdir) have nothing the engine can
+ * frozen-install at the root, so provisioning is a no-op for them.
+ */
+export function detectInstallCommand(cwd: string): string | null {
+  for (const { lockfile, command } of LOCKFILE_INSTALL_COMMANDS) {
+    if (existsSync(resolve(cwd, lockfile))) return command;
+  }
+  return null;
+}
+
+/**
+ * Default install runner: lockfile-detected install inside the worktree.
+ * Uses shell: true so the pnpm.cmd/yarn.cmd/npm.cmd shims resolve on Windows
+ * (mirrors the pattern in scripts/dev-staging.mjs). No root lockfile → no-op
+ * — a missing optional bootstrap must not kill the run (the AHEAD bug:
+ * hardcoded `pnpm install --frozen-lockfile` failed every worktree on a
+ * Yarn-in-subdir + Bundler repo before node 1 ever ran).
+ */
+export function defaultInstallRunner(cwd: string): Promise<void> {
+  const command = detectInstallCommand(cwd);
+  if (command === null) return Promise.resolve();
+
   return new Promise((res, rej) => {
-    const child = spawn('pnpm install --frozen-lockfile', {
+    const child = spawn(command, {
       shell: true,
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -136,8 +170,7 @@ function defaultInstallRunner(cwd: string): Promise<void> {
         const stderr = Buffer.concat(stderrChunks).toString().trim();
         rej(
           new Error(
-            `pnpm install --frozen-lockfile failed (exit ${code}) in ${cwd}` +
-              (stderr ? `:\n${stderr}` : ''),
+            `${command} failed (exit ${code}) in ${cwd}` + (stderr ? `:\n${stderr}` : ''),
           ),
         );
       }
@@ -384,7 +417,7 @@ export class WorktreeService {
   // run in the user's repo regardless of which branch they had checked out
   // or whether their tree was dirty.
   //
-  // The dev worktree is a plain `git worktree add <path> dev` — no pnpm
+  // The dev worktree is a plain `git worktree add <path> dev` — no dep
   // install. It is created lazily and reused across merge steps.
   //
   // `mergeBranchIntoDev` additionally asserts that the worktree is on `dev`
@@ -393,7 +426,7 @@ export class WorktreeService {
 
   /**
    * Absolute path to the engine-controlled dev merge worktree. Lives under
-   * the same `baseDir` as run worktrees but is NOT provisioned with pnpm.
+   * the same `baseDir` as run worktrees but is NOT dep-provisioned.
    */
   get devWorktreePath(): string {
     return resolve(this.baseDir, '__dev-merge');

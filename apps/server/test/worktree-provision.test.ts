@@ -1,16 +1,19 @@
 // Worktree provisioning contract tests (pc-pty-chat-305).
 //
-// Verifies that `pnpm install --frozen-lockfile` (via the installRunner seam)
-// is awaited and surfaced for BOTH provisioning paths — create() and the
-// attach/orphan-recovery branch of ensureWorktree() — without requiring real
-// git or pnpm processes.
+// Verifies that the dep install (via the installRunner seam) is awaited and
+// surfaced for BOTH provisioning paths — create() and the attach/orphan-
+// recovery branch of ensureWorktree() — without requiring real git or
+// package-manager processes.
 //
 // A fourth test confirms that an *already-attached* worktree (the match
 // branch of ensureWorktree) does NOT trigger a redundant reinstall.
+//
+// The detection tests pin the lockfile → install-command mapping and the
+// no-lockfile no-op (polyglot / non-Node repos must not fail provisioning).
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,7 +24,9 @@ const tmpDir = mkdtempSync(join(tmpdir(), 'pc-worktree-provision-'));
 process.env['PC_DATA_DIR'] = tmpDir;
 
 const { closeDb, runMigrations } = await import('@pc/db');
-const { WorktreeService } = await import('../src/services/worktree.ts');
+const { WorktreeService, detectInstallCommand, defaultInstallRunner } = await import(
+  '../src/services/worktree.ts'
+);
 
 const FAKE_WORKSPACE = join(tmpDir, 'repo');
 const FAKE_BASE = join(tmpDir, 'worktrees', 'test-project');
@@ -136,4 +141,43 @@ test('provision/match: installRunner is NOT called for an already-attached workt
 
   assert.equal(entry.path, existingEntry.path, 'returns the existing entry');
   assert.equal(installed.length, 0, 'installRunner must NOT be called for an already-attached worktree');
+});
+
+// ── lockfile detection (the AHEAD bug: non-pnpm / polyglot repos) ─────────────
+
+function lockfileDir(name: string, files: string[]): string {
+  const dir = join(tmpDir, 'detect', name);
+  mkdirSync(dir, { recursive: true });
+  for (const f of files) writeFileSync(join(dir, f), '');
+  return dir;
+}
+
+test('detect: pnpm-lock.yaml → pnpm frozen install', () => {
+  const dir = lockfileDir('pnpm', ['pnpm-lock.yaml', 'package.json']);
+  assert.equal(detectInstallCommand(dir), 'pnpm install --frozen-lockfile');
+});
+
+test('detect: yarn.lock → yarn frozen install', () => {
+  const dir = lockfileDir('yarn', ['yarn.lock', 'package.json']);
+  assert.equal(detectInstallCommand(dir), 'yarn install --frozen-lockfile');
+});
+
+test('detect: package-lock.json → npm ci', () => {
+  const dir = lockfileDir('npm', ['package-lock.json', 'package.json']);
+  assert.equal(detectInstallCommand(dir), 'npm ci');
+});
+
+test('detect: no lockfile → null (even with a root package.json)', () => {
+  const dir = lockfileDir('none', ['package.json']);
+  assert.equal(detectInstallCommand(dir), null);
+});
+
+test('detect: non-Node repo (no manifest at all) → null', () => {
+  const dir = lockfileDir('polyglot', ['Gemfile']);
+  assert.equal(detectInstallCommand(dir), null);
+});
+
+test('default runner: no lockfile → resolves without spawning anything', async () => {
+  const dir = lockfileDir('skip', ['Gemfile']);
+  await assert.doesNotReject(() => defaultInstallRunner(dir));
 });
