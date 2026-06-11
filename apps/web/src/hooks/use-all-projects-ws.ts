@@ -1,9 +1,13 @@
 // Q12 multi-project WS subscription.
 //
-// Opens one WebSocket per project in `projects` when `enabled` is true,
-// excluding `excludeProjectId` (the active project — `useProjectWs` already
-// owns that socket). Keeping the active project out also keeps consumers from
-// double-processing the same chat stream as both visible and background.
+// Opens one WebSocket per project in `projects` when `enabled` is true.
+// Subscribes to ALL projects with intent=activity (broadcast-only; never
+// spawns an orchestrator). The active project's chat events come via a
+// separate intent=chat socket in useProjectWs; the activity socket for the
+// same project carries only broadcast frames so there is no double-processing
+// concern. Crucially, NOT excluding the active project means the eligible set
+// is stable across project switches — switching focus never tears down and
+// reopens any of these sockets.
 //
 // Returns a single merged event list (newest at end, matching useProjectWs)
 // plus an aggregate status: 'open' if every socket is open, 'connecting' if
@@ -54,7 +58,6 @@ interface ConnectionHandle {
 
 export function useAllProjectsWs(
   projects: Project[],
-  excludeProjectId: string | null,
   enabled: boolean,
 ): UseAllProjectsWsResult {
   const [events, setEvents] = useState<WsEnvelope[]>([]);
@@ -63,9 +66,11 @@ export function useAllProjectsWs(
 
   // Stable key: re-open sockets only when the eligible project ID set changes,
   // not when a project.changed refetch returns new Project object identities.
+  // Passing null for excludeProjectId subscribes to all projects — the set is
+  // then stable across project switches (pc-pty-chat-403 Part A).
   const targetIds = useMemo(
-    () => projectWsTargetIds(projects, excludeProjectId, enabled),
-    [projects, excludeProjectId, enabled],
+    () => projectWsTargetIds(projects, null, enabled),
+    [projects, enabled],
   );
   const targetKey = projectWsTargetKeyFromIds(targetIds);
 
