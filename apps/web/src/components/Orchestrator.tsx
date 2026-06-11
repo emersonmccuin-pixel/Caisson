@@ -713,7 +713,7 @@ export function Orchestrator({
       events={sourceEvents}
       subscribeRawTerminal={subscribeRawTerminal}
       projectId={project.id}
-      currentSessionId={session?.id ?? null}
+      currentSessionId={session?.projectId === project.id ? session.id : null}
       onSend={(text, clientMessageId) => send({ type: 'send', text, clientMessageId })}
       onInterrupt={() => send({ type: 'interrupt' })}
       onTerminalInput={(data) => send({ type: 'terminal-input', data })}
