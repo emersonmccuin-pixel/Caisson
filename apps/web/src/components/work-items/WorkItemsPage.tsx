@@ -1,8 +1,9 @@
-// Work page: segmented sub-nav — "Areas" (grid) · "Focus" · "Tasks" (Table/Kanban).
-// Default = Areas. The Tasks surface has a left Areas filter rail and a
-// Table|Kanban view switcher injected into the toolbar's rightSlot.
-// Focus (pc-pty-chat-355) shows all in-focus items across all projects,
-// nested: project → area → items.
+// Work page: segmented sub-nav — "Focus" · "Areas" (grid) · "Tasks" (Table/Kanban).
+// Default = Areas (first-open lands on Areas, not the potentially-empty Focus).
+// The Tasks surface has a left Areas filter rail and a Table|Kanban view
+// switcher injected into the toolbar's rightSlot.
+// Focus (pc-pty-chat-355/390): project-scoped in regular projects; cross-project
+// (nested: project → area → items) only in Command.
 
 import { useEffect } from 'react';
 
@@ -73,11 +74,11 @@ export function WorkItemsPage({ project, projects, events }: WorkItemsPageProps)
         className="flex shrink-0 items-stretch border-b border-border/20 bg-[var(--surface-1)] px-4"
         style={{ height: 32 }}
       >
-        <NavButton active={workView === 'areas'} onClick={() => setWorkView('areas')}>
-          Areas
-        </NavButton>
         <NavButton active={workView === 'focus'} onClick={() => setWorkView('focus')}>
           Focus
+        </NavButton>
+        <NavButton active={workView === 'areas'} onClick={() => setWorkView('areas')}>
+          Areas
         </NavButton>
         <NavButton active={workView === 'tasks'} onClick={() => setWorkView('tasks')}>
           Tasks
@@ -92,7 +93,7 @@ export function WorkItemsPage({ project, projects, events }: WorkItemsPageProps)
             <WorkItemsTable project={project} events={events} rightSlot={viewSwitcher} />
           )
         ) : workView === 'focus' ? (
-          <FocusTab projects={projects} />
+          <FocusTab project={project} projects={projects} />
         ) : (
           <AreasTab project={project} events={events} />
         )}
