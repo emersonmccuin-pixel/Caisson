@@ -1,6 +1,6 @@
 {
   "name": "caisson",
-  "version": "0.7.1-beta.5",
+  "version": "0.7.1-beta.6",
   "private": true,
   "type": "module",
   "description": "Local-first work-item + workflow companion. Persistent project Orchestrator chat + MCP tools as the differentiator.",
