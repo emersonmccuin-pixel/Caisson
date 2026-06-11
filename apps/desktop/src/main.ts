@@ -732,7 +732,7 @@ void app.whenReady().then(async () => {
     }
   } catch (err) {
     dialog.showErrorBox(
-      'Caisson can't start',
+      "Caisson can't start",
       `Failed to load the secure credential vault key:\n\n${(err as Error).message}\n\n` +
         `If this keeps happening, restart your computer or reinstall Caisson.`,
     );
