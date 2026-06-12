@@ -50,7 +50,12 @@ export type PodAuditField =
   | 'mcp_server'
   | 'scope'
   | 'created'
-  | 'deleted';
+  | 'deleted'
+  /** pc-pty-chat-410 — membership model. fieldRef = projectId. */
+  | 'member-added'
+  | 'member-removed'
+  /** pc-pty-chat-410 — shareable flag flip. */
+  | 'shareable';
 
 export const POD_AUDIT_FIELDS: readonly PodAuditField[] = [
   'prompt',
@@ -69,6 +74,9 @@ export const POD_AUDIT_FIELDS: readonly PodAuditField[] = [
   'scope',
   'created',
   'deleted',
+  'member-added',
+  'member-removed',
+  'shareable',
 ];
 
 /** Inline MCP server config stored on `agent_mcp_servers.config_json`.
@@ -145,6 +153,9 @@ export interface PodAgentRow {
   /** Section 36 — `'stock'` vs `'user-created'`. Stock pods can't be deleted
    *  or edited via user-facing routes (route-layer guard reads this column). */
   origin: PodOrigin;
+  /** pc-pty-chat-408 — when true this agent is in the shared library and can
+   *  be attached to multiple projects. False = home-project only. */
+  shareable: boolean;
   /** Section 36 — orchestrator-facing "when to dispatch this agent" hint,
    *  rendered into the orchestrator's `{{AVAILABLE_AGENTS}}` variable. Null
    *  for most user-created pods (their `description` is enough). */

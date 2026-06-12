@@ -22,7 +22,7 @@
 // changed, a fresh ULID is minted to group them. No audit emitted when the
 // patch has no field changes.
 
-import { and, asc, eq, isNull, or } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, or } from 'drizzle-orm';
 import type {
   AgentContextDoc,
   AgentEffort,
@@ -38,7 +38,7 @@ import type {
 import { mergeRequiredAgentTools } from '@pc/domain';
 import { getDb } from '../connection.ts';
 import { newId } from '../id.ts';
-import { agentAudit, agentSecrets, agents, contextDocs } from '../schema.ts';
+import { agentAudit, agentProjects, agentSecrets, agents } from '../schema.ts';
 import { type ContextDocRow, listContextDocsForScope } from './context-docs.ts';
 import { type AuditInput, buildAuditRow } from './pod-audit.ts';
 
@@ -64,6 +64,9 @@ export interface CreateAgentInput {
   /** Section 36 — orchestrator-facing dispatch hint, rendered into the
    *  orchestrator's `{{AVAILABLE_AGENTS}}` variable. Optional. */
   dispatchGuidance?: string | null;
+  /** pc-pty-chat-408 — place this agent in the shared library on creation.
+   *  Defaults to false. */
+  shareable?: boolean;
 }
 
 function rowToAgent(row: typeof agents.$inferSelect): PodAgentRow {
@@ -79,6 +82,7 @@ function rowToAgent(row: typeof agents.$inferSelect): PodAgentRow {
     maxTurns: row.maxTurns ?? null,
     description: row.description,
     origin: row.origin,
+    shareable: row.shareable ?? false,
     dispatchGuidance: row.dispatchGuidance ?? null,
     expectedOutput: row.expectedOutput ?? null,
     rev: row.rev ?? 0,
@@ -96,6 +100,7 @@ function agentSnapshot(row: PodAgentRow): string {
     name: row.name,
     scope: row.scope,
     projectId: row.projectId,
+    shareable: row.shareable,
     prompt: row.prompt,
     tools: row.tools,
     model: row.model,
@@ -113,11 +118,12 @@ export function createAgent(input: CreateAgentInput, audit: AuditInput): PodAgen
   }
   const now = Date.now();
   const id = (input.id ?? newId()) as ULID;
+  const homeProjectId = input.scope === 'project' ? (input.projectId ?? null) : null;
   const row = {
     id,
     name: input.name,
     scope: input.scope,
-    projectId: input.scope === 'project' ? input.projectId ?? null : null,
+    projectId: homeProjectId,
     prompt: input.prompt ?? '',
     // Section 26 — every agent always has the work-item contract tools, no
     // matter what the caller passed. Idempotent merge dedupes if the caller
@@ -128,6 +134,7 @@ export function createAgent(input: CreateAgentInput, audit: AuditInput): PodAgen
     maxTurns: input.maxTurns ?? null,
     description: input.description ?? '',
     origin: input.origin ?? 'user-created',
+    shareable: input.shareable ?? false,
     dispatchGuidance: input.dispatchGuidance ?? null,
     rev: 1,
     createdAt: now,
@@ -147,6 +154,14 @@ export function createAgent(input: CreateAgentInput, audit: AuditInput): PodAgen
   getDb().transaction((tx) => {
     tx.insert(agents).values(row).run();
     tx.insert(agentAudit).values(auditValues).run();
+    // Membership — project-scoped agents get a membership row so they are
+    // immediately visible via listProjectVisibleAgents.
+    if (homeProjectId) {
+      tx.insert(agentProjects)
+        .values({ agentId: id, projectId: homeProjectId, createdAt: now })
+        .onConflictDoNothing()
+        .run();
+    }
   });
   return out;
 }
@@ -358,168 +373,33 @@ export function restoreAgent(id: ULID): PodAgentRow | null {
   return getAgentById(id);
 }
 
-/** Promote a project-scoped agent to global scope. Flips `scope='global'`,
- *  clears `project_id`. Throws if the row is already global or doesn't
- *  exist. UNIQUE constraint on `agents_global_name_idx` may throw if a
- *  global with the same name already exists — caller surfaces as 409. */
-export function promoteAgentToGlobal(id: ULID, audit: AuditInput): PodAgentRow | null {
+/** Flip the `shareable` flag on an agent. Does NOT touch membership rows or
+ *  `projectId` — promoting keeps the original home-project attachment intact.
+ *  Returns the updated row, or null if the agent doesn't exist. No-ops and
+ *  returns the existing row when the flag is already at the requested value. */
+export function setAgentShareable(id: ULID, shareable: boolean, audit: AuditInput): PodAgentRow | null {
   const existing = getAgentById(id);
   if (!existing) return null;
-  if (existing.scope === 'global') {
-    throw new Error('already global');
-  }
+  if (existing.shareable === shareable) return existing; // no-op
   const now = Date.now();
-  const prior = JSON.stringify({ scope: existing.scope, projectId: existing.projectId });
-  const next = JSON.stringify({ scope: 'global', projectId: null });
   const auditRow = buildAuditRow(
     {
       agentId: id,
-      field: 'scope',
-      priorValue: prior,
-      newValue: next,
+      field: 'shareable',
+      priorValue: JSON.stringify(existing.shareable),
+      newValue: JSON.stringify(shareable),
       audit,
     },
     now,
   );
   getDb().transaction((tx) => {
     tx.update(agents)
-      .set({ scope: 'global', projectId: null, updatedAt: now, rev: (existing.rev ?? 0) + 1 })
+      .set({ shareable, updatedAt: now, rev: (existing.rev ?? 0) + 1 })
       .where(eq(agents.id, id))
       .run();
     tx.insert(agentAudit).values(auditRow).run();
   });
   return getAgentById(id);
-}
-
-export interface CloneAgentToProjectInput {
-  /** Source agent. Any scope; typically global. */
-  sourceId: ULID;
-  /** Target project for the clone. */
-  targetProjectId: ULID;
-  /** Optional name override. Defaults to source name. */
-  name?: string;
-}
-
-export interface CloneAgentResult {
-  agent: PodAgentRow;
-  /** Counts of content rows that were copied. */
-  copied: { contextDocs: number };
-}
-
-/** Clone a pod into a target project as a project-scope row. Copies the
- *  agent's scalar fields + every attached context doc + every mcp-server row.
- *  Secrets are NOT copied — they're sensitive and the cloning user may not
- *  intend to share them. The target project re-creates whatever secrets the
- *  pod actually needs.
- *
- *  Throws 'already exists' if the target project already has a live
- *  project-scope row with the resolved name. UNIQUE constraint on
- *  `agents_project_name_idx` is the structural guard; we pre-check for a
- *  cleaner error message. */
-export function cloneAgentToProject(
-  input: CloneAgentToProjectInput,
-  audit: AuditInput,
-): CloneAgentResult {
-  const source = getAgentById(input.sourceId);
-  if (!source) throw new Error(`unknown source pod: ${input.sourceId}`);
-  const name = (input.name ?? source.name).trim();
-  if (!name) throw new Error('clone name cannot be empty');
-
-  const collision = getAgentByName({
-    name,
-    scope: 'project',
-    projectId: input.targetProjectId,
-  });
-  if (collision) {
-    throw new Error(
-      `a project pod named "${name}" already exists in this project`,
-    );
-  }
-
-  const sourceDocs = listContextDocsForScope({ scope: { agentId: source.id } });
-
-  const now = Date.now();
-  const newAgentId = newId() as ULID;
-  const agentRow = {
-    id: newAgentId,
-    name,
-    scope: 'project' as PodScope,
-    projectId: input.targetProjectId,
-    prompt: source.prompt,
-    tools: source.tools,
-    model: source.model,
-    effort: source.effort,
-    maxTurns: source.maxTurns,
-    description: source.description,
-    // Cloned pods are user-created regardless of the source's origin —
-    // the new row is the user's own copy in this project.
-    origin: 'user-created' as PodOrigin,
-    dispatchGuidance: source.dispatchGuidance,
-    createdAt: now,
-    updatedAt: now,
-    deletedAt: null,
-  };
-  const newAgent = rowToAgent(agentRow as typeof agents.$inferSelect);
-
-  const cloneAudit: AuditInput = {
-    ...audit,
-    reason: audit.reason ?? `cloned-from-${source.id}`,
-  };
-
-  const docRows = sourceDocs.map((d) => ({
-    insertRow: {
-      id: newId() as ULID,
-      projectId: null,
-      areaId: null,
-      workItemId: null,
-      agentId: newAgentId,
-      title: d.title,
-      body: d.body,
-      author: d.author,
-      createdAt: now,
-      updatedAt: now,
-      deletedAt: null,
-    },
-    auditField: 'context-doc' as PodAuditField,
-    snapshot: JSON.stringify({ title: d.title, body: d.body }),
-  }));
-
-  const agentAuditRow = buildAuditRow(
-    {
-      agentId: newAgentId,
-      field: 'created',
-      newValue: agentSnapshot(newAgent),
-      audit: cloneAudit,
-    },
-    now,
-  );
-
-  getDb().transaction((tx) => {
-    tx.insert(agents).values(agentRow).run();
-    tx.insert(agentAudit).values(agentAuditRow).run();
-    for (const d of docRows) {
-      tx.insert(contextDocs).values(d.insertRow).run();
-      tx.insert(agentAudit)
-        .values(
-          buildAuditRow(
-            {
-              agentId: newAgentId,
-              field: d.auditField,
-              fieldRef: d.insertRow.id,
-              newValue: d.snapshot,
-              audit: cloneAudit,
-            },
-            now,
-          ),
-        )
-        .run();
-    }
-  });
-
-  return {
-    agent: newAgent,
-    copied: { contextDocs: docRows.length },
-  };
 }
 
 /** Bump an agent's rev + updatedAt without changing any other fields. Called
@@ -534,6 +414,76 @@ export function bumpAgentRev(id: ULID): void {
     .set({ rev: (existing.rev ?? 0) + 1, updatedAt: now })
     .where(eq(agents.id, id))
     .run();
+}
+
+// --- agent_projects (membership) --------------------------------------------
+
+/** Attach an agent to a project. Idempotent — a duplicate insert is silently
+ *  ignored (composite PK on (agentId, projectId) is the structural guard).
+ *  Writes a `member-added` audit row each call even on no-op so history stays
+ *  observable. */
+export function addAgentToProject(agentId: ULID, projectId: ULID, audit: AuditInput): void {
+  const now = Date.now();
+  const auditRow = buildAuditRow(
+    { agentId, field: 'member-added', fieldRef: projectId, audit },
+    now,
+  );
+  getDb().transaction((tx) => {
+    tx.insert(agentProjects)
+      .values({ agentId, projectId, createdAt: now })
+      .onConflictDoNothing()
+      .run();
+    tx.insert(agentAudit).values(auditRow).run();
+  });
+}
+
+/** Detach an agent from a project. Allowed even if it is the last membership
+ *  row — the agent stays in the library as a shareable orphan. No-ops
+ *  silently if the membership row doesn't exist. Writes a `member-removed`
+ *  audit row only when a row was actually deleted. */
+export function removeAgentFromProject(agentId: ULID, projectId: ULID, audit: AuditInput): void {
+  const now = Date.now();
+  let removed = false;
+  getDb().transaction((tx) => {
+    const result = tx
+      .delete(agentProjects)
+      .where(and(eq(agentProjects.agentId, agentId), eq(agentProjects.projectId, projectId)))
+      .run();
+    removed = (result.changes ?? 0) > 0;
+    if (removed) {
+      tx.insert(agentAudit)
+        .values(buildAuditRow({ agentId, field: 'member-removed', fieldRef: projectId, audit }, now))
+        .run();
+    }
+  });
+}
+
+/** Return the project IDs this agent is currently attached to. */
+export function listAgentProjects(agentId: ULID): ULID[] {
+  return getDb()
+    .select({ projectId: agentProjects.projectId })
+    .from(agentProjects)
+    .where(eq(agentProjects.agentId, agentId))
+    .all()
+    .map((r) => r.projectId as ULID);
+}
+
+/** Return the live (non-deleted) agents joined to a project via agent_projects. */
+export function listProjectMemberAgents(projectId: ULID): PodAgentRow[] {
+  const memberIds = getDb()
+    .select({ agentId: agentProjects.agentId })
+    .from(agentProjects)
+    .where(eq(agentProjects.projectId, projectId))
+    .all()
+    .map((r) => r.agentId);
+  if (memberIds.length === 0) return [];
+  return getDb()
+    .select()
+    .from(agents)
+    .where(and(inArray(agents.id, memberIds), isNull(agents.deletedAt)))
+    .orderBy(asc(agents.name))
+    .all()
+    .map(rowToAgent);
 }
 
 // --- agent_secrets ----------------------------------------------------------
@@ -666,75 +616,91 @@ export function deleteSecret(id: ULID, audit: AuditInput): boolean {
 
 // --- pod bundle -------------------------------------------------------------
 
-/** Resolve a pod for dispatch: prefer a project-scoped row for this project,
- *  fall back to a live global row with the same name. Returns null when
- *  neither exists.
+/** THE visibility rule: the agents a project may see and dispatch.
  *
- *  Section 22.1 — the 2026-05-25 codebase review found this was the
- *  load-bearing place where project-scoped pods became invisible at spawn.
- *  Stabilization pass switched it from "global only" to "project wins". */
-/** THE policy: which agents a project may see and dispatch — its own
- *  project-scope pods + built-in (stock) globals. A global USER-CREATED pod is
- *  excluded; the user must copy it into the project (Add agent / clone) to use
- *  it, so the orchestrator can never reach a custom global it wasn't given.
- *  Single source of truth shared by `listProjectVisibleAgents`,
- *  `resolveAgentForDispatch`, the `{{AVAILABLE_AGENTS}}` prompt var, and the
- *  Agents-tab list route. */
-export function isProjectDispatchable(agent: PodAgentRow): boolean {
-  return agent.scope === 'project' || agent.origin === 'stock';
-}
-
-/** The agents visible/usable inside a project: project-scope pods + stock
- *  globals (see `isProjectDispatchable`). With no `projectId`, returns stock
- *  globals only. Both the orchestrator's available-agents list and the
- *  project agents-list route call this — one path, one rule. */
+ *  - `origin='stock'` agents are implicitly all-projects (no membership rows,
+ *    always included).
+ *  - All other agents must have a row in `agent_projects` for this project to
+ *    be visible here.
+ *  - With no `projectId`, returns stock agents only (no project context).
+ *
+ *  Single source of truth shared by `resolveAgentForDispatch`, the
+ *  `{{AVAILABLE_AGENTS}}` prompt var, and the Agents-tab list route.
+ *  The old scope-based `isProjectDispatchable` predicate is replaced by this
+ *  membership-aware query. */
 export function listProjectVisibleAgents(projectId?: ULID | null): PodAgentRow[] {
-  const rows = projectId
-    ? listAgents({ projectId, includeGlobals: true })
-    : listAgents({ scope: 'global' });
-  return rows.filter(isProjectDispatchable);
+  // Stock agents are always visible in every project (no membership rows needed).
+  const stockAgents = getDb()
+    .select()
+    .from(agents)
+    .where(and(eq(agents.origin, 'stock'), isNull(agents.deletedAt)))
+    .orderBy(asc(agents.name))
+    .all()
+    .map(rowToAgent);
+
+  if (!projectId) return stockAgents;
+
+  // Member agents: those joined to this project via agent_projects.
+  const memberAgents = listProjectMemberAgents(projectId);
+
+  // Merge stock + members, deduplicating by id (stock rows are never in
+  // agent_projects in practice, but guard for correctness).
+  const seen = new Set<ULID>();
+  const merged: PodAgentRow[] = [];
+  for (const a of [...stockAgents, ...memberAgents]) {
+    if (!seen.has(a.id)) {
+      seen.add(a.id);
+      merged.push(a);
+    }
+  }
+  return merged.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Resolve an agent for dispatch by name within the project's visible set
+ *  (stock ∪ members).
+ *
+ *  Collision precedence (deterministic, documented here as the single source):
+ *   1. Home-project agent — agents.projectId === projectId (project-native wins).
+ *   2. Any other non-stock member agent (shared member added explicitly).
+ *   3. Stock agent (origin='stock') — last; stock names are reserved and
+ *      should never collide with user-created names in practice.
+ *
+ *  With no projectId only stock agents are visible. Returns null if no match. */
 export function resolveAgentForDispatch(
   name: string,
   projectId?: ULID | null,
 ): PodAgentRow | null {
-  if (projectId) {
-    const project = getAgentByName({ name, scope: 'project', projectId });
-    if (project) return project;
-  }
-  const global = getAgentByName({ name, scope: 'global' });
-  return global && isProjectDispatchable(global) ? global : null;
+  const visible = listProjectVisibleAgents(projectId);
+  const matches = visible.filter((a) => a.name === name);
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0]!;
+  // Collision: apply precedence.
+  const homeMatch = matches.find((a) => a.projectId === projectId);
+  if (homeMatch) return homeMatch;
+  const memberMatch = matches.find((a) => a.origin !== 'stock');
+  if (memberMatch) return memberMatch;
+  return matches[0]!;
 }
 
 /** Read the full pod the materialiser (17a.3) needs to render `.md` +
  *  `mcp.json` + env vars at spawn time.
  *
- *  Resolution: project-scoped row for this project wins, then live global
- *  row. Content rows are read with the resolved agent's own scope — a
- *  project pod's bundle carries that project's knowledge / secrets / mcp
- *  rows; a global pod's bundle carries the global ones.
+ *  Secrets are resolved by agentId only (Phase-1 re-key: unique index on
+ *  (agentId, envVarName)). Shared agents carry the same secrets across all
+ *  member projects — no scope/projectId filter at spawn.
  *
- *  Returns null when neither a project nor a global row with `name` exists.
- */
+ *  Returns null when no visible agent with `name` exists for the project. */
 export function getPodForSpawn(name: string, projectId?: ULID | null): PodSpawnBundle | null {
   const agent = resolveAgentForDispatch(name, projectId);
   if (!agent) return null;
-  // Context docs hang off the agent row alone — the resolved agent's own
-  // scope already decided which row (project overlay vs global) we're on.
+  // Context docs hang off the agent row alone — already keyed by agentId.
   const docs = listContextDocsForScope({ scope: { agentId: agent.id } });
   const contextDocsForSpawn: AgentContextDoc[] = docs.map(toAgentContextDoc);
-  if (agent.scope === 'project' && agent.projectId) {
-    return {
-      agent,
-      contextDocs: contextDocsForSpawn,
-      secrets: listSecrets({ agentId: agent.id, projectId: agent.projectId }),
-    };
-  }
   return {
     agent,
     contextDocs: contextDocsForSpawn,
-    secrets: listSecrets({ agentId: agent.id, scope: 'global' }),
+    // Secrets key by agentId across all member projects (shared-everything).
+    secrets: listSecrets({ agentId: agent.id }),
   };
 }
 

@@ -172,8 +172,8 @@ export type { UpsertWorktreeInput } from './repos/worktrees.ts';
 export { getGlobalSettings, setGlobalSettings } from './repos/settings.ts';
 
 export {
+  addAgentToProject,
   bumpAgentRev,
-  cloneAgentToProject,
   createAgent,
   createSecret,
   deleteSecret,
@@ -182,20 +182,20 @@ export {
   getPodForSpawn,
   getSecret,
   getSecretByEnvVarName,
-  isProjectDispatchable,
+  listAgentProjects,
   listAgents,
+  listProjectMemberAgents,
   listProjectVisibleAgents,
   listSecrets,
-  promoteAgentToGlobal,
+  removeAgentFromProject,
   resolveAgentForDispatch,
   restoreAgent,
+  setAgentShareable,
   softDeleteAgent,
   toAgentContextDoc,
   updateAgent,
 } from './repos/pods.ts';
 export type {
-  CloneAgentResult,
-  CloneAgentToProjectInput,
   CreateAgentInput,
   CreateSecretInput,
   GetAgentByNameInput,
