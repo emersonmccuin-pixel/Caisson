@@ -113,7 +113,10 @@ function deriveProseV2(
 function deriveRepoV2(
   spec: Extract<ExpectedOutputV2, { kind: 'repo' }>,
 ): AcceptancePredicateV2[] {
-  const cwd: 'worktree' | 'project' = spec.isolation === 'in_place' ? 'project' : 'worktree';
+  // pc-pty-chat-415 (R3) — repo work always runs isolated; derived checks
+  // always aim at the worktree. (`cwd: 'project'` survives in the predicate
+  // union for stored legacy ACs only.)
+  const cwd: 'worktree' | 'project' = 'worktree';
   const preds: AcceptancePredicateV2[] = [];
   if (spec.require_diff !== false) {
     preds.push({ kind: 'git_diff_nonempty', cwd });

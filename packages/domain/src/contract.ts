@@ -62,7 +62,11 @@ export type ExpectedOutput =
   | { kind: 'payload'; schema: JsonSchema; semantic?: PayloadSemantic }
   | {
       kind: 'repo';
-      isolation: 'worktree' | 'in_place';
+      // pc-pty-chat-415 (R3) — `in_place` is DELETED, not deprecated. Code work
+      // ALWAYS runs in an isolated worktree; isolation is derived from the kind,
+      // never chosen per dispatch. The field survives (optional, single value)
+      // only so stored specs that spell it out stay parseable.
+      isolation?: 'worktree';
       paths_touched?: string[];
       checks?: RepoCheck[];
       require_diff?: boolean; // default true

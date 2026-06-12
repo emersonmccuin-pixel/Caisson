@@ -54,7 +54,9 @@ export function summarizeExpectedOutput(eo: ExpectedOutput | null): string {
     case 'payload':
       return eo.semantic ? `Data (${eo.semantic})` : 'Structured data';
     case 'repo':
-      return `Code (${eo.isolation === 'worktree' ? 'worktree' : 'in place'})`;
+      // pc-pty-chat-415 (R3) — code work is always worktree-isolated now;
+      // historical contracts may still record a legacy in-place run.
+      return `Code (${(eo.isolation as string | undefined) === 'in_place' ? 'in place · legacy' : 'worktree'})`;
     case 'external':
       return `${eo.system} · ${eo.action}`;
     case 'binary':

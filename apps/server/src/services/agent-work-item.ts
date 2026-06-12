@@ -108,16 +108,13 @@ export function createAgentWorkItem(
       const def = getPodDefaultExpectedOutput(pod);
       expectedOutput = def ?? null;
     }
-    // A DEFAULTED repo spec inherits the dispatch's isolation. Pod defaults
-    // declare `in_place` (orchestrator-style dispatches into the real repo),
-    // which aims the git-diff acceptance check at the PROJECT folder — but a
-    // worktree dispatch does its work in the worktree. Caught live 2026-06-03:
-    // every workflow acceptance run was passing/failing on the HUMAN's
-    // uncommitted changes in the main repo, not the agent's work. Explicit
-    // caller-supplied specs are respected as written.
-    if (expectedOutput?.kind === 'repo' && input.worktree?.trim() && expectedOutput.isolation === 'in_place') {
-      expectedOutput = { ...expectedOutput, isolation: 'worktree' };
-    }
+  }
+  // pc-pty-chat-415 (R3) — repo specs are always worktree-isolated. Normalizes
+  // legacy stored pod rows that still spell `in_place` (migration 0060 rewrites
+  // them; this covers the read path defensively). Explicit caller-supplied
+  // `in_place` is rejected loudly in assertExpectedOutputShape above.
+  if (expectedOutput?.kind === 'repo' && expectedOutput.isolation !== 'worktree') {
+    expectedOutput = { ...expectedOutput, isolation: 'worktree' };
   }
   if (expectedOutput === null) {
     throw new AgentWorkItemInputError(
@@ -211,9 +208,11 @@ function assertExpectedOutputShape(value: unknown): asserts value is ExpectedOut
       }
       break;
     case 'repo':
-      if (v.isolation !== 'worktree' && v.isolation !== 'in_place') {
+      // pc-pty-chat-415 (R3) — in_place was REMOVED: code work always runs in
+      // an isolated worktree; the system provisions it. Omit the field.
+      if (v.isolation !== undefined && v.isolation !== 'worktree') {
         throw new AgentWorkItemInputError(
-          'expected_output (repo): isolation must be "worktree" or "in_place"',
+          'expected_output (repo): isolation "in_place" was removed — code work always runs in an isolated worktree (omit the field or use "worktree")',
         );
       }
       break;

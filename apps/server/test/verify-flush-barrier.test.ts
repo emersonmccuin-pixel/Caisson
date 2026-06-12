@@ -170,13 +170,16 @@ test('flush barrier: clean worktree lets verification proceed normally', async (
     'predicate must run when tree is clean');
 });
 
-test('flush barrier: in_place isolation is not gated by dirty-tree check', async () => {
+test('flush barrier: legacy stored in_place spec is gated like any repo contract (pc-pty-chat-415 R3)', async () => {
+  // in_place is deleted; the barrier keys off `kind: repo`, so even a
+  // historical contract row that still spells `isolation: in_place` gets the
+  // dirty-tree gate — there is no isolation value that exempts code work.
   const p = mkProject('barrier-inplace');
   const contract = new ContractService().create({
     projectId: p.id as ULID,
     workItemId: null,
     podName: 'coder',
-    expectedOutput: { kind: 'repo', isolation: 'in_place' },
+    expectedOutput: { kind: 'repo', isolation: 'in_place' as unknown as 'worktree' },
     acceptanceCriteria: [{ kind: 'bash_exit_zero', command: 'echo ok' }],
     verificationTier: 'auto',
   });
@@ -190,15 +193,14 @@ test('flush barrier: in_place isolation is not gated by dirty-tree check', async
       worktreeDir: tmpDir,
     },
     {
-      // Would fire for worktree -- must NOT fire for in_place
       checkDirtyWorktree: async () => true,
       executorsFor: () => mockExec({ exitCode: 0, timedOut: false }),
     },
   );
 
   assert.ok(outcome);
-  assert.equal(outcome!.verificationStatus, 'passed',
-    'in_place must not be blocked by worktree dirty-tree check');
+  assert.equal(outcome!.verificationStatus, 'pending',
+    'dirty tree must gate every repo contract, legacy in_place included');
 });
 
 // ---- inconclusive outcome: empty evidence = verification defect -------------

@@ -488,26 +488,27 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       return c.json({ ok: false, error: depthCheck.error, cause: depthCheck.cause }, 400);
     }
 
-    // Fix 2 — isolation provisioned to spec or refuse. When the dispatch
-    // declares `isolation: "worktree"`, a real git worktree must be created
-    // BEFORE spawn and used as the run's cwd. "in_place" (default) keeps
-    // the existing project.folderPath behavior.
-    // Never fall back to project.folderPath for a worktree-isolation dispatch —
-    // falling back is what caused the "committed straight to dev" incident.
+    // Fix 2 + pc-pty-chat-415 (R3) — isolation is derived from the output
+    // KIND, never from a per-dispatch setting: `kind: "repo"` (code work)
+    // always gets a real git worktree created BEFORE spawn and used as the
+    // run's cwd. Non-repo kinds keep the project.folderPath cwd.
+    // Never fall back to project.folderPath for code work — falling back is
+    // what caused the "committed straight to dev" incident. The factory holds
+    // the matching backstop invariant (refuses repo dispatch in the live copy).
     let worktreeDir = project.folderPath;
     // Resolve the EFFECTIVE expected_output for the isolation precondition —
     // same three-tier chain the factory/contract layer uses:
     //   inline body.expectedOutput ?? pod-row stored default ?? stock pod default
-    // This closes the bypass where a pod whose default declares `isolation:
-    // "worktree"` was silently skipped because the inline body was null.
+    // This closes the bypass where a pod whose default is repo-kind was
+    // silently skipped because the inline body was null.
     const resolveAgentRow = deps.resolveAgentForDispatch ?? defaultResolveAgentForDispatch;
     const podRow = resolveAgentRow(agentName, projectId);
     const effectiveSpec =
       body.expectedOutput != null
         ? body.expectedOutput
         : ((podRow?.expectedOutput as unknown) ?? getPodDefaultExpectedOutput(agentName) ?? null);
-    const declaredIsolation = (effectiveSpec as { isolation?: unknown } | null)?.isolation;
-    if (declaredIsolation === 'worktree') {
+    const isRepoKind = (effectiveSpec as { kind?: unknown } | null)?.kind === 'repo';
+    if (isRepoKind) {
       const wts = deps.worktreeServiceFor?.(projectId) ?? null;
       if (!wts) {
         return c.json(
@@ -560,7 +561,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         // the path-guard hook (already used by workflow nodes) enforces worktree
         // confinement for subagent calls too. Mirrors the workflow convention
         // (PC_WORKFLOW_WORKTREE); reuses the same primitive.
-        ...(declaredIsolation === 'worktree' ? { extraEnv: { PC_WORKFLOW_WORKTREE: worktreeDir } } : {}),
+        ...(isRepoKind ? { extraEnv: { PC_WORKFLOW_WORKTREE: worktreeDir } } : {}),
       },
       {
         mailboxEnqueue,

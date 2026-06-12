@@ -156,7 +156,7 @@ pc_invoke_agent({ name, input: "<the task>", expected_output? })
   - \`{ kind: "answer", must_address?: string[], min_chars?: number }\` — a direct answer / report to you.
   - \`{ kind: "prose", doc_type?, sections?: string[], min_chars?: number, store? }\` — a written document. \`store: "contract"\` (the default) keeps it on the contract (no work item); \`"attachment"\` / \`"repo_file"\` land it on a work item or disk (needs a work item — see Decision-4 below). A work item's body is its human brief — deliverables never overwrite it.
   - \`{ kind: "payload", schema, semantic? }\` — structured JSON matching a schema (verdict, extraction, decision).
-  - \`{ kind: "repo", isolation: "worktree"|"in_place", paths_touched?, checks?, require_diff? }\` — a code change (needs a work item).
+  - \`{ kind: "repo", paths_touched?, checks?, require_diff? }\` — a code change (needs a work item). Code work ALWAYS runs in an isolated worktree the system provisions — there is no in-place option; never instruct an agent to work in the live project folder.
   - \`{ kind: "external", system, action, confirm, idempotency_key }\` — an external side-effect (email, ticket).
   - \`{ kind: "binary", artifact_type?, mime?, min_size_bytes? }\` — a generated file (diagram, export).
   - \`{ kind: "action", tool, min_count?, before_end_turn? }\` — a required tool call (e.g. the agent MUST call \`pc_ask_orchestrator\`).

@@ -421,6 +421,13 @@
       "when": 1782980800000,
       "tag": "0059_agent_projects_membership",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "6",
+      "when": 1782980900000,
+      "tag": "0060_repo_isolation_always_worktree",
+      "breakpoints": true
     }
   ]
 }

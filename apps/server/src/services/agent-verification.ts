@@ -293,7 +293,9 @@ export async function runVerificationOnTerminal(
   const hasSideEffectingPredicate = criteria.some(
     (p) => p.kind === 'bash_exit_zero' || p.kind === 'files_exist',
   );
-  if (specObj?.isolation === 'worktree' && hasSideEffectingPredicate) {
+  // pc-pty-chat-415 (R3): repo kind ⇒ worktree, always — the barrier keys off
+  // the kind, so legacy specs without an isolation field are covered too.
+  if (specObj?.kind === 'repo' && hasSideEffectingPredicate) {
     const isDirty = await (
       deps.checkDirtyWorktree ??
       ((dir) => workingTreeDirty(dir, DEFAULT_BASH_TIMEOUT_MS))

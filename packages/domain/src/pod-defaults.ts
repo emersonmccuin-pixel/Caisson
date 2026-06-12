@@ -42,9 +42,9 @@ const POD_DEFAULTS: Record<string, PodDefault> = {
   writer: podDefault({ kind: 'prose', store: 'contract' }),
 
   // Code changes land in the repo. Decision-4 leans repo ⇒ requires a
-  // work-item home; in_place isolation by default (orchestrator overrides to
-  // worktree per dispatch).
-  'code-writer': podDefault({ kind: 'repo', isolation: 'in_place' }),
+  // work-item home. Isolation is NOT declared here — repo kind ⇒ worktree,
+  // always, enforced structurally at dispatch (pc-pty-chat-415 R3).
+  'code-writer': podDefault({ kind: 'repo' }),
 
   // Reviewer's job is a structured verdict — a payload the orchestrator reads.
   // Lives on the contract.

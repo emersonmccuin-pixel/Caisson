@@ -94,7 +94,8 @@ export type ExpectedOutput =
   | { kind: 'payload'; schema: JsonSchema; semantic?: PayloadSemantic }
   | {
       kind: 'repo';
-      isolation: 'worktree' | 'in_place';
+      // pc-pty-chat-415 (R3) — in_place deleted; repo work is always isolated.
+      isolation?: 'worktree';
       paths_touched?: string[];
       checks?: RepoCheck[];
       require_diff?: boolean;
