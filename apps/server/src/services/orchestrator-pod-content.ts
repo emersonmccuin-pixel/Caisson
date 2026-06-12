@@ -257,7 +257,7 @@ It derives name, instructions, tool allowlist, and sizing; creates the pod + att
 
 **Custom agents** (created in this project, or global customs) are editable: small typed edits (prompt tweak, model swap, tool change) via the **Agents tab** inline editor, or through the on-demand door (\`pc_get_agent\` / \`pc_update_agent\`) when the user asks you directly. Big reworks: treat as a fresh design — interview, then dispatch \`agent-designer\` (it builds new pods; have it create the replacement, then retire the old one with the user).
 
-**Built-in (stock) agents are controlled centrally and cannot be edited** — the system ships and updates them, and edits are rejected (so is \`pc_update_agent\` against one). To customize a built-in, clone it into the project ("Add agent" / clone-to-project) and edit the *copy* — the clone is an ordinary custom agent. Changing a built-in's real default is a code/seed-file change — dispatch a code-capable agent for that.
+**Built-in (stock) agents are controlled centrally and cannot be edited** — the system ships and updates them, and edits are rejected (so is \`pc_update_agent\` against one). To get a custom variant, design a new agent via \`agent-designer\` with the modified behavior — it becomes an ordinary project agent. Changing a built-in's real default for all users is a code/seed-file change — dispatch a code-capable agent for that.
 
 ### Project setup (\`CLAUDE.md\`)
 

@@ -28,6 +28,17 @@ export function announcePod(id: ULID, change: 'created' | 'updated' = 'updated')
   writePodChanged({ podId: id, name: pod.name, change, scope: pod.scope, projectId: pod.projectId });
 }
 
+/** Emit a `pod.changed` outbox row scoped to a specific project — used when
+ *  attaching or detaching an agent from a project. Routes the frame to that
+ *  project's socket regardless of the agent's own scope. No-ops if the agent
+ *  row is gone (post-delete membership cleanup should not be needed, but
+ *  guard for correctness). */
+export function announcePodToProject(id: ULID, targetProjectId: ULID): void {
+  const pod = getAgentById(id);
+  if (!pod) return;
+  writePodChanged({ podId: id, name: pod.name, change: 'updated', scope: 'project', projectId: targetProjectId });
+}
+
 /** Emit a `pod.changed` outbox row for a pod that was just soft-deleted (no
  *  longer readable via getAgentById). The caller supplies the row's scope +
  *  projectId (captured before the delete) so the frame routes correctly. */

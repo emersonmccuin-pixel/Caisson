@@ -13,21 +13,24 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { agentsApi, type Pod, type PodBundle } from '@/features/agents/client';
+import { projectsApi, type Project } from '@/features/projects/client';
 import { Markdown } from '@/components/Markdown';
 import { ContextTab } from './ContextTab';
 import { SecretsTab } from './SecretsTab';
 import { SettingsTab } from './SettingsTab';
 import { HistoryTab } from './HistoryTab';
 
-type TabId = 'prompt' | 'context' | 'secrets' | 'settings' | 'history';
+type TabId = 'prompt' | 'context' | 'secrets' | 'settings' | 'history' | 'membership';
 
-const TABS: { id: TabId; label: string }[] = [
+const BASE_TABS: { id: TabId; label: string }[] = [
   { id: 'prompt', label: 'Prompt' },
   { id: 'context', label: 'Context' },
   { id: 'secrets', label: 'Secrets' },
   { id: 'settings', label: 'Settings' },
   { id: 'history', label: 'History' },
 ];
+
+const MEMBERSHIP_TAB: { id: TabId; label: string } = { id: 'membership', label: 'Membership' };
 
 
 interface PodDetailModalProps {
@@ -79,6 +82,7 @@ function isDirty(draft: ScalarDraft, baseline: Pod): boolean {
 
 export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailModalProps) {
   const [tab, setTab] = useState<TabId>('prompt');
+  const tabs = readOnly ? BASE_TABS : [...BASE_TABS, MEMBERSHIP_TAB];
   const [baseline, setBaseline] = useState<Pod>(pod);
   const [draft, setDraft] = useState<ScalarDraft>(() => draftFromPod(pod));
   const [bundle, setBundle] = useState<PodBundle | null>(null);
@@ -108,6 +112,7 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
       .then((b) => {
         if (!cancelled) {
           setBundle(b);
+          setBaseline(b.agent); // pick up fresh memberProjectIds etc.
           setBundleLoading(false);
         }
       })
@@ -121,6 +126,16 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
       cancelled = true;
     };
   }, [baseline.id]);
+
+  /** Re-fetch the bundle and baseline pod after a membership change. */
+  function refreshBundleAndBaseline() {
+    agentsApi.getPod(baseline.id)
+      .then((b) => {
+        setBundle(b);
+        setBaseline(b.agent);
+      })
+      .catch((e: unknown) => setBundleErr((e as Error).message));
+  }
 
   const dirty = isDirty(draft, baseline);
 
@@ -264,7 +279,7 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
         </header>
 
         <nav className="flex gap-1 border-b border-border px-2 pt-2">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
@@ -282,9 +297,7 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
 
         {readOnly && (
           <div className="border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
-            Built-in agent — controlled centrally and can't be edited. To customize, clone it
-            into a project (<span className="font-medium text-foreground">Add agent</span>) and edit
-            the copy.
+            Built-in agent — controlled centrally. Prompt and settings are read-only.
           </div>
         )}
 
@@ -347,6 +360,12 @@ export function PodDetailModal({ pod, readOnly, onClose, onDeleted }: PodDetailM
           )}
           {tab === 'history' && (
             <HistoryTab podId={baseline.id} />
+          )}
+          {tab === 'membership' && (
+            <MembershipPanel
+              pod={baseline}
+              onChanged={() => refreshBundleAndBaseline()}
+            />
           )}
         </div>
 
@@ -471,6 +490,210 @@ function PromptTab({
       ) : (
         <div className="flex min-h-[400px] flex-1 items-center justify-center border border-border bg-background text-xs text-muted-foreground">
           No prompt set.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Membership tab ---------------------------------------------------------
+
+function MembershipPanel({
+  pod,
+  onChanged,
+}: {
+  pod: Pod;
+  onChanged: () => void;
+}) {
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [projectsErr, setProjectsErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [selectedAddId, setSelectedAddId] = useState('');
+  const [actionErr, setActionErr] = useState<string | null>(null);
+  const [lastProjectNote, setLastProjectNote] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    projectsApi.listProjects()
+      .then((ps) => { if (!cancelled) setProjects(ps); })
+      .catch((e: unknown) => { if (!cancelled) setProjectsErr((e as Error).message); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const memberIdSet = useMemo(
+    () => new Set(pod.memberProjectIds ?? []),
+    [pod.memberProjectIds],
+  );
+
+  const memberProjects = useMemo(
+    () => projects?.filter((p) => memberIdSet.has(p.id)) ?? [],
+    [projects, memberIdSet],
+  );
+
+  const addableProjects = useMemo(
+    () => projects?.filter((p) => !memberIdSet.has(p.id)) ?? [],
+    [projects, memberIdSet],
+  );
+
+  async function handleAdd() {
+    if (!selectedAddId || busy) return;
+    setActionErr(null);
+    setBusy(`add-${selectedAddId}`);
+    try {
+      await agentsApi.addPodToProject(pod.id, selectedAddId);
+      setSelectedAddId('');
+      onChanged();
+    } catch (e) {
+      const err = e as Error & { kind?: string };
+      if (err.kind === 'name-collision') {
+        setActionErr(
+          'An agent with the same name already exists in that project. ' +
+          'Rename the existing one first.',
+        );
+      } else {
+        setActionErr(err.message);
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRemove(projectId: string, projectName: string) {
+    if (busy) return;
+    const ok = window.confirm(
+      `Remove "${pod.name}" from "${projectName}"?\n\nThe agent stays in the shared library and can be re-added later.`,
+    );
+    if (!ok) return;
+    setActionErr(null);
+    setBusy(`remove-${projectId}`);
+    try {
+      const { wasLastProject } = await agentsApi.removePodFromProject(pod.id, projectId);
+      if (wasLastProject) setLastProjectNote(true);
+      onChanged();
+    } catch (e) {
+      setActionErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!pod.shareable) {
+    return (
+      <div className="flex flex-col gap-3 py-2">
+        <div className="border border-border/60 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+          This agent is private to its home project. Use{' '}
+          <span className="font-medium text-foreground">Make shareable</span> (in the footer) to
+          add it to the shared library — after that it can be attached to other projects.
+        </div>
+      </div>
+    );
+  }
+
+  if (projectsErr) {
+    return <div className="py-2 text-sm text-destructive">{projectsErr}</div>;
+  }
+
+  if (!projects) {
+    return (
+      <div className="py-4 text-sm text-muted-foreground">Loading projects…</div>
+    );
+  }
+
+  const memberCount = pod.memberProjectIds?.length ?? 0;
+
+  return (
+    <div className="flex flex-col gap-5 py-2">
+      {memberCount > 1 && (
+        <div className="border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-300">
+          Shared agent — edits to the prompt, settings, context docs, or secrets apply to every
+          project this agent is attached to.
+        </div>
+      )}
+
+      {lastProjectNote && (
+        <div className="border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          This agent is no longer attached to any project but stays in the shared library.
+          <button
+            type="button"
+            onClick={() => setLastProjectNote(false)}
+            className="ml-2 underline"
+          >
+            ok
+          </button>
+        </div>
+      )}
+
+      <div>
+        <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          Member projects ({memberProjects.length})
+        </div>
+        {memberProjects.length === 0 ? (
+          <div className="border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+            Not attached to any project. Use "Add to project" below.
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {memberProjects.map((p) => (
+              <div
+                key={p.id}
+                className="grid grid-cols-[1fr_auto] items-center gap-3 border border-border bg-background px-3 py-2"
+              >
+                <span className="text-sm text-foreground">{p.name}</span>
+                <button
+                  type="button"
+                  onClick={() => void handleRemove(p.id, p.name)}
+                  disabled={!!busy}
+                  className="border border-destructive/60 bg-card px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                >
+                  {busy === `remove-${p.id}` ? 'Removing…' : 'Remove'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {addableProjects.length > 0 && (
+        <div>
+          <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            Add to project
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedAddId}
+              onChange={(e) => setSelectedAddId(e.target.value)}
+              disabled={!!busy}
+              className="flex-1 border border-border bg-background px-2 py-1.5 text-sm text-foreground outline-none focus:border-primary disabled:opacity-50"
+            >
+              <option value="">— select a project —</option>
+              {addableProjects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void handleAdd()}
+              disabled={!selectedAddId || !!busy}
+              className="border border-primary bg-primary/30 px-3 py-1.5 text-xs font-medium text-foreground hover:bg-primary/50 disabled:opacity-50"
+            >
+              {busy?.startsWith('add-') ? 'Adding…' : 'Add'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {actionErr && (
+        <div className="border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {actionErr}
+          <button
+            type="button"
+            onClick={() => setActionErr(null)}
+            className="ml-2 underline"
+          >
+            dismiss
+          </button>
         </div>
       )}
     </div>

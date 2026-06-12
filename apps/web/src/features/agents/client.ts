@@ -39,11 +39,43 @@ export const agentsApi = {
       {},
     ).then((r) => r.pod),
 
-  clonePodToProject: (podId: ULID, projectId: ULID, name?: string) =>
-    postJson<{ ok: true; pod: Pod; copied: { contextDocs: number } }>(
-      `/api/agents/pods/${podId}/clone-to-project`,
-      name ? { projectId, name } : { projectId },
-    ).then((r) => ({ pod: r.pod, copied: r.copied })),
+  /** Add a shareable agent to a project. Throws with `err.kind === 'name-collision'`
+   *  when another agent in that project already has the same name. */
+  addPodToProject: async (podId: ULID, projectId: ULID): Promise<void> => {
+    const res = await fetch(`/api/agents/pods/${podId}/add-to-project`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId }),
+    });
+    const data = (await res.json()) as { ok?: boolean; error?: string; kind?: string };
+    if (!res.ok || data.ok === false) {
+      const msg = data.error ?? `add-to-project → ${res.status}`;
+      const err = new Error(msg) as Error & { kind?: string; status?: number };
+      if (data.kind) err.kind = data.kind;
+      err.status = res.status;
+      throw err;
+    }
+  },
+
+  /** Remove a shared agent from one project. Returns wasLastProject=true when
+   *  the agent is now in no projects (still stays in the library). */
+  removePodFromProject: async (
+    podId: ULID,
+    projectId: ULID,
+  ): Promise<{ wasLastProject: boolean }> => {
+    const res = await fetch(`/api/agents/pods/${podId}/projects/${projectId}`, {
+      method: 'DELETE',
+    });
+    const data = (await res.json()) as {
+      ok?: boolean;
+      wasLastProject?: boolean;
+      error?: string;
+    };
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error ?? `remove-from-project → ${res.status}`);
+    }
+    return { wasLastProject: data.wasLastProject ?? false };
+  },
 
   resetStockPodToDefault: (podId: ULID) =>
     postJson<{ ok: true; pod: Pod; resetFields: string[] }>(

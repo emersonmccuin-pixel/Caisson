@@ -19,9 +19,10 @@
 //     JSONL itself (Read/Grep/Bash). The agent_dispatched diary events cross-
 //     link nodeId -> agentRunId -> workItemId.
 //   - Fixing a misconfigured pod: pc_update_agent mutates tools/model/effort/
-//     prompt. Editing a STOCK pod changes it for EVERY project, so the doctor
-//     clones it into the project first (pc_clone_agent_to_project, keep name)
-//     and edits the clone, then repoints the node. Project pods edit in place.
+//     prompt. Stock pods cannot be edited — if the misconfigured pod is a
+//     built-in, the fix is a code/seed change (dispatch a code-capable agent)
+//     or creating a new custom agent via agent-designer. Project pods edit in
+//     place.
 
 import { type CreateAgentInput } from '@pc/db';
 import { mergeRequiredAgentTools } from '@pc/domain';
@@ -77,7 +78,7 @@ Before applying ANY change, call \`pc_request_approval\` with a clear, plain-Eng
 
 **Fixing a pod:**
 - \`pc_get_agent\` first to see current config. \`pc_update_agent({ name, tools?, model?, effort?, prompt?, reason })\` mutates the allowlist / model / effort / prompt.
-- **Never edit a stock (built-in) pod directly — that changes it for EVERY project.** If the misconfigured pod is a built-in (it appears under \`globals\` in \`pc_list_agents\`, not \`overrides\`/\`projectOnly\`), clone it into the project first: \`pc_clone_agent_to_project({ name })\` (keep the same name — the clone inherits the built-in's default output contract and shadows it), then edit the **clone**, and make sure the workflow node references that project pod. A project-scoped pod (in \`overrides\`/\`projectOnly\`) you edit in place.
+- **Never edit a stock (built-in) pod directly — stock pods are controlled centrally and \`pc_update_agent\` is rejected against them.** If the misconfigured pod is a built-in, flag it in your findings: the real fix is a code/seed-file change (dispatch a code-capable agent) or creating a new custom agent via \`agent-designer\` with the corrected behavior and re-pointing the workflow node. A user-created project agent you edit in place with \`pc_update_agent\`.
 - A required set of contract tools is always re-merged into any allowlist you set — you can't strip those, and shouldn't try.
 
 **Fixing the workflow definition:**
@@ -137,7 +138,6 @@ export const WORKFLOW_DOCTOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_fire_workflow',
     // Fix the pods.
     'mcp__pc-rig__pc_update_agent',
-    'mcp__pc-rig__pc_clone_agent_to_project',
     // Fix the workflow.
     'mcp__pc-rig__pc_update_workflow',
     // Gate + escalate.
@@ -148,7 +148,7 @@ export const WORKFLOW_DOCTOR_POD_CONTENT: CreateAgentInput = {
   effort: 'high',
   maxTurns: null,
   description:
-    'Reviews / tests a workflow run, finds inefficiencies + misconfigurations (wild or looping tool calls from a mis-set-up pod, wrong model, prompt thrash, redundant steps, bad wiring, loops that keep hitting their ceiling), and — approval-gated — fixes them. Diagnoses from evidence: per-node timing/iteration/failure from pc_get_workflow_run (dagState + diary), and per-tool-call/token detail by reading the agents\' raw JSONL transcripts on disk (path from pc_inspect_agent_run; agent_dispatched diary events link node→agentRun). Fixes pods via pc_update_agent (clones a built-in into the project first so stock pods stay untouched) and the workflow via pc_update_workflow (verifies workflow.status — an invalid def publishes as a 2xx success). Recommended on a workflow\'s first run.',
+    'Reviews / tests a workflow run, finds inefficiencies + misconfigurations (wild or looping tool calls from a mis-set-up pod, wrong model, prompt thrash, redundant steps, bad wiring, loops that keep hitting their ceiling), and — approval-gated — fixes them. Diagnoses from evidence: per-node timing/iteration/failure from pc_get_workflow_run (dagState + diary), and per-tool-call/token detail by reading the agents\' raw JSONL transcripts on disk (path from pc_inspect_agent_run; agent_dispatched diary events link node→agentRun). Fixes user-created pods via pc_update_agent (stock pods cannot be edited — flags them for a code/seed change or agent-designer replacement) and the workflow via pc_update_workflow (verifies workflow.status — an invalid def publishes as a 2xx success). Recommended on a workflow\'s first run.',
   dispatchGuidance:
     'reviewing, testing, or debugging a workflow — especially after its first run, or when a workflow is slow / expensive / flaky or an agent is "going wild." Dispatch with a workflowRunId (best), or a workflow slug to review its latest run, or a slug + "test it" to fire a fresh run first. It reads the run record + the agents\' transcripts, diagnoses, and applies approval-gated fixes to the pods and/or the workflow.',
 };
