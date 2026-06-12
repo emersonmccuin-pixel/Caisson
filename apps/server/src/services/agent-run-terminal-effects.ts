@@ -42,6 +42,7 @@ import {
   type VerificationDeps,
   type VerificationOutcome,
 } from './agent-verification.ts';
+import { landAcceptedContract as defaultLandAcceptedContract } from './landing-service.ts';
 
 type TerminalStatus = 'completed' | 'failed' | 'cancelled';
 
@@ -101,6 +102,11 @@ export interface AgentRunTerminalEffectsDeps {
   markTerminal?: (input: MarkAgentRunTerminalInput) => void;
   verifyOnTerminal?: typeof runVerificationOnTerminal;
   verificationDeps?: VerificationDeps;
+  /** pc-pty-chat-415 (R5) — accept ⇒ land. Called after auto-verification
+   *  PASSES a contract; standalone repo contracts land on the integration
+   *  branch (workflow-owned runs are skipped inside — the merge node owns
+   *  them). Test seam; production defaults to the real landing service. */
+  landAcceptedContract?: typeof defaultLandAcceptedContract;
   now?: () => number;
   onError?: (error: Error) => void;
   /** Issue 3 (near-term) — called immediately after the terminal mailbox
@@ -431,6 +437,27 @@ async function finishTerminalEffects(args: {
           notes: `verifier crashed before evaluating acceptance criteria: ${verifierCrash.message}`,
         }
       : null;
+
+  // pc-pty-chat-415 (R5) — accept ⇒ land. An auto-verification PASS on a
+  // standalone repo contract lands the sealed branch on the integration
+  // branch through the ONE landing path. Outcome (landed / conflict / failed)
+  // is durable on the contract; the note rides the verification block so the
+  // settle + envelope surface where the work went. Guarded: a landing crash
+  // must never starve the settle/envelope tail.
+  if (outcome?.verificationStatus === 'passed' && contractId && verification) {
+    try {
+      const land = await (deps.landAcceptedContract ?? defaultLandAcceptedContract)(contractId);
+      if (land.applicable) {
+        const note =
+          land.outcome === 'landed'
+            ? `landed on ${land.into ?? 'the integration branch'} (branch ${land.branch})`
+            : `landing ${land.outcome}: ${land.error ?? 'see contract landing record'}`;
+        verification.notes = verification.notes ? `${verification.notes}\n${note}` : note;
+      }
+    } catch (err) {
+      deps.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
 
   // Slice 013 — the deliverable was captured onto the contract synchronously
   // (see `captureDeliverable`). The envelope surfaces the resolved result.

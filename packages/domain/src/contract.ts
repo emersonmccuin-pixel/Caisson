@@ -22,6 +22,16 @@ export type VerificationTier = (typeof VERIFICATION_TIERS)[number];
 export const VERIFICATION_STATUSES = ['pending', 'passed', 'failed'] as const;
 export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
 
+// pc-pty-chat-415 (R5) — accept ⇒ land. Landing state for ACCEPTED repo-kind
+// contracts produced in an isolated worktree: 'pending' (landing in flight —
+// boot re-drives a crash), 'landed' (merge + push verified, receipts on the
+// contract), 'conflict' (durable gate — a human/orchestrator resolves, then
+// re-lands), 'failed' (mechanics error; retryable through the same door).
+// NULL = not applicable (non-repo kinds, workflow-owned runs — those land via
+// the workflow merge node — and pre-415 history).
+export const CONTRACT_LANDING_STATUSES = ['pending', 'landed', 'conflict', 'failed'] as const;
+export type ContractLandingStatus = (typeof CONTRACT_LANDING_STATUSES)[number];
+
 export const DELIVERABLE_KINDS = [
   'answer',
   'prose',

@@ -39,10 +39,12 @@ export * as ContractV2 from './contract.ts';
 export type {
   Deliverable,
   DeliverableKind,
+  ContractLandingStatus,
   ContractStatus,
   JsonSchema,
 } from './contract.ts';
 export {
+  CONTRACT_LANDING_STATUSES,
   CONTRACT_STATUSES,
   DELIVERABLE_KINDS,
   isContractStatus,

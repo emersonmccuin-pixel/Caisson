@@ -207,6 +207,13 @@ export interface Contract {
   deliverable: Deliverable | null;
   /** Isolation axis for repo/file producers. */
   worktreePath: string | null;
+  /** pc-pty-chat-415 (R5) — accept ⇒ land. Null = not applicable (non-repo,
+   *  workflow-owned, pre-415). The receipts outlive the worktree. */
+  landingStatus: 'pending' | 'landed' | 'conflict' | 'failed' | null;
+  landedBranch: string | null;
+  landedSha: string | null;
+  landingError: string | null;
+  landedAt: number | null;
   status: ContractStatus;
   /** Optimistic-concurrency counter. */
   version: number;
@@ -243,6 +250,7 @@ export type ContractMutationReason =
   | 'dispatched'
   | 'deliverable-set'
   | 'verification-set'
+  | 'landing-set'
   | 'patched';
 
 export interface ContractChangedLivePayload {
@@ -289,6 +297,7 @@ export function isContractMutationReason(value: unknown): value is ContractMutat
     value === 'dispatched' ||
     value === 'deliverable-set' ||
     value === 'verification-set' ||
+    value === 'landing-set' ||
     value === 'patched'
   );
 }

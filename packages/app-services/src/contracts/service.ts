@@ -26,11 +26,13 @@ import {
   listContractsForRunInDb,
   listContractsForWorkItemInDb,
   setContractDeliverable as setContractDeliverableInDb,
+  setContractLanding as setContractLandingInDb,
   setContractRun as setContractRunInDb,
   setContractVerification as setContractVerificationInDb,
   type ContractRow,
   type DbExecutor,
   type InsertLiveEventDraft,
+  type SetLandingInput,
 } from '@pc/db';
 import type { AcceptanceCriteria, ContractV2, ULID as DomainULID } from '@pc/domain';
 
@@ -50,6 +52,11 @@ export function toContractDto(row: ContractRow): Contract {
     report: row.report,
     deliverable: row.deliverable,
     worktreePath: row.worktreePath,
+    landingStatus: row.landingStatus,
+    landedBranch: row.landedBranch,
+    landedSha: row.landedSha,
+    landingError: row.landingError,
+    landedAt: row.landedAt,
     status: row.status,
     version: row.version,
     createdAt: row.createdAt,
@@ -174,6 +181,19 @@ export class ContractService {
       if (!row) return null;
       const contract = toContractDto(row);
       this.insert(tx, buildContractChangedDraft({ reason: 'deliverable-set', contract }));
+      return contract;
+    });
+  }
+
+  /** pc-pty-chat-415 (R5) — record the landing state/receipts onto the
+   *  contract (accept ⇒ land). */
+  setLanding(input: { id: ULID } & SetLandingInput): Contract | null {
+    return this.tx((tx) => {
+      const { id, ...fields } = input;
+      const row = setContractLandingInDb(id as DomainULID, fields, tx);
+      if (!row) return null;
+      const contract = toContractDto(row);
+      this.insert(tx, buildContractChangedDraft({ reason: 'landing-set', contract }));
       return contract;
     });
   }

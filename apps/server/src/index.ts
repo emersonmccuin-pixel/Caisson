@@ -30,6 +30,7 @@ import {
   insertPostTurnSummary,
   getProjectById,
   getProjectBySlug,
+  listContractsPendingLanding,
   listNonTerminalAgentRuns,
   listProjects,
   newId,
@@ -65,6 +66,7 @@ import { createHostConnection, toHostHealthSnapshot } from './services/host-conn
 import { announceHostHealth } from './services/host-health-writer.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
 import { createWorktreeSweepRunner } from './services/worktree-sweep-runner.ts';
+import { landAcceptedContract, setLandingWorktreesAccessor } from './services/landing-service.ts';
 import { backfillStageFlags } from './services/stage-flags-backfill.ts';
 import { seedClaudeFirstRun } from './services/claude-firstrun-seed.ts';
 import { ProjectCreate } from './services/project-create.ts';
@@ -699,6 +701,26 @@ void worktreeSweep.runOnce();
     if (typeof worktreeSweepTimer.unref === 'function') worktreeSweepTimer.unref();
   }
 }
+
+// pc-pty-chat-415 (R5) — accept ⇒ land. Wire the per-project WorktreeService
+// accessor the landing service uses (services can't reach the project
+// registry), then re-drive landings interrupted mid-flight ('pending' rows —
+// the mechanics are idempotent, so a crash between merge and push converges).
+// Fire-and-forget: a slow git/origin can't block startup.
+setLandingWorktreesAccessor(
+  (projectId) => projectRegistry.ensure(projectId)?.worktrees() ?? null,
+);
+void (async () => {
+  try {
+    for (const row of listContractsPendingLanding()) {
+      const res = await landAcceptedContract(row.id);
+      const detail = res.applicable ? res.outcome : `skipped (${res.reason})`;
+      console.log(`[landing] boot re-drive contract ${row.id}: ${detail}`);
+    }
+  } catch (err) {
+    console.error('[landing] boot re-drive failed:', (err as Error).message);
+  }
+})();
 
 // Step 2 — start THE loop (the same tick boot just ran; the only liveness
 // interval in the codebase — ONE-RECONCILER guard). Events = latency,

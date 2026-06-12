@@ -26,6 +26,7 @@ import type { AgentHostReattachClient } from '../../services/agent-host-reattach
 import type { ReviewInboxResolution } from '../../services/dag-run-service.ts';
 import type { ReviewDecisionErrorCode } from '../../services/review-decision-service.ts';
 import type { dispatchContinueAgent } from '../../services/agent-run-factory.ts';
+import { landAcceptedContract as defaultLandAcceptedContract } from '../../services/landing-service.ts';
 
 /** Map a VerificationReviewError cause to an HTTP status. */
 function contractDecisionStatus(code: ReviewDecisionErrorCode): 400 | 404 | 409 | 500 {
@@ -49,6 +50,9 @@ export interface ContractRoutesDeps {
   broadcastTo?: (projectId: ULID, msg: unknown) => void;
   /** Test seam for the continuation dispatch. */
   dispatch?: typeof dispatchContinueAgent;
+  /** pc-pty-chat-415 (R5) — accept ⇒ land. Test seam; production defaults to
+   *  the real landing service. */
+  landAcceptedContract?: typeof defaultLandAcceptedContract;
 }
 
 export function registerContractRoutes(app: Hono, deps: ContractRoutesDeps = {}): void {
@@ -99,6 +103,17 @@ export function registerContractRoutes(app: Hono, deps: ContractRoutesDeps = {})
           reviewInbox: deps.reviewInbox,
         },
       );
+      // pc-pty-chat-415 (R5) — accept ⇒ land. Best-effort: a landing failure
+      // is durable on the contract, never undoes the approval.
+      try {
+        await (deps.landAcceptedContract ?? defaultLandAcceptedContract)(contractId, {
+          contractService: service,
+        });
+      } catch (err) {
+        console.warn(
+          `[contracts] landing after approval failed for ${contractId}: ${(err as Error).message}`,
+        );
+      }
       return c.json({ ok: true, workItem: null });
     } catch (err) {
       if (err instanceof VerificationReviewError) {
@@ -109,6 +124,23 @@ export function registerContractRoutes(app: Hono, deps: ContractRoutesDeps = {})
       }
       return c.json({ ok: false, error: (err as Error).message }, 500);
     }
+  });
+
+  // pc-pty-chat-415 (R5) — the re-land door. Re-drives landing for an ACCEPTED
+  // repo contract whose landing is 'conflict' (after the human/orchestrator
+  // resolved it in the engine merge worktree), 'failed', or 'pending' (crash).
+  // Idempotent: an already-landed contract short-circuits to 'landed'.
+  app.post('/api/contracts/:id/land', async (c) => {
+    const contractId = c.req.param('id') as ULID;
+    const contract = service.get(contractId);
+    if (!contract) return c.json({ ok: false, error: `unknown contract: ${contractId}` }, 404);
+    const landing = await (deps.landAcceptedContract ?? defaultLandAcceptedContract)(contractId, {
+      contractService: service,
+    });
+    if (!landing.applicable) {
+      return c.json({ ok: false, error: `nothing to land: ${landing.reason}` }, 409);
+    }
+    return c.json({ ok: landing.outcome === 'landed', landing });
   });
 
   // Issue 4 — reject a contract-only verification hold by contractId.

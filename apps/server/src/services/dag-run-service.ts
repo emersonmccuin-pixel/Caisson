@@ -51,6 +51,7 @@ import { dispatchFreshAgent } from './agent-run-factory.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import type { WorkItemService } from './work-item.ts';
 import type { WorktreeService } from './worktree.ts';
+import { landBranch } from './landing-service.ts';
 
 /** FD-12 — the one write door (repo write + outbox receipt in one txn). */
 const workItemGateway = new WorkItemMutationGateway();
@@ -578,30 +579,6 @@ export function makeExecutorDeps(
       return { outcome: 'failed', error: `cannot derive branch name from worktree path: ${run.worktreePath}` };
     }
 
-    // Resolve the merge target up front. A resolver failure (no configured
-    // branch + nothing detectable, or a configured branch missing from the
-    // repo) fails the node LOUDLY with the fix-it message on the run.
-    let into: string;
-    try {
-      into = await opts.worktrees.integrationBranch();
-    } catch (err) {
-      return { outcome: 'failed', error: (err as Error).message };
-    }
-
-    // Worktree teardown — the branch has verifiably landed (both positive
-    // receipts), so the run worktree + branch have no further purpose.
-    // Best-effort: a teardown failure (Windows file lock, etc.) must never
-    // fail an already-merged node; the sweep retries leftovers.
-    const teardownBestEffort = async (): Promise<void> => {
-      try {
-        await opts.worktrees.teardownAfterMerge(branch);
-      } catch (err) {
-        console.warn(
-          `[dag-run] worktree teardown after merge failed for "${branch}" (sweep will retry): ${(err as Error).message}`,
-        );
-      }
-    };
-
     const emitConflict = async (): Promise<void> => {
       // Board visibility: move card to on_conflict_stage (documented side-effect
       // of the merge node — FD-9 exception, per the build decisions). A failed
@@ -625,103 +602,25 @@ export function makeExecutorDeps(
       });
     };
 
-    try {
-      // Idempotent reconcile — read actual git state before doing anything.
-      const state = await opts.worktrees.mergeState(branch);
-
-      if (state.mergeInProgress) {
-        // MERGE_HEAD present: a prior (interrupted) merge attempt left a conflict.
-        await emitConflict();
-        return { outcome: 'conflict' };
-      }
-
-      if (state.alreadyMerged) {
-        // Branch tip is already an ancestor of the integration branch — skip
-        // the merge itself.
-        if (!state.pushed) {
-          // Push + positive receipt #2.
-          try {
-            await opts.worktrees.pushIntegration();
-          } catch (pushErr) {
-            const msg = (pushErr as Error).message ?? '';
-            if (/rejected|non-fast-forward/i.test(msg)) {
-              await emitConflict();
-              return { outcome: 'conflict' };
-            }
-            return { outcome: 'failed', error: `push to origin/${into} failed: ${msg}` };
-          }
-          const afterPush = await opts.worktrees.mergeState(branch);
-          if (!afterPush.pushed) {
-            return {
-              outcome: 'failed',
-              error: `push to origin/${into} completed but origin/${into} != ${into}`,
-            };
-          }
-        }
-        runGateway.appendRunEvent({
-          projectId: opts.projectId,
-          runId: run.id,
-          type: 'git_merged',
-          nodeId: node.id,
-          data: { branch, into, idempotent: true },
-        });
-        await teardownBestEffort();
-        return { outcome: 'merged' };
-      }
-
-      // Fresh merge: merge → positive receipt #1 → push → positive receipt #2.
-      await opts.worktrees.mergeBranchIntoIntegration(branch);
-
-      // Positive receipt #1: branch tip must now be an ancestor of the
-      // integration branch.
-      const afterMerge = await opts.worktrees.mergeState(branch);
-      if (!afterMerge.alreadyMerged) {
-        return {
-          outcome: 'failed',
-          error: `merge ran but branch tip is not an ancestor of ${into} — merge commit not found`,
-        };
-      }
-
-      // Push to the origin integration branch.
-      try {
-        await opts.worktrees.pushIntegration();
-      } catch (pushErr) {
-        const msg = (pushErr as Error).message ?? '';
-        if (/rejected|non-fast-forward/i.test(msg)) {
-          await emitConflict();
-          return { outcome: 'conflict' };
-        }
-        return { outcome: 'failed', error: `push to origin/${into} failed: ${msg}` };
-      }
-
-      // Positive receipt #2: the origin integration branch must equal local.
-      const afterPush = await opts.worktrees.mergeState(branch);
-      if (!afterPush.pushed) {
-        return {
-          outcome: 'failed',
-          error: `push to origin/${into} completed but origin/${into} != ${into}`,
-        };
-      }
-
-      runGateway.appendRunEvent({
-        projectId: opts.projectId,
-        runId: run.id,
-        type: 'git_merged',
-        nodeId: node.id,
-        data: { branch, into },
-      });
-      await teardownBestEffort();
-      return { outcome: 'merged' };
-
-    } catch (err) {
-      const msg = (err as Error).message ?? 'unknown error';
-      // Conflict thrown by mergeBranchIntoIntegration (git exits non-zero).
-      if (/conflict|CONFLICT|Automatic merge failed/i.test(msg)) {
-        await emitConflict();
-        return { outcome: 'conflict' };
-      }
-      return { outcome: 'failed', error: msg };
+    // pc-pty-chat-415 (R5) — the mechanics live in landing-service.landBranch
+    // (the ONE landing path, shared with acceptance-side landing). This node
+    // keeps the workflow-specific effects: diary events + conflict card move.
+    const result = await landBranch(opts.worktrees, branch);
+    if (result.outcome === 'conflict') {
+      await emitConflict();
+      return { outcome: 'conflict' };
     }
+    if (result.outcome === 'failed') {
+      return { outcome: 'failed', error: result.error };
+    }
+    runGateway.appendRunEvent({
+      projectId: opts.projectId,
+      runId: run.id,
+      type: 'git_merged',
+      nodeId: node.id,
+      data: result.idempotent ? { branch, into: result.into, idempotent: true } : { branch, into: result.into },
+    });
+    return { outcome: 'merged' };
   };
 
   const requestReview = async (

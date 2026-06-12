@@ -98,7 +98,9 @@ export {
   listContractsForRunInDb,
   listContractsForWorkItem,
   listContractsForWorkItemInDb,
+  listContractsPendingLanding,
   setContractDeliverable,
+  setContractLanding,
   setContractRun,
   setContractVerification,
 } from './repos/contracts.ts';
@@ -106,6 +108,7 @@ export type {
   ContractRow,
   CreateContractInput,
   SetDeliverableInput,
+  SetLandingInput,
   SetVerificationInput,
 } from './repos/contracts.ts';
 

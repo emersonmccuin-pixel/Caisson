@@ -96,11 +96,13 @@ export interface ApproveAgentWorkItemDeps {
 
 /** Approve a tier-2/3 verification hold on the contract. Rolls up the linked
  *  work item (if any) to complete + the done stage. Returns the updated
- *  WorkItem when one is linked, else null (a contract-only hold). */
+ *  WorkItem (null for a contract-only hold) + the accepted contract — the
+ *  caller lands repo contracts through the landing service (pc-pty-chat-415
+ *  R5). */
 export function approveAgentWorkItem(
   input: ApproveAgentWorkItemInput,
   deps: ApproveAgentWorkItemDeps = {},
-): WorkItem | null {
+): { workItem: WorkItem | null; contract: Contract } {
   const service = deps.contractService ?? new ContractService();
   const contract = loadVerifyingContract(input.workItemId, service);
   const note = input.notes?.trim() ?? '';
@@ -112,7 +114,7 @@ export function approveAgentWorkItem(
   resolveVerificationInbox(deps.reviewInbox, contract.id);
 
   // Roll-up: advance the linked work item, if one exists.
-  if (!contract.workItemId) return null;
+  if (!contract.workItemId) return { workItem: null, contract };
   const wiId = contract.workItemId as ULID;
   const actor = input.actor ?? 'orchestrator';
   const pre = getWorkItem(wiId);
@@ -148,7 +150,7 @@ export function approveAgentWorkItem(
       return { row: updated, reason: 'approved' };
     },
   });
-  return result;
+  return { workItem: result, contract };
 }
 
 export interface RejectAgentWorkItemInput {
