@@ -34,12 +34,12 @@ These are the safety rails for the bug push:
   with a guard test (`apps/server/test/dispatch-invariant.test.ts`). (Residual edge — resolving the
   pod/stock-default spec before the isolation check — being closed in
   [pc-pty-chat-353](pc://work-item/pc-pty-chat-353).)
-- **Git is orchestrator-owned and verified** ([pc-pty-chat-270](pc://work-item/pc-pty-chat-270)) —
-  **NOT YET BUILT.** The build workflow's merge/restart/push steps are still honor-system gate
-  prompts — approving them performs NO git, so a run can "complete" without merging/testing/pushing.
-  Until the verified-engine-git rebuild lands, the orchestrator owns and verifies git directly;
-  don't assume a green workflow shipped anything. Design + plan:
-  `docs/build-ship-pipeline-design-2026-06-08.md`.
+- **Git is engine-executed and verified for workflow runs** ([pc-pty-chat-270](pc://work-item/pc-pty-chat-270))
+  — **PARTIALLY LANDED** (slices 0fbe0109..4c808b1f, 2026-06-11): real `merge` node with positive
+  receipts (merge asserted + push asserted), per-project integration-branch resolver, periodic
+  worktree sweep. The live Build workflow uses the merge node (verified 2026-06-12). Remainder —
+  standalone accepted code auto-landing, seal-before-verify, durable conflict gate, abandon flow —
+  is [pc-pty-chat-415](pc://work-item/pc-pty-chat-415): `docs/one-dispatch-path-plan-2026-06-12.md`.
 
 ## Core principles (non-negotiable)
 
