@@ -261,8 +261,8 @@ export function ProjectRail({
               className={
                 'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted ' +
                 (commandActive
-                  ? 'border-l-2 border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary '
-                  : 'border-l-2 border-transparent text-foreground/80 ')
+                  ? 'border-l-[3px] border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary font-semibold '
+                  : 'border-l-[3px] border-transparent text-foreground/80 ')
               }
             >
               <span
@@ -290,8 +290,8 @@ export function ProjectRail({
                 className="pointer-events-none absolute inset-0"
                 style={{
                   background: [
-                    'repeating-linear-gradient(0deg, color-mix(in srgb, var(--primary) 15%, transparent) 0px, color-mix(in srgb, var(--primary) 15%, transparent) 1px, transparent 1px, transparent 4px)',
-                    'color-mix(in srgb, var(--primary) 9%, transparent)',
+                    'repeating-linear-gradient(0deg, color-mix(in srgb, var(--primary) 32%, transparent) 0px, color-mix(in srgb, var(--primary) 32%, transparent) 1px, transparent 1px, transparent 4px)',
+                    'color-mix(in srgb, var(--primary) 22%, transparent)',
                   ].join(', '),
                 }}
               />
@@ -345,8 +345,8 @@ export function ProjectRail({
                   className={
                     'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted ' +
                     (isActive
-                      ? 'border-l-2 border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary '
-                      : 'border-l-2 border-transparent text-foreground/80 ') +
+                      ? 'border-l-[3px] border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary font-semibold '
+                      : 'border-l-[3px] border-transparent text-foreground/80 ') +
                     (isDragging ? 'opacity-40 ' : '') +
                     (dragEnabled ? 'cursor-grab active:cursor-grabbing' : '')
                   }
