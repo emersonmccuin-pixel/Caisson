@@ -27,6 +27,8 @@ function slimAgentList(body: string): string {
       if (typeof def.description === 'string') out.description = def.description;
       if (typeof def.model === 'string') out.model = def.model;
       if (Array.isArray(def.tools) && def.tools.length > 0) out.tools = def.tools;
+      if (typeof r.shareable === 'boolean') out.shareable = r.shareable;
+      if (Array.isArray(r.memberProjectIds)) out.memberProjectIds = r.memberProjectIds;
       return out;
     };
     const slimArr = (v: unknown) => (Array.isArray(v) ? v.map(slimOne) : v);
@@ -310,63 +312,6 @@ export async function handleAgentTool(
         return {
           content: [
             { type: 'text', text: `pc_promote_agent_to_global failed: ${(err as Error).message}` },
-          ],
-          isError: true,
-        };
-      }
-    }
-
-    case 'pc_clone_agent_to_project': {
-      try {
-        const id = await resolvePodId(args, ctx);
-        if (!id.ok) {
-          return {
-            content: [{ type: 'text', text: `pc_clone_agent_to_project: ${id.error}` }],
-            isError: true,
-          };
-        }
-        const projectId =
-          typeof args.projectId === 'string' && args.projectId.trim()
-            ? args.projectId.trim()
-            : ctx.projectId;
-        if (!projectId) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'pc_clone_agent_to_project: projectId required (none passed and PC_PROJECT_ID is not set)',
-              },
-            ],
-            isError: true,
-          };
-        }
-        const res = await ctx.postServer(
-          `/api/agents/pods/${encodeURIComponent(id.id)}/clone-to-project`,
-          {
-            projectId,
-            ...(typeof args.newName === 'string' && args.newName.trim()
-              ? { name: args.newName.trim() }
-              : {}),
-            actor: 'orchestrator',
-            reason:
-              typeof args.reason === 'string' && args.reason.trim()
-                ? args.reason.trim()
-                : 'mcp-clone',
-          },
-        );
-        if (res.status >= 200 && res.status < 300) {
-          return { content: [{ type: 'text', text: res.body }] };
-        }
-        return {
-          content: [
-            { type: 'text', text: `pc_clone_agent_to_project failed (${res.status}): ${res.body}` },
-          ],
-          isError: true,
-        };
-      } catch (err) {
-        return {
-          content: [
-            { type: 'text', text: `pc_clone_agent_to_project failed: ${(err as Error).message}` },
           ],
           isError: true,
         };

@@ -428,35 +428,6 @@
       }
     },
     {
-      "name": "pc_clone_agent_to_project",
-      "description": "Clone a pod into a target project as a project-scoped copy (scalar fields + attached context docs + MCP servers; secrets are NOT copied). Workflow agent steps require project-scoped pods — use this to bring a global pod into the project before wiring it into a workflow. 409 if the target name already exists in the project. Audits as actor='orchestrator'. Accepts either { id } or { name } for the source pod; projectId defaults to the calling session's project.",
-      "inputSchema": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "source pod ULID id (mutually exclusive with name)"
-          },
-          "name": {
-            "type": "string",
-            "description": "source pod name (looked up if id absent)"
-          },
-          "projectId": {
-            "type": "string",
-            "description": "target project ULID — defaults to the calling session's project"
-          },
-          "newName": {
-            "type": "string",
-            "description": "optional name override for the clone"
-          },
-          "reason": {
-            "type": "string",
-            "description": "optional one-line audit reason"
-          }
-        }
-      }
-    },
-    {
       "name": "pc_reset_agent_to_default",
       "description": "Reset a STOCK pod's scalar fields (prompt, description, model, tools, …) to the canonical seed content. Attached context docs, secrets, and MCP servers are untouched. Non-stock pods return 400. Audits as actor='orchestrator'. Accepts either { id } or { name }.",
       "inputSchema": {
@@ -1766,7 +1737,6 @@
     "mcp__pc-rig__pc_update_agent",
     "mcp__pc-rig__pc_delete_agent",
     "mcp__pc-rig__pc_promote_agent_to_global",
-    "mcp__pc-rig__pc_clone_agent_to_project",
     "mcp__pc-rig__pc_reset_agent_to_default",
     "mcp__pc-rig__pc_create_agent_secret",
     "mcp__pc-rig__pc_delete_agent_secret",
@@ -1959,12 +1929,6 @@
       "slug": "mcp__pc-rig__pc_promote_agent_to_global",
       "label": "Promote a project pod to global",
       "description": "Make a project pod available to all projects.",
-      "source": "pc-rig"
-    },
-    {
-      "slug": "mcp__pc-rig__pc_clone_agent_to_project",
-      "label": "Clone a pod into a project",
-      "description": "Copy a pod into a project (workflows need project-scoped pods).",
       "source": "pc-rig"
     },
     {
@@ -2330,9 +2294,6 @@
       "family": "agent"
     },
     "pc_promote_agent_to_global": {
-      "family": "agent"
-    },
-    "pc_clone_agent_to_project": {
       "family": "agent"
     },
     "pc_reset_agent_to_default": {

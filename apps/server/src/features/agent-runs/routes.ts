@@ -20,6 +20,7 @@ import {
   getContract,
   getProjectById,
   listActiveAgentRunsForProject,
+  listAgentProjects,
   listAgentRunsForSession,
   listContractsForRun,
   listContractsForWorkItem,
@@ -422,6 +423,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
     const globals = listProjectVisibleAgents(projectId).map((a) => ({
       name: a.name,
+      shareable: a.shareable,
+      memberProjectIds: listAgentProjects(a.id),
       def: { description: a.description, model: a.model, tools: a.tools },
     }));
     return c.json({ ok: true, globals, overrides: [], projectOnly: [] });

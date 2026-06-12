@@ -517,38 +517,6 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
-    "name": "pc_clone_agent_to_project",
-    "family": "agent",
-    "label": "Clone a pod into a project",
-    "description": "Clone a pod into a target project as a project-scoped copy (scalar fields + attached context docs + MCP servers; secrets are NOT copied). Workflow agent steps require project-scoped pods — use this to bring a global pod into the project before wiring it into a workflow. 409 if the target name already exists in the project. Audits as actor='orchestrator'. Accepts either { id } or { name } for the source pod; projectId defaults to the calling session's project.",
-    "catalogDescription": "Copy a pod into a project (workflows need project-scoped pods).",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "source pod ULID id (mutually exclusive with name)"
-        },
-        "name": {
-          "type": "string",
-          "description": "source pod name (looked up if id absent)"
-        },
-        "projectId": {
-          "type": "string",
-          "description": "target project ULID — defaults to the calling session's project"
-        },
-        "newName": {
-          "type": "string",
-          "description": "optional name override for the clone"
-        },
-        "reason": {
-          "type": "string",
-          "description": "optional one-line audit reason"
-        }
-      }
-    }
-  },
-  {
     "name": "pc_reset_agent_to_default",
     "family": "agent",
     "label": "Reset a stock pod to its default",
@@ -2036,7 +2004,6 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   // Agent-mgmt toolkit audit (2026-06-04) — the three UI-only pod lifecycle
   // doors gained tools (FD: complete agent-management toolkit).
   pc_promote_agent_to_global: 'on-demand',
-  pc_clone_agent_to_project: 'on-demand',
   pc_reset_agent_to_default: 'on-demand',
   pc_create_agent_secret: 'on-demand',
   pc_delete_agent_secret: 'on-demand',

@@ -321,19 +321,13 @@ export function makeExecutorDeps(
   ): Promise<NodeOutcome> => {
     const task = renderBody(node.task, node.input, ctx);
 
-    // Project-scope enforcement: workflow nodes must use project-scoped pods.
-    // Global pods must first be cloned into the project (POST
-    // /api/agents/pods/:id/clone-to-project). The door (dispatchFreshAgent)
-    // would silently fall back to a global pod, so gate it here.
+    // Membership-visibility check: any pod visible to the project (stock ∪
+    // members) is valid in a workflow node. resolveAgentForDispatch already
+    // enforces this via listProjectVisibleAgents — if it returns a row the pod
+    // is dispatchable here, regardless of its scope column.
     const podRow = resolveAgentForDispatch(node.agent, opts.projectId);
     if (!podRow) {
-      return { state: 'failed', error: `pod "${node.agent}" not found in registry` };
-    }
-    if (podRow.scope === 'global') {
-      return {
-        state: 'failed',
-        error: `pod "${node.agent}" is global-scope — clone it into project ${opts.projectId} before using it in a workflow node`,
-      };
+      return { state: 'failed', error: `pod "${node.agent}" not found in this project's agent roster` };
     }
 
     // Contract birth — the one thing the workflow still OWNS: mint the child

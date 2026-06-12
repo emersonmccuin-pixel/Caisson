@@ -27,12 +27,12 @@ import { createHash } from 'node:crypto';
 
 import type { Hono } from 'hono';
 import {
-  getAgentByName,
   getDb,
   getProjectById,
   insertLiveEvent,
   listMcpServersRegistry,
   listWorkflowAudit,
+  resolveAgentForDispatch,
   workflowsRepo,
   type WorkflowAuditInput,
 } from '@pc/db';
@@ -290,10 +290,11 @@ function emitChanged(row: WorkflowRow, change: WorkflowMutationKind): void {
   emitDefinitionFact(row, change);
 }
 
-/** Verify that every `agent` node in `def` references a live project-scoped
- *  pod in `projectId`. Returns one error string per offending node; empty
- *  when all pods are present. Pure policy check — no DB side-effects. */
-function validateAgentNodesProjectScoped(
+/** Verify that every `agent` node in `def` references a pod visible to the
+ *  project (stock ∪ members via agent_projects). Returns one error string per
+ *  offending node; empty when all pods resolve. Pure policy check — no DB
+ *  side-effects. */
+function validateAgentNodesVisible(
   def: WorkflowV2.Workflow,
   projectId: ULID,
 ): string[] {
@@ -305,10 +306,10 @@ function validateAgentNodesProjectScoped(
     if (node.kind !== 'agent') continue;
     const agentName = typeof node.agent === 'string' ? node.agent : '';
     if (!agentName) continue;
-    const row = getAgentByName({ name: agentName, scope: 'project', projectId });
+    const row = resolveAgentForDispatch(agentName, projectId);
     if (!row) {
       errors.push(
-        `agent node "${String(node.id ?? '?')}": pod "${agentName}" is not a project-scoped pod in this project — clone it into the project first`,
+        `agent node "${String(node.id ?? '?')}": pod "${agentName}" is not in this project's agent roster — add it to the project first (Agents tab → Add agent) or create a new one`,
       );
     }
   }
@@ -339,7 +340,7 @@ function validateWorkflowFeasibility(
     const agentName = typeof node.agent === 'string' ? node.agent : '';
     if (!agentName) continue;
     if (node.expected_output) continue; // node-level override present
-    const row = getAgentByName({ name: agentName, scope: 'project', projectId });
+    const row = resolveAgentForDispatch(agentName, projectId);
     if (row?.expectedOutput) continue; // pod row carries a default
     if (getPodDefaultExpectedOutput(agentName)) continue; // stock default
     errors.push(
@@ -519,10 +520,10 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
     // ☠ M6/FD-10: the cross-workflow stage-collision check is gone with
     // stage-entry triggers — a card move can no longer fire anything to skip.
 
-    // Pod-scope enforcement: for project workflows every agent node must
-    // reference a project-scoped pod. Reject publish if any pod is missing.
+    // Agent-visibility check: every agent node must reference a pod visible
+    // to the project (stock ∪ members). Reject publish if any pod is missing.
     if (scope === 'project' && projectId && normalised.status === 'active' && normalised.parsedDefinition !== null) {
-      const podErrors = validateAgentNodesProjectScoped(normalised.parsedDefinition, projectId);
+      const podErrors = validateAgentNodesVisible(normalised.parsedDefinition, projectId);
       if (podErrors.length > 0) {
         return c.json({ ok: false, error: `workflow has unresolvable pods: ${podErrors.join('; ')}` }, 400);
       }
@@ -624,9 +625,9 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
 
       // ☠ M6/FD-10: stage-collision check gone (see create route).
 
-      // Pod-scope enforcement on update: same rule as on create.
+      // Agent-visibility check on update: same rule as on create.
       if (existing.scope === 'project' && existing.projectId && normalised.status === 'active' && normalised.parsedDefinition !== null) {
-        const podErrors = validateAgentNodesProjectScoped(normalised.parsedDefinition, existing.projectId);
+        const podErrors = validateAgentNodesVisible(normalised.parsedDefinition, existing.projectId);
         if (podErrors.length > 0) {
           return c.json({ ok: false, error: `workflow has unresolvable pods: ${podErrors.join('; ')}` }, 400);
         }
@@ -909,13 +910,13 @@ export function registerWorkflowRoutes(app: Hono, deps: WorkflowRoutesDeps): voi
       workItemId = body.workItemId as ULID;
     }
 
-    // Pod-scope enforcement at fire time (last-mile guard). Even if the
+    // Agent-visibility check at fire time (last-mile guard). Even if the
     // workflow was published before enforcement was added, firing it with
     // unresolvable pods would produce confusing runtime failures — surface a
     // clear error here instead.
     {
       const def = row.parsedDefinition as WorkflowV2.Workflow;
-      const podErrors = validateAgentNodesProjectScoped(def, projectId);
+      const podErrors = validateAgentNodesVisible(def, projectId);
       if (podErrors.length > 0) {
         return c.json({ ok: false, error: `workflow cannot be fired: ${podErrors.join('; ')}` }, 400);
       }
