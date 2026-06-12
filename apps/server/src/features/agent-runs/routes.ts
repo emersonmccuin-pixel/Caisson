@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { resolve as resolvePath } from 'node:path';
 
 import type { Hono } from 'hono';
 import type {
@@ -42,6 +43,7 @@ import {
   recordExplicitPause as defaultRecordExplicitPause,
 } from '../../services/pause-resume.ts';
 import { applyDeliverableStore } from '../../services/apply-deliverable-store.ts';
+import { defaultGitReceipts, type GitReceipts } from '../../services/git-receipts.ts';
 import { getActiveRunRegistry as defaultGetActiveRunRegistry } from '../../services/agent-active-runs.ts';
 import { hardKillAgentRun, inspectAgentRun } from '../../services/agent-run-control.ts';
 import { recordAgentInvoke as defaultRecordAgentInvoke } from '../../services/agent-audit.ts';
@@ -86,6 +88,9 @@ export interface AgentRunRouteDeps {
   answerPendingAsk?: typeof defaultAnswerPendingAsk;
   cancelPendingAsk?: typeof defaultCancelPendingAsk;
   checkInvokeDepth?: typeof defaultCheckInvokeDepth;
+  /** pc-pty-chat-415 (R4) — seal-before-verify git probes for the deliverable
+   *  door. Tests inject fakes; production uses the spawn-based defaults. */
+  gitReceipts?: GitReceipts;
   now?: () => number;
   /** M4b (FD-8) — an ask decided through ANY door clears its open
    *  `agent-ask-escalated` inbox cards (MailboxService collect/action/dismiss). */
@@ -844,6 +849,51 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       );
     }
 
+    // pc-pty-chat-415 (R4) — seal before verify. A repo deliverable is only
+    // accepted from a COMMITTED worktree: the slice the verifier judges (and
+    // the landing path merges) is a sealed commit, never a half-written tree.
+    // Dirty → typed RETRYABLE refusal (the agent commits and resubmits); a
+    // failed probe also refuses — "cannot confirm committed" is not "clean"
+    // (positive receipt over inference). On success the engine reads the
+    // sealed branch + HEAD from git directly and stamps them onto the
+    // deliverable — receipts, not agent claims. Legacy in-place runs (cwd ==
+    // project folder) are exempt: the live copy's dirtiness is the human's.
+    let deliverable = parsed.deliverable;
+    if (deliverable.kind === 'repo') {
+      const wt = (row.worktreeDir ?? '').trim();
+      const samePath = (a: string, b: string) =>
+        process.platform === 'win32'
+          ? resolvePath(a).toLowerCase() === resolvePath(b).toLowerCase()
+          : resolvePath(a) === resolvePath(b);
+      const isolated = wt.length > 0 && !samePath(wt, project.folderPath);
+      if (isolated) {
+        const receipts = deps.gitReceipts ?? defaultGitReceipts;
+        const treeStatus = await receipts.workingTreeStatus(wt);
+        if (treeStatus !== 'clean') {
+          return c.json(
+            {
+              ok: false,
+              cause: 'uncommitted-work',
+              error:
+                treeStatus === 'dirty'
+                  ? 'worktree has uncommitted changes — commit your work (git add -A && git commit), then resubmit the deliverable'
+                  : 'could not confirm the worktree is committed (git probe failed) — make sure your work is committed, then resubmit the deliverable',
+            },
+            409,
+          );
+        }
+        const [sealedSha, sealedBranch] = await Promise.all([
+          receipts.headSha(wt),
+          receipts.currentBranch(wt),
+        ]);
+        deliverable = {
+          ...deliverable,
+          ...(sealedSha ? { commit: sealedSha } : {}),
+          ...(sealedBranch ? { branch: sealedBranch } : {}),
+        };
+      }
+    }
+
     // Slice 014c — apply the deliverable to the home its contract declares
     // (`expectedOutput.store`) BEFORE persisting, so submission alone satisfies
     // the derived acceptance criteria. A placement failure (WI archived, bad
@@ -851,7 +901,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     // failing later at verify with a misleading body_contains message.
     const placement = applyDeliverableStore({
       contract,
-      deliverable: parsed.deliverable,
+      deliverable,
       runId,
       agentName: contract.podName ?? null,
       projectFolderPath: project.folderPath,
@@ -864,7 +914,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     const service = new ContractService();
     const updated = service.setDeliverable({
       id: contractId,
-      deliverable: parsed.deliverable,
+      deliverable,
       report,
     });
     if (!updated) {
@@ -881,8 +931,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     markAgentRunDelivered(runId, services.now());
     const deliverableText =
       report ??
-      (parsed.deliverable.kind === 'answer' || parsed.deliverable.kind === 'prose'
-        ? parsed.deliverable.text ?? ''
+      (deliverable.kind === 'answer' || deliverable.kind === 'prose'
+        ? deliverable.text ?? ''
         : '');
     const host = resolveHost();
 
