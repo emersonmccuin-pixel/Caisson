@@ -291,6 +291,73 @@ export class WorktreeService {
   }
 
   /**
+   * pc-pty-chat-415 (R12/R14) — tear down an ABANDONED run worktree: remove
+   * the directory (force — node_modules is untracked) but PRESERVE the branch.
+   * The branch is the durable record of unlanded work; the abandon door
+   * records its tip on the contract BEFORE calling here. No merged guard —
+   * abandoning unmerged work is the point; the caller is an explicit
+   * human/orchestrator decision, never an automatic janitor.
+   */
+  async teardownAfterAbandon(branch: string): Promise<void> {
+    try {
+      await this.destroy(branch, true);
+    } catch (err) {
+      if (!/is not a working tree|No such file|not a valid path/i.test((err as Error).message)) {
+        throw err;
+      }
+      const pruneFn = this.deps.pruneWorktrees ?? _pruneWorktrees;
+      await pruneFn(this.workspaceDir);
+    }
+  }
+
+  /**
+   * pc-pty-chat-415 (R14) — read-only STRANDED report: unmerged run worktrees
+   * and branches that no live run references. These are never auto-deleted
+   * (the sweep keeps unmerged work, always); they are surfaced so a human or
+   * the orchestrator decides: retry, land, or abandon. The route layer filters
+   * out branches already recorded as abandoned on a contract.
+   */
+  async listStranded(
+    inUsePaths: Iterable<string>,
+  ): Promise<Array<{ name: string; branch: string; path: string | null }>> {
+    const integration = await this.getIntegrationBranch();
+    const inUse = new Set<string>();
+    const inUseNames = new Set<string>();
+    for (const p of inUsePaths) {
+      inUse.add(normalize(p));
+      const n = nameFromPath(p);
+      if (n) inUseNames.add(n);
+    }
+    const mergedFn = this.deps.branchMergedInto ?? _branchMergedInto;
+    const baseNorm = normalize(this.baseDir);
+    const out: Array<{ name: string; branch: string; path: string | null }> = [];
+    const seen = new Set<string>();
+
+    const entries = (await this.list()).slice(1).filter((e) => {
+      const name = nameFromPath(e.path);
+      return normalize(e.path).startsWith(baseNorm) && name !== null && REAPABLE_NAME_RE.test(name);
+    });
+    for (const entry of entries) {
+      const name = nameFromPath(entry.path)!;
+      if (inUse.has(normalize(entry.path)) || inUseNames.has(name)) continue;
+      const branch = entry.branch ?? name;
+      if (await mergedFn(this.workspaceDir, branch, integration)) continue;
+      out.push({ name, branch, path: entry.path });
+      seen.add(branch);
+    }
+
+    // Unmerged branches whose worktree dir is already gone (manual deletes,
+    // abandon-with-dir-reclaimed, teardown crash windows).
+    const listBranchesFn = this.deps.listBranchesByPrefix ?? _listBranchesByPrefix;
+    for (const branch of await listBranchesFn(this.workspaceDir, ['agent-', 'wf-'])) {
+      if (seen.has(branch) || inUseNames.has(branch)) continue;
+      if (await mergedFn(this.workspaceDir, branch, integration)) continue;
+      out.push({ name: branch, branch, path: null });
+    }
+    return out;
+  }
+
+  /**
    * Backstop sweep (boot + periodic). Reaps, under this project's baseDir only:
    *  1. registered `agent-*`/`wf-*` worktrees whose branch is merged into the
    *     integration branch and which no live run references,

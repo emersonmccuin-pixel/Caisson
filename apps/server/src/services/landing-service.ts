@@ -23,6 +23,8 @@ import { getActiveWorktreeByName, getAgentRunRow, getProjectById } from '@pc/db'
 import { ContractService } from '@pc/app-services';
 import type { ULID } from '@pc/domain';
 
+import { headSha as defaultHeadSha } from './git-receipts.ts';
+
 /** The slice of WorktreeService the mechanics need. */
 export interface LandingWorktrees {
   integrationBranch(): Promise<string>;
@@ -30,6 +32,9 @@ export interface LandingWorktrees {
   mergeBranchIntoIntegration(branch: string): Promise<void>;
   pushIntegration(): Promise<void>;
   teardownAfterMerge(branch: string): Promise<void>;
+  /** pc-pty-chat-415 (R12) — reclaim the worktree DIR of abandoned work; the
+   *  branch is preserved as the durable record. */
+  teardownAfterAbandon(branch: string): Promise<void>;
 }
 
 export type LandBranchResult =
@@ -281,4 +286,99 @@ export async function landAcceptedContract(
     error,
   });
   return { applicable: true, outcome: result.outcome === 'conflict' ? 'conflict' : 'failed', branch, into: result.into, error };
+}
+
+// ── Abandon (R12/R14) ────────────────────────────────────────────────────────
+
+export interface AbandonContractDeps {
+  worktreesFor?: (projectId: ULID) => LandingWorktrees | null;
+  contractService?: ContractService;
+  /** Test seam — reads the branch tip to preserve before reclaim. */
+  headSha?: typeof defaultHeadSha;
+  now?: () => number;
+}
+
+export type AbandonContractResult =
+  | { ok: false; reason: string }
+  | {
+      ok: true;
+      branch: string;
+      /** Tip recorded on the contract before the dir was reclaimed (null when
+       *  the dir was already gone — the branch ref itself still preserves it). */
+      preservedSha: string | null;
+      /** 'removed' = worktree dir reclaimed; 'failed' = record stands, dir
+       *  removal failed (Windows lock etc.) — re-POST the abandon to retry. */
+      teardown: 'removed' | 'failed';
+    };
+
+/** Explicitly abandon a repo contract's unlanded work (R12: teardown only
+ *  after the work is recorded). Order is non-negotiable: record the branch +
+ *  tip on the contract FIRST, then reclaim the worktree DIR — the branch is
+ *  preserved as the durable artifact. Refuses while the producing run is
+ *  still active, and for workflow-owned runs (cancel/resume the workflow run
+ *  instead). Idempotent: re-abandoning retries the teardown without
+ *  overwriting the original preservation record. */
+export async function abandonContractWorkspace(
+  contractId: ULID,
+  deps: AbandonContractDeps = {},
+): Promise<AbandonContractResult> {
+  const service = deps.contractService ?? new ContractService();
+  const now = deps.now ?? Date.now;
+
+  const contract = service.get(contractId);
+  if (!contract) return { ok: false, reason: 'contract not found' };
+  if (contract.landingStatus === 'landed') {
+    return { ok: false, reason: 'work already landed — nothing to abandon' };
+  }
+  const spec = contract.expectedOutput as { kind?: unknown } | null;
+  if (spec?.kind !== 'repo') return { ok: false, reason: 'not a repo contract' };
+
+  const runId = (contract.agentRunId ?? null) as ULID | null;
+  const run = runId ? getAgentRunRow(runId) : null;
+  if (run && run.status !== 'completed' && run.status !== 'failed' && run.status !== 'cancelled') {
+    return { ok: false, reason: `producing run is still ${run.status} — cancel it first` };
+  }
+
+  const worktreeDir = (run?.worktreeDir ?? contract.worktreePath ?? '').trim();
+  if (!worktreeDir) return { ok: false, reason: 'no worktree recorded for the run' };
+  const project = getProjectById(contract.projectId as ULID);
+  if (project) {
+    const norm = (p: string) =>
+      process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p);
+    if (norm(worktreeDir) === norm(project.folderPath)) {
+      return { ok: false, reason: 'legacy in-place run — nothing to reclaim' };
+    }
+  }
+  const branch = basename(worktreeDir);
+  const wtRow = getActiveWorktreeByName(branch);
+  if (wtRow?.workflowRunId || branch.startsWith('wf-')) {
+    return { ok: false, reason: 'workflow-owned run — cancel/resume the workflow run instead' };
+  }
+
+  // Record FIRST (R12). A re-abandon keeps the original record — the dir may
+  // be gone by now and a null tip must not overwrite the preserved sha.
+  let preservedSha = contract.landedSha ?? null;
+  if (contract.landingStatus !== 'abandoned') {
+    preservedSha = await (deps.headSha ?? defaultHeadSha)(worktreeDir);
+    service.setLanding({
+      id: contractId,
+      landingStatus: 'abandoned',
+      landedBranch: branch,
+      landedSha: preservedSha,
+      landingError: null,
+      landedAt: now(),
+    });
+  }
+
+  const worktrees = (deps.worktreesFor ?? worktreesAccessor)?.(contract.projectId as ULID) ?? null;
+  if (!worktrees) return { ok: true, branch, preservedSha, teardown: 'failed' };
+  try {
+    await worktrees.teardownAfterAbandon(branch);
+    return { ok: true, branch, preservedSha, teardown: 'removed' };
+  } catch (err) {
+    console.warn(
+      `[landing] abandon teardown failed for "${branch}" (re-POST to retry): ${(err as Error).message}`,
+    );
+    return { ok: true, branch, preservedSha, teardown: 'failed' };
+  }
 }

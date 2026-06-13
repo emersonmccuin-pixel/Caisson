@@ -207,9 +207,10 @@ export interface Contract {
   deliverable: Deliverable | null;
   /** Isolation axis for repo/file producers. */
   worktreePath: string | null;
-  /** pc-pty-chat-415 (R5) — accept ⇒ land. Null = not applicable (non-repo,
-   *  workflow-owned, pre-415). The receipts outlive the worktree. */
-  landingStatus: 'pending' | 'landed' | 'conflict' | 'failed' | null;
+  /** pc-pty-chat-415 (R5/R12) — accept ⇒ land. Null = not applicable
+   *  (non-repo, workflow-owned, pre-415). The receipts outlive the worktree;
+   *  'abandoned' preserves the branch + records its tip before reclaim. */
+  landingStatus: 'pending' | 'landed' | 'conflict' | 'failed' | 'abandoned' | null;
   landedBranch: string | null;
   landedSha: string | null;
   landingError: string | null;

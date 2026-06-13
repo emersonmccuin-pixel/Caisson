@@ -5,7 +5,7 @@
 // A contract is a first-class agent assignment with a typed, verified output.
 // Optionally links to one work item (1:many). The deliverable lives here.
 
-import { asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import type {
   AcceptanceCriteria,
   ContractLandingStatus,
@@ -239,6 +239,18 @@ export function setContractLanding(
   if (input.landedAt !== undefined) patch.landedAt = input.landedAt;
   db.update(agentContracts).set(patch).where(eq(agentContracts.id, id)).run();
   return getContractInDb(db, id);
+}
+
+/** pc-pty-chat-415 (R14) — branches whose work was explicitly abandoned for a
+ *  project. The stranded report excludes them: their preservation record is
+ *  on the contract; the branch ref intentionally remains. */
+export function listAbandonedContractBranches(projectId: ULID, db: DbExecutor = getDb()): string[] {
+  const rows = db
+    .select({ landedBranch: agentContracts.landedBranch })
+    .from(agentContracts)
+    .where(and(eq(agentContracts.projectId, projectId), eq(agentContracts.landingStatus, 'abandoned')))
+    .all() as { landedBranch: string | null }[];
+  return rows.map((r) => r.landedBranch).filter((b): b is string => !!b);
 }
 
 /** pc-pty-chat-415 (R5) — landings interrupted mid-flight (status 'pending'),

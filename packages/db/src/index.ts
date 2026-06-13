@@ -98,6 +98,7 @@ export {
   listContractsForRunInDb,
   listContractsForWorkItem,
   listContractsForWorkItemInDb,
+  listAbandonedContractBranches,
   listContractsPendingLanding,
   setContractDeliverable,
   setContractLanding,

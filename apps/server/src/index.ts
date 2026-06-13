@@ -677,19 +677,22 @@ try {
 // boot-only sweeping let merged worktrees pile up between reboots
 // (2026-06-11 incident). This janitor is distinct from the ONE-RECONCILER
 // run-state loop; see worktree-sweep-runner.ts.
+// Worktree paths referenced by live runs — shared by the sweep AND the
+// stranded report (pc-pty-chat-415 R14) so both agree on "in use".
+const collectInUseWorktreePaths = (): string[] => {
+  const inUse: string[] = [];
+  for (const run of listNonTerminalAgentRuns()) {
+    if (run.worktreeDir) inUse.push(run.worktreeDir);
+  }
+  for (const run of workflowRunsV2Repo.listRunsByStatus(['pending', 'running', 'paused', 'failed'])) {
+    if (run.worktreePath) inUse.push(run.worktreePath);
+  }
+  return inUse;
+};
 const worktreeSweep = createWorktreeSweepRunner({
   listProjects: () => listProjects().map((p) => ({ id: p.id, slug: p.slug })),
   getRuntime: (projectId) => projectRegistry.get(projectId as ULID) ?? null,
-  collectInUse: () => {
-    const inUse: string[] = [];
-    for (const run of listNonTerminalAgentRuns()) {
-      if (run.worktreeDir) inUse.push(run.worktreeDir);
-    }
-    for (const run of workflowRunsV2Repo.listRunsByStatus(['pending', 'running', 'paused', 'failed'])) {
-      if (run.worktreePath) inUse.push(run.worktreePath);
-    }
-    return inUse;
-  },
+  collectInUse: collectInUseWorktreePaths,
   dirExists: (p) => existsSync(p),
 });
 // Boot pass: fire-and-forget so a slow git/disk can't block startup.
@@ -1359,6 +1362,8 @@ registerAgentRunRoutes(app, {
   // route provisions a real worktree before spawn via the project's
   // WorktreeService (same primitive the DAG executor uses).
   worktreeServiceFor: (projectId) => resolveProject(projectId)?.worktrees() ?? null,
+  // pc-pty-chat-415 (R14) — the stranded report shares the sweep's in-use view.
+  collectInUseWorktrees: collectInUseWorktreePaths,
 });
 
 registerStatuslineRoutes(app, { broadcastTo });

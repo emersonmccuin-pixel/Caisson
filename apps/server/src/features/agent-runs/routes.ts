@@ -22,6 +22,7 @@ import {
   getProjectById,
   listActiveAgentRunsForProject,
   listAgentProjects,
+  listAbandonedContractBranches,
   listAgentRunsForSession,
   listContractsForRun,
   listContractsForWorkItem,
@@ -70,7 +71,15 @@ export interface AgentRunRouteDeps {
    *  route provisions a real worktree via this factory BEFORE spawn. Returns null
    *  when no ProjectRuntime exists for the project (dispatch is refused). Tests
    *  inject a fake; production wires to `resolveProject(id)?.worktrees()`. */
-  worktreeServiceFor?: (projectId: ULID) => { ensureWorktree(name: string): Promise<{ path: string }> } | null;
+  worktreeServiceFor?: (projectId: ULID) => {
+    ensureWorktree(name: string): Promise<{ path: string }>;
+    /** pc-pty-chat-415 (R14) — read-only stranded report (unmerged, no live
+     *  run). Optional: tests that only exercise provisioning omit it. */
+    listStranded?(inUsePaths: Iterable<string>): Promise<Array<{ name: string; branch: string; path: string | null }>>;
+  } | null;
+  /** pc-pty-chat-415 (R14) — worktree paths referenced by live runs (same
+   *  closure the sweep uses). Powers the stranded report. */
+  collectInUseWorktrees?: () => string[];
   /** Effective-spec resolution seam: looks up the pod row (project-scoped win
    *  over global) to read its stored `expectedOutput` default. Used by the
    *  isolation precondition to honour pod-default `isolation: "worktree"` even
@@ -953,6 +962,27 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       }
     });
     return response;
+  });
+
+  // pc-pty-chat-415 (R14) — the stranded report: unmerged run worktrees /
+  // branches no live run references, minus explicitly-abandoned work. Never
+  // auto-deleted; a human/orchestrator decides retry / land / abandon.
+  app.get('/api/projects/:projectId/worktrees/stranded', async (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const project = getProjectById(projectId);
+    if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+    const wts = deps.worktreeServiceFor?.(projectId) ?? null;
+    if (!wts?.listStranded) {
+      return c.json({ ok: false, error: 'no worktree service available for this project' }, 503);
+    }
+    try {
+      const inUse = deps.collectInUseWorktrees?.() ?? [];
+      const abandoned = new Set(listAbandonedContractBranches(projectId));
+      const stranded = (await wts.listStranded(inUse)).filter((s) => !abandoned.has(s.branch));
+      return c.json({ ok: true, stranded });
+    } catch (err) {
+      return c.json({ ok: false, error: (err as Error).message }, 500);
+    }
   });
 
   /** `pc_list_my_runs` HTTP surface. Reads from the `agent_runs` table. */

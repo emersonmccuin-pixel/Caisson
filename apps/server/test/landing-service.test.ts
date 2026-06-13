@@ -66,6 +66,9 @@ function fakeWorktrees(opts?: {
     teardownAfterMerge: async () => {
       calls.push('teardown');
     },
+    teardownAfterAbandon: async () => {
+      calls.push('teardown-abandon');
+    },
   };
   return { wt, calls };
 }

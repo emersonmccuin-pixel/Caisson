@@ -26,7 +26,10 @@ import type { AgentHostReattachClient } from '../../services/agent-host-reattach
 import type { ReviewInboxResolution } from '../../services/dag-run-service.ts';
 import type { ReviewDecisionErrorCode } from '../../services/review-decision-service.ts';
 import type { dispatchContinueAgent } from '../../services/agent-run-factory.ts';
-import { landAcceptedContract as defaultLandAcceptedContract } from '../../services/landing-service.ts';
+import {
+  abandonContractWorkspace as defaultAbandonContractWorkspace,
+  landAcceptedContract as defaultLandAcceptedContract,
+} from '../../services/landing-service.ts';
 
 /** Map a VerificationReviewError cause to an HTTP status. */
 function contractDecisionStatus(code: ReviewDecisionErrorCode): 400 | 404 | 409 | 500 {
@@ -53,6 +56,8 @@ export interface ContractRoutesDeps {
   /** pc-pty-chat-415 (R5) — accept ⇒ land. Test seam; production defaults to
    *  the real landing service. */
   landAcceptedContract?: typeof defaultLandAcceptedContract;
+  /** pc-pty-chat-415 (R12) — explicit abandon door. Test seam. */
+  abandonContractWorkspace?: typeof defaultAbandonContractWorkspace;
 }
 
 export function registerContractRoutes(app: Hono, deps: ContractRoutesDeps = {}): void {
@@ -141,6 +146,23 @@ export function registerContractRoutes(app: Hono, deps: ContractRoutesDeps = {})
       return c.json({ ok: false, error: `nothing to land: ${landing.reason}` }, 409);
     }
     return c.json({ ok: landing.outcome === 'landed', landing });
+  });
+
+  // pc-pty-chat-415 (R12) — the explicit abandon door: record the unlanded
+  // branch + its tip on the contract, THEN reclaim the worktree dir (the
+  // branch survives as the durable artifact). Refuses while the producing run
+  // is active. Idempotent: re-POST retries a failed teardown without
+  // overwriting the preservation record.
+  app.post('/api/contracts/:id/abandon', async (c) => {
+    const contractId = c.req.param('id') as ULID;
+    const contract = service.get(contractId);
+    if (!contract) return c.json({ ok: false, error: `unknown contract: ${contractId}` }, 404);
+    const result = await (deps.abandonContractWorkspace ?? defaultAbandonContractWorkspace)(
+      contractId,
+      { contractService: service },
+    );
+    if (!result.ok) return c.json({ ok: false, error: result.reason }, 409);
+    return c.json({ ok: true, abandon: result });
   });
 
   // Issue 4 — reject a contract-only verification hold by contractId.

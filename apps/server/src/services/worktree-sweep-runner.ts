@@ -77,6 +77,15 @@ export function createWorktreeSweepRunner(deps: WorktreeSweepRunnerDeps): Worktr
             for (const f of r.failed) {
               warn(`[worktree-sweep] ${p.slug}: ${f.op} FAILED for "${f.name}": ${f.message}`);
             }
+            // pc-pty-chat-415 (R14) — stranded surfacing: unmerged work with no
+            // live run is named, never silently kept (nor ever auto-deleted).
+            // GET /api/projects/:id/worktrees/stranded is the queryable door.
+            const stranded = r.kept.filter((k) => k.reason === 'unmerged').map((k) => k.name);
+            if (stranded.length) {
+              log(
+                `[worktree-sweep] ${p.slug}: stranded (unmerged, no live run — retry, land, or abandon): ${stranded.join(', ')}`,
+              );
+            }
           } catch (err) {
             // Resolver failure (no detectable integration branch) or git error —
             // this project is skipped THIS pass; the others still sweep.
