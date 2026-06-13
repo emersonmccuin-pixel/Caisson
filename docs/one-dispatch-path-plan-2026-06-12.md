@@ -1,6 +1,9 @@
 # One Dispatch Path — codebase review + implementation plan
 
-**Status:** plan, reviewed against code 2026-06-12. **Tracking:** pc-pty-chat-415.
+**Status:** ✅ IMPLEMENTED on dev, 2026-06-12 — all phases (0–5). Commits: 885606ae (docs/Phase 0),
+ee52373b (Phase 1 isolation), 93beceda (Phase 2 seal), 7696888e (Phase 3 landing), f07eee9f
+(Phase 4 abandon/stranded), + Phase 5 (transparency/guards/docs). Riding dev; reaches the
+packaged daily driver at the next release. **Tracking:** pc-pty-chat-415.
 **Relation to other work:** absorbs the remainder of pc-pty-chat-270 (merge node + integration
 branch + sweep already landed on dev, slices 0fbe0109..4c808b1f); feeds pc-pty-chat-352.
 

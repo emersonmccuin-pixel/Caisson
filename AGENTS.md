@@ -34,12 +34,18 @@ These are the safety rails for the bug push:
   with a guard test (`apps/server/test/dispatch-invariant.test.ts`). (Residual edge — resolving the
   pod/stock-default spec before the isolation check — being closed in
   [pc-pty-chat-353](pc://work-item/pc-pty-chat-353).)
-- **Git is engine-executed and verified for workflow runs** ([pc-pty-chat-270](pc://work-item/pc-pty-chat-270))
-  — **PARTIALLY LANDED** (slices 0fbe0109..4c808b1f, 2026-06-11): real `merge` node with positive
-  receipts (merge asserted + push asserted), per-project integration-branch resolver, periodic
-  worktree sweep. The live Build workflow uses the merge node (verified 2026-06-12). Remainder —
-  standalone accepted code auto-landing, seal-before-verify, durable conflict gate, abandon flow —
-  is [pc-pty-chat-415](pc://work-item/pc-pty-chat-415): `docs/one-dispatch-path-plan-2026-06-12.md`.
+- **One dispatch path, cradle to teardown** ([pc-pty-chat-415](pc://work-item/pc-pty-chat-415),
+  absorbing pc-pty-chat-270's remainder) — **BUILT on dev 2026-06-12**
+  (`docs/one-dispatch-path-plan-2026-06-12.md`). Code work (repo-kind) ALWAYS runs in an isolated
+  worktree — `in_place` is deleted and the dispatch factory refuses a repo dispatch aimed at the
+  live copy. Repo deliverables are SEALED: a dirty worktree gets a typed retryable refusal and the
+  engine stamps branch + HEAD receipts from git, not agent claims. Acceptance LANDS standalone repo
+  work on the integration branch through ONE landing service (workflow runs land once via the
+  `merge` node — same mechanics, positive receipts on merge + push). Conflicts park durably on the
+  contract (`landing_status`); `POST /api/contracts/:id/land` re-drives after resolution; boot
+  re-drives interrupted landings. Explicit abandon (`POST /api/contracts/:id/abandon`) records
+  branch + tip FIRST, then reclaims the dir (branch preserved). Stranded work is surfaced
+  (`GET /api/projects/:id/worktrees/stranded` + sweep log), never silently deleted or kept.
 
 ## Core principles (non-negotiable)
 

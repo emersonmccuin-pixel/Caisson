@@ -141,6 +141,27 @@ export function describeDeliverable(d: Deliverable | null): DeliverableView {
   }
 }
 
+/** pc-pty-chat-415 (R10/R15) — where the accepted code went, one line. Null
+ *  when landing doesn't apply (non-repo, workflow-owned, pre-415 history). */
+export function describeLanding(c: Contract): string | null {
+  switch (c.landingStatus) {
+    case 'pending':
+      return 'Landing on the main line…';
+    case 'landed':
+      return `Landed${c.landedBranch ? ` from ${c.landedBranch}` : ''}${
+        c.landedSha ? ` @ ${shortId(c.landedSha)}` : ''
+      }`;
+    case 'conflict':
+      return 'Merge conflict — needs resolution, then re-land';
+    case 'failed':
+      return `Landing failed${c.landingError ? `: ${c.landingError}` : ''}`;
+    case 'abandoned':
+      return `Abandoned — work preserved on branch ${c.landedBranch ?? '?'}`;
+    default:
+      return null;
+  }
+}
+
 function shortId(id: string): string {
   return id.length > 8 ? id.slice(-8) : id;
 }
