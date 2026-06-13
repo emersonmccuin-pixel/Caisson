@@ -112,3 +112,8 @@ Thumbs.db
 .idea/
 *.swp
 .obsidian/
+
+# Session scratch (diagnostic dumps + throwaway probe scripts — never history)
+r2r_raw.txt
+scripts/_*.ps1
+apps/web/e2e/qa-scratch/
