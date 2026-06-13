@@ -17,7 +17,10 @@ export interface ValidationResult {
   errors: string[];
 }
 
-const NODE_KINDS = new Set(['agent', 'review', 'move', 'loop', 'merge']);
+const NODE_KINDS = new Set(['agent', 'review', 'move', 'loop', 'merge', 'call']);
+/** Kinds whose `$nodeId.output` resolves to a real value (agent → contract
+ *  deliverable; call → captured tool result). move/loop/merge produce nothing. */
+const OUTPUT_PRODUCING_KINDS = new Set(['agent', 'call']);
 const REVIEW_KINDS = new Set(['review']);
 const REVIEWERS = new Set(['human', 'orchestrator']);
 /** Flow fields a `loop` node cannot carry — its routing is fixed. */
@@ -27,6 +30,17 @@ const LOOP_FORBIDDEN = ['next', 'when', 'trigger_rule', 'input', 'timeout'] as c
  *  well-formed atom parse (string-eq AND numeric), so `parsed: false` means the
  *  expression is genuinely malformed — not merely that a value was absent. */
 const GRAMMAR_PROBE: RefResolver = () => '0';
+
+/** Every string leaf of a call node's `args` (any nesting depth) — each one is
+ *  a substitutable body subject to the same ref-ordering rules as `task`. */
+function collectStringLeaves(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(collectStringLeaves);
+  if (value !== null && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).flatMap(collectStringLeaves);
+  }
+  return [];
+}
 
 /**
  * Validate a v2 workflow graph. Checks (in order): shell shape · unique node
@@ -86,15 +100,46 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
         if (n[f] !== undefined)
           errors.push(`loop node "${id}": "${f}" is not allowed — a loop's routing is fixed (under ceiling → back_to; at ceiling → human)`);
       }
+      // carry shape — a map of identifier → string template. The refs inside
+      // each value are checked in the ref-integrity pass below (a broken carry
+      // ref used to silently substitute '' at kick-back time).
+      if (n.carry !== undefined) {
+        if (typeof n.carry !== 'object' || n.carry === null || Array.isArray(n.carry)) {
+          errors.push(`loop node "${id}": carry must be a map of name → ref`);
+        } else {
+          for (const [k, v] of Object.entries(n.carry as Record<string, unknown>)) {
+            if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k))
+              errors.push(`loop node "${id}": carry key "${k}" must be a plain identifier`);
+            if (typeof v !== 'string')
+              errors.push(`loop node "${id}": carry "${k}" must be a string ref or literal`);
+          }
+        }
+      }
     }
     if (kind === 'merge') {
-      if ((n.target as unknown) !== 'dev')
-        errors.push(`merge node "${id}": target must be "dev"`);
+      // `target` is a legacy token (the engine merges into the project's
+      // configured integration branch). Absent is preferred; the literal
+      // 'dev' is accepted so stored defs + run snapshots keep validating.
+      if (n.target !== undefined && (n.target as unknown) !== 'dev')
+        errors.push(
+          `merge node "${id}": target is a legacy field — omit it (the engine merges into the project's integration branch)`,
+        );
       if (
         n.on_conflict_stage !== undefined &&
         (typeof n.on_conflict_stage !== 'string' || n.on_conflict_stage === '')
       )
         errors.push(`merge node "${id}": on_conflict_stage must be a non-empty string when set`);
+    }
+    if (kind === 'call') {
+      if (typeof n.server !== 'string' || n.server === '')
+        errors.push(`call node "${id}": missing "server" (a registered MCP server name)`);
+      if (typeof n.tool !== 'string' || n.tool === '')
+        errors.push(`call node "${id}": missing "tool" (the tool to invoke on the server)`);
+      if (
+        n.args !== undefined &&
+        (typeof n.args !== 'object' || n.args === null || Array.isArray(n.args))
+      )
+        errors.push(`call node "${id}": args must be an object of tool arguments`);
     }
 
     // input map shape — an object of identifier → string (a `$ref` or literal).
@@ -146,7 +191,31 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
       if (!known(n.back_to))
         errors.push(`loop node "${id}": back_to → unknown node "${String(n.back_to)}"`);
       else if (kindOf(n.back_to) === 'loop' || kindOf(n.back_to) === 'review')
-        errors.push(`loop node "${id}": back_to must point at an agent or move step (the work to re-run)`);
+        errors.push(`loop node "${id}": back_to must point at an agent, call, or move step (the work to re-run)`);
+    }
+    // carry ref integrity — `$self.output` (the owning review's verdict) is
+    // always valid; any other `$X.output` must name a known output-producing
+    // node, else the kick-back silently substitutes '' (the old behaviour).
+    if (n.kind === 'loop' && n.carry && typeof n.carry === 'object' && !Array.isArray(n.carry)) {
+      for (const [k, v] of Object.entries(n.carry as Record<string, unknown>)) {
+        if (typeof v !== 'string') continue; // shape error already reported
+        for (const ref of extractRefs(v)) {
+          const fieldSuffix = ref.field ? `.${ref.field}` : '';
+          if (ref.nodeId === 'self' || ref.nodeId === 'root') continue;
+          if (!known(ref.nodeId)) {
+            errors.push(
+              `loop node "${id}": carry "${k}" reads $${ref.nodeId}.output${fieldSuffix} — no such node`,
+            );
+            continue;
+          }
+          const refKind = kindOf(ref.nodeId);
+          if (refKind !== undefined && !OUTPUT_PRODUCING_KINDS.has(refKind) && refKind !== 'review') {
+            errors.push(
+              `loop node "${id}": carry "${k}" reads $${ref.nodeId}.output${fieldSuffix} but "${ref.nodeId}" is a ${refKind} step — only agent and call steps produce an output`,
+            );
+          }
+        }
+      }
     }
   }
 
@@ -200,14 +269,16 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
       if (!id) continue;
       // The substitutable text bodies a step renders refs from — its task /
       // prompt AND every value in its declared `input:` map (each value is a
-      // `$ref` bound to an upstream port, subject to the same ordering rule).
+      // `$ref` bound to an upstream port, subject to the same ordering rule)
+      // AND, for call nodes, every string leaf of `args` (rendered the same way).
       const inputVals =
         n.input && typeof n.input === 'object' && !Array.isArray(n.input)
           ? Object.values(n.input as Record<string, unknown>).filter(
               (v): v is string => typeof v === 'string',
             )
           : [];
-      const bodies = [n.task, n.prompt, ...inputVals].filter(
+      const argLeaves = n.kind === 'call' ? collectStringLeaves(n.args) : [];
+      const bodies = [n.task, n.prompt, ...inputVals, ...argLeaves].filter(
         (v): v is string => typeof v === 'string',
       );
       if (bodies.length === 0) continue;
@@ -233,9 +304,9 @@ export function validateWorkflowV2(workflow: WorkflowV2.Workflow): ValidationRes
             continue;
           }
           const refKind = kindOf(ref.nodeId);
-          if (refKind === 'move' || refKind === 'loop' || refKind === 'merge') {
+          if (refKind !== undefined && !OUTPUT_PRODUCING_KINDS.has(refKind) && refKind !== 'review') {
             errors.push(
-              `node "${id}": reads $${ref.nodeId}.output${fieldSuffix} but "${ref.nodeId}" is a ${refKind} step — only agent steps produce an output`,
+              `node "${id}": reads $${ref.nodeId}.output${fieldSuffix} but "${ref.nodeId}" is a ${refKind} step — only agent and call steps produce an output`,
             );
             continue;
           }

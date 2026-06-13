@@ -13,7 +13,7 @@
 //   PATCH marks discoveryStatus='stale' when transport changes (handled in repo).
 
 import type { Hono } from 'hono';
-import type { McpServerRegistryRow, PodMcpServerConfig, PodScope, ULID } from '@pc/domain';
+import type { McpServerRegistryRow, McpServerTransport, PodMcpServerConfig, PodScope, ULID } from '@pc/domain';
 import {
   createMcpServerRegistry,
   getProjectById,
@@ -27,6 +27,7 @@ import {
 import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
 import { COMMAND_PLANNER_POD_NAME } from '../../services/command-planner-pod-content.ts';
 import { parsePodMcpServerConfig } from '../../services/pod-mcp-config.ts';
+import { registerOAuthRoutes, type AuthFn } from './oauth-routes.ts';
 
 export type ProbeFn = (config: PodMcpServerConfig) => Promise<{ status: 'ok' | 'failed'; tools?: string[]; error?: string }>;
 
@@ -39,14 +40,28 @@ export interface McpServerRoutesDeps {
    * Injected so tests can stub it without launching real subprocesses.
    */
   probe?: ProbeFn;
+  /**
+   * Slice 4: API server port used to build the OAuth loopback callback URL.
+   * Defaults to process.env.PORT ?? 4040 when omitted.
+   */
+  port?: number;
+  /**
+   * Slice 4: injectable auth orchestrator for the OAuth broker routes.
+   * Defaults to the SDK auth() when omitted (tests can inject a stub).
+   */
+  oauthAuthFn?: AuthFn;
 }
 
 export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {}): void {
 
   // ── Shared helper: run probe + persist result ────────────────────────────────
 
-  async function runAndStoreProbe(id: ULID, config: PodMcpServerConfig): Promise<McpServerRegistryRow | null> {
-    const probeResult = await deps.probe!(config);
+  // Slice 5+ will call resolveTransportSecrets before probing. Until then the
+  // stored McpServerTransport is cast to PodMcpServerConfig (safe for servers
+  // with no SecretRef values; ref-carrying transports are migrated by Slice 2,
+  // auth-aware probe wired in Slice 5).
+  async function runAndStoreProbe(id: ULID, config: McpServerTransport): Promise<McpServerRegistryRow | null> {
+    const probeResult = await deps.probe!(config as unknown as PodMcpServerConfig);
     return setMcpServerDiscovery(id, {
       status: probeResult.status,
       tools: probeResult.status === 'ok' ? (probeResult.tools ?? []) : null,
@@ -164,6 +179,14 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 422);
     }
+  });
+
+  // ── Slice 4 — OAuth broker routes ────────────────────────────────────────────
+  // Mounted here so they share the same Hono instance and deps injection pattern.
+  // Routes: POST /api/mcp-servers/:id/auth/start, GET /api/oauth/callback.
+  registerOAuthRoutes(app, {
+    port: deps.port ?? Number(process.env.PORT ?? 4040),
+    authFn: deps.oauthAuthFn,
   });
 
   // ── Orchestrator pod resolution (P4a) ────────────────────────────────────────

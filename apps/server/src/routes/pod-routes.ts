@@ -25,8 +25,8 @@
 
 import type { Hono } from 'hono';
 import {
+  addAgentToProject,
   bumpAgentRev,
-  cloneAgentToProject,
   createAgent,
   createContextDoc,
   createSecret,
@@ -36,14 +36,17 @@ import {
   getContextDoc,
   getContextDocReadStats,
   getMcpServerRegistry,
+  getProjectById,
   getSecret,
   listAgentAudit,
+  listAgentProjects,
   listAgents,
   listContextDocsForScope,
   listMcpAttachmentsForAgent,
   listProjectVisibleAgents,
   listSecrets,
-  promoteAgentToGlobal,
+  removeAgentFromProject,
+  setAgentShareable,
   softDeleteAgent,
   softDeleteContextDoc,
   updateAgent,
@@ -64,7 +67,7 @@ import type {
 } from '@pc/domain';
 import { POD_AUDIT_ACTORS, POD_AUDIT_FIELDS } from '@pc/domain';
 import { recordToolReadFromQuery } from '../features/context-docs/routes.ts';
-import { announcePod, announcePodDeleted } from '../services/pod-writer.ts';
+import { announcePod, announcePodDeleted, announcePodToProject } from '../services/pod-writer.ts';
 
 export type PodMutationKind = 'created' | 'updated' | 'deleted';
 
@@ -269,6 +272,7 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     const annotated = pods.map((p) => ({
       ...p,
       driftedFields: detectDrift ? detectDrift(p) : null,
+      memberProjectIds: listAgentProjects(p.id),
     }));
     return c.json({ ok: true, pods: annotated });
   });
@@ -284,7 +288,8 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     const driftedFields = deps.detectStockPodDrift
       ? deps.detectStockPodDrift(bundle.agent)
       : null;
-    return c.json({ ok: true, ...bundle, driftedFields });
+    const memberProjectIds = listAgentProjects(id);
+    return c.json({ ok: true, ...bundle, driftedFields, memberProjectIds });
   });
 
   /** Audit log for a pod. Filters: actor, field, beforeCreatedAt, limit. */
@@ -366,49 +371,38 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     return c.json({ ok: true, pod: row }, 201);
   });
 
-  /** Promote a project-scoped pod to global. Stock pods are seeded global and
-   *  shouldn't surface this route in practice, but it returns 400 if the row
-   *  is already global. UNIQUE violation on a global name collision → 409. */
+  /** Mark a pod as shareable — places it in the shared library so it can be
+   *  attached to multiple projects. Idempotent: calling on an already-shareable
+   *  pod returns 200 with the current row (no-op at the DB layer). Route kept
+   *  at /:id/promote-to-global for backward compatibility. */
   app.post('/api/agents/pods/:id/promote-to-global', async (c) => {
     const id = c.req.param('id') as ULID;
     const existing = getAgentById(id);
     if (!existing) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
-    if (existing.scope === 'global') {
-      return c.json({ ok: false, error: 'pod is already global' }, 400);
-    }
     let body: Record<string, unknown> = {};
     try {
       body = (await c.req.json()) as Record<string, unknown>;
     } catch {
       /* empty body is fine */
     }
-    let row: PodAgentRow | null;
-    try {
-      row = promoteAgentToGlobal(id, auditFromBody(body, 'user', 'ui-promote'));
-    } catch (err) {
-      const msg = (err as Error).message;
-      if (/UNIQUE/i.test(msg)) {
-        return c.json(
-          { ok: false, error: `a global pod named "${existing.name}" already exists` },
-          409,
-        );
-      }
-      return c.json({ ok: false, error: msg }, 400);
-    }
+    const row = setAgentShareable(id, true, auditFromBody(body, 'user', 'ui-set-shareable'));
     if (!row) return c.json({ ok: false, error: `unknown pod: ${id}` }, 404);
     announcePod(row.id, 'updated');
     deps.onPodChanged?.(row.name, 'updated');
     return c.json({ ok: true, pod: row });
   });
 
-  /** Clone a pod into a target project as a project-scope row. Copies the
-   *  scalar fields + knowledge + mcp servers; secrets are intentionally NOT
-   *  copied. Returns the new pod row and counts of cloned content rows.
-   *  Body: `{ projectId: ULID, name?: string, actor?, reason? }`. */
-  app.post('/api/agents/pods/:id/clone-to-project', async (c) => {
-    const sourceId = c.req.param('id') as ULID;
-    const source = getAgentById(sourceId);
-    if (!source) return c.json({ ok: false, error: `unknown pod: ${sourceId}` }, 404);
+  /** Attach a shareable (or stock) agent to a target project. Idempotent for
+   *  the membership row. Guards:
+   *  - Only `shareable === true` or `origin === 'stock'` agents may be added (400).
+   *  - Name-collision: rejects (409) if the target project already has a VISIBLE
+   *    agent with the same name (stock ∪ existing members ∪ home-project), to
+   *    prevent silent dispatch ambiguity.
+   *  Body: `{ projectId: ULID, actor?, reason? }`. */
+  app.post('/api/agents/pods/:id/add-to-project', async (c) => {
+    const agentId = c.req.param('id') as ULID;
+    const agent = getAgentById(agentId);
+    if (!agent) return c.json({ ok: false, error: `unknown pod: ${agentId}` }, 404);
     let body: Record<string, unknown> = {};
     try {
       body = (await c.req.json()) as Record<string, unknown>;
@@ -417,30 +411,57 @@ export function registerPodRoutes(app: Hono, deps: PodRoutesDeps): void {
     }
     const targetProjectId = body.projectId;
     if (typeof targetProjectId !== 'string' || !targetProjectId) {
-      return c.json({ ok: false, error: 'projectId is required' }, 400);
+      return c.json({ ok: false, error: 'projectId required' }, 400);
     }
-    const nameOverride =
-      typeof body.name === 'string' && body.name.trim() ? body.name.trim() : undefined;
-    let result;
-    try {
-      result = cloneAgentToProject(
-        {
-          sourceId,
-          targetProjectId: targetProjectId as ULID,
-          name: nameOverride,
-        },
-        auditFromBody(body, 'user', 'ui-clone'),
+    const project = getProjectById(targetProjectId as ULID);
+    if (!project) {
+      return c.json({ ok: false, error: `unknown project: ${targetProjectId}` }, 404);
+    }
+    if (!agent.shareable && agent.origin !== 'stock') {
+      return c.json(
+        { ok: false, error: 'only shareable or stock agents may be added to a project' },
+        400,
       );
-    } catch (err) {
-      const msg = (err as Error).message;
-      if (/already exists/i.test(msg)) {
-        return c.json({ ok: false, error: msg }, 409);
-      }
-      return c.json({ ok: false, error: msg }, 400);
     }
-    announcePod(result.agent.id, 'created');
-    deps.onPodChanged?.(result.agent.name, 'created');
-    return c.json({ ok: true, pod: result.agent, copied: result.copied }, 201);
+    // Name-collision guard: reject if the target project already has a VISIBLE
+    // agent (stock ∪ members ∪ home-project) with the same name, excluding the
+    // agent itself (idempotent re-add is not a collision).
+    const visible = listProjectVisibleAgents(targetProjectId as ULID);
+    const collision = visible.find((a) => a.name === agent.name && a.id !== agentId);
+    if (collision) {
+      return c.json(
+        { ok: false, error: `project already has an agent named "${agent.name}"`, kind: 'name-collision' as const },
+        409,
+      );
+    }
+    addAgentToProject(agentId, targetProjectId as ULID, auditFromBody(body, 'user', 'ui-add-to-project'));
+    announcePodToProject(agentId, targetProjectId as ULID);
+    return c.json({ ok: true });
+  });
+
+  /** Detach an agent from a project. Allowed even when it is the last membership
+   *  row — the agent remains in the shared library as a shareable orphan.
+   *  Response includes `wasLastProject: boolean` so the UI can surface a warning
+   *  before the next detach in a multi-project flow. Announces `pod.changed` to
+   *  the target project's socket so its Agents tab refreshes. */
+  app.delete('/api/agents/pods/:id/projects/:projectId', (c) => {
+    const agentId = c.req.param('id') as ULID;
+    const targetProjectId = c.req.param('projectId') as ULID;
+    const agent = getAgentById(agentId);
+    if (!agent) return c.json({ ok: false, error: `unknown pod: ${agentId}` }, 404);
+    const project = getProjectById(targetProjectId);
+    if (!project) {
+      return c.json({ ok: false, error: `unknown project: ${targetProjectId}` }, 404);
+    }
+    const membersBefore = listAgentProjects(agentId);
+    const wasMember = membersBefore.includes(targetProjectId);
+    const qs = new URL(c.req.url).searchParams;
+    removeAgentFromProject(agentId, targetProjectId, auditFromQuery(qs, 'user', 'ui-remove-from-project'));
+    if (wasMember) {
+      announcePodToProject(agentId, targetProjectId);
+    }
+    const wasLastProject = wasMember && membersBefore.length === 1;
+    return c.json({ ok: true, wasLastProject });
   });
 
   /** Reset a stock pod's scalar fields to its canonical seed content. Only

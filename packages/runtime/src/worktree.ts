@@ -50,6 +50,18 @@ function assertBranchName(name: string): void {
   }
 }
 
+/** Integration-branch ref shape. Mirrors @pc/domain INTEGRATION_BRANCH_RE
+ *  (runtime stays dependency-free of domain). Unlike BRANCH_NAME_RE (which
+ *  guards GENERATED run-branch names), this allows `/` — `release/2026`-style
+ *  integration branches are legitimate user config. */
+const INTEGRATION_BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
+function assertIntegrationBranch(name: string): void {
+  if (!INTEGRATION_BRANCH_RE.test(name)) {
+    throw new Error(`invalid integration branch: ${JSON.stringify(name)}`);
+  }
+}
+
 /**
  * Create a worktree at `wtPath` on a fresh branch named `branchName`.
  * Caller owns the path; this primitive only runs `git worktree add wtPath -b branchName`.
@@ -98,6 +110,75 @@ export async function pruneWorktrees(workspaceDir: string): Promise<void> {
 }
 
 /**
+ * True when `branch`'s work has landed on the integration branch (local or
+ * origin counterpart). Two positive forms, both conservative:
+ *
+ *  1. ANCESTRY — the branch tip is an ancestor (a real `git merge` landed it).
+ *  2. PATCH EQUIVALENCE — `git cherry <target> <branch>` reports every branch
+ *     commit as `-` (an equivalent patch exists upstream). This is how
+ *     cherry-pick / rebase-style integration flows land work: the commits are
+ *     COPIED, so the tip is never an ancestor, but deleting the branch loses
+ *     nothing. Any `+` line (a commit with no upstream equivalent) → NOT
+ *     landed → kept.
+ *
+ * False when the branch doesn't exist or isn't landed — callers use this as
+ * the safety gate before teardown.
+ */
+export async function branchMergedInto(
+  workspaceDir: string,
+  branch: string,
+  integrationBranch: string,
+): Promise<boolean> {
+  assertBranchName(branch);
+  assertIntegrationBranch(integrationBranch);
+  const cwd = resolve(workspaceDir);
+  const targets = [integrationBranch, `origin/${integrationBranch}`];
+  for (const target of targets) {
+    try {
+      await exec('git', ['merge-base', '--is-ancestor', branch, target], { cwd });
+      return true;
+    } catch {
+      /* not an ancestor of this target (or ref missing) — try the next */
+    }
+  }
+  for (const target of targets) {
+    try {
+      const { stdout } = await exec('git', ['cherry', target, branch], { cwd });
+      const lines = stdout.split(/\r?\n/).filter((l) => l.trim() !== '');
+      // Zero lines = nothing ahead of the merge-base (ancestry would normally
+      // have caught this); all '-' = every commit has an upstream equivalent.
+      if (lines.every((l) => l.startsWith('-'))) return true;
+    } catch {
+      /* target ref missing — try the next */
+    }
+  }
+  return false;
+}
+
+/**
+ * Delete local branch `branch` unconditionally (`-D`). Callers must verify
+ * merge state first (`branchMergedInto`) — this primitive does not check.
+ */
+export async function deleteBranch(workspaceDir: string, branch: string): Promise<void> {
+  assertBranchName(branch);
+  await exec('git', ['branch', '-D', branch], { cwd: resolve(workspaceDir) });
+}
+
+/** List local branch names starting with any of `prefixes`. */
+export async function listBranchesByPrefix(
+  workspaceDir: string,
+  prefixes: string[],
+): Promise<string[]> {
+  const patterns = prefixes.map((p) => `refs/heads/${p}*`);
+  const { stdout } = await exec(
+    'git',
+    ['for-each-ref', '--format=%(refname:short)', ...patterns],
+    { cwd: resolve(workspaceDir) },
+  );
+  return stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+}
+
+/**
  * Attach an existing branch as a worktree at `wtPath` (no `-b`). Used to
  * recover from "branch exists but worktree dir is gone" — i.e. orphaned
  * branch from a failed prior dispatch.
@@ -122,53 +203,56 @@ export async function attachWorktree(
 // ---------------------------------------------------------------------------
 
 export interface GitMergeState {
-  /** Branch tip is already an ancestor of dev (branch already merged). */
+  /** Branch tip is already an ancestor of the integration branch (landed). */
   alreadyMerged: boolean;
   /** `.git/MERGE_HEAD` is present — a merge is in progress or conflicted. */
   mergeInProgress: boolean;
-  /** `origin/dev` points at the same commit as local `dev`. */
+  /** `origin/<integration>` points at the same commit as the local target. */
   pushed: boolean;
 }
 
 /**
- * Read-only inspection of merge / push state for `branch` relative to `dev`.
- * All checks are non-destructive. Returns `false` conservatively when a ref
- * lookup fails (e.g. no origin configured yet, or branch unknown).
+ * Read-only inspection of merge / push state for `branch` relative to the
+ * integration branch. All checks are non-destructive. Returns `false`
+ * conservatively when a ref lookup fails (e.g. no origin configured yet, or
+ * branch unknown).
  *
- * When called from the engine-controlled dev merge worktree (which is in
+ * When called from the engine-controlled merge worktree (which is in
  * **detached HEAD** state), uses `HEAD` as the merge target ref instead of the
- * `dev` branch pointer. This correctly tracks the merge commit that was just
- * created and lets the idempotent reconcile see `alreadyMerged: true` without
- * needing to advance the local `dev` branch ref (which would require modifying
- * the main checkout's branch tracking).
+ * integration branch pointer. This correctly tracks the merge commit that was
+ * just created and lets the idempotent reconcile see `alreadyMerged: true`
+ * without needing to advance the local branch ref (which would require
+ * modifying the main checkout's branch tracking).
  *
- * `alreadyMerged` also falls back to checking `origin/dev` — this covers the
- * restart/worktree-recreated case: if the worktree was removed and recreated at
- * `dev`'s old pre-merge tip, but `origin/dev` already has the merge commit,
- * the branch is still considered merged (don't re-merge).
+ * `alreadyMerged` also falls back to checking `origin/<integration>` — this
+ * covers the restart/worktree-recreated case: if the worktree was removed and
+ * recreated at the integration branch's old pre-merge tip, but origin already
+ * has the merge commit, the branch is still considered merged (don't re-merge).
  */
 export async function gitMergeState(
   workspaceDir: string,
   branch: string,
+  integrationBranch: string,
 ): Promise<GitMergeState> {
   assertBranchName(branch);
+  assertIntegrationBranch(integrationBranch);
   const cwd = resolve(workspaceDir);
+  const originRef = `origin/${integrationBranch}`;
 
-  // Detect if we're in detached HEAD (the dev merge worktree uses --detach).
-  // When detached, use HEAD as the "merge target" ref rather than 'dev', since
-  // the merge commit advances HEAD (not the local 'dev' branch pointer).
-  let target = 'dev';
+  // Detect if we're in detached HEAD (the merge worktree uses --detach).
+  // When detached, use HEAD as the "merge target" ref rather than the branch
+  // pointer, since the merge commit advances HEAD only.
+  let target = integrationBranch;
   try {
     const abbrev = (await exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd })).stdout.trim();
     if (abbrev === 'HEAD') target = 'HEAD'; // detached — use HEAD as the merge target
   } catch {
-    /* fallback to 'dev' */
+    /* fallback to the integration branch pointer */
   }
 
-  // alreadyMerged: branch tip is an ancestor of target.
-  // Also check origin/dev as a fallback for the "restart after push" scenario:
-  // if the dev worktree was removed and recreated at dev's old pre-merge tip,
-  // origin/dev already has the merge commit, so the branch IS already merged.
+  // alreadyMerged: branch tip is an ancestor of target, with an origin
+  // fallback for the "restart after push" scenario (worktree recreated at the
+  // old pre-merge tip while origin already has the merge commit).
   let alreadyMerged = false;
   try {
     await exec('git', ['merge-base', '--is-ancestor', branch, target], { cwd });
@@ -178,16 +262,16 @@ export async function gitMergeState(
   }
   if (!alreadyMerged) {
     try {
-      await exec('git', ['merge-base', '--is-ancestor', branch, 'origin/dev'], { cwd });
+      await exec('git', ['merge-base', '--is-ancestor', branch, originRef], { cwd });
       alreadyMerged = true;
     } catch {
-      /* not merged via origin/dev either — genuinely not merged */
+      /* not merged via origin either — genuinely not merged */
     }
   }
 
   // mergeInProgress: MERGE_HEAD present ⇒ a merge was started but not committed.
   // Each worktree has its own MERGE_HEAD, so this correctly reflects a conflict
-  // that occurred in the dev worktree (not in the main checkout).
+  // that occurred in the merge worktree (not in the main checkout).
   let mergeInProgress = false;
   try {
     await exec('git', ['rev-parse', '--verify', 'MERGE_HEAD'], { cwd });
@@ -196,30 +280,29 @@ export async function gitMergeState(
     /* absent → no merge in progress */
   }
 
-  // pushed: target SHA == origin/dev SHA.
-  // In detached HEAD mode, target is HEAD (the merge commit); in branch mode,
-  // target is 'dev'. Either way, pushed means origin/dev is at the same commit.
+  // pushed: target SHA == origin SHA. In detached HEAD mode, target is HEAD
+  // (the merge commit); in branch mode, the integration branch pointer.
   let pushed = false;
   try {
     const [localRes, remoteRes] = await Promise.all([
       exec('git', ['rev-parse', target], { cwd }),
-      exec('git', ['rev-parse', 'origin/dev'], { cwd }),
+      exec('git', ['rev-parse', originRef], { cwd }),
     ]);
     pushed = localRes.stdout.trim() === remoteRes.stdout.trim();
   } catch {
-    /* no origin/dev (no remote, or not yet pushed) → false */
+    /* no origin counterpart (no remote, or not yet pushed) → false */
   }
 
   return { alreadyMerged, mergeInProgress, pushed };
 }
 
 /**
- * Merge `branch` into the current HEAD (expected: `dev` or detached at dev's
- * tip) with `--no-ff`. Throws on conflict or any other failure. Callers must
- * check `gitMergeState` for idempotency before calling (if `alreadyMerged` is
- * true, skip this).
+ * Merge `branch` into the current HEAD (expected: the merge worktree detached
+ * at the integration tip) with `--no-ff`. Throws on conflict or any other
+ * failure. Callers must check `gitMergeState` for idempotency before calling
+ * (if `alreadyMerged` is true, skip this).
  */
-export async function mergeBranchIntoDev(
+export async function mergeBranchIntoHead(
   workspaceDir: string,
   branch: string,
 ): Promise<void> {
@@ -229,9 +312,9 @@ export async function mergeBranchIntoDev(
 
 /**
  * Push `ref` to `origin`. `ref` can be a branch name (`'dev'`) or a refspec
- * (`'HEAD:dev'`). The refspec form is used by the dev merge worktree when it
- * is in detached HEAD state to push the merge commit to `origin/dev` without
- * needing a local branch pointer.
+ * (`'HEAD:dev'`). The refspec form is used by the merge worktree when it is
+ * in detached HEAD state to push the merge commit to the origin integration
+ * branch without needing a local branch pointer.
  */
 export async function pushBranch(workspaceDir: string, ref: string): Promise<void> {
   // No assertBranchName here — `ref` may be a refspec like 'HEAD:dev'.
@@ -239,43 +322,110 @@ export async function pushBranch(workspaceDir: string, ref: string): Promise<voi
 }
 
 /**
- * Ensure a lightweight git worktree at `devWtPath` for merge operations,
- * checked out in **detached HEAD** at `dev`'s current commit. Using `--detach`
- * avoids the git constraint that prevents two worktrees from tracking the same
- * branch simultaneously (the main checkout is often on `dev`).
+ * Ensure a lightweight git worktree at `wtPath` for merge operations, checked
+ * out in **detached HEAD** at the integration branch's current commit. Using
+ * `--detach` avoids the git constraint that prevents two worktrees from
+ * tracking the same branch simultaneously (the main checkout is often on the
+ * integration branch).
  *
  * No pnpm install is run — a merge worktree needs no node_modules.
  *
- * Idempotent: prunes stale registrations first, returns immediately if the
- * worktree already exists in detached HEAD or on `dev`. Throws if the worktree
- * exists on a different, unexpected branch.
+ * Idempotent, with a LINEAGE GUARD: an existing detached worktree is reused
+ * only when (a) it has a MERGE_HEAD (a conflict someone is parked on — never
+ * destroy that state), or (b) its HEAD contains the integration tip (i.e. it
+ * is at the tip, or holds not-yet-pushed merge commits on top of it). Anything
+ * else is STALE — out-of-band merges advanced the integration branch under it,
+ * or the integration-branch setting changed — and is force-removed and
+ * recreated at the current tip. A dropped diverged merge commit is simply
+ * re-merged by the idempotent reconcile; keeping it would guarantee a non-FF
+ * push reject instead.
+ *
+ * Throws if the worktree exists on a different, unexpected branch.
  */
-export async function ensureDevWorktree(workspaceDir: string, devWtPath: string): Promise<void> {
+export async function ensureMergeWorktree(
+  workspaceDir: string,
+  wtPath: string,
+  integrationBranch: string,
+): Promise<void> {
+  assertIntegrationBranch(integrationBranch);
   const wsAbs = resolve(workspaceDir);
-  const wtAbs = resolve(devWtPath);
+  const wtAbs = resolve(wtPath);
   // Prune stale registrations so a removed-dir doesn't block the add.
   await exec('git', ['worktree', 'prune'], { cwd: wsAbs });
   const all = await listWorktrees(wsAbs);
   const existing = all.find((w) => normalize(w.path) === normalize(wtAbs));
   if (existing) {
-    // Detached HEAD (our normal creation mode) or on 'dev' (if the main
-    // checkout happens to be on a different branch at creation time) — both OK.
-    if (existing.branch !== null && existing.branch !== 'dev') {
+    if (existing.branch !== null && existing.branch !== integrationBranch) {
       throw new Error(
-        `dev merge worktree at ${wtAbs} is on branch "${existing.branch}", expected detached HEAD or "dev" — remove and retry`,
+        `merge worktree at ${wtAbs} is on branch "${existing.branch}", expected detached HEAD or "${integrationBranch}" — remove and retry`,
       );
     }
-    return; // already in a good state
+    // Parked conflict? Never destroy MERGE_HEAD state.
+    let hasMergeHead = false;
+    try {
+      await exec('git', ['rev-parse', '--verify', 'MERGE_HEAD'], { cwd: wtAbs });
+      hasMergeHead = true;
+    } catch {
+      /* no merge in progress */
+    }
+    if (hasMergeHead) return;
+    // Lineage check: HEAD must contain the integration tip.
+    try {
+      await exec('git', ['merge-base', '--is-ancestor', integrationBranch, 'HEAD'], {
+        cwd: wtAbs,
+      });
+      return; // current (or ahead with unpushed merge commits) — reuse
+    } catch {
+      /* stale — fall through to recreate */
+    }
+    await exec('git', ['worktree', 'remove', '--force', wtAbs], { cwd: wsAbs });
   }
-  // Create in detached HEAD at dev's current commit. --detach works even when
-  // the main checkout is already on dev (avoids "already used by worktree" error).
-  await exec('git', ['worktree', 'add', '--detach', wtAbs, 'dev'], { cwd: wsAbs });
+  // Create in detached HEAD at the integration tip. --detach works even when
+  // the main checkout is on the same branch (avoids "already used by worktree").
+  await exec('git', ['worktree', 'add', '--detach', wtAbs, integrationBranch], { cwd: wsAbs });
+}
+
+/**
+ * One-time integration-branch auto-detection for a repo with no explicit
+ * setting. Order: local `dev` (preserves the pre-parameterization semantics
+ * for every repo that has one) → origin's default branch (`origin/HEAD`) →
+ * the currently checked-out branch. Returns null when nothing is detectable
+ * (detached HEAD in an empty repo, etc.) — callers must fail loudly, never
+ * default silently.
+ */
+export async function detectIntegrationBranch(workspaceDir: string): Promise<string | null> {
+  const cwd = resolve(workspaceDir);
+  try {
+    await exec('git', ['rev-parse', '--verify', '--quiet', 'refs/heads/dev'], { cwd });
+    return 'dev';
+  } catch {
+    /* no local dev */
+  }
+  try {
+    const short = (
+      await exec('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd })
+    ).stdout.trim();
+    const name = short.replace(/^origin\//, '');
+    if (name && INTEGRATION_BRANCH_RE.test(name)) return name;
+  } catch {
+    /* no origin/HEAD (no remote, or never cloned) */
+  }
+  try {
+    const current = (
+      await exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd })
+    ).stdout.trim();
+    if (current && current !== 'HEAD' && INTEGRATION_BRANCH_RE.test(current)) return current;
+  } catch {
+    /* not a repo / unborn HEAD */
+  }
+  return null;
 }
 
 /**
  * Read the current branch name and tree cleanliness of the worktree at
- * `wtPath`. Used as a pre-merge guard: the dev merge worktree must be on
- * `dev` with no uncommitted changes before `git merge` is invoked.
+ * `wtPath`. Used as a pre-merge guard: the merge worktree must be on the
+ * integration branch (or detached) with no uncommitted changes before
+ * `git merge` is invoked.
  *
  * Returns `branch: null` when the worktree is in detached HEAD state.
  */

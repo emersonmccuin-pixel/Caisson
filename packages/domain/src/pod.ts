@@ -50,7 +50,12 @@ export type PodAuditField =
   | 'mcp_server'
   | 'scope'
   | 'created'
-  | 'deleted';
+  | 'deleted'
+  /** pc-pty-chat-410 — membership model. fieldRef = projectId. */
+  | 'member-added'
+  | 'member-removed'
+  /** pc-pty-chat-410 — shareable flag flip. */
+  | 'shareable';
 
 export const POD_AUDIT_FIELDS: readonly PodAuditField[] = [
   'prompt',
@@ -69,12 +74,18 @@ export const POD_AUDIT_FIELDS: readonly PodAuditField[] = [
   'scope',
   'created',
   'deleted',
+  'member-added',
+  'member-removed',
+  'shareable',
 ];
 
 /** Inline MCP server config stored on `agent_mcp_servers.config_json`.
  *  Mirrors the on-disk `.mcp.json` `mcpServers` value shape — `command + args
  *  + env` for stdio, `type:'http' + url + headers` for HTTP (FD-2: the pc-rig
- *  baseline is an HTTP entry). Validated at materialisation time. */
+ *  baseline is an HTTP entry). Validated at materialisation time.
+ *
+ *  This is the RESOLVED form — all values are plain strings. Pass to
+ *  `buildTransport` / the SDK transport layer directly. */
 export interface PodMcpServerConfig {
   command?: string;
   args?: string[];
@@ -82,6 +93,37 @@ export interface PodMcpServerConfig {
   type?: string;
   url?: string;
   headers?: Record<string, string>;
+}
+
+// ── Secret-ref indirection (Slice 2 — pc-pty-chat-400.3) ─────────────────────
+
+/** Sentinel value stored in place of a live secret in a registry transport.
+ *  `$secretRef` holds a `CredentialRow` id (ULID); resolved to the live
+ *  plaintext string by `resolveTransportSecrets` at connect / spawn time.
+ *
+ *  Convention chosen: an object with a single `$secretRef` key so it is
+ *  unambiguous in JSON, type-safe, and easy to detect with a type guard. */
+export interface SecretRef {
+  $secretRef: string; // CredentialRow id (ULID)
+}
+
+/** A transport header / env value in its stored form: either a plain string
+ *  (non-secret, or already resolved) or a vault reference. */
+export type TransportValue = string | SecretRef;
+
+/** Storage form of a registry MCP server transport. May contain `SecretRef`
+ *  objects in `headers` and `env` — these are vault references that
+ *  `resolveTransportSecrets` swaps for live strings before the transport layer
+ *  sees them.  All other fields are identical to `PodMcpServerConfig`. */
+export interface McpServerTransport {
+  command?: string;
+  args?: string[];
+  /** Env vars; values may be plain strings or vault refs. */
+  env?: Record<string, TransportValue>;
+  type?: string;
+  url?: string;
+  /** HTTP request headers; values may be plain strings or vault refs. */
+  headers?: Record<string, TransportValue>;
 }
 
 /** Provenance of an agent row. `'stock'` rows are seeded by PC at boot;
@@ -111,6 +153,9 @@ export interface PodAgentRow {
   /** Section 36 — `'stock'` vs `'user-created'`. Stock pods can't be deleted
    *  or edited via user-facing routes (route-layer guard reads this column). */
   origin: PodOrigin;
+  /** pc-pty-chat-408 — when true this agent is in the shared library and can
+   *  be attached to multiple projects. False = home-project only. */
+  shareable: boolean;
   /** Section 36 — orchestrator-facing "when to dispatch this agent" hint,
    *  rendered into the orchestrator's `{{AVAILABLE_AGENTS}}` variable. Null
    *  for most user-created pods (their `description` is enough). */
@@ -203,6 +248,45 @@ export interface AgentMcpAttachmentRow {
   updatedAt: number;
 }
 
+// ── Credentials vault (Slice 1 — pc-pty-chat-400.2) ─────────────────────────
+
+/** What the encrypted blob holds. */
+export type CredentialKind = 'oauth_tokens' | 'provider_tokens' | 'static';
+
+/** Auth lifecycle state for a stored credential. */
+export type CredentialAuthState = 'none' | 'needs-auth' | 'connected' | 'expired' | 'error';
+
+export const CREDENTIAL_AUTH_STATES: readonly CredentialAuthState[] = [
+  'none',
+  'needs-auth',
+  'connected',
+  'expired',
+  'error',
+];
+
+/** Row in the `credentials` table — AES-256-GCM encrypted token blob. */
+export interface CredentialRow {
+  id: ULID;
+  ownerScope: 'global' | 'project';
+  /** FK to `mcp_servers.id`. Nullable — credential may not yet be bound to a
+   *  server (e.g. during initial OAuth flow). */
+  ownerServerId: ULID | null;
+  kind: CredentialKind;
+  /** Base64-encoded ciphertext. */
+  ciphertext: string;
+  /** Base64-encoded 12-byte IV. */
+  iv: string;
+  /** Base64-encoded 16-byte GCM auth tag. */
+  authTag: string;
+  authState: CredentialAuthState;
+  lastError: string | null;
+  /** Epoch-ms token expiry, or null for non-expiring credentials. */
+  expiresAt: number | null;
+  rev: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 // ── MCP Server Registry (P1 — pc-pty-chat-359) ───────────────────────────────
 
 /** Discovery lifecycle for a registry server entry. `stale` = never probed or
@@ -221,8 +305,9 @@ export interface McpServerRegistryRow {
   projectId: ULID | null;
   name: string;
   description: string;
-  /** Stdio: command + optional args/env. HTTP: url + optional headers. */
-  transport: PodMcpServerConfig;
+  /** Stored transport — may contain SecretRef objects in headers/env.
+   *  Resolve via `resolveTransportSecrets` before passing to the SDK. */
+  transport: McpServerTransport;
   /** Cached tool list from the last successful discovery probe. Null until P2. */
   discoveredTools: string[] | null;
   discoveryStatus: McpDiscoveryStatus;

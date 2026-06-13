@@ -261,17 +261,22 @@ export function ProjectRail({
               className={
                 'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted ' +
                 (commandActive
-                  ? 'border-l-2 border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary '
-                  : 'border-l-2 border-transparent text-foreground/80 ')
+                  ? 'border-l-[3px] border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary font-semibold '
+                  : 'border-l-[3px] border-transparent text-foreground/80 ')
               }
             >
               <span
                 aria-hidden="true"
-                className={
-                  'pc-project-tile pc-project-tile-row shrink-0 ' +
-                  (commandActive ? 'pc-project-tile-active' : 'pc-project-tile-inactive') +
-                  (commandUnread ? ' pc-project-tile-unread' : '')
-                }
+                className={[
+                  'pc-project-tile pc-project-tile-row shrink-0',
+                  commandActive
+                    ? 'pc-project-tile-unread'
+                    : commandUnread
+                      ? 'pc-project-tile-unread'
+                      : commandHasLiveSession
+                        ? 'pc-project-tile-chat-open'
+                        : 'pc-project-tile-inactive',
+                ].join(' ')}
               >
                 <span className="text-[1.1rem] leading-none">★</span>
               </span>
@@ -279,13 +284,15 @@ export function ProjectRail({
                 {commandProject.name}
               </span>
             </button>
-            {commandHasLiveSession && (
+            {commandActive && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute bottom-0 left-0 right-0 h-px"
+                className="pointer-events-none absolute inset-0"
                 style={{
-                  background: 'linear-gradient(to right, transparent, var(--primary) 35%, var(--primary) 65%, transparent)',
-                  boxShadow: '0 0 8px 2px color-mix(in srgb, var(--primary) 40%, transparent)',
+                  background: [
+                    'repeating-linear-gradient(0deg, color-mix(in srgb, var(--primary) 32%, transparent) 0px, color-mix(in srgb, var(--primary) 32%, transparent) 1px, transparent 1px, transparent 4px)',
+                    'color-mix(in srgb, var(--primary) 22%, transparent)',
+                  ].join(', '),
                 }}
               />
             )}
@@ -338,19 +345,24 @@ export function ProjectRail({
                   className={
                     'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted ' +
                     (isActive
-                      ? 'border-l-2 border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary '
-                      : 'border-l-2 border-transparent text-foreground/80 ') +
+                      ? 'border-l-[3px] border-primary -ml-px pl-[calc(0.75rem-1px)] bg-muted text-primary font-semibold '
+                      : 'border-l-[3px] border-transparent text-foreground/80 ') +
                     (isDragging ? 'opacity-40 ' : '') +
                     (dragEnabled ? 'cursor-grab active:cursor-grabbing' : '')
                   }
                 >
                   <span
                     aria-hidden="true"
-                    className={
-                      'pc-project-tile pc-project-tile-row shrink-0 ' +
-                      (isActive ? 'pc-project-tile-active' : 'pc-project-tile-inactive') +
-                      (hasUnread ? ' pc-project-tile-unread' : '')
-                    }
+                    className={[
+                      'pc-project-tile pc-project-tile-row shrink-0',
+                      isActive
+                        ? 'pc-project-tile-unread'
+                        : hasUnread
+                          ? 'pc-project-tile-unread'
+                          : hasLiveSession
+                            ? 'pc-project-tile-chat-open'
+                            : 'pc-project-tile-inactive',
+                    ].join(' ')}
                   >
                     {initials(p.name)}
                   </span>
@@ -365,13 +377,15 @@ export function ProjectRail({
                     </span>
                   )}
                 </button>
-                {hasLiveSession && (
+                {isActive && (
                   <div
                     aria-hidden="true"
-                    className="pointer-events-none absolute bottom-0 left-0 right-0 h-px"
+                    className="pointer-events-none absolute inset-0"
                     style={{
-                      background: 'linear-gradient(to right, transparent, var(--primary) 35%, var(--primary) 65%, transparent)',
-                      boxShadow: '0 0 8px 2px color-mix(in srgb, var(--primary) 40%, transparent)',
+                      background: [
+                        'repeating-linear-gradient(0deg, color-mix(in srgb, var(--primary) 15%, transparent) 0px, color-mix(in srgb, var(--primary) 15%, transparent) 1px, transparent 1px, transparent 4px)',
+                        'color-mix(in srgb, var(--primary) 9%, transparent)',
+                      ].join(', '),
                     }}
                   />
                 )}

@@ -298,6 +298,9 @@ export function Orchestrator({
   const remoteControlActive = rc === 'on' ? true : rc === 'off' ? false : globalRemoteControl;
   useEffect(() => {
     let cancelled = false;
+    // Reset immediately so no stale session from the previous project bleeds
+    // into this render before the new fetch resolves (pc-pty-chat-403 Part B).
+    setSession(null);
     runtimeApi.getActiveSession(project.id)
       .then((s) => {
         if (!cancelled) setSession(s);
@@ -710,7 +713,7 @@ export function Orchestrator({
       events={sourceEvents}
       subscribeRawTerminal={subscribeRawTerminal}
       projectId={project.id}
-      currentSessionId={session?.id ?? null}
+      currentSessionId={session?.projectId === project.id ? session.id : null}
       onSend={(text, clientMessageId) => send({ type: 'send', text, clientMessageId })}
       onInterrupt={() => send({ type: 'interrupt' })}
       onTerminalInput={(data) => send({ type: 'terminal-input', data })}

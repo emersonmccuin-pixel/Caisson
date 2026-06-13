@@ -1,5 +1,5 @@
-﻿// pc-pty-chat-270 Chunk B -- dag-run-service mergeToDev (step 6).
-// Tests the mergeToDev closure via a fake WorktreeService.
+// pc-pty-chat-270 Chunk B -- dag-run-service mergeToIntegration (step 6).
+// Tests the mergeToIntegration closure via a fake WorktreeService.
 // Pure unit coverage of the idempotent reconcile logic branches — no DB or real git.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,13 +8,22 @@ import type { WorktreeService } from '../src/services/worktree.ts';
 
 type MergeOutcome = { outcome: 'merged' | 'conflict' | 'failed'; error?: string };
 
-/** Mirrors the mergeToDev closure from dag-run-service.ts with injected fakes. */
-function makeMergeToDev(
+/** Mirrors the mergeToIntegration closure from dag-run-service.ts with injected fakes. */
+function makeMergeToIntegration(
   branch: string,
-  fakeWorktrees: Pick<WorktreeService, 'mergeState' | 'mergeBranchIntoDev' | 'pushDev'>,
-  events: Array<{ type: string }>,
+  fakeWorktrees: Pick<
+    WorktreeService,
+    'mergeState' | 'mergeBranchIntoIntegration' | 'pushIntegration' | 'integrationBranch'
+  >,
+  events: Array<{ type: string; into?: string }>,
 ): (node: WorkflowV2.MergeNode) => Promise<MergeOutcome> {
   return async (node) => {
+    let into: string;
+    try {
+      into = await fakeWorktrees.integrationBranch();
+    } catch (err) {
+      return { outcome: 'failed', error: (err as Error).message };
+    }
     const emitConflict = (): void => { events.push({ type: 'git_conflict' }); };
     try {
       const state = await fakeWorktrees.mergeState(branch);
@@ -22,33 +31,33 @@ function makeMergeToDev(
       if (state.alreadyMerged) {
         if (!state.pushed) {
           try {
-            await fakeWorktrees.pushDev();
+            await fakeWorktrees.pushIntegration();
           } catch (pushErr) {
             const msg = (pushErr as Error).message ?? '';
             if (/rejected|non-fast-forward/i.test(msg)) { emitConflict(); return { outcome: 'conflict' }; }
             return { outcome: 'failed', error: msg };
           }
           const afterPush = await fakeWorktrees.mergeState(branch);
-          if (!afterPush.pushed) return { outcome: 'failed', error: 'origin/dev != dev' };
+          if (!afterPush.pushed) return { outcome: 'failed', error: `origin/${into} != ${into}` };
         }
-        events.push({ type: 'git_merged' });
+        events.push({ type: 'git_merged', into });
         return { outcome: 'merged' };
       }
-      await fakeWorktrees.mergeBranchIntoDev(branch);
+      await fakeWorktrees.mergeBranchIntoIntegration(branch);
       const afterMerge = await fakeWorktrees.mergeState(branch);
       if (!afterMerge.alreadyMerged) {
-        return { outcome: 'failed', error: 'branch tip not ancestor of dev' };
+        return { outcome: 'failed', error: `branch tip not ancestor of ${into}` };
       }
       try {
-        await fakeWorktrees.pushDev();
+        await fakeWorktrees.pushIntegration();
       } catch (pushErr) {
         const msg = (pushErr as Error).message ?? '';
         if (/rejected|non-fast-forward/i.test(msg)) { emitConflict(); return { outcome: 'conflict' }; }
         return { outcome: 'failed', error: msg };
       }
       const afterPush2 = await fakeWorktrees.mergeState(branch);
-      if (!afterPush2.pushed) return { outcome: 'failed', error: 'origin/dev != dev' };
-      events.push({ type: 'git_merged' });
+      if (!afterPush2.pushed) return { outcome: 'failed', error: `origin/${into} != ${into}` };
+      events.push({ type: 'git_merged', into });
       return { outcome: 'merged' };
     } catch (err) {
       const msg = (err as Error).message ?? 'unknown error';
@@ -61,16 +70,18 @@ function makeMergeToDev(
   };
 }
 
-const mergeNode: WorkflowV2.MergeNode = { id: 'merge', kind: 'merge', target: 'dev' };
+const mergeNode: WorkflowV2.MergeNode = { id: 'merge', kind: 'merge' };
+const DEV = async () => 'dev';
 
 test('alreadyMerged + pushed: idempotent path returns merged without merge or push', async () => {
   let mergeCalled = false;
   let pushCalled = false;
   const events: Array<{ type: string }> = [];
-  const fn = makeMergeToDev('agent-AAAA1234', {
+  const fn = makeMergeToIntegration('agent-AAAA1234', {
+    integrationBranch: DEV,
     mergeState: async () => ({ alreadyMerged: true, mergeInProgress: false, pushed: true }),
-    mergeBranchIntoDev: async () => { mergeCalled = true; },
-    pushDev: async () => { pushCalled = true; },
+    mergeBranchIntoIntegration: async () => { mergeCalled = true; },
+    pushIntegration: async () => { pushCalled = true; },
   }, events);
   const result = await fn(mergeNode);
   assert.equal(result.outcome, 'merged');
@@ -79,13 +90,31 @@ test('alreadyMerged + pushed: idempotent path returns merged without merge or pu
   assert.ok(events.some((e) => e.type === 'git_merged'));
 });
 
+test('resolver failure: node fails LOUDLY with the fix-it message, nothing attempted', async () => {
+  let mergeCalled = false;
+  const events: Array<{ type: string }> = [];
+  const fn = makeMergeToIntegration('agent-NOBR0000', {
+    integrationBranch: async () => {
+      throw new Error('cannot detect an integration branch for project "x" — set one in Project Settings');
+    },
+    mergeState: async () => { throw new Error('should not be called'); },
+    mergeBranchIntoIntegration: async () => { mergeCalled = true; },
+    pushIntegration: async () => {},
+  }, events);
+  const result = await fn(mergeNode);
+  assert.equal(result.outcome, 'failed');
+  assert.match(result.error ?? '', /Project Settings/, 'fix-it pointer surfaces on the run');
+  assert.ok(!mergeCalled, 'no git work attempted without a merge target');
+});
+
 test('mergeInProgress: returns conflict without calling merge', async () => {
   let mergeCalled = false;
   const events: Array<{ type: string }> = [];
-  const fn = makeMergeToDev('agent-BBBB5678', {
+  const fn = makeMergeToIntegration('agent-BBBB5678', {
+    integrationBranch: DEV,
     mergeState: async () => ({ alreadyMerged: false, mergeInProgress: true, pushed: false }),
-    mergeBranchIntoDev: async () => { mergeCalled = true; },
-    pushDev: async () => {},
+    mergeBranchIntoIntegration: async () => { mergeCalled = true; },
+    pushIntegration: async () => {},
   }, events);
   const result = await fn(mergeNode);
   assert.equal(result.outcome, 'conflict');
@@ -93,40 +122,43 @@ test('mergeInProgress: returns conflict without calling merge', async () => {
   assert.ok(events.some((e) => e.type === 'git_conflict'));
 });
 
-test('fresh merge + push + verify: returns merged', async () => {
+test('fresh merge + push + verify: returns merged with the integration branch on the receipt', async () => {
   let merged = false;
   let pushed = false;
   let stateCallCount = 0;
-  const events: Array<{ type: string }> = [];
-  const fn = makeMergeToDev('agent-CCCC9012', {
+  const events: Array<{ type: string; into?: string }> = [];
+  const fn = makeMergeToIntegration('agent-CCCC9012', {
+    integrationBranch: async () => 'reporting-rebuild-phase2',
     mergeState: async () => {
       stateCallCount += 1;
       if (stateCallCount === 1) return { alreadyMerged: false, mergeInProgress: false, pushed: false };
       if (stateCallCount === 2) return { alreadyMerged: true, mergeInProgress: false, pushed: false };
       return { alreadyMerged: true, mergeInProgress: false, pushed: true };
     },
-    mergeBranchIntoDev: async () => { merged = true; },
-    pushDev: async () => { pushed = true; },
+    mergeBranchIntoIntegration: async () => { merged = true; },
+    pushIntegration: async () => { pushed = true; },
   }, events);
   const result = await fn(mergeNode);
   assert.equal(result.outcome, 'merged');
   assert.ok(merged, 'merge was called');
   assert.ok(pushed, 'push was called');
   assert.equal(stateCallCount, 3, 'mergeState checked three times (before, after merge, after push)');
-  assert.ok(events.some((e) => e.type === 'git_merged'));
+  const receipt = events.find((e) => e.type === 'git_merged');
+  assert.equal(receipt?.into, 'reporting-rebuild-phase2', 'receipt names the real merge target');
 });
 
 test('push rejected: returns conflict', async () => {
   let stateCallCount = 0;
   const events: Array<{ type: string }> = [];
-  const fn = makeMergeToDev('agent-DDDD3456', {
+  const fn = makeMergeToIntegration('agent-DDDD3456', {
+    integrationBranch: DEV,
     mergeState: async () => {
       stateCallCount += 1;
       if (stateCallCount === 1) return { alreadyMerged: false, mergeInProgress: false, pushed: false };
       return { alreadyMerged: true, mergeInProgress: false, pushed: false };
     },
-    mergeBranchIntoDev: async () => {},
-    pushDev: async () => { throw new Error('rejected: non-fast-forward'); },
+    mergeBranchIntoIntegration: async () => {},
+    pushIntegration: async () => { throw new Error('rejected: non-fast-forward'); },
   }, events);
   const result = await fn(mergeNode);
   assert.equal(result.outcome, 'conflict', 'push rejection triggers conflict outcome');
@@ -135,25 +167,27 @@ test('push rejected: returns conflict', async () => {
 
 test('merge throws conflict error: returns conflict', async () => {
   const events: Array<{ type: string }> = [];
-  const fn = makeMergeToDev('agent-EEEE7890', {
+  const fn = makeMergeToIntegration('agent-EEEE7890', {
+    integrationBranch: DEV,
     mergeState: async () => ({ alreadyMerged: false, mergeInProgress: false, pushed: false }),
-    mergeBranchIntoDev: async () => { throw new Error('Automatic merge failed; fix conflicts'); },
-    pushDev: async () => {},
+    mergeBranchIntoIntegration: async () => { throw new Error('Automatic merge failed; fix conflicts'); },
+    pushIntegration: async () => {},
   }, events);
   const result = await fn(mergeNode);
   assert.equal(result.outcome, 'conflict');
   assert.ok(events.some((e) => e.type === 'git_conflict'));
 });
 
-test('guard violation (non-conflict error from mergeBranchIntoDev): returns failed, not conflict', async () => {
+test('guard violation (non-conflict error from mergeBranchIntoIntegration): returns failed, not conflict', async () => {
   const events: Array<{ type: string }> = [];
-  const fn = makeMergeToDev('agent-GGGG1234', {
+  const fn = makeMergeToIntegration('agent-GGGG1234', {
+    integrationBranch: DEV,
     mergeState: async () => ({ alreadyMerged: false, mergeInProgress: false, pushed: false }),
-    mergeBranchIntoDev: async () => {
-      // Precondition guard in WorktreeService.mergeBranchIntoDev throws this:
-      throw new Error('MERGE GUARD: dev merge worktree is on branch "main", expected "dev" — refusing to merge');
+    mergeBranchIntoIntegration: async () => {
+      // Precondition guard in WorktreeService.mergeBranchIntoIntegration throws this:
+      throw new Error('MERGE GUARD: merge worktree is on branch "main", expected detached HEAD or "dev" — refusing to merge');
     },
-    pushDev: async () => {},
+    pushIntegration: async () => {},
   }, events);
   const result = await fn(mergeNode);
   assert.equal(result.outcome, 'failed', 'guard violation must return failed, not conflict');
@@ -165,17 +199,25 @@ test('alreadyMerged but not pushed: pushes and verifies receipt', async () => {
   let pushed = false;
   let stateCallCount = 0;
   const events: Array<{ type: string }> = [];
-  const fn = makeMergeToDev('agent-FFFF2345', {
+  const fn = makeMergeToIntegration('agent-FFFF2345', {
+    integrationBranch: DEV,
     mergeState: async () => {
       stateCallCount += 1;
       if (stateCallCount === 1) return { alreadyMerged: true, mergeInProgress: false, pushed: false };
       return { alreadyMerged: true, mergeInProgress: false, pushed: true };
     },
-    mergeBranchIntoDev: async () => { throw new Error('should not be called'); },
-    pushDev: async () => { pushed = true; },
+    mergeBranchIntoIntegration: async () => { throw new Error('should not be called'); },
+    pushIntegration: async () => { pushed = true; },
   }, events);
   const result = await fn(mergeNode);
   assert.equal(result.outcome, 'merged');
   assert.ok(pushed, 'push was called to close the idempotent gap');
   assert.ok(events.some((e) => e.type === 'git_merged'));
+});
+
+test('legacy target: "dev" still type-checks and validates on stored defs', () => {
+  // Stored workflow defs + run snapshots carry `target: 'dev'` — the field is
+  // optional-legacy, never read by the engine.
+  const legacy: WorkflowV2.MergeNode = { id: 'm', kind: 'merge', target: 'dev' };
+  assert.equal(legacy.target, 'dev');
 });

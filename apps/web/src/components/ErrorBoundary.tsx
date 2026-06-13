@@ -6,6 +6,10 @@ interface Props {
   label?: string;
   /** Override the default compact fallback. */
   fallback?: ReactNode;
+  /** When this value changes, any caught error state is cleared without
+   *  remounting the children. Use instead of React's `key` on this component
+   *  when you want per-route error isolation without a full subtree remount. */
+  resetKey?: unknown;
 }
 
 interface State {
@@ -27,6 +31,12 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   override state: State = { error: null };
+
+  override componentDidUpdate(prevProps: Readonly<Props>): void {
+    if (this.state.error && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ error: null });
+    }
+  }
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {
     // Routed to renderer-console.log via Electron's console-message capture.

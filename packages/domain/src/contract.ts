@@ -22,6 +22,18 @@ export type VerificationTier = (typeof VERIFICATION_TIERS)[number];
 export const VERIFICATION_STATUSES = ['pending', 'passed', 'failed'] as const;
 export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
 
+// pc-pty-chat-415 (R5/R12) — accept ⇒ land. Landing state for repo-kind
+// contracts produced in an isolated worktree: 'pending' (landing in flight —
+// boot re-drives a crash), 'landed' (merge + push verified, receipts on the
+// contract), 'conflict' (durable gate — a human/orchestrator resolves, then
+// re-lands), 'failed' (mechanics error; retryable through the same door),
+// 'abandoned' (explicit decision to discard unlanded work — the branch is
+// PRESERVED and its tip recorded before the worktree dir is reclaimed).
+// NULL = not applicable (non-repo kinds, workflow-owned runs — those land via
+// the workflow merge node — and pre-415 history).
+export const CONTRACT_LANDING_STATUSES = ['pending', 'landed', 'conflict', 'failed', 'abandoned'] as const;
+export type ContractLandingStatus = (typeof CONTRACT_LANDING_STATUSES)[number];
+
 export const DELIVERABLE_KINDS = [
   'answer',
   'prose',
@@ -62,7 +74,11 @@ export type ExpectedOutput =
   | { kind: 'payload'; schema: JsonSchema; semantic?: PayloadSemantic }
   | {
       kind: 'repo';
-      isolation: 'worktree' | 'in_place';
+      // pc-pty-chat-415 (R3) — `in_place` is DELETED, not deprecated. Code work
+      // ALWAYS runs in an isolated worktree; isolation is derived from the kind,
+      // never chosen per dispatch. The field survives (optional, single value)
+      // only so stored specs that spell it out stay parseable.
+      isolation?: 'worktree';
       paths_touched?: string[];
       checks?: RepoCheck[];
       require_diff?: boolean; // default true

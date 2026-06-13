@@ -1,12 +1,15 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import type {
   AgentEffort,
   AgentModel,
+  CredentialAuthState,
+  CredentialKind,
   ExpectedOutput,
   FieldSchemaType,
   GlobalSettings,
   McpDiscoveryStatus,
+  McpServerTransport,
   PodAuditActor,
   PodAuditField,
   PodMcpServerConfig,
@@ -615,6 +618,10 @@ export const agents = sqliteTable(
       .notNull()
       .default('user-created')
       .$type<'stock' | 'user-created'>(),
+    /** pc-pty-chat-408 Phase 0 — when true this agent is in the shared library
+     *  and can be attached to multiple projects via `agent_projects`. Defaults
+     *  to false (home-project only). NOT NULL DEFAULT 0. */
+    shareable: integer('shareable', { mode: 'boolean' }).notNull().default(false),
     /** Section 36 — orchestrator-facing "when to dispatch this agent" hint,
      *  rendered into `{{AVAILABLE_AGENTS}}` by the pod materializer. Different
      *  from `description` (which has UI-display contracts); may be longer +
@@ -669,15 +676,41 @@ export const agentSecrets = sqliteTable(
   (t) => [
     index('agent_secrets_agent_idx').on(t.agentId),
     index('agent_secrets_scope_project_idx').on(t.scope, t.projectId),
-    /** Per-scope partial uniqueness — split into two partial indices because
-     *  sqlite treats NULL as distinct in unique indices (a single composite
-     *  index on project_id would let dup names slip through for global rows). */
-    uniqueIndex('agent_secrets_global_env_idx')
-      .on(t.agentId, t.envVarName)
-      .where(sql`scope = 'global'`),
-    uniqueIndex('agent_secrets_project_env_idx')
-      .on(t.agentId, t.projectId, t.envVarName)
-      .where(sql`scope = 'project'`),
+    /** pc-pty-chat-408 Phase 0 — collapsed from two scope-split partial indices
+     *  to a single unconditional unique key on (agentId, envVarName). Secrets
+     *  are now per-agent (shared across all projects the agent is attached to).
+     *  A dedupe pass in migration 0059 removes any collisions first. */
+    uniqueIndex('agent_secrets_env_idx').on(t.agentId, t.envVarName),
+  ],
+);
+
+/**
+ * pc-pty-chat-408 Phase 1 — Agent ↔ Project membership join table.
+ *
+ * One row per (agent, project) pair. Replaces the scope='project' access path
+ * for user-created agents. Visibility rule: stock agents (origin='stock') are
+ * implicitly all-projects and have NO rows here; all other agents need at least
+ * one row to be visible in a project. Composite PK on (agentId, projectId).
+ *
+ * No CASCADE — application layer handles teardown (remove-from-project deletes
+ * the row; delete-agent removes all membership rows in the same tx).
+ */
+export const agentProjects = sqliteTable(
+  'agent_projects',
+  {
+    agentId: text('agent_id')
+      .notNull()
+      .$type<ULID>()
+      .references(() => agents.id),
+    projectId: text('project_id')
+      .notNull()
+      .$type<ULID>()
+      .references(() => projects.id),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.agentId, t.projectId] }),
+    index('agent_projects_project_idx').on(t.projectId),
   ],
 );
 
@@ -746,8 +779,9 @@ export const mcpServers = sqliteTable(
       .references(() => projects.id),
     name: text('name').notNull(),
     description: text('description').notNull().default(''),
-    /** Validated stdio (command/args/env) or HTTP (url/headers) transport. */
-    transport: text('transport', { mode: 'json' }).notNull().$type<PodMcpServerConfig>(),
+    /** Stored transport — may contain SecretRef objects in headers/env
+     *  (Slice 2+). Resolve via resolveTransportSecrets before using. */
+    transport: text('transport', { mode: 'json' }).notNull().$type<McpServerTransport>(),
     /** Tool list populated by the P2 discovery probe. Null until discovered. */
     discoveredTools: text('discovered_tools', { mode: 'json' }).$type<string[] | null>(),
     discoveryStatus: text('discovery_status')
@@ -1068,6 +1102,41 @@ export const contextDocs = sqliteTable(
     index('context_docs_area_idx').on(t.areaId),
     index('context_docs_work_item_idx').on(t.workItemId),
     index('context_docs_agent_idx').on(t.agentId),
+  ],
+);
+
+/**
+ * Connector-auth Slice 1 (pc-pty-chat-400.2) — Credentials vault.
+ *
+ * One row per token set, encrypted at rest with AES-256-GCM. The master key
+ * lives in Electron main (safeStorage), handed to the API child via a secure
+ * stdio init message at spawn (never an env var). Ciphertext, IV, and auth tag
+ * are base64 text. `owner_server_id` soft-links to `mcp_servers.id` (no DB FK
+ * — credential may precede the server row during initial OAuth flow).
+ */
+export const credentials = sqliteTable(
+  'credentials',
+  {
+    id: text('id').primaryKey().$type<ULID>(),
+    /** `'global'` = shared across all projects; `'project'` = project-local. */
+    ownerScope: text('owner_scope').notNull().$type<'global' | 'project'>(),
+    /** Soft FK to `mcp_servers.id` — no cascade, no DB constraint. */
+    ownerServerId: text('owner_server_id').$type<ULID | null>(),
+    kind: text('kind').notNull().$type<CredentialKind>(),
+    ciphertext: text('ciphertext').notNull(),
+    iv: text('iv').notNull(),
+    authTag: text('auth_tag').notNull(),
+    authState: text('auth_state').notNull().default('none').$type<CredentialAuthState>(),
+    lastError: text('last_error'),
+    expiresAt: integer('expires_at'),
+    /** Monotonic write counter — incremented on every mutating write. */
+    rev: integer('rev').notNull().default(0),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [
+    index('credentials_owner_server_idx').on(t.ownerServerId),
+    index('credentials_owner_scope_idx').on(t.ownerScope),
   ],
 );
 

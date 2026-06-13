@@ -99,6 +99,10 @@ Pics/
 # Archived planning / scratch (local-only; kept out of the repo)
 archive/
 
+# Secrets / keys (never commit)
+*.p8
+cia_next_agent.*
+
 # OS / editor noise
 .DS_Store
 .AppleDouble
@@ -108,3 +112,8 @@ Thumbs.db
 .idea/
 *.swp
 .obsidian/
+
+# Session scratch (diagnostic dumps + throwaway probe scripts — never history)
+r2r_raw.txt
+scripts/_*.ps1
+apps/web/e2e/qa-scratch/

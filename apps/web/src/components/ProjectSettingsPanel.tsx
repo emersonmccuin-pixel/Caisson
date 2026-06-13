@@ -143,6 +143,9 @@ function ProjectInfoForm({
   const [name, setName] = useState(project.name);
   const [gitRemote, setGitRemote] = useState(project.gitRemote ?? '');
   const [remoteControl, setRemoteControl] = useState(project.settings.remoteControl);
+  const [integrationBranch, setIntegrationBranch] = useState(
+    project.settings.integrationBranch ?? '',
+  );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -150,14 +153,23 @@ function ProjectInfoForm({
     setName(project.name);
     setGitRemote(project.gitRemote ?? '');
     setRemoteControl(project.settings.remoteControl);
-  }, [project.id, project.name, project.gitRemote, project.settings.remoteControl]);
+    setIntegrationBranch(project.settings.integrationBranch ?? '');
+  }, [
+    project.id,
+    project.name,
+    project.gitRemote,
+    project.settings.remoteControl,
+    project.settings.integrationBranch,
+  ]);
 
   const trimmedName = name.trim();
   const trimmedRemote = gitRemote.trim();
+  const trimmedBranch = integrationBranch.trim();
   const dirty =
     trimmedName !== project.name ||
     (trimmedRemote || null) !== (project.gitRemote ?? null) ||
-    remoteControl !== project.settings.remoteControl;
+    remoteControl !== project.settings.remoteControl ||
+    (trimmedBranch || null) !== (project.settings.integrationBranch ?? null);
   const valid = trimmedName.length > 0;
 
   async function save() {
@@ -168,13 +180,20 @@ function ProjectInfoForm({
       const patch: {
         name?: string;
         git_remote?: string | null;
-        settings?: { remoteControl?: 'use-global' | 'on' | 'off' };
+        settings?: {
+          remoteControl?: 'use-global' | 'on' | 'off';
+          integrationBranch?: string | null;
+        };
       } = {};
       if (trimmedName !== project.name) patch.name = trimmedName;
       const nextRemote = trimmedRemote ? trimmedRemote : null;
       if (nextRemote !== (project.gitRemote ?? null)) patch.git_remote = nextRemote;
       if (remoteControl !== project.settings.remoteControl) {
-        patch.settings = { remoteControl };
+        patch.settings = { ...patch.settings, remoteControl };
+      }
+      const nextBranch = trimmedBranch ? trimmedBranch : null;
+      if (nextBranch !== (project.settings.integrationBranch ?? null)) {
+        patch.settings = { ...patch.settings, integrationBranch: nextBranch };
       }
       const updated = await projectsApi.updateProject(project.id, patch);
       onSaved(updated);
@@ -189,6 +208,7 @@ function ProjectInfoForm({
     setName(project.name);
     setGitRemote(project.gitRemote ?? '');
     setRemoteControl(project.settings.remoteControl);
+    setIntegrationBranch(project.settings.integrationBranch ?? '');
     setErr(null);
   }
 
@@ -221,6 +241,18 @@ function ProjectInfoForm({
           value={gitRemote}
           onChange={(e) => setGitRemote(e.target.value)}
           placeholder="git@github.com:org/repo.git"
+          className="w-full border border-border bg-background px-2 py-1 font-mono text-xs"
+        />
+      </Field>
+      <Field
+        label="Integration branch"
+        help="The branch finished work is merged into. Leave blank to detect automatically."
+      >
+        <input
+          type="text"
+          value={integrationBranch}
+          onChange={(e) => setIntegrationBranch(e.target.value)}
+          placeholder="auto-detect"
           className="w-full border border-border bg-background px-2 py-1 font-mono text-xs"
         />
       </Field>

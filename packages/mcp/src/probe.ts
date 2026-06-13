@@ -8,9 +8,8 @@
 // never rejects. Callers store the result (ok or failed) and surface it.
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { PodMcpServerConfig } from '@pc/domain';
+import { buildTransport } from './transport.js';
 
 export const PROBE_TIMEOUT_MS = 10_000;
 
@@ -45,28 +44,11 @@ export async function probeMcpServer(
 
   const probePromise = (async (): Promise<ProbeResult> => {
     const client = new Client({ name: 'pc-probe', version: '0.0.0' }, { capabilities: {} });
-    let transport: StdioClientTransport | StreamableHTTPClientTransport | null = null;
 
     try {
-      if (config.command) {
-        // stdio — spawn the server process
-        const spawnEnv = config.env
-          ? { ...getDefaultEnvironment(), ...config.env }
-          : undefined;
-        transport = new StdioClientTransport({
-          command: config.command,
-          args: config.args,
-          env: spawnEnv,
-          stderr: 'pipe',
-        });
-      } else if (config.url) {
-        // HTTP streamable
-        transport = new StreamableHTTPClientTransport(new URL(config.url), {
-          requestInit: config.headers ? { headers: config.headers } : undefined,
-        });
-      } else {
-        return { status: 'failed', error: 'transport has neither command nor url' };
-      }
+      const built = buildTransport(config);
+      if (!built.ok) return { status: 'failed', error: built.error };
+      const transport = built.transport;
 
       // Register close callback for the timeout path.
       closeTransport = () => client.close();

@@ -54,7 +54,9 @@ export function summarizeExpectedOutput(eo: ExpectedOutput | null): string {
     case 'payload':
       return eo.semantic ? `Data (${eo.semantic})` : 'Structured data';
     case 'repo':
-      return `Code (${eo.isolation === 'worktree' ? 'worktree' : 'in place'})`;
+      // pc-pty-chat-415 (R3) — code work is always worktree-isolated now;
+      // historical contracts may still record a legacy in-place run.
+      return `Code (${(eo.isolation as string | undefined) === 'in_place' ? 'in place · legacy' : 'worktree'})`;
     case 'external':
       return `${eo.system} · ${eo.action}`;
     case 'binary':
@@ -136,6 +138,27 @@ export function describeDeliverable(d: Deliverable | null): DeliverableView {
     default:
       // Unknown/future kind — graceful empty-ish state.
       return { kind: 'none', label: '?', detail: 'Unrecognized deliverable.' };
+  }
+}
+
+/** pc-pty-chat-415 (R10/R15) — where the accepted code went, one line. Null
+ *  when landing doesn't apply (non-repo, workflow-owned, pre-415 history). */
+export function describeLanding(c: Contract): string | null {
+  switch (c.landingStatus) {
+    case 'pending':
+      return 'Landing on the main line…';
+    case 'landed':
+      return `Landed${c.landedBranch ? ` from ${c.landedBranch}` : ''}${
+        c.landedSha ? ` @ ${shortId(c.landedSha)}` : ''
+      }`;
+    case 'conflict':
+      return 'Merge conflict — needs resolution, then re-land';
+    case 'failed':
+      return `Landing failed${c.landingError ? `: ${c.landingError}` : ''}`;
+    case 'abandoned':
+      return `Abandoned — work preserved on branch ${c.landedBranch ?? '?'}`;
+    default:
+      return null;
   }
 }
 

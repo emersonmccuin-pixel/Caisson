@@ -9,6 +9,11 @@
 //
 // (D) A contract-required rejection (pc-pty-chat-366) creates NO AgentRun row
 //     and emits NO terminal event — the 422 is the only signal.
+//
+// (E) pc-pty-chat-415 (R3): isolation is derived from the output KIND.
+//     `kind: "repo"` (code work) ALWAYS provisions a worktree — there is no
+//     in_place option — and the factory refuses a repo dispatch whose cwd is
+//     the live project folder (the structural backstop).
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -86,7 +91,9 @@ test("dispatch-invariant (A): contract-required refusal returns 422 not 200", as
       body: JSON.stringify({
         input: "fix the bug",
         dispatcherSessionId: "orch-session-1",
-        expectedOutput: { kind: "repo", isolation: "in_place" },
+        // Non-repo kind: repo would route into worktree provisioning (R3)
+        // before the dispatch mock — this test exercises the 422 mapping.
+        expectedOutput: { kind: "answer" },
       }),
     },
   );
@@ -308,21 +315,24 @@ test("dispatch-invariant (D): contract-required creates NO AgentRun row and NO t
   // nothing to announce).
 });
 
-test("dispatch-invariant (B): isolation:in_place keeps project.folderPath", async () => {
-  const projectFolderPath = join(tmpDir, "inv-c");
+test("dispatch-invariant (E1, pc-pty-chat-415 R3): repo kind with NO isolation field still provisions a worktree", async () => {
+  // in_place is deleted — isolation derives from the KIND. A bare
+  // `{ kind: "repo" }` spec must route through worktree provisioning.
+  const projectFolderPath = join(tmpDir, "inv-e1-main-repo");
   const project = createProject({
-    slug: "inv-c-" + Date.now(),
-    name: "Invariant C",
+    slug: "inv-e1-" + Date.now(),
+    name: "Invariant E1",
     stages,
     folderPath: projectFolderPath,
   });
 
+  const WORKTREE_PATH = join(tmpDir, "worktrees", "inv-e1", "agent-test");
   const capturedWorktreeDir = { value: "" };
   const app = mkApp({
     dispatchResult: {
       ok: true,
       agentRunId: newId() as ULID,
-      ccSessionId: "cc-inv-c",
+      ccSessionId: "cc-inv-e1",
       podName: "code-writer",
       initialState: "queued",
       startedAt: Date.now(),
@@ -330,7 +340,7 @@ test("dispatch-invariant (B): isolation:in_place keeps project.folderPath", asyn
     },
     capturedWorktreeDir,
     worktreeServiceFor: (_id) => ({
-      ensureWorktree: async () => ({ path: "/should-not-be-used" }),
+      ensureWorktree: async () => ({ path: WORKTREE_PATH }),
     }),
   });
 
@@ -342,15 +352,61 @@ test("dispatch-invariant (B): isolation:in_place keeps project.folderPath", asyn
       body: JSON.stringify({
         input: "fix the bug",
         dispatcherSessionId: "orch-session-4",
-        expectedOutput: { kind: "repo", isolation: "in_place" },
+        expectedOutput: { kind: "repo" },
       }),
     },
   );
 
   assert.equal(res.status, 200);
-  assert.equal(
+  assert.notEqual(
     capturedWorktreeDir.value,
     projectFolderPath,
-    "in_place isolation must use project.folderPath",
+    "repo kind must never run in the live project folder",
   );
+  assert.equal(
+    capturedWorktreeDir.value,
+    WORKTREE_PATH,
+    "repo kind must use the provisioned worktree path",
+  );
+});
+
+test("dispatch-invariant (E2, pc-pty-chat-415 R3): factory refuses a repo-kind dispatch aimed at the live project folder", async () => {
+  // The structural backstop BELOW the route layer: even a caller that skips
+  // the HTTP route (e.g. a future internal caller) cannot run code work in
+  // the live working copy. code-writer's stock default is repo-kind.
+  const projectFolderPath = join(tmpDir, "inv-e2-main-repo");
+  const project = createProject({
+    slug: "inv-e2-" + Date.now(),
+    name: "Invariant E2",
+    stages,
+    folderPath: projectFolderPath,
+  });
+  createAgent(
+    { name: "repo-pod-e2", scope: "project", projectId: project.id as ULID },
+    { actor: "user" },
+  );
+
+  const sessionId = "sess-inv-e2-" + Date.now();
+  const result = await dispatchFreshAgent(
+    {
+      projectId: project.id as ULID,
+      worktreeDir: projectFolderPath, // the live copy — must be refused
+      agentName: "repo-pod-e2",
+      input: "fix the bug",
+      dispatcherSessionId: sessionId,
+      invokeDepth: 1,
+      slug: "inv-e2",
+      expectedOutput: { kind: "repo" },
+    },
+    {},
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(
+    (result as DispatchAgentFailure).cause,
+    "worktree-provision-failed",
+    "repo dispatch in the live copy must refuse with worktree-provision-failed",
+  );
+  const runs = listAgentRunsForSession(project.id as ULID, sessionId, { limit: 10 });
+  assert.equal(runs.length, 0, "isolation refusal must not insert an agent_runs row");
 });

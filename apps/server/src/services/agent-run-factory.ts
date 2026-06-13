@@ -36,6 +36,7 @@ import { resolve } from 'node:path';
 import {
   computePodRevision,
   resolveAgentForDispatch,
+  getProjectById,
   getWorkItem,
   insertAgentRunRow,
   listContractsForWorkItem,
@@ -228,7 +229,7 @@ export type DispatchAgentFailure =
     }
   | {
       ok: false;
-      cause: 'host-unavailable' | 'host-protocol-error';
+      cause: 'host-unavailable' | 'host-protocol-error' | 'host-rejected';
       error: string;
     }
   | {
@@ -242,6 +243,15 @@ export type DispatchAgentFailure =
        *  (inline spec → pod-row default → stock default) produced no
        *  expected_output; no AgentRun row was inserted (pc-pty-chat-366). */
       cause: 'contract-required';
+      error: string;
+    }
+  | {
+      ok: false;
+      /** Isolation invariant (pc-pty-chat-415 R3): the effective spec is
+       *  repo-kind but the dispatch cwd is the live project folder (or
+       *  missing). Code work never runs in the live working copy; no AgentRun
+       *  row was inserted. */
+      cause: 'worktree-provision-failed';
       error: string;
     }
   | {
@@ -305,6 +315,41 @@ export async function dispatchFreshAgent(
       'pass an explicit expected_output (this pod has no stored or stock default), ' +
       'or check server logs for a contract-resolution error';
     return { ok: false, cause: 'contract-required', error: reason };
+  }
+
+  // pc-pty-chat-415 (R3) — structural isolation invariant: code work NEVER
+  // runs in the live working copy. The effective spec resolves through the
+  // same chain as the contract (inline → pod row → stock default); when its
+  // kind is `repo`, the dispatch cwd must be a provisioned worktree, not the
+  // project folder. Provisioning happens at the edges (HTTP route / workflow
+  // engine) — this pre-row check is the backstop that makes the guarantee
+  // structural rather than per-caller. Refused BEFORE any row insert.
+  const effectiveSpecForIsolation = (input.expectedOutput ??
+    podRow.expectedOutput ??
+    getPodDefaultExpectedOutput(input.agentName) ??
+    null) as { kind?: unknown } | null;
+  if (effectiveSpecForIsolation?.kind === 'repo') {
+    let projectFolder: string | null = null;
+    try {
+      projectFolder = getProjectById(input.projectId)?.folderPath ?? null;
+    } catch {
+      projectFolder = null; // no DB (tests) — fall through to the empty-cwd check
+    }
+    const norm = (p: string) =>
+      process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p);
+    const inLiveCopy =
+      projectFolder != null &&
+      !!input.worktreeDir?.trim() &&
+      norm(input.worktreeDir) === norm(projectFolder);
+    if (!input.worktreeDir?.trim() || inLiveCopy) {
+      return {
+        ok: false,
+        cause: 'worktree-provision-failed',
+        error:
+          `repo-kind dispatch for pod "${input.agentName}" must run in an isolated worktree — ` +
+          'none was provisioned (code work never runs in the live working copy)',
+      };
+    }
   }
 
   // Slice 019 (Decision 4) — reject loudly when the dispatch's own output spec
@@ -794,7 +839,7 @@ type StartDispatchedRunResult =
   | { ok: true; initialState: 'queued' | 'spawning' }
   | {
       ok: false;
-      cause: 'host-unavailable' | 'host-protocol-error';
+      cause: 'host-unavailable' | 'host-protocol-error' | 'host-rejected';
       error: string;
     };
 
@@ -834,7 +879,7 @@ async function startHostBackedRun(
   // terminal returned synchronously in the start response is applied below.
   let handle: HostBackedActiveRunHandle | null = null;
   const fail = (
-    cause: 'host-unavailable' | 'host-protocol-error',
+    cause: 'host-unavailable' | 'host-protocol-error' | 'host-rejected',
     error: string,
   ): StartDispatchedRunResult => failHostStart(args, cause, error);
 
@@ -855,8 +900,17 @@ async function startHostBackedRun(
     );
   }
   if (!response.ok) {
+    // The host ANSWERED — it is not unavailable. 'host-shutting-down' is the
+    // one rejection that genuinely means "host can't take work right now";
+    // every other rejection (run-exists collision, unsupported, …) is the host
+    // refusing THIS command. Labelling those 'host-unavailable' produced the
+    // contradictory "run already exists / host-unavailable" spawn error.
     const cause =
-      response.code === 'protocol-error' ? 'host-protocol-error' : 'host-unavailable';
+      response.code === 'protocol-error'
+        ? 'host-protocol-error'
+        : response.code === 'host-shutting-down'
+          ? 'host-unavailable'
+          : 'host-rejected';
     return fail(cause, `agent host command ${commandType} failed: ${response.error}`);
   }
   if (response.command !== commandType || !('run' in response)) {
@@ -912,6 +966,7 @@ async function startHostBackedRun(
       status: snapshot.state,
       ...(snapshot.spawnedAt !== null ? { spawnedAt: snapshot.spawnedAt } : {}),
       ...(snapshot.readyAt !== null ? { readyAt: snapshot.readyAt } : {}),
+      ...(snapshot.pid !== undefined ? { pid: snapshot.pid } : {}),
     });
     broadcastHostRunChanged(args, snapshot);
   }
@@ -991,7 +1046,7 @@ function transcriptPathFor(args: ConstructAndStartArgs): string {
 
 function failHostStart(
   args: ConstructAndStartArgs,
-  cause: 'host-unavailable' | 'host-protocol-error',
+  cause: 'host-unavailable' | 'host-protocol-error' | 'host-rejected',
   error: string,
 ): StartDispatchedRunResult {
   const completedAt = (args.deps.now ?? Date.now)();
@@ -1200,13 +1255,12 @@ export function resolveContractForDispatch(
           lookupPodRow(args.podName, args.projectId) ??
           getPodDefaultExpectedOutput(args.podName) ??
           null;
-        if (
-          expectedOutput?.kind === 'repo' &&
-          args.worktreePath &&
-          expectedOutput.isolation === 'in_place'
-        ) {
-          expectedOutput = { ...expectedOutput, isolation: 'worktree' };
-        }
+      }
+      // pc-pty-chat-415 (R3) — repo specs are always worktree-isolated; this
+      // normalizes legacy stored specs that still spell `in_place` (migration
+      // 0060 rewrites pod rows; this covers the read path defensively).
+      if (expectedOutput?.kind === 'repo' && expectedOutput.isolation !== 'worktree') {
+        expectedOutput = { ...expectedOutput, isolation: 'worktree' };
       }
       // Empty-contract guard (2026-06-07). A fresh dispatch whose resolution
       // chain produced no spec would mint a contract that checks nothing and

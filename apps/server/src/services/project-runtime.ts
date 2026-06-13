@@ -34,6 +34,7 @@ import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
 
 import { preparePodSpawn, type PodSpawnPrep } from './pod-spawn.ts';
 import { COMMAND_PLANNER_POD_NAME } from './command-planner-pod-content.ts';
+import { makeIntegrationBranchResolver } from './integration-branch.ts';
 import { WorktreeService } from './worktree.ts';
 import { importV2WorkflowsFromDisk } from './workflow-import.ts';
 import {
@@ -259,7 +260,19 @@ export class ProjectRuntime {
    */
   worktrees(): WorktreeService {
     if (!this.worktreesSvc) {
-      this.worktreesSvc = new WorktreeService(this.project.folderPath, this.worktreeBaseDir);
+      // The resolver reads `this.project` live (survives refresh()) and is
+      // the ONE writer of settings.integrationBranch: explicit setting wins,
+      // else one-time auto-detect persisted back into the project row.
+      const resolveIntegrationBranch = makeIntegrationBranchResolver({
+        getProject: () => this.project,
+        workspaceDir: this.project.folderPath,
+        onPersisted: (project) => this.refresh(project),
+      });
+      this.worktreesSvc = new WorktreeService(
+        this.project.folderPath,
+        this.worktreeBaseDir,
+        resolveIntegrationBranch,
+      );
     }
     return this.worktreesSvc;
   }

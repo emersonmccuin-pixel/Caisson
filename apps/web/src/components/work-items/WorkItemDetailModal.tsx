@@ -20,6 +20,7 @@ import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useProjectAreas } from '@/hooks/use-project-areas';
 import { useLiveEvents } from '@/store/live-store';
 import { Markdown } from '../Markdown';
+import { FullsizeButton, useFullsizeModal } from '../useFullsizeModal';
 import { TypedFieldEditor } from './TypedFieldEditor';
 import { WorkLogSection } from './WorkLogSection';
 
@@ -114,6 +115,7 @@ export function WorkItemDetailModal({
   onSwitchItem,
   onItemCreated,
 }: WorkItemDetailModalProps) {
+  const { full, toggle: toggleFull, panelSizeClass } = useFullsizeModal();
   const [tab, setTab] = useState<TabId>('overview');
   const [baseline, setBaseline] = useState<WorkItem>(workItem);
   const [draft, setDraft] = useState<Draft>(() => draftFromItem(workItem));
@@ -319,7 +321,10 @@ export function WorkItemDetailModal({
       onClick={attemptClose}
     >
       <div
-        className="pc-work-content flex h-[80vh] w-full max-w-3xl flex-col border border-border bg-card text-foreground"
+        className={
+          'pc-work-content flex flex-col border border-border bg-card text-foreground ' +
+          panelSizeClass('h-[80vh] w-full max-w-3xl')
+        }
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
@@ -344,13 +349,16 @@ export function WorkItemDetailModal({
               )}
             </p>
           </div>
-          <button
-            onClick={attemptClose}
-            className="text-muted-foreground hover:text-foreground"
-            aria-label="Close"
-          >
-            ×
-          </button>
+          <div className="flex items-center gap-3">
+            <FullsizeButton full={full} onToggle={toggleFull} />
+            <button
+              onClick={attemptClose}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
         </header>
 
         <nav className="flex gap-1 border-b border-border px-2 pt-2">

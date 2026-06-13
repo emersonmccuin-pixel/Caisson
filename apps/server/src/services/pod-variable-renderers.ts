@@ -10,18 +10,20 @@
 // Canonical variables:
 //
 //   - `AVAILABLE_AGENTS` — the DISPATCHING pod's view of every live agent it
-//     could dispatch to. Stock first, then user-created; alphabetical within
+//     could dispatch to. Stock first, then member agents; alphabetical within
 //     each section. Each entry carries name + origin tag + description + the
 //     orchestrator-facing `dispatch_guidance` hint (when non-null). Excludes
-//     the orchestrator itself and global user-created pods (not dispatchable
-//     in-project). Consumed by the orchestrator prompt (36.4).
+//     the orchestrator itself and user-created agents not joined to this
+//     project via agent_projects. Consumed by the orchestrator prompt (36.4).
 //
 //   - `AGENT_ROSTER` — the EXPLAINER's view (consumed by the caisson pod). The
-//     full picture grouped by where each agent lives: built-in (stock), this
-//     project's customs, and the user's global customs. Unlike AVAILABLE_AGENTS
-//     it KEEPS the orchestrator and global customs, because caisson explains the
-//     roster rather than dispatches it. Live from DB at spawn — never hardcode
-//     the roster in caisson's prompt or knowledge.
+//     full membership picture grouped by tier: Built-in (stock, every project),
+//     In this project (member agents — private and shared ones added here), and
+//     In the shared library, not in this project (shareable agents available to
+//     add). Unlike AVAILABLE_AGENTS it KEEPS the orchestrator and shared
+//     library, because caisson explains the roster rather than dispatches it.
+//     Live from DB at spawn — never hardcode the roster in caisson's prompt or
+//     knowledge.
 //
 //   - `PROJECT_AREAS` — the orchestrator's live view of the project's Areas
 //     (the optional buckets work items file into). Each entry = name + id (to
@@ -36,7 +38,7 @@
 // Add new DB-backed variables here as the need arises — one variable per use
 // case, no general-purpose templating.
 
-import { listAgents, listAreas, listProjectVisibleAgents } from '@pc/db';
+import { listAgents, listAreas, listProjectMemberAgents, listProjectVisibleAgents } from '@pc/db';
 import type { ULID } from '@pc/domain';
 
 /** Format the full agent roster the orchestrator (or any other pod opting in
@@ -44,9 +46,9 @@ import type { ULID } from '@pc/domain';
  *  user-created; alphabetical within each group. Returns an empty string when
  *  no agents are live (rare — implies the seed didn't run). */
 export function renderAvailableAgents(projectId: ULID | null | undefined): string {
-  // Project pods + built-in (stock) agents only — same path/rule as the
-  // Agents-tab list route. Global user-created pods are NOT discoverable here;
-  // the user must copy one into the project (Add agent) to make it usable.
+  // Built-in (stock) agents + user-created agents joined to this project via
+  // agent_projects (members). User-created agents not in agent_projects for
+  // this project are not visible here — add them to the project first.
   const rows = listProjectVisibleAgents(projectId);
   // The orchestrator must never advertise itself as a dispatch target.
   const dispatchable = rows.filter((a) => a.name !== 'orchestrator');
@@ -83,38 +85,52 @@ function formatRosterRow(r: RosterRow): string {
 }
 
 /** Format the EXPLAINER's full agent roster (caisson's `{{AGENT_ROSTER}}`).
- *  Grouped by where each agent lives so caisson can answer from the right
- *  standpoint: built-in (stock, ships with Caisson — includes the orchestrator
- *  itself and the conversational builders), this project's custom pods, and the
- *  user's global custom pods (which must be copied into a project before they
- *  can be dispatched there). All groups alphabetical (DB orders by name). When
- *  no rows come back (seed hasn't run) we say so rather than emit a blank. */
+ *  Grouped by membership tier so caisson can answer from the right standpoint:
+ *
+ *  - **Built-in** (origin=stock) — ships with Caisson, available in every
+ *    project automatically; includes `orchestrator` and the stock specialists.
+ *  - **In this project** — user-created agents joined to this project via
+ *    `agent_projects`. Covers both private project agents and shared agents
+ *    that have been added here. Editing one affects it everywhere it's attached.
+ *  - **In the shared library, not in this project** — `shareable=true` agents
+ *    that exist in the library but are not yet attached to this project. To use
+ *    one here, add it to the project ("Add to project" in the Agents tab).
+ *    Adding attaches the same shared agent — edits apply everywhere it lives.
+ *
+ *  All groups alphabetical (DB orders by name). When nothing comes back (seed
+ *  hasn't run) we say so rather than emit a blank. */
 export function renderAgentRosterForCaisson(projectId: ULID | null | undefined): string {
-  const rows = projectId
-    ? listAgents({ projectId, includeGlobals: true })
-    : listAgents({ scope: 'global' });
-  if (rows.length === 0) {
+  // Built-in agents: always visible, origin=stock.
+  const visible = listProjectVisibleAgents(projectId ?? undefined);
+  const builtIn = visible.filter((r) => r.origin === 'stock');
+
+  // In-project members: user-created agents joined via agent_projects.
+  const members = projectId ? listProjectMemberAgents(projectId) : [];
+
+  // Shared library agents not yet attached to this project.
+  const memberIdSet = new Set(members.map((m) => m.id));
+  const sharedNotHere = listAgents().filter(
+    (a) => a.shareable && a.origin !== 'stock' && !memberIdSet.has(a.id),
+  );
+
+  if (builtIn.length === 0 && members.length === 0 && sharedNotHere.length === 0) {
     return '_No agents found — the stock seed may not have run. Call `pc_list_agents` to re-check before answering._';
   }
-
-  const builtIn = rows.filter((r) => r.origin === 'stock');
-  const projectPods = rows.filter((r) => r.origin === 'user-created' && r.scope === 'project');
-  const globalCustom = rows.filter((r) => r.origin === 'user-created' && r.scope === 'global');
 
   const sections: string[] = [];
   if (builtIn.length > 0) {
     sections.push(
-      `**Built-in agents** (ship with Caisson, available in every project — \`orchestrator\` is the chat the user talks to):\n${builtIn.map(formatRosterRow).join('\n')}`,
+      `**Built-in** (ships with Caisson, available in every project — \`orchestrator\` is the chat the user talks to):\n${builtIn.map(formatRosterRow).join('\n')}`,
     );
   }
-  if (projectPods.length > 0) {
+  if (members.length > 0) {
     sections.push(
-      `**This project's agents** (custom, scoped to this project):\n${projectPods.map(formatRosterRow).join('\n')}`,
+      `**In this project** (agents attached to this project — dispatch any of these directly):\n${members.map(formatRosterRow).join('\n')}`,
     );
   }
-  if (globalCustom.length > 0) {
+  if (sharedNotHere.length > 0) {
     sections.push(
-      `**The user's global agents** (custom, global scope — copy one into a project with "Add agent" before it can be dispatched there):\n${globalCustom.map(formatRosterRow).join('\n')}`,
+      `**In the shared library, not in this project** (shared agents not yet attached here — use "Add to project" in the Agents tab to bring one in; edits apply everywhere it's attached):\n${sharedNotHere.map(formatRosterRow).join('\n')}`,
     );
   }
   return sections.join('\n\n');

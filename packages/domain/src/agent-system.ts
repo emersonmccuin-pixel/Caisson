@@ -49,6 +49,11 @@ export type AgentRunFailureCause =
   | 'host-lost'
   | 'host-crashed'
   | 'host-protocol-error'
+  /** The host was reachable and ANSWERED, but rejected the command (e.g. a
+   *  genuine run-id/cc-session collision). Distinct from 'host-unavailable'
+   *  (no answer at all) — conflating the two produced the misleading
+   *  "run already exists / host-unavailable" spawn error (2026-06-10). */
+  | 'host-rejected'
   /** Workflow-engine redesign — the dispatched worker reached a terminal
    *  WITHOUT submitting a deliverable against its contract. Delivery is the
    *  sole done-signal; ending a turn / exiting with nothing delivered is a
@@ -79,6 +84,7 @@ export const AGENT_RUN_FAILURE_CAUSES: readonly AgentRunFailureCause[] = [
   'host-lost',
   'host-crashed',
   'host-protocol-error',
+  'host-rejected',
   'no-deliverable',
   'contract-required',
   'worktree-provision-failed',

@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { resolve as resolvePath } from 'node:path';
 
 import type { Hono } from 'hono';
 import type {
@@ -20,6 +21,8 @@ import {
   getContract,
   getProjectById,
   listActiveAgentRunsForProject,
+  listAgentProjects,
+  listAbandonedContractBranches,
   listAgentRunsForSession,
   listContractsForRun,
   listContractsForWorkItem,
@@ -41,6 +44,7 @@ import {
   recordExplicitPause as defaultRecordExplicitPause,
 } from '../../services/pause-resume.ts';
 import { applyDeliverableStore } from '../../services/apply-deliverable-store.ts';
+import { defaultGitReceipts, type GitReceipts } from '../../services/git-receipts.ts';
 import { getActiveRunRegistry as defaultGetActiveRunRegistry } from '../../services/agent-active-runs.ts';
 import { hardKillAgentRun, inspectAgentRun } from '../../services/agent-run-control.ts';
 import { recordAgentInvoke as defaultRecordAgentInvoke } from '../../services/agent-audit.ts';
@@ -67,7 +71,15 @@ export interface AgentRunRouteDeps {
    *  route provisions a real worktree via this factory BEFORE spawn. Returns null
    *  when no ProjectRuntime exists for the project (dispatch is refused). Tests
    *  inject a fake; production wires to `resolveProject(id)?.worktrees()`. */
-  worktreeServiceFor?: (projectId: ULID) => { ensureWorktree(name: string): Promise<{ path: string }> } | null;
+  worktreeServiceFor?: (projectId: ULID) => {
+    ensureWorktree(name: string): Promise<{ path: string }>;
+    /** pc-pty-chat-415 (R14) — read-only stranded report (unmerged, no live
+     *  run). Optional: tests that only exercise provisioning omit it. */
+    listStranded?(inUsePaths: Iterable<string>): Promise<Array<{ name: string; branch: string; path: string | null }>>;
+  } | null;
+  /** pc-pty-chat-415 (R14) — worktree paths referenced by live runs (same
+   *  closure the sweep uses). Powers the stranded report. */
+  collectInUseWorktrees?: () => string[];
   /** Effective-spec resolution seam: looks up the pod row (project-scoped win
    *  over global) to read its stored `expectedOutput` default. Used by the
    *  isolation precondition to honour pod-default `isolation: "worktree"` even
@@ -85,6 +97,9 @@ export interface AgentRunRouteDeps {
   answerPendingAsk?: typeof defaultAnswerPendingAsk;
   cancelPendingAsk?: typeof defaultCancelPendingAsk;
   checkInvokeDepth?: typeof defaultCheckInvokeDepth;
+  /** pc-pty-chat-415 (R4) — seal-before-verify git probes for the deliverable
+   *  door. Tests inject fakes; production uses the spawn-based defaults. */
+  gitReceipts?: GitReceipts;
   now?: () => number;
   /** M4b (FD-8) — an ask decided through ANY door clears its open
    *  `agent-ask-escalated` inbox cards (MailboxService collect/action/dismiss). */
@@ -422,6 +437,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
     const globals = listProjectVisibleAgents(projectId).map((a) => ({
       name: a.name,
+      shareable: a.shareable,
+      memberProjectIds: listAgentProjects(a.id),
       def: { description: a.description, model: a.model, tools: a.tools },
     }));
     return c.json({ ok: true, globals, overrides: [], projectOnly: [] });
@@ -485,26 +502,27 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       return c.json({ ok: false, error: depthCheck.error, cause: depthCheck.cause }, 400);
     }
 
-    // Fix 2 — isolation provisioned to spec or refuse. When the dispatch
-    // declares `isolation: "worktree"`, a real git worktree must be created
-    // BEFORE spawn and used as the run's cwd. "in_place" (default) keeps
-    // the existing project.folderPath behavior.
-    // Never fall back to project.folderPath for a worktree-isolation dispatch —
-    // falling back is what caused the "committed straight to dev" incident.
+    // Fix 2 + pc-pty-chat-415 (R3) — isolation is derived from the output
+    // KIND, never from a per-dispatch setting: `kind: "repo"` (code work)
+    // always gets a real git worktree created BEFORE spawn and used as the
+    // run's cwd. Non-repo kinds keep the project.folderPath cwd.
+    // Never fall back to project.folderPath for code work — falling back is
+    // what caused the "committed straight to dev" incident. The factory holds
+    // the matching backstop invariant (refuses repo dispatch in the live copy).
     let worktreeDir = project.folderPath;
     // Resolve the EFFECTIVE expected_output for the isolation precondition —
     // same three-tier chain the factory/contract layer uses:
     //   inline body.expectedOutput ?? pod-row stored default ?? stock pod default
-    // This closes the bypass where a pod whose default declares `isolation:
-    // "worktree"` was silently skipped because the inline body was null.
+    // This closes the bypass where a pod whose default is repo-kind was
+    // silently skipped because the inline body was null.
     const resolveAgentRow = deps.resolveAgentForDispatch ?? defaultResolveAgentForDispatch;
     const podRow = resolveAgentRow(agentName, projectId);
     const effectiveSpec =
       body.expectedOutput != null
         ? body.expectedOutput
         : ((podRow?.expectedOutput as unknown) ?? getPodDefaultExpectedOutput(agentName) ?? null);
-    const declaredIsolation = (effectiveSpec as { isolation?: unknown } | null)?.isolation;
-    if (declaredIsolation === 'worktree') {
+    const isRepoKind = (effectiveSpec as { kind?: unknown } | null)?.kind === 'repo';
+    if (isRepoKind) {
       const wts = deps.worktreeServiceFor?.(projectId) ?? null;
       if (!wts) {
         return c.json(
@@ -557,7 +575,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         // the path-guard hook (already used by workflow nodes) enforces worktree
         // confinement for subagent calls too. Mirrors the workflow convention
         // (PC_WORKFLOW_WORKTREE); reuses the same primitive.
-        ...(declaredIsolation === 'worktree' ? { extraEnv: { PC_WORKFLOW_WORKTREE: worktreeDir } } : {}),
+        ...(isRepoKind ? { extraEnv: { PC_WORKFLOW_WORKTREE: worktreeDir } } : {}),
       },
       {
         mailboxEnqueue,
@@ -840,6 +858,51 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       );
     }
 
+    // pc-pty-chat-415 (R4) — seal before verify. A repo deliverable is only
+    // accepted from a COMMITTED worktree: the slice the verifier judges (and
+    // the landing path merges) is a sealed commit, never a half-written tree.
+    // Dirty → typed RETRYABLE refusal (the agent commits and resubmits); a
+    // failed probe also refuses — "cannot confirm committed" is not "clean"
+    // (positive receipt over inference). On success the engine reads the
+    // sealed branch + HEAD from git directly and stamps them onto the
+    // deliverable — receipts, not agent claims. Legacy in-place runs (cwd ==
+    // project folder) are exempt: the live copy's dirtiness is the human's.
+    let deliverable = parsed.deliverable;
+    if (deliverable.kind === 'repo') {
+      const wt = (row.worktreeDir ?? '').trim();
+      const samePath = (a: string, b: string) =>
+        process.platform === 'win32'
+          ? resolvePath(a).toLowerCase() === resolvePath(b).toLowerCase()
+          : resolvePath(a) === resolvePath(b);
+      const isolated = wt.length > 0 && !samePath(wt, project.folderPath);
+      if (isolated) {
+        const receipts = deps.gitReceipts ?? defaultGitReceipts;
+        const treeStatus = await receipts.workingTreeStatus(wt);
+        if (treeStatus !== 'clean') {
+          return c.json(
+            {
+              ok: false,
+              cause: 'uncommitted-work',
+              error:
+                treeStatus === 'dirty'
+                  ? 'worktree has uncommitted changes — commit your work (git add -A && git commit), then resubmit the deliverable'
+                  : 'could not confirm the worktree is committed (git probe failed) — make sure your work is committed, then resubmit the deliverable',
+            },
+            409,
+          );
+        }
+        const [sealedSha, sealedBranch] = await Promise.all([
+          receipts.headSha(wt),
+          receipts.currentBranch(wt),
+        ]);
+        deliverable = {
+          ...deliverable,
+          ...(sealedSha ? { commit: sealedSha } : {}),
+          ...(sealedBranch ? { branch: sealedBranch } : {}),
+        };
+      }
+    }
+
     // Slice 014c — apply the deliverable to the home its contract declares
     // (`expectedOutput.store`) BEFORE persisting, so submission alone satisfies
     // the derived acceptance criteria. A placement failure (WI archived, bad
@@ -847,7 +910,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     // failing later at verify with a misleading body_contains message.
     const placement = applyDeliverableStore({
       contract,
-      deliverable: parsed.deliverable,
+      deliverable,
       runId,
       agentName: contract.podName ?? null,
       projectFolderPath: project.folderPath,
@@ -860,7 +923,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     const service = new ContractService();
     const updated = service.setDeliverable({
       id: contractId,
-      deliverable: parsed.deliverable,
+      deliverable,
       report,
     });
     if (!updated) {
@@ -877,8 +940,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     markAgentRunDelivered(runId, services.now());
     const deliverableText =
       report ??
-      (parsed.deliverable.kind === 'answer' || parsed.deliverable.kind === 'prose'
-        ? parsed.deliverable.text ?? ''
+      (deliverable.kind === 'answer' || deliverable.kind === 'prose'
+        ? deliverable.text ?? ''
         : '');
     const host = resolveHost();
 
@@ -899,6 +962,27 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       }
     });
     return response;
+  });
+
+  // pc-pty-chat-415 (R14) — the stranded report: unmerged run worktrees /
+  // branches no live run references, minus explicitly-abandoned work. Never
+  // auto-deleted; a human/orchestrator decides retry / land / abandon.
+  app.get('/api/projects/:projectId/worktrees/stranded', async (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const project = getProjectById(projectId);
+    if (!project) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+    const wts = deps.worktreeServiceFor?.(projectId) ?? null;
+    if (!wts?.listStranded) {
+      return c.json({ ok: false, error: 'no worktree service available for this project' }, 503);
+    }
+    try {
+      const inUse = deps.collectInUseWorktrees?.() ?? [];
+      const abandoned = new Set(listAbandonedContractBranches(projectId));
+      const stranded = (await wts.listStranded(inUse)).filter((s) => !abandoned.has(s.branch));
+      return c.json({ ok: true, stranded });
+    } catch (err) {
+      return c.json({ ok: false, error: (err as Error).message }, 500);
+    }
   });
 
   /** `pc_list_my_runs` HTTP surface. Reads from the `agent_runs` table. */

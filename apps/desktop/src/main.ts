@@ -15,7 +15,7 @@
 // longer takes the window with it, and a dead host respawns instead of
 // logging.
 
-import { app, BrowserWindow, dialog, Menu, shell, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, Menu, shell, ipcMain, safeStorage } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import {
   Supervisor,
@@ -25,11 +25,12 @@ import {
   waitForPortsFree,
   type ExitInfo,
 } from '@pc/supervisor';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   packagedAgentHostLockFilePath,
-  removePackagedAgentHostLockFile,
+  reapStaleAgentHost,
   requestPackagedAgentHostShutdown,
 } from './agent-host-process';
 import { findPortConflicts, freeCaissonPorts, type PortConflict } from './port-conflict';
@@ -105,6 +106,65 @@ let supervisor: Supervisor | null = null;
 let quitting = false;
 let windowUrl = '';
 
+// ── Vault master-key lifecycle ────────────────────────────────────────────────
+//
+// The master key is a random 32-byte value that lives ONLY in memory (and in
+// the encrypted-at-rest copy below). It is NEVER stored in an environment
+// variable or passed via the command line — both are visible to process
+// listings, crash dumps, and inheriting child processes.
+//
+// Primary path (Windows/macOS and most Linux with a keyring):
+//   safeStorage.encryptString(base64(key)) → saved to userData/vault-master-key.enc
+//   safeStorage.decryptString(bytes) → raw key on every boot
+//
+// Fallback (keyring-less Linux, safeStorage.isEncryptionAvailable() === false):
+//   key stored as hex in userData/vault-master-key.raw with 0600 permissions
+//   A 'less protected' warning is emitted to the supervisor log.
+//
+// The raw key is handed to the API child via a private stdin pipe (one-shot
+// JSON init message). See `buildSupervisor` below.
+
+const VAULT_KEY_ENC_FILE = 'vault-master-key.enc';
+const VAULT_KEY_RAW_FILE = 'vault-master-key.raw';
+
+interface MasterKeyResult {
+  key: Buffer;
+  /** True when safeStorage was unavailable and the key file uses 0600 perms
+   *  instead of OS-level keychain encryption. */
+  lessProtected: boolean;
+}
+
+function loadOrCreateMasterKey(dataDir: string): MasterKeyResult {
+  if (safeStorage.isEncryptionAvailable()) {
+    const keyFile = join(dataDir, VAULT_KEY_ENC_FILE);
+    try {
+      const encrypted = readFileSync(keyFile); // returns Buffer
+      const b64 = safeStorage.decryptString(encrypted);
+      return { key: Buffer.from(b64, 'base64'), lessProtected: false };
+    } catch {
+      // First boot or corrupted file — regenerate.
+      const key = randomBytes(32);
+      const encrypted = safeStorage.encryptString(key.toString('base64'));
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(keyFile, encrypted);
+      return { key, lessProtected: false };
+    }
+  } else {
+    // Fallback: hex text file, chmod 0600 for Unix protection.
+    const keyFile = join(dataDir, VAULT_KEY_RAW_FILE);
+    try {
+      const hex = readFileSync(keyFile, 'utf8').trim();
+      return { key: Buffer.from(hex, 'hex'), lessProtected: true };
+    } catch {
+      const key = randomBytes(32);
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(keyFile, key.toString('hex'), 'utf8');
+      try { chmodSync(keyFile, 0o600); } catch { /* best-effort on non-Unix */ }
+      return { key, lessProtected: true };
+    }
+  }
+}
+
 // ── Supervisor wiring ────────────────────────────────────────────────────────
 
 let childrenLogPath: string | null = null;
@@ -164,7 +224,7 @@ function onChildGiveUp(info: ExitInfo): void {
   app.quit();
 }
 
-function buildSupervisor(config: StackConfig): Supervisor {
+function buildSupervisor(config: StackConfig, masterKey: Buffer): Supervisor {
   const lockFilePath = packagedAgentHostLockFilePath(config.dataDir);
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -172,6 +232,9 @@ function buildSupervisor(config: StackConfig): Supervisor {
     PC_DATA_DIR: config.dataDir,
     PORT: String(config.port),
     PC_AGENT_HOST_LOCK_FILE: lockFilePath,
+    // Signal to the API server that it should read the vault master key from
+    // stdin. The key itself travels over the stdin pipe (never an env var).
+    PC_VAULT_USE_STDIN: '1',
   };
   if (config.childPcRoot) childEnv.PC_ROOT = config.childPcRoot;
   else delete childEnv.PC_ROOT;
@@ -188,9 +251,13 @@ function buildSupervisor(config: StackConfig): Supervisor {
     },
     deps: { log: supervisorLog },
     hooks: {
-      // A stale lock from a dead host must never count as ready.
+      // A stale lock from a dead host must never count as ready — and a stale
+      // lock from a LIVE host (Electron hard-killed last run; the host's port
+      // is random, so the port guard can't see it) is an orphan to reap, not
+      // just a file to delete. reapStaleAgentHost verifies the pid's command
+      // line, stops it (polite HTTP, then tree-kill), and removes the lock.
       preSpawn: async () => {
-        removePackagedAgentHostLockFile(lockFilePath);
+        await reapStaleAgentHost(lockFilePath, { log: supervisorLog });
         hostSpawnedAt = Date.now();
       },
       onReady: () =>
@@ -211,6 +278,9 @@ function buildSupervisor(config: StackConfig): Supervisor {
       args: ['--report-on-fatalerror', config.apiEntry],
       cwd: dirname(config.apiEntry),
       env: childEnv,
+      // stdin = pipe so we can write the vault master key as a one-shot init
+      // message. The child reads it synchronously at boot then stdin closes.
+      stdio: ['pipe', 'pipe', 'pipe'],
     },
     // exit 75 = intentional restart (POST /api/dev/restart) — never a crash.
     policy: { sentinelRestartCode: 75 },
@@ -222,6 +292,20 @@ function buildSupervisor(config: StackConfig): Supervisor {
       },
       onOutput: teeChildOutput('api'),
       onGiveUp: onChildGiveUp,
+      // Secure master-key handoff: write ONE JSON line to stdin and close it.
+      // stdin is a private OS pipe — not visible in process listings, env dumps,
+      // or /proc/<pid>/environ. The child reads it before HTTP listen starts.
+      // Fires on every (re)spawn so sentinel-75 restarts receive the key too.
+      onSpawn: (child) => {
+        const initMsg =
+          JSON.stringify({ type: 'vault-init', masterKey: masterKey.toString('hex') }) + '\n';
+        child.stdin?.write(initMsg, (err) => {
+          if (err) {
+            supervisorLog(`[api] vault-init stdin write failed: ${err.message}`);
+          }
+          child.stdin?.end();
+        });
+      },
     },
   });
 
@@ -241,7 +325,7 @@ function describeConflict(c: PortConflict): string {
 
 /** Detect port conflicts, offer to free Caisson-owned offenders, then start
  *  the supervised stack and wait for the API to answer. False = user quit. */
-async function bootSupervisedStack(config: StackConfig): Promise<boolean> {
+async function bootSupervisedStack(config: StackConfig, masterKey: Buffer): Promise<boolean> {
   const ports = [config.port];
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -290,7 +374,7 @@ async function bootSupervisedStack(config: StackConfig): Promise<boolean> {
     return false;
   }
 
-  supervisor = buildSupervisor(config);
+  supervisor = buildSupervisor(config, masterKey);
   await supervisor.start();
 
   // Positive receipt: the window is only worth opening once the API answers.
@@ -395,8 +479,11 @@ function initAutoUpdater(): void {
   autoUpdater.autoInstallOnAppQuit = true;
 
   // Apply persisted beta-channel preference before the first check.
+  // allowPrerelease must be set alongside channel: without it the GitHub provider
+  // only scans non-prerelease releases and never finds the prerelease's beta.yml.
   if (resolvedDataDir) {
     const { betaOptIn } = readUpdatePrefs(resolvedDataDir);
+    autoUpdater.allowPrerelease = betaOptIn;
     if (betaOptIn) autoUpdater.channel = 'beta';
   }
 
@@ -459,11 +546,23 @@ ipcMain.handle('pc:update:setBetaOptIn', (_event, enabled: unknown) => {
   writeUpdatePrefs(dataDir, { betaOptIn });
   if (updaterEnabled()) {
     autoUpdater.channel = betaOptIn ? 'beta' : 'latest';
+    autoUpdater.allowPrerelease = betaOptIn;
     autoUpdater
       .checkForUpdates()
       .catch((err) => pushUpdateState({ status: 'error', error: (err as Error).message }));
   }
   return betaOptIn;
+});
+
+// OAuth broker — open the authorization URL in the system browser.
+// The web UI calls this IPC after POST /api/mcp-servers/:id/auth/start returns
+// { status: 'redirect', authorizationUrl }. Electron main relays it via
+// shell.openExternal so the API child (plain Node) never needs to call Electron APIs.
+// Only https:// and http:// URLs are accepted; all others are silently dropped.
+ipcMain.handle('pc:shell:openExternal', (_event, url: unknown): Promise<void> => {
+  if (typeof url !== 'string') return Promise.resolve();
+  if (!url.startsWith('https://') && !url.startsWith('http://')) return Promise.resolve();
+  return shell.openExternal(url);
 });
 
 // Native OS folder chooser — used by the onboarding wizard (and future pickers)
@@ -628,8 +727,33 @@ void app.whenReady().then(async () => {
   resolvedDataDir = config.dataDir;
   initChildrenLog(config.dataDir);
 
+  // Load (or generate on first boot) the vault master key.
+  // safeStorage requires app.whenReady(); this is the earliest safe call site.
+  let masterKey: Buffer;
   try {
-    const booted = await bootSupervisedStack(config);
+    const result = loadOrCreateMasterKey(config.dataDir);
+    masterKey = result.key;
+    if (result.lessProtected) {
+      supervisorLog(
+        '[vault] WARNING: safeStorage is unavailable — vault master key is stored in a ' +
+          '0600-perms file instead of the OS keychain. Credentials are less protected.',
+      );
+    } else {
+      supervisorLog('[vault] master key loaded from safeStorage');
+    }
+  } catch (err) {
+    dialog.showErrorBox(
+      "Caisson can't start",
+      `Failed to load the secure credential vault key:\n\n${(err as Error).message}\n\n` +
+        `If this keeps happening, restart your computer or reinstall Caisson.`,
+    );
+    quitting = true;
+    app.quit();
+    return;
+  }
+
+  try {
+    const booted = await bootSupervisedStack(config, masterKey);
     if (!booted) {
       quitting = true;
       supervisor?.stopAll();

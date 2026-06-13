@@ -17,6 +17,7 @@ const {
   createProject,
   getAgentRunRow,
   insertAgentRunRow,
+  markAgentRunTerminal,
   newId,
   runMigrations,
 } = await import('@pc/db');
@@ -443,4 +444,51 @@ test('S3 replay re-emits a missing terminal envelope exactly once', async () => 
     hasMailboxKey: (key) => seen.has(key),
   });
   assert.equal(r2.replayed, 0, 'second replay is a no-op once the key exists');
+});
+
+// Spawn-flakiness fix (2026-06-10) — a dispatch that failed BEFORE any spawn on
+// a host start receipt already returned that failure synchronously to its
+// dispatcher. The replay pass must NOT page the orchestrator about it minutes
+// later (Symptom 2: stale agent-failed events after the retry already ran).
+test('S3 replay skips a pre-spawn host failure (sync receipt already delivered)', async () => {
+  const { runId } = seedRun(`htg-presp-${Date.now()}`);
+  // Simulate failHostStart: terminal row written directly, no envelope, no spawn.
+  markAgentRunTerminal({
+    id: runId,
+    status: 'failed',
+    result: null,
+    failureCause: 'host-unavailable',
+    failureReason: 'agent host command start-run failed: timed out after 5000ms',
+    completedAt: Date.now(),
+  });
+  const row = getAgentRunRow(runId)!;
+  assert.equal(row.status, 'failed');
+  assert.equal(row.spawnedAt, null, 'pre-spawn failure must carry no spawnedAt');
+
+  const seen = new Set<string>();
+  const r = await replayMissingTerminalEnvelopes({
+    mailboxEnqueue: (input) => (seen.add(input.message.idempotencyKey), {}),
+    listRecentTerminalRuns: () => [getAgentRunRow(runId)!],
+    hasMailboxKey: (key) => seen.has(key),
+  });
+  assert.equal(r.replayed, 0, 'pre-spawn host failure must not be replayed');
+  assert.equal(seen.size, 0, 'no envelope enqueued for the sync-reported failure');
+
+  // A spawn-reached failure with the same cause family IS still replayed —
+  // the suppression is keyed on spawnedAt null, not the cause alone.
+  const spawned = seedRun(`htg-presp2-${Date.now()}`);
+  markAgentRunTerminal({
+    id: spawned.runId,
+    status: 'failed',
+    result: null,
+    failureCause: 'unexpected-exit',
+    failureReason: 'agent process exited unexpectedly',
+    completedAt: Date.now(),
+  });
+  const r2 = await replayMissingTerminalEnvelopes({
+    mailboxEnqueue: (input) => (seen.add(input.message.idempotencyKey), {}),
+    listRecentTerminalRuns: () => [getAgentRunRow(spawned.runId)!],
+    hasMailboxKey: (key) => seen.has(key),
+  });
+  assert.equal(r2.replayed, 1, 'a real post-dispatch failure still replays');
 });

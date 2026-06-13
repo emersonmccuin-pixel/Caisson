@@ -71,6 +71,8 @@ export type AgentRunFailureCause =
   | 'host-lost'
   | 'host-crashed'
   | 'host-protocol-error'
+  /** Mirror of @pc/domain — the host answered but rejected the command. */
+  | 'host-rejected'
   /** Mirror of @pc/domain — reached terminal without a submitted deliverable.
    *  Produced by the server's terminal gate, not the runtime; kept here so the
    *  two failure-cause unions stay in sync. */

@@ -41,6 +41,10 @@ export interface Pod {
   driftedFields: string[] | null;
   /** UI Spine step 3 — monotonic write counter for version-aware WS patching. */
   rev: number;
+  /** Membership model — all project IDs this agent is attached to. */
+  memberProjectIds: string[];
+  /** When true the agent is in the shared library and can be added to other projects. */
+  shareable: boolean;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;

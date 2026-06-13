@@ -1,8 +1,14 @@
 import './diagnostics.ts'; // FIRST — arm crash capture before anything else loads
+import { initVaultFromStdin } from './services/secrets-vault.ts';
+// Connector-auth Slice 1: read the vault master key from stdin (sent by Electron
+// main via a private pipe) before any other module uses the vault. No-ops when
+// PC_VAULT_USE_STDIN is not set (dev mode, tests).
+initVaultFromStdin();
 
 import { serve } from '@hono/node-server';
 import { RESPONSE_ALREADY_SENT } from '@hono/node-server/utils/response';
 import { Hono } from 'hono';
+import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse as NodeServerResponse } from 'node:http';
 import { isAbsolute, relative, resolve } from 'node:path';
@@ -24,6 +30,8 @@ import {
   insertPostTurnSummary,
   getProjectById,
   getProjectBySlug,
+  listContractsPendingLanding,
+  listNonTerminalAgentRuns,
   listProjects,
   newId,
   pruneLiveOutbox,
@@ -57,6 +65,8 @@ import { announceSessionTitle } from './services/session-title-writer.ts';
 import { createHostConnection, toHostHealthSnapshot } from './services/host-connection.ts';
 import { announceHostHealth } from './services/host-health-writer.ts';
 import { sweepStaleJsonl } from './services/jsonl-sweep.ts';
+import { createWorktreeSweepRunner } from './services/worktree-sweep-runner.ts';
+import { landAcceptedContract, setLandingWorktreesAccessor } from './services/landing-service.ts';
 import { backfillStageFlags } from './services/stage-flags-backfill.ts';
 import { seedClaudeFirstRun } from './services/claude-firstrun-seed.ts';
 import { ProjectCreate } from './services/project-create.ts';
@@ -655,6 +665,66 @@ try {
   }
 }
 
+// Worktree sweep — backstop for the merge-node teardown. Reaps run worktrees
+// whose branch already landed on the project's integration branch, merged
+// orphan branches, and husk dirs left by interrupted removals. Worktrees
+// referenced by any live run (agent: non-terminal; workflow: anything not
+// completed/cancelled — failed runs keep theirs for resume/re-drive) are
+// never touched.
+//
+// Runs at boot AND on an interval: out-of-band merges (orchestrator-run git)
+// produce no event to hook, and the packaged daily driver rarely restarts —
+// boot-only sweeping let merged worktrees pile up between reboots
+// (2026-06-11 incident). This janitor is distinct from the ONE-RECONCILER
+// run-state loop; see worktree-sweep-runner.ts.
+// Worktree paths referenced by live runs — shared by the sweep AND the
+// stranded report (pc-pty-chat-415 R14) so both agree on "in use".
+const collectInUseWorktreePaths = (): string[] => {
+  const inUse: string[] = [];
+  for (const run of listNonTerminalAgentRuns()) {
+    if (run.worktreeDir) inUse.push(run.worktreeDir);
+  }
+  for (const run of workflowRunsV2Repo.listRunsByStatus(['pending', 'running', 'paused', 'failed'])) {
+    if (run.worktreePath) inUse.push(run.worktreePath);
+  }
+  return inUse;
+};
+const worktreeSweep = createWorktreeSweepRunner({
+  listProjects: () => listProjects().map((p) => ({ id: p.id, slug: p.slug })),
+  getRuntime: (projectId) => projectRegistry.get(projectId as ULID) ?? null,
+  collectInUse: collectInUseWorktreePaths,
+  dirExists: (p) => existsSync(p),
+});
+// Boot pass: fire-and-forget so a slow git/disk can't block startup.
+void worktreeSweep.runOnce();
+{
+  const intervalMs = Number(process.env['PC_WORKTREE_SWEEP_INTERVAL_MS'] ?? 30 * 60_000);
+  if (Number.isFinite(intervalMs) && intervalMs > 0) {
+    const worktreeSweepTimer = setInterval(() => void worktreeSweep.runOnce(), intervalMs);
+    if (typeof worktreeSweepTimer.unref === 'function') worktreeSweepTimer.unref();
+  }
+}
+
+// pc-pty-chat-415 (R5) — accept ⇒ land. Wire the per-project WorktreeService
+// accessor the landing service uses (services can't reach the project
+// registry), then re-drive landings interrupted mid-flight ('pending' rows —
+// the mechanics are idempotent, so a crash between merge and push converges).
+// Fire-and-forget: a slow git/origin can't block startup.
+setLandingWorktreesAccessor(
+  (projectId) => projectRegistry.ensure(projectId)?.worktrees() ?? null,
+);
+void (async () => {
+  try {
+    for (const row of listContractsPendingLanding()) {
+      const res = await landAcceptedContract(row.id);
+      const detail = res.applicable ? res.outcome : `skipped (${res.reason})`;
+      console.log(`[landing] boot re-drive contract ${row.id}: ${detail}`);
+    }
+  } catch (err) {
+    console.error('[landing] boot re-drive failed:', (err as Error).message);
+  }
+})();
+
 // Step 2 — start THE loop (the same tick boot just ran; the only liveness
 // interval in the codebase — ONE-RECONCILER guard). Events = latency,
 // reconcile = correctness: anything the live stream drops converges here.
@@ -871,7 +941,7 @@ function deliverWorkflowFirstRunReview(input: {
     `First runs are when a workflow is least tuned — this is the moment to catch ` +
     `wasted steps, a specialist making excessive tool calls, the wrong model, or bad wiring.\n\n` +
     `Consider offering the user a review: dispatch the workflow-doctor on this run — ` +
-    `pc_invoke_agent({ agent: "workflow-doctor", input: "Review run ${input.runId} of workflow \\"${input.workflowName}\\" (${input.workflowId}) for inefficiencies and propose fixes." }). ` +
+    `pc_invoke_agent({ name: "workflow-doctor", input: "Review run ${input.runId} of workflow \\"${input.workflowName}\\" (${input.workflowId}) for inefficiencies and propose fixes." }). ` +
     `It reads the run + the agents' transcripts, finds problems, and applies approval-gated fixes.`;
   enqueueMailboxAndFanout({
     message: {
@@ -1292,6 +1362,8 @@ registerAgentRunRoutes(app, {
   // route provisions a real worktree before spawn via the project's
   // WorktreeService (same primitive the DAG executor uses).
   worktreeServiceFor: (projectId) => resolveProject(projectId)?.worktrees() ?? null,
+  // pc-pty-chat-415 (R14) — the stranded report shares the sweep's in-use view.
+  collectInUseWorktrees: collectInUseWorktreePaths,
 });
 
 registerStatuslineRoutes(app, { broadcastTo });

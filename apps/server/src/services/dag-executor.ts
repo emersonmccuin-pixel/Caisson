@@ -44,7 +44,7 @@ export interface NodeOutcome {
   state: 'completed' | 'failed';
   workItemId?: ULID;
   error?: string;
-  /** Captured stdout for bash/script nodes — feeds `$nodeId.output` refs (F#1). */
+  /** Captured output for call nodes (tool result) — feeds `$nodeId.output` refs (F#1). */
   output?: string;
 }
 
@@ -56,15 +56,22 @@ export interface DagExecutorDeps {
   resolveRef(state: State): RefResolver;
   /** Create the child work item + spawn the pod; resolve when terminal. */
   dispatchAgent(node: WorkflowV2.AgentNode, ctx: DagNodeContext): Promise<NodeOutcome>;
+  /** Execute a `call` node — invoke `node.tool` on the registered MCP server
+   *  `node.server` with the rendered args, and capture the result as the
+   *  node's output. Resolves to a TYPED outcome: tool error / transport
+   *  failure / timeout → `failed` with the error text (positive receipt —
+   *  never a silent hang, never a fake success). */
+  callTool(node: WorkflowV2.CallNode, ctx: DagNodeContext): Promise<NodeOutcome>;
   /** Move the run-root card to `stage` — the body of a `move` STEP (FD-9: a
    *  drawn step, not a hidden property). A failed move fails the step. */
   moveCard(stage: string): Promise<{ ok: boolean; error?: string }>;
   /** Execute the git merge for a `merge` node (pc-pty-chat-270 Chunk B).
-   *  Reads git state first (idempotent reconcile), then merge+verify+push+verify.
+   *  Merges into the project's configured integration branch. Reads git state
+   *  first (idempotent reconcile), then merge+verify+push+verify.
    *  `merged`   → node completes, advance proceeds;
    *  `conflict` → arm a review gate via requestReview, pause the run;
    *  `failed`   → fail the node (hard git or infra error). */
-  mergeToDev(
+  mergeToIntegration(
     node: WorkflowV2.MergeNode,
     ctx: DagNodeContext,
   ): Promise<{ outcome: 'merged' | 'conflict' | 'failed'; error?: string }>;
@@ -186,7 +193,7 @@ export class DagExecutor {
 
       if (ready.length === 0) {
         if (skips.length > 0) continue; // skips may have unblocked downstream
-        break; // no progress possible — fall through to finalize
+        return this.finalize(); // no progress possible
       }
 
       const reviewReady = ready.filter((id) => isReview(this.byId.get(id)!));
@@ -238,7 +245,15 @@ export class DagExecutor {
       return 'awaiting-review';
     }
 
-    return this.finalize();
+    // Tick-safety guard exhausted without the loop breaking — an engine bug
+    // (the loop should always settle, pause, or run out of ready nodes within
+    // the guard). Fail loudly instead of silently finalizing a possibly-still-
+    // running state (positive receipt — never a silent hang).
+    const reason = `advance() exceeded the ${String(TICK_SAFETY)}-tick safety guard — aborting the run (engine bug)`;
+    this.deps.event({ type: 'workflow_failed', data: { reason } });
+    this.deps.persist(this.state, 'failed', { lastReason: reason });
+    this.deps.notifyRunFailed?.(reason);
+    return 'failed';
   }
 
   private async runLayer(ids: string[], resolve: RefResolver): Promise<void> {
@@ -256,7 +271,13 @@ export class DagExecutor {
           const node = this.byId.get(id)!;
           try {
             // runLayer sees non-review, non-loop ready nodes (reviews pause via
-            // requestReview; loops never dispatch). Run kinds: agent, move, merge.
+            // requestReview; loops never dispatch). Run kinds: agent, move,
+            // merge, call.
+            if (node.kind === 'call') {
+              const carry = this.carryFor(id, resolve);
+              const outcome = await this.deps.callTool(node, this.ctx(resolve, carry));
+              return { id, outcome };
+            }
             if (node.kind === 'move') {
               const res = await this.deps.moveCard(node.stage);
               this.deps.event({
@@ -275,7 +296,7 @@ export class DagExecutor {
             // This is the ONE non-review node that can pause the run, kept
             // NARROW: only merge nodes, only via the existing requestReview door.
             if (node.kind === 'merge') {
-              const r = await this.deps.mergeToDev(node, this.ctx(resolve));
+              const r = await this.deps.mergeToIntegration(node, this.ctx(resolve));
               if (r.outcome === 'merged') {
                 return { id, outcome: { state: 'completed' as const } };
               }

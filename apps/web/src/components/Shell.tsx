@@ -315,7 +315,7 @@ function Center({
             <WorkItemsPage project={activeProject} projects={projects} events={wsEvents} />
           </ErrorBoundary>
         ) : effectiveTab === 'orchestrator' ? (
-          <ErrorBoundary key={activeProject.id} label="chat">
+          <ErrorBoundary resetKey={activeProject.id} label="chat">
             <Orchestrator
               project={activeProject}
               events={wsEvents}

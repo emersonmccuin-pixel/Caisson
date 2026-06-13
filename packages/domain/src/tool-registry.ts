@@ -346,7 +346,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_create_agent",
     "family": "agent",
     "label": "Create an agent pod",
-    "description": "Create a NEW agent pod (DB-resident). Returns the new pod row with its ULID id. Defaults to scope='project' (pod is owned by the current project — set via PC_PROJECT_ID). Pass scope='global' only when the user explicitly says this agent should be reusable across every project. Use this for fresh agent design — the user said 'build me an agent that does X'. For structural design from scratch you should usually dispatch agent-designer first (pc_invoke_agent agent='agent-designer') so the design conversation happens in its specialised pod; call pc_create_agent directly only for trivial extractors / utilities or when continuing a design conversation. Stock-pod names (orchestrator/researcher/writer/code-writer/reviewer/planner/extractor/agent-designer) are reserved — 400 if name collides with a global. Broadcasts pod-changed on success.",
+    "description": "Create a NEW agent pod (DB-resident). Returns the new pod row with its ULID id. Defaults to scope='project' (pod is owned by the current project — set via PC_PROJECT_ID). Pass scope='global' only when the user explicitly says this agent should be reusable across every project. Use this for fresh agent design — the user said 'build me an agent that does X'. For structural design from scratch you should usually dispatch agent-designer first (pc_invoke_agent name='agent-designer') so the design conversation happens in its specialised pod; call pc_create_agent directly only for trivial extractors / utilities or when continuing a design conversation. Stock-pod names (orchestrator/researcher/writer/code-writer/reviewer/planner/extractor/agent-designer) are reserved — 400 if name collides with a global. Broadcasts pod-changed on success.",
     "catalogDescription": "Author a new agent pod row (use for fresh-design flows).",
     "inputSchema": {
       "type": "object",
@@ -517,38 +517,6 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
-    "name": "pc_clone_agent_to_project",
-    "family": "agent",
-    "label": "Clone a pod into a project",
-    "description": "Clone a pod into a target project as a project-scoped copy (scalar fields + attached context docs + MCP servers; secrets are NOT copied). Workflow agent steps require project-scoped pods — use this to bring a global pod into the project before wiring it into a workflow. 409 if the target name already exists in the project. Audits as actor='orchestrator'. Accepts either { id } or { name } for the source pod; projectId defaults to the calling session's project.",
-    "catalogDescription": "Copy a pod into a project (workflows need project-scoped pods).",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "source pod ULID id (mutually exclusive with name)"
-        },
-        "name": {
-          "type": "string",
-          "description": "source pod name (looked up if id absent)"
-        },
-        "projectId": {
-          "type": "string",
-          "description": "target project ULID — defaults to the calling session's project"
-        },
-        "newName": {
-          "type": "string",
-          "description": "optional name override for the clone"
-        },
-        "reason": {
-          "type": "string",
-          "description": "optional one-line audit reason"
-        }
-      }
-    }
-  },
-  {
     "name": "pc_reset_agent_to_default",
     "family": "agent",
     "label": "Reset a stock pod to its default",
@@ -643,8 +611,8 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_add_agent_mcp_server",
     "family": "agent",
     "label": "Configure an agent's MCP server",
-    "description": "Configure a per-pod MCP server (e.g. gmail, jira, custom). The pod's materialised mcp.json will merge this server into the baseline at spawn time; pod entry wins per-server-name. Pass the standard MCP config shape: { command, args, env } OR { url } (for HTTP transports). Accepts either { agentId } or { agentName }.",
-    "catalogDescription": "Attach a per-pod MCP server config (gmail, jira, etc.).",
+    "description": "Attach an MCP server that is already registered in the MCP registry to a pod, choosing which of its tools the pod may call. Register the server first (App/Project settings → MCP Servers, or the /api/mcp-servers HTTP route); this grants the pod access by the server's id and takes effect on the pod's next session. Accepts either { agentId } or { agentName } plus { mcpServerId }.",
+    "catalogDescription": "Attach a registered MCP server to a pod (per-tool grants).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -656,42 +624,16 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
           "type": "string",
           "description": "pod name (looked up if agentId absent)"
         },
-        "serverName": {
+        "mcpServerId": {
           "type": "string",
-          "description": "MCP server name (e.g. \"gmail\")"
+          "description": "ULID id of a server already registered in the MCP registry"
         },
-        "config": {
-          "type": "object",
-          "description": "MCP server config: { command, args?, env? } or { url }",
-          "properties": {
-            "command": {
-              "type": "string"
-            },
-            "args": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "env": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            },
-            "url": {
-              "type": "string"
-            }
-          }
-        },
-        "reason": {
-          "type": "string",
-          "description": "optional one-line audit reason"
+        "enabledTools": {
+          "description": "which of the server's tools to grant: \"*\" for all (default), or an array of tool names"
         }
       },
       "required": [
-        "serverName",
-        "config"
+        "mcpServerId"
       ]
     }
   },
@@ -951,7 +893,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
       "properties": {
         "def": {
           "type": "object",
-          "description": "v2 workflow object: { id, name, nodes: [...], description?, worktree? } (NO triggers key — runs start via Run-now or pc_fire_workflow). FOUR node kinds (FD-9): 'agent' { agent, task, input?, expected_output?, next?, when? } · 'review' { reviewer:'human'|'orchestrator', prompt?, reject?: '<loopId>', next? } · 'move' { stage: '<stageId>', next? } (a drawn card-move step) · 'loop' { back_to, max_iterations? (default 3), carry? } (the one retry construct — the reject target of exactly one review; no next/when/input). Wire step-to-step output via input ports — `input: { name: \"$earlierId.output\" }` + `{{name}}` in task/prompt (preferred) — or inline `$earlierId.output` refs (= the upstream AGENT step's deliverable; `.field` needs a `payload` output). Every `{{name}}` needs an `input:` key and every ref must point at a strictly-earlier agent step, else the publish returns a validation error.",
+          "description": "v2 workflow object: { id, name, nodes: [...], description?, worktree? } (NO triggers key — runs start via Run-now or pc_fire_workflow). FIVE authoring node kinds (FD-9): 'agent' { agent, task, input?, expected_output?, next?, when? } · 'review' { reviewer:'human'|'orchestrator', prompt?, reject?: '<loopId>', next? } · 'move' { stage: '<stageId>', next? } (a drawn card-move step) · 'loop' { back_to, max_iterations? (default 3), carry? } (the one retry construct — the reject target of exactly one review; no next/when/input) · 'call' { server, tool, args?, next?, when? } (engine-executed tool call on a REGISTERED MCP server — deterministic external work like a Gmail draft or a Snowflake query with no agent; args string values support refs/{{name}}; the server must exist in the MCP registry or publish fails). Wire step-to-step output via input ports — `input: { name: \"$earlierId.output\" }` + `{{name}}` in task/prompt (preferred) — or inline `$earlierId.output` refs (= the upstream agent step's deliverable, or a call step's tool result; `.field` needs a `payload` output / JSON-object tool result). Every `{{name}}` needs an `input:` key and every ref must point at a strictly-earlier agent or call step, else the publish returns a validation error.",
           "additionalProperties": true
         }
       },
@@ -1153,7 +1095,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "def": {
           "type": "object",
-          "description": "v2 workflow graph object (alternative to yaml). { id, name, nodes:[...] } (NO triggers key — runs start via Run-now or pc_fire_workflow). FOUR node kinds (FD-9): 'agent' { agent, task, input?, expected_output?, next?, when? } · 'review' { reviewer:'human'|'orchestrator', prompt?, reject?: '<loopId>', next? } · 'move' { stage:'<stageId>', next? } · 'loop' { back_to, max_iterations?, carry? } (reject target of exactly one review; no next/when/input). Wire step output→input via input ports `input:{ name:\"$earlierId.output\" }` + `{{name}}` (preferred) or inline `$earlierId.output` refs (the upstream AGENT step's deliverable; `.field` needs a `payload` output). Refs must point at strictly-earlier agent steps.",
+          "description": "v2 workflow graph object (alternative to yaml). { id, name, nodes:[...] } (NO triggers key — runs start via Run-now or pc_fire_workflow). FIVE authoring node kinds (FD-9): 'agent' { agent, task, input?, expected_output?, next?, when? } · 'review' { reviewer:'human'|'orchestrator', prompt?, reject?: '<loopId>', next? } · 'move' { stage:'<stageId>', next? } · 'loop' { back_to, max_iterations?, carry? } (reject target of exactly one review; no next/when/input) · 'call' { server, tool, args?, next?, when? } (engine-executed tool call on a REGISTERED MCP server — no agent; args string values support refs/{{name}}). Wire step output→input via input ports `input:{ name:\"$earlierId.output\" }` + `{{name}}` (preferred) or inline `$earlierId.output` refs (the upstream agent step's deliverable, or a call step's tool result; `.field` needs a `payload` output / JSON-object result). Refs must point at strictly-earlier agent or call steps.",
           "additionalProperties": true
         },
         "scope": {
@@ -2062,7 +2004,6 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   // Agent-mgmt toolkit audit (2026-06-04) — the three UI-only pod lifecycle
   // doors gained tools (FD: complete agent-management toolkit).
   pc_promote_agent_to_global: 'on-demand',
-  pc_clone_agent_to_project: 'on-demand',
   pc_reset_agent_to_default: 'on-demand',
   pc_create_agent_secret: 'on-demand',
   pc_delete_agent_secret: 'on-demand',

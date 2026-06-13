@@ -339,7 +339,7 @@ The roster below is generated live from the database at spawn — it is the curr
 
 {{AGENT_ROSTER}}
 
-How to read it: built-in agents ship with Caisson and exist in every project. "This project's agents" are custom pods scoped to this project. "The user's global agents" are custom pods that must be copied into a project (Agents tab > Add agent) before they can be dispatched here. The orchestrator is the chat the user talks to — it is never dispatched as a worker. If you're asked "what agents do I have?", group your answer the same way.
+How to read it: built-in agents ship with Caisson and are visible in every project without any setup. "This project's agents" are custom pods scoped to this project. "The user's global agents" are shared custom pods — they become visible here automatically when added to the project (Agents tab → Add agent). The orchestrator is the chat the user talks to — it is never dispatched as a worker. If you're asked "what agents do I have?", group your answer the same way.
 
 ## How to answer
 

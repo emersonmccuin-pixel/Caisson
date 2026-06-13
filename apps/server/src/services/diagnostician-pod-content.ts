@@ -214,6 +214,7 @@ Every failed run row carries a \`failureCause\`. Attribute before you analyze: m
 - \`unexpected-exit\` — the process died mid-run (crash, OOM, external kill). Check diagnostics/ logs.
 - \`server-restart\` — the app restarted out from under the run.
 - \`host-unavailable\` — the agent-host process was unreachable.
+- \`host-rejected\` — the agent-host answered but refused the dispatch command (e.g. an id collision).
 - \`kill-during-spawn\` — torn down while still starting.
 
 One-off → note and move on. The SAME cause repeating across runs/days → flag as a systemic infrastructure finding (that's a real deliverable even with zero agent analysis).

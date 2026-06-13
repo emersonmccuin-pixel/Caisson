@@ -91,6 +91,10 @@ export interface UpdateAgentRunStatusInput {
   spawnedAt?: number;
   /** Set when transitioning into 'running'. */
   readyAt?: number;
+  /** Host-backed runs (2026-06-10): OS pid of the live claude.exe child from
+   *  the host snapshot (null after exit). Persisted so peek/kill can answer
+   *  "is anything actually alive" — host runs used to always show pid null. */
+  pid?: number | null;
   /** Set on the resume path (paused → spawning). Captures pod-row revision
    *  at resume time for drift detection. */
   podRevisionAtResume?: string | null;
@@ -104,6 +108,7 @@ export function updateAgentRunStatus(input: UpdateAgentRunStatusInput): void {
   const patch: Partial<AgentRunRow> = { status: input.status, rev: REV_INC };
   if (input.spawnedAt !== undefined) patch.spawnedAt = input.spawnedAt;
   if (input.readyAt !== undefined) patch.readyAt = input.readyAt;
+  if (input.pid !== undefined) patch.pid = input.pid;
   if (input.podRevisionAtResume !== undefined) {
     patch.podRevisionAtResume = input.podRevisionAtResume;
   }

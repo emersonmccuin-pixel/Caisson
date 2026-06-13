@@ -50,6 +50,7 @@ import {
   GitMerge,
   Maximize2,
   Minimize2,
+  Plug,
   RotateCcw,
   ShieldCheck,
   X,
@@ -77,6 +78,7 @@ const KIND_CONFIG: Record<WorkflowV2.WorkflowNode['kind'], KindConfig> = {
   move: { label: 'move card', icon: ArrowRightCircle, band: 'bg-success/70' },
   loop: { label: 'loop', icon: RotateCcw, band: 'bg-muted-foreground/60' },
   merge: { label: 'merge', icon: GitMerge, band: 'bg-info/70' },
+  call: { label: 'tool call', icon: Plug, band: 'bg-info/50' },
 };
 
 // Border + animation classes per lock 9 (runtime overlay vocabulary).
@@ -123,7 +125,12 @@ export function nodeLabel(node: WorkflowV2.WorkflowNode): {
       return { title: 'If rejected, retry', subtitle: max };
     }
     case 'merge':
-      return { title: 'Merge into dev', subtitle: humanizeId(node.id) };
+      return { title: 'Merge into integration branch', subtitle: humanizeId(node.id) };
+    case 'call':
+      return {
+        title: humanizeId(node.id),
+        subtitle: `Calls ${node.tool} on ${node.server}`,
+      };
   }
 }
 
@@ -1148,6 +1155,34 @@ function NodeDetailBody({
       <>
         <DetailRow label="Loops back to" value={humanizeId(node.back_to)} />
         <DetailRow label="Max retries" value={max} />
+      </>
+    );
+  }
+
+  if (node.kind === 'call') {
+    const argEntries = node.args ? Object.entries(node.args) : [];
+    return (
+      <>
+        <DetailRow label="MCP server" value={node.server} />
+        <DetailRow label="Tool" value={node.tool} />
+        {node.when && (
+          <DetailSection label="Condition">
+            <code className="break-all font-mono text-[10px] text-muted-foreground">{node.when}</code>
+          </DetailSection>
+        )}
+        {argEntries.length > 0 && (
+          <DetailSection label="Arguments">
+            {argEntries.map(([k, v]) => (
+              <div key={k} className="flex gap-1 font-mono text-[10px]">
+                <span className="shrink-0 text-primary/70">{k}</span>
+                <span className="text-muted-foreground">←</span>
+                <span className="break-all text-muted-foreground/80">
+                  {typeof v === 'string' ? v : JSON.stringify(v)}
+                </span>
+              </div>
+            ))}
+          </DetailSection>
+        )}
       </>
     );
   }

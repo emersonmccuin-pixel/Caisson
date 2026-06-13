@@ -98,7 +98,10 @@ export {
   listContractsForRunInDb,
   listContractsForWorkItem,
   listContractsForWorkItemInDb,
+  listAbandonedContractBranches,
+  listContractsPendingLanding,
   setContractDeliverable,
+  setContractLanding,
   setContractRun,
   setContractVerification,
 } from './repos/contracts.ts';
@@ -106,6 +109,7 @@ export type {
   ContractRow,
   CreateContractInput,
   SetDeliverableInput,
+  SetLandingInput,
   SetVerificationInput,
 } from './repos/contracts.ts';
 
@@ -172,8 +176,8 @@ export type { UpsertWorktreeInput } from './repos/worktrees.ts';
 export { getGlobalSettings, setGlobalSettings } from './repos/settings.ts';
 
 export {
+  addAgentToProject,
   bumpAgentRev,
-  cloneAgentToProject,
   createAgent,
   createSecret,
   deleteSecret,
@@ -182,20 +186,20 @@ export {
   getPodForSpawn,
   getSecret,
   getSecretByEnvVarName,
-  isProjectDispatchable,
+  listAgentProjects,
   listAgents,
+  listProjectMemberAgents,
   listProjectVisibleAgents,
   listSecrets,
-  promoteAgentToGlobal,
+  removeAgentFromProject,
   resolveAgentForDispatch,
   restoreAgent,
+  setAgentShareable,
   softDeleteAgent,
   toAgentContextDoc,
   updateAgent,
 } from './repos/pods.ts';
 export type {
-  CloneAgentResult,
-  CloneAgentToProjectInput,
   CreateAgentInput,
   CreateSecretInput,
   GetAgentByNameInput,
@@ -388,12 +392,26 @@ export type {
   RecordDeliveredOrchestratorSendInput,
 } from './repos/orchestrator-send-queue.ts';
 
+// Connector-auth Slice 1 (pc-pty-chat-400.2) — Credentials vault repo.
+// Connector-auth Slice 3 (pc-pty-chat-400.4) — added getCredentialByServerAndKind.
+export {
+  createCredential,
+  deleteCredential,
+  getCredential,
+  getCredentialByServer,
+  getCredentialByServerAndKind,
+  listCredentialsByScope,
+  updateCredentialAuthState,
+} from './repos/credentials.ts';
+export type { CreateCredentialInput } from './repos/credentials.ts';
+
 // pc-pty-chat-359 P1/P2 — MCP Server Registry repo.
 export {
   createMcpServerRegistry,
   getMcpServerRegistry,
   listMcpServersRegistry,
   patchMcpServerRegistry,
+  replaceTransportOnly,
   setMcpServerDiscovery,
   softDeleteMcpServerRegistry,
 } from './repos/mcp-servers.ts';

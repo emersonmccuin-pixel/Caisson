@@ -1,8 +1,7 @@
 // "+ Add agent" modal. Two tabs:
-//   - From global pool (default when pool has pickable globals): pick a
-//     user-promoted global pod and clone it into THIS project. Skips stock
-//     pods (always-visible in the Built-in section) + globals whose name is
-//     already a project pod here. Clone via POST /clone-to-project.
+//   - From library (default when there are addable shared agents): pick a
+//     shareable pod and attach it to THIS project via POST /add-to-project.
+//     The agent is NOT copied — edits apply to every project it's attached to.
 //   - Manual: the plain inline form (name / description / prompt / model /
 //     effort / max-turns / tools / output destination).
 //
@@ -21,40 +20,32 @@ import { ChatHandoffBanner } from '../ChatHandoffBanner';
 
 interface CreatePodModalProps {
   project: Project;
-  /** Names of project-scope pods already in THIS project. Used by the
-   *  global-pool picker to hide globals whose name would collide. */
-  existingProjectPodNames?: string[];
   onClose: () => void;
   onCreated: (pod: Pod) => void;
 }
 
-type TabKey = 'global-pool' | 'manual';
+type TabKey = 'library' | 'manual';
 
 export function CreatePodModal({
   project,
-  existingProjectPodNames,
   onClose,
   onCreated,
 }: CreatePodModalProps) {
   const [globalPool, setGlobalPool] = useState<Pod[] | null>(null);
   const [poolErr, setPoolErr] = useState<string | null>(null);
-  const [tab, setTab] = useState<TabKey>('global-pool');
+  const [tab, setTab] = useState<TabKey>('library');
   const initialTabSet = useRef(false);
 
-  const projectNamesSet = useMemo(
-    () => new Set(existingProjectPodNames ?? []),
-    [existingProjectPodNames],
-  );
-
+  // Shareable non-stock agents not yet attached to this project.
   const pickableGlobals = useMemo(() => {
     if (!globalPool) return [];
     return globalPool.filter(
       (p) =>
-        p.scope === 'global' &&
+        p.shareable === true &&
         p.origin !== 'stock' &&
-        !projectNamesSet.has(p.name),
+        !(p.memberProjectIds ?? []).includes(project.id),
     );
-  }, [globalPool, projectNamesSet]);
+  }, [globalPool, project.id]);
 
   // Load the global pool once on mount.
   useEffect(() => {
@@ -71,7 +62,7 @@ export function CreatePodModal({
     };
   }, []);
 
-  // Once we know the pool is empty, snap to the Manual tab the first time.
+  // Once we know the library is empty, snap to Manual the first time.
   // After that, respect user navigation.
   useEffect(() => {
     if (initialTabSet.current) return;
@@ -108,7 +99,7 @@ export function CreatePodModal({
         <TabStrip value={tab} onChange={setTab} />
 
         <div className="relative min-h-0 flex-1">
-          <TabPanel active={tab === 'global-pool'}>
+          <TabPanel active={tab === 'library'}>
             <GlobalPoolPanel
               project={project}
               pool={globalPool}
@@ -140,8 +131,8 @@ function TabStrip({
 }) {
   return (
     <div className="flex shrink-0 items-end gap-1 border-b border-border bg-card px-4 pt-2">
-      <TabButton active={value === 'global-pool'} onClick={() => onChange('global-pool')}>
-        From global pool
+      <TabButton active={value === 'library'} onClick={() => onChange('library')}>
+        From library
       </TabButton>
       <TabButton active={value === 'manual'} onClick={() => onChange('manual')}>
         Manual
@@ -201,7 +192,7 @@ function TabPanel({
   );
 }
 
-// ── Global pool tab — pick + clone ────────────────────────────────────────
+// ── Library tab — pick + attach ───────────────────────────────────────────
 
 function GlobalPoolPanel({
   project,
@@ -214,29 +205,37 @@ function GlobalPoolPanel({
   pool: Pod[] | null;
   pickable: Pod[];
   error: string | null;
-  onPicked: (newPod: Pod) => void;
+  onPicked: (pod: Pod) => void;
 }) {
-  const [cloningId, setCloningId] = useState<string | null>(null);
+  const [addingId, setAddingId] = useState<string | null>(null);
   const [rowErr, setRowErr] = useState<string | null>(null);
 
   async function pick(pod: Pod) {
-    if (cloningId) return;
+    if (addingId) return;
     setRowErr(null);
-    setCloningId(pod.id);
+    setAddingId(pod.id);
     try {
-      const { pod: cloned } = await agentsApi.clonePodToProject(pod.id, project.id);
-      onPicked(cloned);
+      await agentsApi.addPodToProject(pod.id, project.id);
+      onPicked(pod);
     } catch (e) {
-      setRowErr((e as Error).message);
+      const err = e as Error & { kind?: string };
+      if (err.kind === 'name-collision') {
+        setRowErr(
+          `An agent named "${pod.name}" already exists in this project. ` +
+          `Rename the existing one before adding this shared agent.`,
+        );
+      } else {
+        setRowErr(err.message);
+      }
     } finally {
-      setCloningId(null);
+      setAddingId(null);
     }
   }
 
   if (pool === null) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Loading global pool…
+        Loading shared library…
       </div>
     );
   }
@@ -253,10 +252,10 @@ function GlobalPoolPanel({
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
         <div className="max-w-md text-sm text-muted-foreground">
-          No agents in the global pool yet. Describe the agent in{' '}
-          <span className="font-medium text-foreground">chat</span> (banner above) or use{' '}
-          <span className="font-medium text-foreground">Manual</span> to design one — then{' '}
-          <span className="font-medium text-foreground">Promote to global</span> later to share across projects.
+          No shared agents in the library yet. Design one in{' '}
+          <span className="font-medium text-foreground">Manual</span>, then use{' '}
+          <span className="font-medium text-foreground">Make shareable</span> to add it to the
+          library — after that it can be attached to other projects here.
         </div>
       </div>
     );
@@ -265,7 +264,8 @@ function GlobalPoolPanel({
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-4 py-2 text-xs text-muted-foreground">
-        Adding from the pool clones the agent into this project. Edits here don't touch the global copy.
+        These are shared agents — the same agent row is attached to this project.
+        Edits apply everywhere it's used.
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         <div className="flex flex-col gap-1">
@@ -275,7 +275,14 @@ function GlobalPoolPanel({
               className="grid grid-cols-[1fr_auto] items-center gap-4 border border-border bg-background px-3 py-2"
             >
               <div className="min-w-0">
-                <div className="font-medium text-foreground">{pod.name}</div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-foreground">{pod.name}</span>
+                  {(pod.memberProjectIds?.length ?? 0) > 0 && (
+                    <span className="text-[9px] uppercase tracking-wider text-sky-400">
+                      {pod.memberProjectIds.length} project{pod.memberProjectIds.length !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
                 {pod.description && (
                   <div className="mt-0.5 truncate text-xs text-muted-foreground">
                     {pod.description}
@@ -285,10 +292,10 @@ function GlobalPoolPanel({
               <button
                 type="button"
                 onClick={() => void pick(pod)}
-                disabled={cloningId !== null}
+                disabled={addingId !== null}
                 className="border border-border bg-card px-3 py-1 text-xs hover:bg-muted disabled:opacity-50"
               >
-                {cloningId === pod.id ? 'Adding…' : 'Add'}
+                {addingId === pod.id ? 'Adding…' : 'Add to this project'}
               </button>
             </div>
           ))}
@@ -296,6 +303,7 @@ function GlobalPoolPanel({
         {rowErr && (
           <div className="mt-3 border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {rowErr}
+            <button onClick={() => setRowErr(null)} className="ml-2 underline">dismiss</button>
           </div>
         )}
       </div>

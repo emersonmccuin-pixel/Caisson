@@ -29,6 +29,7 @@ import type { MailboxEnqueuePort } from './agent-delivery.ts';
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import type { DispatchAgentResult } from './agent-run-factory.ts';
 import { dispatchContinueAgent } from './agent-run-factory.ts';
+import { landAcceptedContract as defaultLandAcceptedContract } from './landing-service.ts';
 
 // Error codes
 
@@ -89,6 +90,9 @@ export interface ReviewDecisionVerificationDeps {
   contractService?: ContractService;
   reviewInbox?: ReviewInboxResolution | null;
   dispatch?: typeof dispatchContinueAgent;
+  /** pc-pty-chat-415 (R5) — accept ⇒ land. Test seam; production defaults to
+   *  the real landing service. */
+  landAcceptedContract?: typeof defaultLandAcceptedContract;
 }
 
 export type ReviewDecisionDeps =
@@ -157,7 +161,7 @@ export async function applyReviewDecision(
 
   if (decision.kind === 'approve') {
     try {
-      const workItem = approveAgentWorkItem(
+      const { workItem, contract } = approveAgentWorkItem(
         {
           workItemId,
           notes: decision.notes ?? null,
@@ -169,7 +173,21 @@ export async function applyReviewDecision(
           reviewInbox: deps.reviewInbox,
         },
       );
-      return { ok: true, kind: 'verification-hold', workItem };
+      // pc-pty-chat-415 (R5) — accept ⇒ land. A human/orchestrator approval is
+      // an acceptance like any other: standalone repo contracts land on the
+      // integration branch through the ONE landing path (workflow-owned runs
+      // are skipped inside). Outcome is durable on the contract; a landing
+      // crash must never undo the approval that already happened.
+      try {
+        await (deps.landAcceptedContract ?? defaultLandAcceptedContract)(contract.id as ULID, {
+          ...(deps.contractService ? { contractService: deps.contractService } : {}),
+        });
+      } catch (err) {
+        console.warn(
+          `[review-decision] landing after approval failed for contract ${contract.id}: ${(err as Error).message}`,
+        );
+      }
+      return { ok: true, kind: 'verification-hold', workItem, contract };
     } catch (err) {
       if (err instanceof VerificationReviewError) {
         return { ok: false, code: err.cause, error: err.message };

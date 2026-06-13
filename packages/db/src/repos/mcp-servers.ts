@@ -5,7 +5,7 @@
 // parsePodMcpServerConfig for transport validation; this layer just persists.
 
 import { and, asc, eq, isNull, or } from 'drizzle-orm';
-import type { McpDiscoveryStatus, McpServerRegistryRow, PodMcpServerConfig, PodScope, ULID } from '@pc/domain';
+import type { McpDiscoveryStatus, McpServerRegistryRow, McpServerTransport, PodScope, ULID } from '@pc/domain';
 import { getDb } from '../connection.ts';
 import { newId } from '../id.ts';
 import { mcpServers } from '../schema.ts';
@@ -36,7 +36,7 @@ export interface CreateMcpServerRegistryInput {
   projectId?: ULID | null;
   name: string;
   description?: string;
-  transport: PodMcpServerConfig;
+  transport: McpServerTransport;
 }
 
 export function createMcpServerRegistry(input: CreateMcpServerRegistryInput): McpServerRegistryRow {
@@ -113,7 +113,7 @@ export function listMcpServersRegistry(opts: ListMcpServersRegistryOptions = {})
 export interface PatchMcpServerRegistryInput {
   name?: string;
   description?: string;
-  transport?: PodMcpServerConfig;
+  transport?: McpServerTransport;
 }
 
 export function patchMcpServerRegistry(
@@ -191,4 +191,29 @@ export function softDeleteMcpServerRegistry(id: ULID): McpServerRegistryRow | nu
     .where(eq(mcpServers.id, id))
     .run();
   return { ...existing, deletedAt: now, updatedAt: now, rev: existing.rev + 1 };
+}
+
+// --- secret-ref migration helper ---------------------------------------------
+
+/** Update ONLY the transport JSON on a registry server, without touching
+ *  `discoveryStatus` or `discoveredTools`. Used by the plaintext-to-vault
+ *  migration (Slice 2 — pc-pty-chat-400.3): the probe result remains valid
+ *  after a transport rewrite that only replaces string values with $secretRef
+ *  objects — the underlying server URL / command has not changed.
+ *
+ *  Contrast with `patchMcpServerRegistry`, which clears cached tools whenever
+ *  the transport changes (appropriate for user-initiated edits). */
+export function replaceTransportOnly(
+  id: ULID,
+  transport: McpServerTransport,
+): McpServerRegistryRow | null {
+  const existing = getMcpServerRegistry(id);
+  if (!existing) return null;
+  const now = Date.now();
+  getDb()
+    .update(mcpServers)
+    .set({ transport, updatedAt: now, rev: existing.rev + 1 })
+    .where(eq(mcpServers.id, id))
+    .run();
+  return getMcpServerRegistry(id);
 }

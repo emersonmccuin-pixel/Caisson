@@ -61,6 +61,7 @@ import {
 } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
+import { workingTreeStatus } from './git-receipts.ts';
 
 /** FD-12 — the one write door (repo write + outbox receipt in one txn). */
 const gateway = new WorkItemMutationGateway();
@@ -131,7 +132,9 @@ export interface VerificationDeps {
   contractService?: ContractService;
   /** Slice 7 (pc-pty-chat-374.5) — flush-barrier check for worktree dispatches.
    *  Returns true when the working tree has uncommitted changes. Injected in
-   *  tests; production falls back to the private `workingTreeDirty` helper. */
+   *  tests; production falls back to the shared `git-receipts` probe (a failed
+   *  probe reads as not-dirty here, preserving the barrier's pre-415 lenience;
+   *  the deliverable-door SEAL is the strict gate). */
   checkDirtyWorktree?: (worktreeDir: string) => Promise<boolean>;
   now?: () => number;
 }
@@ -290,13 +293,19 @@ export async function runVerificationOnTerminal(
   // working tree at verification time means the worktree is not in a stable
   // committed state — treat as inconclusive rather than running checks against
   // a half-written tree and producing a potentially wrong verdict.
+  // pc-pty-chat-415 (R4): the deliverable door now SEALS repo submissions
+  // (refuses dirty worktrees with a retryable error), so for fresh runs this
+  // barrier should never trip — it survives as the backstop for legacy rows
+  // and runs that mutate the tree between delivery and verification.
   const hasSideEffectingPredicate = criteria.some(
     (p) => p.kind === 'bash_exit_zero' || p.kind === 'files_exist',
   );
-  if (specObj?.isolation === 'worktree' && hasSideEffectingPredicate) {
+  // pc-pty-chat-415 (R3): repo kind ⇒ worktree, always — the barrier keys off
+  // the kind, so legacy specs without an isolation field are covered too.
+  if (specObj?.kind === 'repo' && hasSideEffectingPredicate) {
     const isDirty = await (
       deps.checkDirtyWorktree ??
-      ((dir) => workingTreeDirty(dir, DEFAULT_BASH_TIMEOUT_MS))
+      (async (dir: string) => (await workingTreeStatus(dir, DEFAULT_BASH_TIMEOUT_MS)) === 'dirty')
     )(input.worktreeDir);
     if (isDirty) {
       const notes =
@@ -511,6 +520,11 @@ export function createWorktreeExecutors(input: {
   worktreeDir: string;
   projectFolderPath: string;
   bashTimeoutMs?: number;
+  /** Full project record (present when called with RunVerificationInput).
+   *  Carries settings.integrationBranch — the authoritative committed-diff
+   *  base for worktree dispatches. Optional: project-less test paths fall
+   *  back to the literal base list. */
+  project?: Project | null;
 }): PredicateExecutors {
   const bashTimeoutMs = input.bashTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS;
   return {
@@ -603,12 +617,17 @@ export function createWorktreeExecutors(input: {
 
       if (cwd === 'worktree') {
         // Worktree dispatches: assert COMMITTED changes vs the provisioning base.
-        // The worktree branch was created from a base branch (commonly dev, main,
-        // or master). Try each in order; the first that resolves determines the
-        // result. A count > 0 means committed changes exist — working-tree
-        // dirtiness is intentionally IGNORED so a clean commit does NOT
-        // false-fail the predicate (pc-pty-chat-207 / pc-pty-chat-281).
-        for (const base of ['dev', 'main', 'master', 'trunk']) {
+        // The project's configured integration branch is the authoritative base;
+        // the literal list is a fallback for project-less test paths. Try each
+        // in order; the first that resolves determines the result. A count > 0
+        // means committed changes exist — working-tree dirtiness is
+        // intentionally IGNORED so a clean commit does NOT false-fail the
+        // predicate (pc-pty-chat-207 / pc-pty-chat-281).
+        const configured = input.project?.settings.integrationBranch;
+        const bases = [...new Set([configured, 'dev', 'main', 'master', 'trunk'])].filter(
+          (b): b is string => typeof b === 'string' && b.length > 0,
+        );
+        for (const base of bases) {
           const count = await countCommitsAhead(cwdAbs, base, bashTimeoutMs);
           if (count !== null) return count > 0;
         }
@@ -620,7 +639,7 @@ export function createWorktreeExecutors(input: {
       // fall back to checking working-tree dirtiness (original behavior).
       // Note: for in-place, a clean committed diff still false-fails — fixing
       // that requires storing the pre-dispatch HEAD at contract creation time.
-      return workingTreeDirty(cwdAbs, bashTimeoutMs);
+      return (await workingTreeStatus(cwdAbs, bashTimeoutMs)) === 'dirty';
     },
   };
 }
@@ -683,34 +702,6 @@ function countCommitsAhead(cwd: string, base: string, timeoutMs: number): Promis
   });
 }
 
-/**
- * True iff the working tree in `cwd` has any uncommitted change (tracked,
- * staged, or untracked). Used as the fallback for `hasGitDiff` when committed-
- * diff detection isn't applicable (in-place isolation or no detectable base).
- */
-function workingTreeDirty(cwd: string, timeoutMs: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    let out = '';
-    let settled = false;
-    const child = spawn('git', ['status', '--porcelain'], { cwd });
-    const finish = (val: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(val);
-    };
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* best-effort */
-      }
-      finish(false);
-    }, timeoutMs);
-    child.stdout?.on('data', (d) => {
-      out += String(d);
-    });
-    child.on('error', () => finish(false));
-    child.on('exit', () => finish(out.trim().length > 0));
-  });
-}
+// (workingTreeDirty moved to git-receipts.ts — pc-pty-chat-415 R4, one owner;
+// callers map its tri-state: barrier/hasGitDiff read `unknown` as not-dirty,
+// the deliverable-door seal reads `unknown` as refuse.)

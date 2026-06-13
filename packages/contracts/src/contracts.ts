@@ -94,7 +94,8 @@ export type ExpectedOutput =
   | { kind: 'payload'; schema: JsonSchema; semantic?: PayloadSemantic }
   | {
       kind: 'repo';
-      isolation: 'worktree' | 'in_place';
+      // pc-pty-chat-415 (R3) — in_place deleted; repo work is always isolated.
+      isolation?: 'worktree';
       paths_touched?: string[];
       checks?: RepoCheck[];
       require_diff?: boolean;
@@ -206,6 +207,14 @@ export interface Contract {
   deliverable: Deliverable | null;
   /** Isolation axis for repo/file producers. */
   worktreePath: string | null;
+  /** pc-pty-chat-415 (R5/R12) — accept ⇒ land. Null = not applicable
+   *  (non-repo, workflow-owned, pre-415). The receipts outlive the worktree;
+   *  'abandoned' preserves the branch + records its tip before reclaim. */
+  landingStatus: 'pending' | 'landed' | 'conflict' | 'failed' | 'abandoned' | null;
+  landedBranch: string | null;
+  landedSha: string | null;
+  landingError: string | null;
+  landedAt: number | null;
   status: ContractStatus;
   /** Optimistic-concurrency counter. */
   version: number;
@@ -242,6 +251,7 @@ export type ContractMutationReason =
   | 'dispatched'
   | 'deliverable-set'
   | 'verification-set'
+  | 'landing-set'
   | 'patched';
 
 export interface ContractChangedLivePayload {
@@ -288,6 +298,7 @@ export function isContractMutationReason(value: unknown): value is ContractMutat
     value === 'dispatched' ||
     value === 'deliverable-set' ||
     value === 'verification-set' ||
+    value === 'landing-set' ||
     value === 'patched'
   );
 }

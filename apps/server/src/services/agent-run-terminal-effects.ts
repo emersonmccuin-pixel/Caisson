@@ -42,6 +42,7 @@ import {
   type VerificationDeps,
   type VerificationOutcome,
 } from './agent-verification.ts';
+import { landAcceptedContract as defaultLandAcceptedContract } from './landing-service.ts';
 
 type TerminalStatus = 'completed' | 'failed' | 'cancelled';
 
@@ -101,6 +102,11 @@ export interface AgentRunTerminalEffectsDeps {
   markTerminal?: (input: MarkAgentRunTerminalInput) => void;
   verifyOnTerminal?: typeof runVerificationOnTerminal;
   verificationDeps?: VerificationDeps;
+  /** pc-pty-chat-415 (R5) — accept ⇒ land. Called after auto-verification
+   *  PASSES a contract; standalone repo contracts land on the integration
+   *  branch (workflow-owned runs are skipped inside — the merge node owns
+   *  them). Test seam; production defaults to the real landing service. */
+  landAcceptedContract?: typeof defaultLandAcceptedContract;
   now?: () => number;
   onError?: (error: Error) => void;
   /** Issue 3 (near-term) — called immediately after the terminal mailbox
@@ -432,6 +438,27 @@ async function finishTerminalEffects(args: {
         }
       : null;
 
+  // pc-pty-chat-415 (R5) — accept ⇒ land. An auto-verification PASS on a
+  // standalone repo contract lands the sealed branch on the integration
+  // branch through the ONE landing path. Outcome (landed / conflict / failed)
+  // is durable on the contract; the note rides the verification block so the
+  // settle + envelope surface where the work went. Guarded: a landing crash
+  // must never starve the settle/envelope tail.
+  if (outcome?.verificationStatus === 'passed' && contractId && verification) {
+    try {
+      const land = await (deps.landAcceptedContract ?? defaultLandAcceptedContract)(contractId);
+      if (land.applicable) {
+        const note =
+          land.outcome === 'landed'
+            ? `landed on ${land.into ?? 'the integration branch'} (branch ${land.branch})`
+            : `landing ${land.outcome}: ${land.error ?? 'see contract landing record'}`;
+        verification.notes = verification.notes ? `${verification.notes}\n${note}` : note;
+      }
+    } catch (err) {
+      deps.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
   // Slice 013 — the deliverable was captured onto the contract synchronously
   // (see `captureDeliverable`). The envelope surfaces the resolved result.
   const result = resolvedResult;
@@ -680,6 +707,21 @@ export async function replayMissingTerminalEnvelopes(
   let replayed = 0;
   for (const row of rows) {
     const status = row.status as TerminalStatus;
+    // Spawn-flakiness fix (2026-06-10) — a dispatch that failed BEFORE any
+    // spawn on a host start receipt already returned that failure
+    // SYNCHRONOUSLY to its dispatcher (the pc_invoke_agent tool result / the
+    // workflow settlement). Replaying an agent-failed envelope for it minutes
+    // later re-pages the orchestrator about a failure it has typically already
+    // retried — pure noise. The sync receipt is the notification; skip.
+    if (
+      status === 'failed' &&
+      row.spawnedAt === null &&
+      (row.failureCause === 'host-unavailable' ||
+        row.failureCause === 'host-rejected' ||
+        row.failureCause === 'host-protocol-error')
+    ) {
+      continue;
+    }
     const kind: AgentInboxEventKind =
       status === 'completed' ? 'agent-completed' : 'agent-failed';
     if (hasKey(`agent:${row.id}:${kind}`)) continue;
@@ -777,6 +819,7 @@ function agentFailureCauseToPayload(
     case 'host-lost':
     case 'host-crashed':
     case 'host-protocol-error':
+    case 'host-rejected':
       return 'spawn-failed';
     case null:
     default:
@@ -821,6 +864,8 @@ export function describeAgentRunFailure(
       return 'agent host crashed while owning this run';
     case 'host-protocol-error':
       return 'agent host returned an invalid protocol response';
+    case 'host-rejected':
+      return 'agent host rejected the dispatch command';
     default:
       return cause;
   }

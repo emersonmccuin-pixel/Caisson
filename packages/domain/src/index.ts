@@ -39,10 +39,12 @@ export * as ContractV2 from './contract.ts';
 export type {
   Deliverable,
   DeliverableKind,
+  ContractLandingStatus,
   ContractStatus,
   JsonSchema,
 } from './contract.ts';
 export {
+  CONTRACT_LANDING_STATUSES,
   CONTRACT_STATUSES,
   DELIVERABLE_KINDS,
   isContractStatus,
@@ -81,6 +83,7 @@ export { validateFields } from './field-schema.ts';
 export type { Project, ProjectSettings, Stage } from './project.ts';
 export {
   defaultProjectSettings,
+  INTEGRATION_BRANCH_RE,
   postMoveStatusForStage,
   resolveCancelledHidden,
   resolveRemoteControlEnabled,
@@ -188,8 +191,12 @@ export { parseAgentFile, serializeAgentFile } from './agent-file.ts';
 export type {
   AgentContextDoc,
   AgentMcpAttachmentRow,
+  CredentialAuthState,
+  CredentialKind,
+  CredentialRow,
   McpDiscoveryStatus,
   McpServerRegistryRow,
+  McpServerTransport,
   PodAgentRow,
   PodAuditActor,
   PodAuditField,
@@ -200,8 +207,11 @@ export type {
   PodScope,
   PodSecretRow,
   PodSpawnBundle,
+  SecretRef,
+  TransportValue,
 } from './pod.ts';
 export {
+  CREDENTIAL_AUTH_STATES,
   MCP_DISCOVERY_STATUSES,
   POD_AUDIT_ACTORS,
   POD_AUDIT_FIELDS,

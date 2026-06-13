@@ -132,7 +132,7 @@ export function markAwaitingReview(state: State, nodeId: string, instanceToken?:
   return next;
 }
 
-/** Record a node's terminal outcome (agent/bash/script nodes). */
+/** Record a node's terminal outcome (agent/call/move/merge nodes). */
 export function settleNode(
   state: State,
   nodeId: string,
@@ -353,9 +353,15 @@ export function applyReviewDecision(
 export function resumeCompatErrors(
   workflow: WorkflowV2.Workflow,
   state: State,
+  /** The run's frozen snapshot (the def the kept work ran under). When
+   *  supplied, a settled node whose kind CHANGED in the edit is rejected —
+   *  e.g. a `completed` agent node redefined as a move step would otherwise
+   *  carry its kept "completed" into a different kind of work. */
+  previous?: WorkflowV2.Workflow,
 ): string[] {
   const errors: string[] = [];
   const byId = new Map(workflow.nodes.map((n) => [n.id, n]));
+  const prevById = previous ? new Map(previous.nodes.map((n) => [n.id, n])) : null;
   for (const [nodeId, rec] of Object.entries(state.nodes)) {
     if (rec.state === 'pending') continue; // never ran — no kept work to honor
     const node = byId.get(nodeId);
@@ -364,6 +370,12 @@ export function resumeCompatErrors(
         `node "${nodeId}" (${rec.state}) no longer exists in the edited definition — its kept work has no home`,
       );
       continue;
+    }
+    const prevNode = prevById?.get(nodeId);
+    if (prevNode && prevNode.kind !== node.kind) {
+      errors.push(
+        `node "${nodeId}" (${rec.state}) changed kind "${prevNode.kind}" → "${node.kind}" in the edited definition — its kept work belongs to a different kind of step`,
+      );
     }
   }
   return errors;

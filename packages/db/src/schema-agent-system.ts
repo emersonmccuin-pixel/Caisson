@@ -13,6 +13,7 @@ import type {
   AcceptanceCriteria,
   AgentRunFailureCause,
   AgentRunStatus,
+  ContractLandingStatus,
   ContractStatus,
   ContractV2,
   Deliverable,
@@ -150,6 +151,13 @@ export const agentContracts = sqliteTable(
     deliverable: text('deliverable', { mode: 'json' }).$type<Deliverable>(),
     /** Isolation axis for repo/file producers. */
     worktreePath: text('worktree_path'),
+    /** pc-pty-chat-415 (R5) — accept ⇒ land. Null = not applicable (non-repo,
+     *  workflow-owned, pre-415). See ContractLandingStatus in @pc/domain. */
+    landingStatus: text('landing_status').$type<ContractLandingStatus | null>(),
+    landedBranch: text('landed_branch'),
+    landedSha: text('landed_sha'),
+    landingError: text('landing_error'),
+    landedAt: integer('landed_at'),
     status: text('status').notNull().default('issued').$type<ContractStatus>(),
     /** Optimistic-concurrency counter. */
     version: integer('version').notNull().default(1),

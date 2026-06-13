@@ -42,7 +42,9 @@ export function AgentsList({ project, events }: AgentsListProps) {
     for (const pod of pods) {
       if (pod.origin === 'stock') {
         stock.push(pod);
-      } else if (pod.scope === 'project') {
+      } else {
+        // Includes both private project pods and shared (shareable) pods that
+        // are members of this project — the API already scopes the list.
         proj.push(pod);
       }
     }
@@ -110,7 +112,7 @@ export function AgentsList({ project, events }: AgentsListProps) {
         <aside className="overflow-y-auto border-r border-border">
           <ListSection
             title="Built-in"
-            subtitle="Built-in — view-only. Clone into a project to customize."
+            subtitle="Built-in — view-only."
             count={stockPods.length}
             filteredCount={filtered.stock.length}
             empty="No stock specialists."
@@ -166,7 +168,6 @@ export function AgentsList({ project, events }: AgentsListProps) {
       {createOpen && (
         <CreatePodModal
           project={project}
-          existingProjectPodNames={projectPods.map((p) => p.name)}
           onClose={() => setCreateOpen(false)}
           onCreated={(newPod: Pod) => {
             setCreateOpen(false);
@@ -314,6 +315,14 @@ function ListRow({
               Customized
             </span>
           )}
+          {pod.shareable && (
+            <span
+              className="shrink-0 border border-sky-500/60 bg-sky-500/10 px-1 py-px text-[9px] uppercase tracking-wider text-sky-300"
+              title={`Shared — in ${pod.memberProjectIds?.length ?? 0} project(s)`}
+            >
+              Shared · {pod.memberProjectIds?.length ?? 0}
+            </span>
+          )}
         </span>
         <span className="shrink-0 text-[9px] uppercase tracking-wider text-muted-foreground">
           {resolveModelLabel(pod.model)}
@@ -351,7 +360,8 @@ function DetailPane({
   const [actionErr, setActionErr] = useState<string | null>(null);
 
   const isStock = pod.origin === 'stock';
-  const isProject = pod.scope === 'project';
+  // Non-stock pods (private or shared) that are visible in this project.
+  const isProject = pod.origin !== 'stock';
 
   const loadBundle = useMemo(() => {
     return () => {
@@ -419,7 +429,7 @@ function DetailPane({
   async function promote() {
     if (promoting) return;
     const ok = window.confirm(
-      `Promote "${pod.name}" to the global pool?\n\nIt becomes available in every project. The local copy is removed from this project.`,
+      `Make "${pod.name}" shareable?\n\nIt's added to the shared library and can then be attached to other projects. It stays in this project.`,
     );
     if (!ok) return;
     setPromoting(true);
@@ -458,9 +468,14 @@ function DetailPane({
                   stock
                 </span>
               )}
-              {isProject && (
+              {isProject && !pod.shareable && (
                 <span className="border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-primary">
                   project
+                </span>
+              )}
+              {pod.shareable && (
+                <span className="border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-sky-400">
+                  shared · {pod.memberProjectIds?.length ?? 0}
                 </span>
               )}
               {isStock && (
@@ -571,15 +586,21 @@ function DetailPane({
             </div>
           ) : (
             <>
-              <button
-                type="button"
-                onClick={() => void promote()}
-                disabled={promoting}
-                className="border border-border bg-card px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
-                title="Make this agent available in every project"
-              >
-                {promoting ? 'Promoting…' : 'Promote to global'}
-              </button>
+              {pod.shareable ? (
+                <span className="text-xs text-sky-400">
+                  Shared — in {pod.memberProjectIds?.length ?? 0} project(s). Manage in the Membership tab.
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void promote()}
+                  disabled={promoting}
+                  className="border border-border bg-card px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
+                  title="Add this agent to the shared library so it can be attached to other projects"
+                >
+                  {promoting ? 'Making shareable…' : 'Make shareable'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setConfirmingDelete(true)}

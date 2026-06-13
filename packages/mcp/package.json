@@ -18,6 +18,14 @@
     "./probe": {
       "types": "./src/probe.ts",
       "import": "./src/probe.ts"
+    },
+    "./call": {
+      "types": "./src/call.ts",
+      "import": "./src/call.ts"
+    },
+    "./oauth/provider": {
+      "types": "./src/oauth/provider.ts",
+      "import": "./src/oauth/provider.ts"
     }
   },
   "scripts": {

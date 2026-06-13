@@ -38,6 +38,9 @@ import {
 export const HOST_LOST_REASON = 'agent host no longer owns this non-terminal run';
 const HOST_LOST_NEVER_STARTED_REASON =
   'agent host never reported this run after dispatch (lost before it started)';
+/** Ghost reaper — how long a DB row must have been terminal before a live host
+ *  run with that id is cancelled (don't race in-flight terminal effects). */
+const GHOST_CANCEL_GRACE_MS = 30_000;
 
 type NonTerminalAgentState = Extract<
   AgentHostRunSnapshot['state'],
@@ -123,6 +126,10 @@ export interface ReconcileSweepResult {
   registered: number;
   /** Step 2 — JSONL backlog events broadcast for newly registered handles. */
   backfilledEvents: number;
+  /** Ghost reaper (2026-06-10) — live host runs cancelled because their DB row
+   *  was already terminal (e.g. a dispatch failed on a timed-out start receipt
+   *  while the host had actually started the run). */
+  ghostCancelled: number;
 }
 
 /**
@@ -226,6 +233,7 @@ export function reconcileAgentRunsAgainstHost(
         status: hostRun.state,
         ...(hostRun.spawnedAt !== null ? { spawnedAt: hostRun.spawnedAt } : {}),
         ...(hostRun.readyAt !== null ? { readyAt: hostRun.readyAt } : {}),
+        ...(hostRun.pid !== undefined ? { pid: hostRun.pid } : {}),
       });
       // Slice 015b — durable outbox row (relay delivers) instead of a direct
       // `agent-run-changed` hand-broadcast. Re-reads the post-write row for rev.
@@ -239,6 +247,41 @@ export function reconcileAgentRunsAgainstHost(
       const h = deps.activeRunRegistry?.get(row.id)?.run;
       if (h instanceof HostBackedActiveRunHandle) h.applySnapshot(hostRun);
       statusUpdated += 1;
+    }
+  }
+
+  // Ghost reaper (2026-06-10) — a NON-terminal host run whose DB row is already
+  // terminal is compute the server has forgotten: the row loop above iterates
+  // only non-terminal DB rows, so nothing else ever converges it. The canonical
+  // producer was a dispatch whose start-run receipt timed out — failHostStart
+  // marked the row failed while the host had actually started the run, which
+  // then burned a concurrency slot until its wall-clock cap. Cancel only
+  // against a freshly-confirmed host list, and only after the row has been
+  // terminal past a grace window (never race the in-flight terminal effects of
+  // a normally-completing run). Fire-and-forget; the next tick re-converges.
+  let ghostCancelled = 0;
+  if (deps.hostAuthoritativelyAbsent) {
+    const now = deps.now?.() ?? Date.now();
+    const nonTerminalRowIds = new Set(rows.map((row) => row.id));
+    for (const hostRun of hostRuns) {
+      if (isTerminalState(hostRun.state)) continue;
+      if (nonTerminalRowIds.has(hostRun.runId)) continue;
+      // A failed lookup is no-information — leave the run alone this tick
+      // (never let one bad read abort the rest of the sweep).
+      let row: AgentRunRow | null = null;
+      try {
+        row = (deps.getAgentRun ?? defaultGetAgentRunRow)(hostRun.runId);
+      } catch {
+        continue;
+      }
+      if (!row || !isDbTerminal(row.status)) continue;
+      if (now - (row.completedAt ?? 0) < GHOST_CANCEL_GRACE_MS) continue;
+      ghostCancelled += 1;
+      Promise.resolve(
+        deps.hostClient.sendCommand({ type: 'cancel', runId: hostRun.runId }),
+      ).catch((err) => {
+        deps.onHostCommandError?.(err instanceof Error ? err : new Error(String(err)));
+      });
     }
   }
 
@@ -260,6 +303,7 @@ export function reconcileAgentRunsAgainstHost(
     hostLost,
     registered,
     backfilledEvents,
+    ghostCancelled,
   };
 }
 
@@ -363,6 +407,7 @@ export function applyAgentHostEvent(
           status: event.run.state,
           ...(event.run.spawnedAt !== null ? { spawnedAt: event.run.spawnedAt } : {}),
           ...(event.run.readyAt !== null ? { readyAt: event.run.readyAt } : {}),
+          ...(event.run.pid !== undefined ? { pid: event.run.pid } : {}),
         });
         // Slice 015b — durable outbox row (relay delivers) instead of a direct
         // `agent-run-changed` hand-broadcast. Re-reads the post-write row.

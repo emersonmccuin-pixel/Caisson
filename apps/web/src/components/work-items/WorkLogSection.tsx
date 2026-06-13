@@ -12,6 +12,7 @@ import type { Contract, VerificationStatus } from '@pc/contracts';
 import { useWorkItemContracts } from '@/hooks/use-work-item-contracts';
 import {
   describeDeliverable,
+  describeLanding,
   summarizeExpectedOutput,
   type DeliverableView,
 } from '@/features/contracts/work-log';
@@ -60,6 +61,7 @@ function ContractRow({ contract }: { contract: Contract }) {
     (contract.agentRunId ? `run ${shortId(contract.agentRunId)}` : 'agent');
   const asked = summarizeExpectedOutput(contract.expectedOutput);
   const delivered = describeDeliverable(contract.deliverable);
+  const landing = describeLanding(contract);
 
   return (
     <div className="border border-border/40 bg-card">
@@ -76,6 +78,12 @@ function ContractRow({ contract }: { contract: Contract }) {
         <span className="min-w-0 text-foreground">
           <DeliverableCell view={delivered} />
         </span>
+        {landing && (
+          <>
+            <span className="text-muted-foreground">Landing</span>
+            <span className="min-w-0 break-words text-foreground">{landing}</span>
+          </>
+        )}
       </div>
     </div>
   );
