@@ -35,6 +35,8 @@ import {
   mergeBranchIntoHead as _mergeBranchIntoHead,
   pruneWorktrees as _pruneWorktrees,
   pushBranch as _pushBranch,
+  resolveIntegrationTip as _resolveIntegrationTip,
+  updateRef as _updateRef,
   type GitMergeState,
   type WorktreeEntry,
 } from '@pc/runtime';
@@ -62,6 +64,7 @@ export interface WorktreeServiceDeps {
     workspaceDir: string,
     wtPath: string,
     branchName: string,
+    startPoint?: string,
   ) => Promise<WorktreeEntry>;
   attachWorktree?: (
     workspaceDir: string,
@@ -114,6 +117,20 @@ export interface WorktreeServiceDeps {
   listBaseDirNames?: (baseDir: string) => Promise<string[]>;
   /** Override for recursive directory delete (sweep husk removal). */
   removeDirectory?: (path: string) => Promise<void>;
+  /**
+   * Override for `resolveIntegrationTip` — returns the most-advanced landed
+   * commit SHA (merge-wt HEAD > origin/<integration> > local) without real git.
+   */
+  resolveIntegrationTip?: (
+    workspaceDir: string,
+    integrationBranch: string,
+    mergeWtPath?: string,
+  ) => Promise<string | null>;
+  /**
+   * Override for `updateRef` — advances a local branch pointer without real
+   * git (used in `tryAdvanceLocalIntegration` tests).
+   */
+  updateRef?: (workspaceDir: string, branch: string, sha: string) => Promise<void>;
 }
 
 /** Names the engine reaps automatically: per-run isolation worktrees only. */
@@ -241,8 +258,17 @@ export class WorktreeService {
 
   async create(name: string): Promise<WorktreeEntry> {
     const wtPath = resolve(this.baseDir, name);
+
+    // Resolve the best-known integration tip so the new run worktree forks
+    // from the latest LANDED state, not the stale main checkout HEAD
+    // (pc-pty-chat-417). Priority: merge-wt HEAD > origin/<integration> > local.
+    const integration = await this.getIntegrationBranch();
+    const tipFn = this.deps.resolveIntegrationTip ?? _resolveIntegrationTip;
+    const startPoint =
+      (await tipFn(this.workspaceDir, integration, this.mergeWorktreePath)) ?? undefined;
+
     const createFn = this.deps.createWorktree ?? _createWorktree;
-    const entry = await createFn(this.workspaceDir, wtPath, name);
+    const entry = await createFn(this.workspaceDir, wtPath, name, startPoint);
     // Provision BEFORE returning — callers must never see a half-built worktree.
     await this.provision(entry.path);
     upsertWorktree({ name, path: entry.path });
@@ -615,6 +641,50 @@ export class WorktreeService {
     const { wtPath, integration } = await this.ensureMergeWorktreeReady();
     const fn = this.deps.gitMergeState ?? _gitMergeState;
     return fn(wtPath, branch, integration);
+  }
+
+  /**
+   * Belt-and-suspenders after a successful landing: advance the LOCAL
+   * integration branch ref to the merge-worktree HEAD so standard git tools
+   * see the merged work, and so the local ref is available as a fallback
+   * start-point for new run worktrees.
+   *
+   * Uses `git update-ref` to move the ref pointer directly — no checkout needed.
+   *
+   * GUARD: skipped when the main worktree is on the integration branch.
+   * Moving a checked-out branch pointer WITHOUT updating the index/working tree
+   * desyncs `git status` (phantom staged changes). In that case Option (b) —
+   * `create()` uses `resolveIntegrationTip` which still finds the correct tip
+   * via the merge-worktree HEAD — is sufficient on its own.
+   *
+   * Best-effort: never throws. Failure is logged and the landing is unaffected.
+   */
+  async tryAdvanceLocalIntegration(): Promise<void> {
+    try {
+      const integration = await this.getIntegrationBranch();
+
+      // Guard: if the main checkout is on the integration branch, skip to
+      // avoid desyncing the user's working tree.
+      const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
+      const { branch: mainBranch } = await statusFn(this.workspaceDir);
+      if (mainBranch === integration) {
+        // Main worktree is on the integration branch. Skipping — `create()`
+        // uses the merge-worktree HEAD via resolveIntegrationTip instead.
+        return;
+      }
+
+      // Resolve the most-advanced SHA (merge-wt HEAD > origin > local).
+      const tipFn = this.deps.resolveIntegrationTip ?? _resolveIntegrationTip;
+      const sha = await tipFn(this.workspaceDir, integration, this.mergeWorktreePath);
+      if (!sha) return; // fresh repo or nothing resolvable — nothing to advance to
+
+      const updateFn = this.deps.updateRef ?? _updateRef;
+      await updateFn(this.workspaceDir, integration, sha);
+    } catch (err) {
+      console.warn(
+        `[worktree] tryAdvanceLocalIntegration failed (non-fatal): ${(err as Error).message}`,
+      );
+    }
   }
 
   // ── private ───────────────────────────────────────────────────────────────

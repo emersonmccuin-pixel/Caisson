@@ -29,6 +29,8 @@ export {
   mergeBranchIntoHead,
   pruneWorktrees,
   pushBranch,
+  resolveIntegrationTip,
+  updateRef,
 } from './worktree.ts';
 export type { GitMergeState, WorktreeEntry } from './worktree.ts';
 

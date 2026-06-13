@@ -35,6 +35,15 @@ export interface LandingWorktrees {
   /** pc-pty-chat-415 (R12) — reclaim the worktree DIR of abandoned work; the
    *  branch is preserved as the durable record. */
   teardownAfterAbandon(branch: string): Promise<void>;
+  /**
+   * pc-pty-chat-417 — belt-and-suspenders after a successful merge+push:
+   * advance the LOCAL integration branch ref to the merge-worktree HEAD so
+   * standard git tools see the merged work and the local ref is usable as a
+   * start-point fallback. Optional: callers use `?.()`. No-op when the main
+   * checkout is on the integration branch (corruption guard). Best-effort:
+   * never throws.
+   */
+  tryAdvanceLocalIntegration?(): Promise<void>;
 }
 
 export type LandBranchResult =
@@ -102,6 +111,9 @@ export async function landBranch(
           };
         }
       }
+      // pc-pty-chat-417: advance the local integration ref so future
+      // run worktrees fork from the landed state (best-effort, never throws).
+      await worktrees.tryAdvanceLocalIntegration?.();
       await teardownBestEffort();
       return { outcome: 'merged', into, idempotent: true };
     }
@@ -135,6 +147,9 @@ export async function landBranch(
       };
     }
 
+    // pc-pty-chat-417: advance the local integration ref so future
+    // run worktrees fork from the landed state (best-effort, never throws).
+    await worktrees.tryAdvanceLocalIntegration?.();
     await teardownBestEffort();
     return { outcome: 'merged', into, idempotent: false };
   } catch (err) {

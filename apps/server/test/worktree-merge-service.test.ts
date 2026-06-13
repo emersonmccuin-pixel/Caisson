@@ -250,3 +250,141 @@ test('mergeState: returns all-false state for an unmapped branch', async () => {
   assert.equal(state.mergeInProgress, false);
   assert.equal(state.pushed, false);
 });
+
+// ── create: start-point resolution (pc-pty-chat-417) ─────────────────────────
+
+test('create: passes resolveIntegrationTip result as startPoint to createWorktree dep', async () => {
+  const FAKE_TIP = 'aabbccddee1122334455667788990011aabbccdd';
+  const createCalls: Array<{ ws: string; path: string; name: string; startPoint: string | undefined }> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: async () => [
+      { path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' },
+      // Return the newly created worktree on the second call (after create)
+    ],
+    pruneWorktrees: async () => {},
+    resolveIntegrationTip: async () => FAKE_TIP,
+    createWorktree: async (ws, path, name, startPoint) => {
+      createCalls.push({ ws, path, name, startPoint });
+      return { path, branch: name, head: FAKE_TIP };
+    },
+    installRunner: async () => {},
+  });
+
+  await svc.create('agent-TEST');
+
+  assert.equal(createCalls.length, 1, 'createWorktree dep called exactly once');
+  assert.equal(createCalls[0]!.startPoint, FAKE_TIP, 'resolveIntegrationTip result passed as startPoint');
+  assert.equal(createCalls[0]!.ws, FAKE_WORKSPACE, 'workspaceDir passed correctly');
+});
+
+test('create: passes undefined startPoint when resolveIntegrationTip returns null (fresh repo)', async () => {
+  const createCalls: Array<{ startPoint: string | undefined }> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' }],
+    pruneWorktrees: async () => {},
+    resolveIntegrationTip: async () => null,
+    createWorktree: async (_ws, path, name, startPoint) => {
+      createCalls.push({ startPoint });
+      return { path, branch: name, head: 'freshhead' };
+    },
+    installRunner: async () => {},
+  });
+
+  await svc.create('agent-FRESH');
+
+  assert.equal(createCalls.length, 1, 'createWorktree dep called exactly once');
+  assert.equal(createCalls[0]!.startPoint, undefined, 'null tip → no startPoint (undefined)');
+});
+
+test('create: resolveIntegrationTip receives the merge-worktree path so local-only repos are covered', async () => {
+  const tipCalls: Array<{ ws: string; integration: string; mergeWtPath: string | undefined }> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'trunk', {
+    listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'trunk', head: 'abc' }],
+    pruneWorktrees: async () => {},
+    resolveIntegrationTip: async (ws, integration, mergeWtPath) => {
+      tipCalls.push({ ws, integration, mergeWtPath });
+      return null;
+    },
+    createWorktree: async (_ws, path, name) => ({ path, branch: name, head: 'h' }),
+    installRunner: async () => {},
+  });
+
+  await svc.create('agent-LOCAL');
+
+  assert.equal(tipCalls.length, 1, 'resolveIntegrationTip called exactly once');
+  assert.equal(tipCalls[0]!.ws, FAKE_WORKSPACE);
+  assert.equal(tipCalls[0]!.integration, 'trunk');
+  assert.equal(
+    tipCalls[0]!.mergeWtPath,
+    resolve(FAKE_BASE, '__dev-merge'),
+    'merge-worktree path passed so local-only repos can use it as start-point',
+  );
+});
+
+// ── tryAdvanceLocalIntegration (pc-pty-chat-417) ─────────────────────────────
+
+test('tryAdvanceLocalIntegration: advances local ref when main checkout is NOT on integration branch', async () => {
+  const MERGE_HEAD_SHA = '1234567890abcdef1234567890abcdef12345678';
+  const updateRefCalls: Array<{ ws: string; branch: string; sha: string }> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: noOpList,
+    // Main checkout is on 'feature', NOT 'dev' — guard must pass.
+    getWorktreeStatus: async () => ({ branch: 'feature', clean: true }),
+    resolveIntegrationTip: async () => MERGE_HEAD_SHA,
+    updateRef: async (ws, branch, sha) => { updateRefCalls.push({ ws, branch, sha }); },
+  });
+
+  await svc.tryAdvanceLocalIntegration();
+
+  assert.equal(updateRefCalls.length, 1, 'updateRef called exactly once');
+  assert.equal(updateRefCalls[0]!.ws, FAKE_WORKSPACE, 'workspaceDir passed');
+  assert.equal(updateRefCalls[0]!.branch, 'dev', 'integration branch passed');
+  assert.equal(updateRefCalls[0]!.sha, MERGE_HEAD_SHA, 'merge-head SHA passed');
+});
+
+test('tryAdvanceLocalIntegration: SKIPS when main checkout IS on integration branch (corruption guard)', async () => {
+  const updateRefCalls: Array<unknown>= [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: noOpList,
+    // Main checkout IS on 'dev' — guard must fire.
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
+    resolveIntegrationTip: async () => 'deadbeef1234',
+    updateRef: async (...args) => { updateRefCalls.push(args); },
+  });
+
+  await svc.tryAdvanceLocalIntegration();
+
+  assert.equal(updateRefCalls.length, 0, 'updateRef must NOT be called when main checkout is on integration branch');
+});
+
+test('tryAdvanceLocalIntegration: no-op when resolveIntegrationTip returns null', async () => {
+  const updateRefCalls: Array<unknown> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: noOpList,
+    getWorktreeStatus: async () => ({ branch: 'other', clean: true }),
+    resolveIntegrationTip: async () => null, // fresh repo
+    updateRef: async (...args) => { updateRefCalls.push(args); },
+  });
+
+  await svc.tryAdvanceLocalIntegration();
+
+  assert.equal(updateRefCalls.length, 0, 'no updateRef when tip is null');
+});
+
+test('tryAdvanceLocalIntegration: never throws even when updateRef fails', async () => {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: noOpList,
+    getWorktreeStatus: async () => ({ branch: 'other', clean: true }),
+    resolveIntegrationTip: async () => 'abc123',
+    updateRef: async () => { throw new Error('update-ref failed (simulated)'); },
+  });
+
+  // Must not throw even though the dep throws.
+  await assert.doesNotReject(() => svc.tryAdvanceLocalIntegration());
+});
