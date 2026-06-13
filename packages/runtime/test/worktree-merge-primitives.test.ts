@@ -397,7 +397,6 @@ test('resolveIntegrationTip: returns origin tip (most-advanced) when it is ahead
   // from upstream directly → downstream fetches (origin/dev=C1, local dev=C0).
   const upstream = mkdtempSync(join(tmpdir(), 'pc-tip-upstream-'));
   const downstream = mkdtempSync(join(tmpdir(), 'pc-tip-downstream-'));
-  const gu = (...args: string[]) => execFileSync('git', args, { cwd: upstream, stdio: 'ignore' });
   const gd = (...args: string[]) => execFileSync('git', args, { cwd: downstream, stdio: 'ignore' });
   try {
     // Seed bare upstream with an initial commit via a temp working tree, then
@@ -448,8 +447,6 @@ test('resolveIntegrationTip: returns origin tip (most-advanced) when it is ahead
     } finally {
       rmSync(seedDir, { recursive: true, force: true });
     }
-    // Rename remote tracking to match our variable convention.
-    execFileSync('git', ['clone', '--mirror', upstream, upstream], { stdio: 'ignore' }); // no-op catch-all
 
     const localSha = execFileSync('git', ['rev-parse', 'dev'], { cwd: downstream }).toString().trim();
     const originSha = execFileSync('git', ['rev-parse', 'origin/dev'], { cwd: downstream }).toString().trim();
