@@ -352,6 +352,8 @@ Use \`toFlag\` instead of guessing the stage slug — the user may have named th
 
 When an agent is dispatched against a specific worktree (workflow context), the path-guard hook denies any Read / Write / Edit / Bash / Glob / Grep / NotebookEdit call that touches a path outside it. Out-of-worktree denials are working as intended — reflect them to the user rather than retrying. Ad-hoc dispatches (no worktree token in the prompt) are NOT path-gated — the agent can read / edit anywhere.
 
+**You (the orchestrator) are NOT git-fenced.** The git write fence — which blocks \`add\` / \`commit\` / \`reset\` / \`checkout\` / \`clean\` / \`merge\` aimed outside a fence root — applies to dispatched **agents only**. You own merges, landing, and git operations, including across projects: run \`git add\` / \`git commit\` / \`git merge\` directly via Bash whenever the user asks. Never refuse a git task on the assumption that a worktree fence applies to you — it doesn't. (Agents stay confined to their worktree; that's the only place the fence bites.)
+
 ## Referencing entities in chat
 
 **Hard rule: every reference to a work item, file, or attachment is a \`pc://\` markdown link. No exceptions.** The chat panel renders these as inline pills the user can hover (preview card) and click (open the modal). Bare backtick codes (\`\\\`example-project-4\\\`\`), bare text (\`example-project-4\`), and raw ULIDs are NOT clickable — the user can read them but can't act on them. Always wrap.

@@ -10,9 +10,9 @@
 //      binding, and silently skipped ALL enforcement for workflow agents.
 //   2. THE BLIND SPOT: Git-Bash form absolute paths (/e/…) sailed past the
 //      Windows-only drive-letter regex.
-//   3. THE GIT WRITE FENCE: writing git aimed outside the session's fence
-//      root is denied for every PC session (orchestrator included); read-only
-//      git passes anywhere.
+//   3. THE GIT WRITE FENCE: for a dispatched AGENT, writing git aimed outside
+//      its fence root is denied; the ORCHESTRATOR is exempt (it owns merges +
+//      cross-project work). Read-only git passes anywhere.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -141,44 +141,63 @@ test('direct isolation:worktree in-worktree Edit still passes (no RUN_ID)', () =
   assert.equal(r.denied, false, r.reason);
 });
 
-// ── 2. the git write fence (every PC session) ────────────────────────────────
+// ── 2. the git write fence (AGENT sessions only; orchestrator exempt) ─────────
 
-const ORCH_ENV = { PC_PROJECT_ID: 'P01' }; // orchestrator: no workflow env
+const ORCH_ENV = { PC_PROJECT_ID: 'P01' }; // orchestrator: no agent/worktree markers
+const AGENT_ENV = { PC_PROJECT_ID: 'P01', PC_AGENT_RUN_ID: 'ar1' }; // dispatched agent, no worktree
 
-test('git fence: orchestrator cd-to-outside + git reset denied', () => {
+test('git fence: ORCHESTRATOR is exempt — cd-to-outside + git reset ALLOWED', () => {
+  // The orchestrator owns merges + cross-project git work; the fence must not
+  // touch it. Same command that an agent would be denied for.
   const r = runEnforce(
     { tool_name: 'Bash', tool_input: { command: `cd "C:/Users/someone/other-repo" && git reset --hard` }, cwd: REPO },
-    ORCH_ENV,
-  );
-  assert.equal(r.denied, true);
-  assert.match(r.reason, /git reset/);
-});
-
-test('git fence: git -C <outside> commit denied; -C <inside> allowed', () => {
-  const out = runEnforce(
-    { tool_name: 'Bash', tool_input: { command: `git -C "C:/elsewhere/repo" commit -m hi` }, cwd: REPO },
-    ORCH_ENV,
-  );
-  assert.equal(out.denied, true);
-  const inn = runEnforce(
-    { tool_name: 'Bash', tool_input: { command: `git -C "${REPO}/packages" commit -m hi` }, cwd: REPO },
-    ORCH_ENV,
-  );
-  assert.equal(inn.denied, false, inn.reason);
-});
-
-test('git fence: read-only git outside the fence passes', () => {
-  const r = runEnforce(
-    { tool_name: 'Bash', tool_input: { command: `git -C "C:/elsewhere/repo" log --oneline -3` }, cwd: REPO },
     ORCH_ENV,
   );
   assert.equal(r.denied, false, r.reason);
 });
 
-test('git fence: in-fence git write passes (orchestrator in its project)', () => {
+test('git fence: ORCHESTRATOR cross-project git -C <outside> commit ALLOWED', () => {
+  const r = runEnforce(
+    { tool_name: 'Bash', tool_input: { command: `git -C "C:/elsewhere/repo" commit -m hi` }, cwd: REPO },
+    ORCH_ENV,
+  );
+  assert.equal(r.denied, false, r.reason);
+});
+
+test('git fence: AGENT cd-to-outside + git reset denied', () => {
+  const r = runEnforce(
+    { tool_name: 'Bash', tool_input: { command: `cd "C:/Users/someone/other-repo" && git reset --hard` }, cwd: REPO },
+    AGENT_ENV,
+  );
+  assert.equal(r.denied, true);
+  assert.match(r.reason, /git reset/);
+});
+
+test('git fence: AGENT git -C <outside> commit denied; -C <inside> allowed', () => {
+  const out = runEnforce(
+    { tool_name: 'Bash', tool_input: { command: `git -C "C:/elsewhere/repo" commit -m hi` }, cwd: REPO },
+    AGENT_ENV,
+  );
+  assert.equal(out.denied, true);
+  const inn = runEnforce(
+    { tool_name: 'Bash', tool_input: { command: `git -C "${REPO}/packages" commit -m hi` }, cwd: REPO },
+    AGENT_ENV,
+  );
+  assert.equal(inn.denied, false, inn.reason);
+});
+
+test('git fence: read-only git outside the fence passes (agent)', () => {
+  const r = runEnforce(
+    { tool_name: 'Bash', tool_input: { command: `git -C "C:/elsewhere/repo" log --oneline -3` }, cwd: REPO },
+    AGENT_ENV,
+  );
+  assert.equal(r.denied, false, r.reason);
+});
+
+test('git fence: in-fence git write passes (agent in its cwd)', () => {
   const r = runEnforce(
     { tool_name: 'Bash', tool_input: { command: `git add -A && git commit -m "fix"` }, cwd: REPO },
-    ORCH_ENV,
+    AGENT_ENV,
   );
   assert.equal(r.denied, false, r.reason);
 });
