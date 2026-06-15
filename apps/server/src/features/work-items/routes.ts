@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import type { Project, Stage, ULID, WorkItem, WorkItemStatus, WorkItemType } from '@pc/domain';
+import type { DoneChecklistItem, Project, Stage, ULID, WorkItem, WorkItemStatus, WorkItemType } from '@pc/domain';
 import { isWorkItemType } from '@pc/domain';
 import { ContractService } from '@pc/app-services';
 import {
@@ -14,6 +14,8 @@ import {
   reassignStage,
   resolveAgentForDispatch,
   searchWorkItems as dbSearchWorkItems,
+  setDoneChecklist as dbSetDoneChecklist,
+  tickDoneChecklistItem as dbTickDoneChecklistItem,
   toSlimWorkItem,
   updateProjectStages,
   updateWorkItemFields as dbUpdateWorkItemFields,
@@ -327,6 +329,56 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 500);
     }
+  });
+
+  // Slice B — replace a card's done-checklist (FD-12 write door).
+  app.post('/api/projects/:projectId/work-items/set-done-checklist', async (c) => {
+    const id = c.req.param('projectId');
+    const runtime = deps.resolveProject(id);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    const body = await c.req.json<{ id?: string; items?: unknown }>();
+    const wiId = typeof body.id === 'string' ? body.id.trim() : '';
+    if (!wiId) return c.json({ ok: false, error: 'id required' }, 400);
+    if (!Array.isArray(body.items)) return c.json({ ok: false, error: 'items (array) required' }, 400);
+    const items = body.items as DoneChecklistItem[];
+    let row: WorkItem | null = null;
+    workItemGateway.tryCommitWorkItemChange({
+      projectId: id as ULID,
+      mutate: () => {
+        row = dbSetDoneChecklist(wiId as ULID, items);
+        return row ? { row, reason: 'checklist-set' } : null;
+      },
+    });
+    if (!row) return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
+    return c.json({ ok: true, workItem: row });
+  });
+
+  // Slice B — flip one checklist item (targeted single-column write, FD-12 write door).
+  app.post('/api/projects/:projectId/work-items/tick-done-checklist-item', async (c) => {
+    const id = c.req.param('projectId');
+    const runtime = deps.resolveProject(id);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    const body = await c.req.json<{ id?: string; itemId?: string; done?: unknown }>();
+    const wiId = typeof body.id === 'string' ? body.id.trim() : '';
+    const itemId = typeof body.itemId === 'string' ? body.itemId.trim() : '';
+    const done = body.done !== false; // default true; explicit false to un-tick
+    if (!wiId) return c.json({ ok: false, error: 'id required' }, 400);
+    if (!itemId) return c.json({ ok: false, error: 'itemId required' }, 400);
+    let row: WorkItem | null = null;
+    const result = workItemGateway.tryCommitWorkItemChange({
+      projectId: id as ULID,
+      mutate: () => {
+        row = dbTickDoneChecklistItem(wiId as ULID, itemId, done);
+        return row ? { row, reason: 'checklist-ticked' } : null;
+      },
+    });
+    if (result === null) {
+      // Distinguish WI-not-found (404) from item-not-found (clean no-op, 200).
+      const wi = dbGetWorkItem(wiId as ULID);
+      if (!wi) return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
+      return c.json({ ok: true, workItem: wi }); // item not found — no-op
+    }
+    return c.json({ ok: true, workItem: result.workItem });
   });
 
   app.post('/api/projects/:projectId/work-items/create', async (c) => {

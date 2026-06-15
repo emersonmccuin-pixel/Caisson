@@ -922,6 +922,91 @@ export async function handleWorkItemTool(
       }
     }
 
+    case 'pc_set_done_checklist': {
+      const ref = typeof args.workItemId === 'string' ? args.workItemId.trim() : '';
+      if (!ref) {
+        return {
+          content: [{ type: 'text', text: 'pc_set_done_checklist: workItemId required' }],
+          isError: true,
+        };
+      }
+      if (!Array.isArray(args.items)) {
+        return {
+          content: [{ type: 'text', text: 'pc_set_done_checklist: items (array) required' }],
+          isError: true,
+        };
+      }
+      const id = await ctx.resolveWorkItemIdViaServer(ref);
+      if (!id) {
+        return {
+          content: [{ type: 'text', text: `pc_set_done_checklist: unknown work item: ${ref}` }],
+          isError: true,
+        };
+      }
+      try {
+        const res = await ctx.postServer(ctx.projectPath('work-items/set-done-checklist'), {
+          id,
+          items: args.items,
+        });
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `pc_set_done_checklist failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_set_done_checklist failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
+    case 'pc_tick_done_checklist_item': {
+      const ref = typeof args.workItemId === 'string' ? args.workItemId.trim() : '';
+      const itemId = typeof args.itemId === 'string' ? args.itemId.trim() : '';
+      const done = args.done !== false; // default true; explicit false to un-tick
+      if (!ref) {
+        return {
+          content: [{ type: 'text', text: 'pc_tick_done_checklist_item: workItemId required' }],
+          isError: true,
+        };
+      }
+      if (!itemId) {
+        return {
+          content: [{ type: 'text', text: 'pc_tick_done_checklist_item: itemId required' }],
+          isError: true,
+        };
+      }
+      const id = await ctx.resolveWorkItemIdViaServer(ref);
+      if (!id) {
+        return {
+          content: [{ type: 'text', text: `pc_tick_done_checklist_item: unknown work item: ${ref}` }],
+          isError: true,
+        };
+      }
+      try {
+        const res = await ctx.postServer(ctx.projectPath('work-items/tick-done-checklist-item'), {
+          id,
+          itemId,
+          done,
+        });
+        if (res.status >= 200 && res.status < 300) {
+          return { content: [{ type: 'text', text: res.body }] };
+        }
+        return {
+          content: [{ type: 'text', text: `pc_tick_done_checklist_item failed (${res.status}): ${res.body}` }],
+          isError: true,
+        };
+      } catch (err) {
+        return {
+          content: [{ type: 'text', text: `pc_tick_done_checklist_item failed: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    }
+
     case 'pc_get_attachment': {
       const attachmentId = typeof args.attachmentId === 'string' ? args.attachmentId.trim() : '';
       if (!attachmentId) {

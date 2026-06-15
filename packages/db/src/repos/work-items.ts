@@ -783,6 +783,66 @@ export function listChildWorkItems(parentId: ULID): WorkItem[] {
   return rows.map(toDomain);
 }
 
+/** Replace the entire done-checklist for a work item.
+ *  Bumps `version` and appends an 'update' history entry.
+ *  Returns the updated WorkItem, or null if the id isn't found / is soft-deleted. */
+export function setDoneChecklist(id: ULID, items: DoneChecklistItem[]): WorkItem | null {
+  const row = getRowById(id);
+  if (!row) return null;
+  const entry: WorkItemHistoryEntry = {
+    ts: new Date().toISOString(),
+    kind: 'update',
+    note: `done-checklist set (${items.length} items)`,
+  };
+  const updated: WorkItemRow = {
+    ...row,
+    doneChecklist: items,
+    history: [...row.history, entry],
+    version: row.version + 1,
+    updatedAt: Date.now(),
+  };
+  getDb().update(workItems).set(updated).where(eq(workItems.id, id)).run();
+  return toDomain(updated);
+}
+
+/** Flip one item's `done` flag in the done-checklist.
+ *
+ *  TARGETED read-modify-write: only `done_checklist`, `history`, `version`, and
+ *  `updated_at` are written — `fields` and all other columns are untouched.
+ *  This is the fix for Risk #1 (concurrent `patchWorkItem` + tick losing data).
+ *
+ *  Returns the updated WorkItem, or null if the work item isn't found or is
+ *  soft-deleted, or if `itemId` doesn't match any checklist item (clean no-op). */
+export function tickDoneChecklistItem(
+  id: ULID,
+  itemId: string,
+  done: boolean,
+): WorkItem | null {
+  const row = getRowById(id);
+  if (!row) return null;
+  const checklist = row.doneChecklist ?? [];
+  const idx = checklist.findIndex((item) => item.id === itemId);
+  if (idx === -1) return null; // item not found — caller handles as clean no-op
+  const newChecklist: DoneChecklistItem[] = checklist.map((item, i) =>
+    i === idx ? { ...item, done } : item,
+  );
+  const entry: WorkItemHistoryEntry = {
+    ts: new Date().toISOString(),
+    kind: 'update',
+    note: `done-checklist "${checklist[idx].label}" → ${done ? 'done' : 'open'}`,
+  };
+  const newHistory = [...row.history, entry];
+  const newVersion = row.version + 1;
+  const now = Date.now();
+  // Targeted write — only the checklist-related columns; fields/body/title untouched.
+  getDb()
+    .update(workItems)
+    .set({ doneChecklist: newChecklist, history: newHistory, version: newVersion, updatedAt: now })
+    .where(eq(workItems.id, id))
+    .run();
+  return toDomain({ ...row, doneChecklist: newChecklist, history: newHistory, version: newVersion, updatedAt: now });
+}
+
 /**
  * Apply a workflow-run outcome atomically: set status + statusReason and append
  * a history note in one update. The runtime calls this from the unlock hook so

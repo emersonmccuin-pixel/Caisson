@@ -65,7 +65,9 @@ export type WorkItemMutationReason =
   | 'verified'
   | 'approved'
   | 'rejected'
-  | 'auto-advanced';
+  | 'auto-advanced'
+  | 'checklist-set'
+  | 'checklist-ticked';
 
 export interface WorkItemChangedLivePayload {
   reason: WorkItemMutationReason;
@@ -261,7 +263,9 @@ export function isWorkItemMutationReason(value: unknown): value is WorkItemMutat
     value === 'verified' ||
     value === 'approved' ||
     value === 'rejected' ||
-    value === 'auto-advanced'
+    value === 'auto-advanced' ||
+    value === 'checklist-set' ||
+    value === 'checklist-ticked'
   );
 }
 
