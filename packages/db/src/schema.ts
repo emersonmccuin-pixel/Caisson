@@ -5,6 +5,7 @@ import type {
   AgentModel,
   CredentialAuthState,
   CredentialKind,
+  DoneChecklistItem,
   ExpectedOutput,
   FieldSchemaType,
   GlobalSettings,
@@ -177,6 +178,8 @@ export const workItems = sqliteTable(
     /** Command focus — epoch-ms when the planner starred this item; NULL = not
      *  in focus. */
     focusedAt: integer('focused_at'),
+    /** Per-card Definition-of-Done checklist. NULL when no checklist set. */
+    doneChecklist: text('done_checklist', { mode: 'json' }).$type<DoneChecklistItem[] | null>(),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     deletedAt: integer('deleted_at'),
