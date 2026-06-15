@@ -33,6 +33,7 @@ import {
   listContractsPendingLanding,
   listNonTerminalAgentRuns,
   listProjects,
+  listWorkItems,
   newId,
   pruneLiveOutbox,
   runMigrations,
@@ -135,6 +136,11 @@ import { migrateStoredWorkflowDefsToV3 } from './services/workflow-def-migrate-v
 import { cancelWorkflowRunCascade } from './services/workflow-run-cancel.ts';
 import { createAgentRunReconciler } from './services/agent-run-reconciler.ts';
 import { getActiveRunRegistry } from './services/agent-active-runs.ts';
+import {
+  collectOpenChecklistCards,
+  formatSweepBlock,
+  sweepClientMessageId,
+} from './services/session-open-checklist-sweep.ts';
 
 // PUBLIC / TEMPLATES / the scaffold trunk path all derive from ROOT, so they
 // relocate with it (PC_ROOT in packaged builds). server-root.ts is the ONE
@@ -341,6 +347,7 @@ const {
   maybeSetSessionTitle,
   maybeApplyAiTitle,
   maybePersistPostTurnSummary,
+  enqueueSessionOpenSweep: enqueueSessionOpenSweepForProject,
 });
 
 const projectScaffold = new ProjectScaffold({
@@ -807,6 +814,29 @@ registerMailboxRoutes(app, {
   mailbox: mailboxService,
   // Mailbox-message delivery rides the relay (015b); no fanout deps.
 });
+
+// Slice F — session-open checklist sweep. Hoisted (function declaration) so it
+// can be referenced in the createRuntimeHostPtyController deps above; the body
+// runs at ready-time (long after server init) so mailboxSendService is initialised.
+function enqueueSessionOpenSweepForProject(projectId: ULID): void {
+  const session = getActiveOrchestratorSession(projectId);
+  if (!session) return;
+  try {
+    const items = listWorkItems(projectId, { open: true });
+    const cards = collectOpenChecklistCards(items);
+    const text = formatSweepBlock(cards);
+    if (!text) return; // no open checklist cards — nothing to inject
+    mailboxSendService.enqueueRuntimeTurn({
+      projectId,
+      sessionId: session.id as ULID,
+      clientMessageId: sweepClientMessageId(session.id),
+      text,
+      source: 'mailbox',
+    });
+  } catch (err) {
+    console.warn('[session-open-sweep] enqueue failed:', (err as Error).message);
+  }
+}
 
 // Workflow-review delivery. Hoisted so the ProjectRegistry built at boot can
 // reference it; the body runs at workflow-fire time so the const bindings above

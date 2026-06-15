@@ -62,6 +62,10 @@ export interface RuntimeHostPtyHandlersDeps<
   maybePersistPostTurnSummary(projectId: ULID, event: unknown): void;
   deliverNextQueuedPrompt?: typeof defaultDeliverNextQueuedPrompt;
   maybeAdvanceSendQueueConfirmation?: typeof defaultMaybeAdvanceSendQueueConfirmation;
+  /** Slice F — called on every `ready` transition. The implementation enqueues
+   *  the session-open checklist sweep (idempotency is at the send-queue layer via
+   *  a deterministic clientMessageId, so repeated ready→busy→ready cycles are safe). */
+  enqueueSessionOpenSweep?: (projectId: ULID) => void;
   setImmediate?: (callback: () => void) => unknown;
   logger?: Pick<Console, 'error' | 'log'>;
 }
@@ -130,6 +134,7 @@ export function createRuntimeHostPtyController<
       deps.broadcastRuntimeSnapshot(projectId, runtime);
       if (state === 'ready') {
         deliverNextQueuedPrompt(projectId, runtime, deps.broadcastSendQueueSnapshot);
+        deps.enqueueSessionOpenSweep?.(projectId);
       }
     });
     session.on('turn-end', () => {
