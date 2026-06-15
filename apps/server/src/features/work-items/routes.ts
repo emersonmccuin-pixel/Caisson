@@ -52,6 +52,7 @@ import {
 } from '../../services/work-item.ts';
 import { announceStageList } from '../../services/stage-writer.ts';
 import { WorkItemMutationGateway } from '@pc/app-services';
+import { triggerChecklistAutoMoveIfComplete } from '../../services/checklist-auto-move.ts';
 
 /** FD-12 — the one write door (repo write + outbox receipt in one txn). */
 const workItemGateway = new WorkItemMutationGateway();
@@ -255,6 +256,17 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       }
       resolvedStage = match.id;
     }
+    // Slice C — soft gate: moving to Done with open checklist items is ALLOWED
+    // but we return a warning so the orchestrator can surface the open state.
+    let openChecklistWarning: string | undefined;
+    const destStage = runtime.project.stages.find((s) => s.id === resolvedStage);
+    if (destStage?.isDone) {
+      const wi = dbGetWorkItem(wiId as ULID);
+      const openCount = wi?.doneChecklist?.filter((item) => !item.done).length ?? 0;
+      if (openCount > 0) {
+        openChecklistWarning = `${openCount} checklist item${openCount !== 1 ? 's' : ''} still open`;
+      }
+    }
     try {
       const workItem = await runtime.moveWorkItemV2({
         id: wiId,
@@ -263,6 +275,9 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       });
       // Announce is fired inside moveWorkItemV2 (via workItemService or
       // project-runtime's write-door); no additional broadcast here.
+      if (openChecklistWarning) {
+        return c.json({ ok: true, workItem, warning: openChecklistWarning });
+      }
       return c.json({ ok: true, workItem });
     } catch (err) {
       const msg = (err as Error).message;
@@ -354,6 +369,7 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
   });
 
   // Slice B — flip one checklist item (targeted single-column write, FD-12 write door).
+  // Slice C — after a successful tick, fire the auto-move trigger if all items are done.
   app.post('/api/projects/:projectId/work-items/tick-done-checklist-item', async (c) => {
     const id = c.req.param('projectId');
     const runtime = deps.resolveProject(id);
@@ -378,7 +394,13 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       if (!wi) return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
       return c.json({ ok: true, workItem: wi }); // item not found — no-op
     }
-    return c.json({ ok: true, workItem: result.workItem });
+    // Slice C: after a successful tick, check if all items are now done and
+    // fire the auto-move path if so. Runs outside the tick transaction so the
+    // tick is committed before the stage-move reads back the updated checklist.
+    triggerChecklistAutoMoveIfComplete(wiId as ULID, runtime.project);
+    // Re-read so the response reflects any auto-move that just happened.
+    const finalWi = dbGetWorkItem(wiId as ULID) ?? result.workItem;
+    return c.json({ ok: true, workItem: finalWi });
   });
 
   app.post('/api/projects/:projectId/work-items/create', async (c) => {
