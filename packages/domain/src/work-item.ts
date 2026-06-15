@@ -1,6 +1,7 @@
 // WorkItem domain type. The unit of work that flows between project stages.
 // Persisted as a row in the sqlite `work_items` table.
 
+import type { AcceptancePredicate } from './contract.ts';
 import type { ULID } from './ulid.ts';
 
 export type WorkItemStatus =
@@ -20,6 +21,22 @@ export type WorkItemType = (typeof WORK_ITEM_TYPES)[number];
 
 export function isWorkItemType(value: unknown): value is WorkItemType {
   return typeof value === 'string' && (WORK_ITEM_TYPES as readonly string[]).includes(value);
+}
+
+/** One item in a per-card Definition-of-Done checklist.
+ *  `kind` controls how the item gets ticked:
+ *  - 'manual'   — orchestrator or human ticks it.
+ *  - 'contract' — auto-ticks when the bound contract PASS-verifies (Slice E).
+ *  - 'machine'  — predicate re-evaluated on demand (deferred slice; `predicate` reserved). */
+export interface DoneChecklistItem {
+  id: string;
+  label: string;
+  done: boolean;
+  kind: 'manual' | 'contract' | 'machine';
+  /** Bound contract id for kind='contract' items. */
+  contractId?: string;
+  /** Reserved for kind='machine' machine-check predicate (deferred — nothing reads this yet). */
+  predicate?: AcceptancePredicate;
 }
 
 export interface WorkItem {
@@ -59,6 +76,8 @@ export interface WorkItem {
   areaId: ULID | null;
   /** Command focus — epoch-ms the planner starred this item; null = not in focus. */
   focusedAt: number | null;
+  /** Per-card Definition-of-Done checklist. Null / absent when no checklist has been set. */
+  doneChecklist?: DoneChecklistItem[] | null;
 }
 
 /** Slim projection returned by pc_list_work_items by default (pc-pty-chat-254).

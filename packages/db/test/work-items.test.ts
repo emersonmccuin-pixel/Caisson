@@ -22,6 +22,7 @@ const {
   createArea,
   createProject,
   createWorkItem,
+  getWorkItem,
   getRawDb,
   listWorkItems,
   patchWorkItem,
@@ -243,4 +244,45 @@ test('migration 0050 backfill: item created before any FTS triggers is searchabl
   const wi = createWorkItem({ projectId: p.id, stageId: 'todo', title: 'BackfillFtsTerm254', body: 'backfill' });
   const results = searchWorkItems({ projectId: p.id, query: 'BackfillFtsTerm254' });
   assert.ok(results.some((r) => r.id === wi.id), 'post-migration inserts must be indexed');
+});
+
+// ── done_checklist column round-trip (Slice A — pc-pty-chat-419) ─────────────
+
+test('done_checklist: column exists on work_items after migration 0063', () => {
+  const raw = getRawDb();
+  const cols = raw.pragma('table_info("work_items")') as { name: string }[];
+  assert.ok(cols.some((c) => c.name === 'done_checklist'), 'done_checklist column must exist');
+});
+
+test('done_checklist: createWorkItem → getWorkItem round-trips a non-empty checklist', () => {
+  const p = seedProject('p-checklist');
+  const items = [
+    { id: 'item-1', label: 'Tests green', done: true, kind: 'manual' as const },
+    { id: 'item-2', label: 'Reviewed', done: false, kind: 'contract' as const, contractId: 'cid-abc' },
+    { id: 'item-3', label: 'Machine check', done: false, kind: 'machine' as const },
+  ];
+  const created = createWorkItem({
+    projectId: p.id,
+    stageId: 'todo',
+    title: 'Checklist round-trip',
+    doneChecklist: items,
+  });
+
+  // toDomain returns the checklist immediately.
+  assert.deepEqual(created.doneChecklist, items);
+
+  // getWorkItem reads it back from the DB via JSON column.
+  const fetched = getWorkItem(created.id);
+  assert.ok(fetched !== null, 'work item should be found');
+  assert.deepEqual(fetched!.doneChecklist, items, 'checklist must survive a DB round-trip');
+});
+
+test('done_checklist: createWorkItem with no checklist → null on round-trip', () => {
+  const p = seedProject('p-checklist-null');
+  const created = createWorkItem({ projectId: p.id, stageId: 'todo', title: 'No checklist' });
+  assert.equal(created.doneChecklist, null, 'doneChecklist should be null when not set');
+
+  const fetched = getWorkItem(created.id);
+  assert.ok(fetched !== null);
+  assert.equal(fetched!.doneChecklist, null, 'doneChecklist should remain null after DB round-trip');
 });

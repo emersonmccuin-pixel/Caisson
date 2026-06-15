@@ -4,6 +4,7 @@ export type {
   StatuslineSnapshot,
 } from './statusline.ts';
 export type {
+  DoneChecklistItem,
   WorkItem,
   WorkItemHistoryEntry,
   WorkItemSlim,

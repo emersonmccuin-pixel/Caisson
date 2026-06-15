@@ -1,5 +1,6 @@
 import { and, asc, eq, isNull, isNotNull, max, notInArray } from 'drizzle-orm';
 import type {
+  DoneChecklistItem,
   ULID,
   WorkItem,
   WorkItemHistoryEntry,
@@ -49,6 +50,7 @@ interface WorkItemRow {
   callsign: string | null;
   areaId: ULID | null;
   focusedAt: number | null;
+  doneChecklist: DoneChecklistItem[] | null;
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
@@ -76,6 +78,7 @@ function toDomain(row: WorkItemRow): WorkItem {
     callsign: row.callsign,
     areaId: row.areaId ?? null,
     focusedAt: row.focusedAt ?? null,
+    doneChecklist: row.doneChecklist ?? null,
   };
 }
 
@@ -93,6 +96,8 @@ export interface CreateWorkItemInput {
   isWorkflowRoot?: boolean;
   /** Slice 010 — Area bucket FK, or null for Uncaptured. */
   areaId?: ULID | null;
+  /** Initial Definition-of-Done checklist. Null/omitted = no checklist. */
+  doneChecklist?: DoneChecklistItem[] | null;
 }
 
 /** Slice 010 — area filter for the work-item list. `'uncaptured'` or `null`
@@ -386,6 +391,7 @@ export function createWorkItem(input: CreateWorkItemInput): WorkItem {
       callsign,
       areaId: input.areaId ?? null,
       focusedAt: null,
+      doneChecklist: input.doneChecklist ?? null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
