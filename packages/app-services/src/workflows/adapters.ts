@@ -86,6 +86,8 @@ export function toWorkflowRunDto(run: WorkflowRunV2Record): WorkflowRunDto {
     rev: run.rev,
     workItemId: run.workItemId,
     worktreePath: run.worktreePath,
+    worktreeBaseBranch: run.worktreeBaseBranch,
+    worktreeBaseSha: run.worktreeBaseSha,
     lastReason: run.lastReason,
     createdAt: run.createdAt,
     startedAt: run.startedAt,

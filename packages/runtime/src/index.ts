@@ -22,6 +22,7 @@ export {
   destroyWorktree,
   detectIntegrationBranch,
   ensureMergeWorktree,
+  fastForwardWorktree,
   gitMergeState,
   getWorktreeStatus,
   listBranchesByPrefix,
@@ -30,6 +31,7 @@ export {
   pruneWorktrees,
   pushBranch,
   resolveIntegrationTip,
+  resolveLocalBranchHead,
   updateRef,
 } from './worktree.ts';
 export type { GitMergeState, WorktreeEntry } from './worktree.ts';

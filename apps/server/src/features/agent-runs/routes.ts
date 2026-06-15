@@ -72,7 +72,7 @@ export interface AgentRunRouteDeps {
    *  when no ProjectRuntime exists for the project (dispatch is refused). Tests
    *  inject a fake; production wires to `resolveProject(id)?.worktrees()`. */
   worktreeServiceFor?: (projectId: ULID) => {
-    ensureWorktree(name: string): Promise<{ path: string }>;
+    ensureWorktree(name: string): Promise<{ path: string; baseBranch?: string; baseSha?: string }>;
     /** pc-pty-chat-415 (R14) — read-only stranded report (unmerged, no live
      *  run). Optional: tests that only exercise provisioning omit it. */
     listStranded?(inUsePaths: Iterable<string>): Promise<Array<{ name: string; branch: string; path: string | null }>>;
@@ -510,6 +510,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     // what caused the "committed straight to dev" incident. The factory holds
     // the matching backstop invariant (refuses repo dispatch in the live copy).
     let worktreeDir = project.folderPath;
+    let worktreeBaseBranch: string | null = null;
+    let worktreeBaseSha: string | null = null;
     // Resolve the EFFECTIVE expected_output for the isolation precondition —
     // same three-tier chain the factory/contract layer uses:
     //   inline body.expectedOutput ?? pod-row stored default ?? stock pod default
@@ -534,16 +536,15 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
           503,
         );
       }
-      // Name mirrors the workflow convention: keyed to the linked work item when
-      // one is present (idempotent re-attach), otherwise a random session-unique
-      // suffix. WorktreeService.ensureWorktree prunes stale registrations and
-      // returns an existing worktree if the path is already attached.
-      const worktreeName = workItemId
-        ? `agent-${workItemId.slice(-8)}`
-        : `agent-${randomUUID().slice(0, 8)}`;
+      // Fresh repo dispatches always use a unique temp branch. The work item is
+      // the human rollup; the branch is disposable isolation and must never be
+      // reused across separate dispatches.
+      const worktreeName = `agent-${randomUUID().slice(0, 8)}`;
       try {
         const wt = await wts.ensureWorktree(worktreeName);
         worktreeDir = wt.path;
+        worktreeBaseBranch = wt.baseBranch ?? null;
+        worktreeBaseSha = wt.baseSha ?? null;
       } catch (err) {
         return c.json(
           {
@@ -571,6 +572,8 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
           : {}),
         invokeDepth: depthCheck.childDepth,
         slug: project.slug,
+        ...(worktreeBaseBranch ? { worktreeBaseBranch } : {}),
+        ...(worktreeBaseSha ? { worktreeBaseSha } : {}),
         // When a worktree was provisioned, pass its path in the spawn env so
         // the path-guard hook (already used by workflow nodes) enforces worktree
         // confinement for subagent calls too. Mirrors the workflow convention
@@ -755,6 +758,9 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         expectedOutput: contract.expectedOutput,
         acceptanceCriteria: contract.acceptanceCriteria,
         verificationTier: contract.verificationTier,
+        worktreePath: contract.worktreePath,
+        worktreeBaseBranch: contract.worktreeBaseBranch,
+        worktreeBaseSha: contract.worktreeBaseSha,
         deliverable: contract.deliverable,
         report: contract.report,
       },
@@ -899,6 +905,12 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
           ...deliverable,
           ...(sealedSha ? { commit: sealedSha } : {}),
           ...(sealedBranch ? { branch: sealedBranch } : {}),
+          ...((contract.worktreeBaseBranch ?? row.worktreeBaseBranch)
+            ? { baseBranch: contract.worktreeBaseBranch ?? row.worktreeBaseBranch ?? undefined }
+            : {}),
+          ...((contract.worktreeBaseSha ?? row.worktreeBaseSha)
+            ? { baseCommit: contract.worktreeBaseSha ?? row.worktreeBaseSha ?? undefined }
+            : {}),
         };
       }
     }

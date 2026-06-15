@@ -78,6 +78,32 @@ test('hasGitDiff: false when worktree branch has NO commits vs base', async () =
   }
 });
 
+test('hasGitDiff: stamped base SHA is authoritative even when base branch ref is gone', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-gitdiff-base-sha-'));
+  try {
+    setupRepo(dir);
+    const baseSha = execFileSync('git', ['rev-parse', 'dev'], { cwd: dir }).toString().trim();
+    git(dir, 'branch', '-D', 'dev');
+    writeFileSync(join(dir, 'from-base.ts'), 'export const x = 1;');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-m', 'feat: from stamped base');
+
+    const exec = createWorktreeExecutors({
+      worktreeDir: dir,
+      projectFolderPath: dir,
+      worktreeBaseSha: baseSha,
+      worktreeBaseBranch: 'dev',
+    });
+    assert.equal(
+      await exec.hasGitDiff!('worktree'),
+      true,
+      'committed diff must compare against the stamped base SHA, not guessed branch refs',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('hasGitDiff: true after committing; working-tree dirtiness alone does NOT drive the result', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'pc-gitdiff-wt-'));
   try {

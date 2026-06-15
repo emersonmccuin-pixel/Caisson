@@ -26,7 +26,7 @@ import { Hono } from "hono";
 const tmpDir = mkdtempSync(join(tmpdir(), "pc-dispatch-invariant-"));
 process.env.PC_DATA_DIR = tmpDir;
 
-const { closeDb, createAgent, createProject, listAgentRunsForSession, runMigrations, newId } = await import("@pc/db");
+const { closeDb, createAgent, createProject, createWorkItem, listAgentRunsForSession, runMigrations, newId } = await import("@pc/db");
 const { dispatchFreshAgent } = await import("../src/services/agent-run-factory.ts");
 const { registerAgentRunRoutes } = await import("../src/features/agent-runs/routes.ts");
 import type { AgentRunRouteDeps } from "../src/features/agent-runs/routes.ts";
@@ -158,6 +158,61 @@ test("dispatch-invariant (B): isolation:worktree passes provisioned path not pro
     WORKTREE_PATH,
     "worktreeDir must be the provisioned worktree path",
   );
+});
+
+test("dispatch-invariant (B2): same work item gets a fresh temp worktree branch each dispatch", async () => {
+  const project = createProject({
+    slug: "inv-b2-unique-" + Date.now(),
+    name: "Invariant B2 Unique",
+    stages,
+    folderPath: join(tmpDir, "inv-b2-unique"),
+  });
+  const wi = createWorkItem({
+    projectId: project.id as ULID,
+    stageId: "todo",
+    title: "Build this",
+  });
+  const names: string[] = [];
+
+  const app = mkApp({
+    dispatchResult: {
+      ok: true,
+      agentRunId: newId() as ULID,
+      ccSessionId: "cc-inv-b2",
+      podName: "code-writer",
+      initialState: "queued",
+      startedAt: Date.now(),
+      done: new Promise<never>(() => {}),
+    },
+    worktreeServiceFor: () => ({
+      ensureWorktree: async (name: string) => {
+        names.push(name);
+        return { path: join(tmpDir, "worktrees", name), baseBranch: "main", baseSha: "base" };
+      },
+    }),
+  });
+
+  for (let i = 0; i < 2; i += 1) {
+    const res = await app.request(
+      "/api/projects/" + project.id + "/agents/code-writer/invoke",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: "fix the bug",
+          dispatcherSessionId: "orch-session-b2",
+          workItemId: wi.id,
+          expectedOutput: { kind: "repo" },
+        }),
+      },
+    );
+    assert.equal(res.status, 200);
+  }
+
+  assert.equal(names.length, 2);
+  assert.match(names[0]!, /^agent-/);
+  assert.match(names[1]!, /^agent-/);
+  assert.notEqual(names[0], names[1], "separate dispatches must not reuse a work-item-keyed branch");
 });
 
 test("dispatch-invariant (B): isolation:worktree without worktreeService returns 503", async () => {

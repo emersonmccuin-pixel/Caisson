@@ -120,8 +120,13 @@ function row(id: string, patch: Partial<AgentRunRow> = {}): AgentRunRow {
     readyAt: 1_700_000_000_200,
     pid: null,
     lastActivityAt: null,
+    deliveredAt: null,
     completedAt: null,
     rev: 0,
+    contractId: null,
+    worktreeDir: null,
+    worktreeBaseBranch: null,
+    worktreeBaseSha: null,
     ...patch,
   };
 }

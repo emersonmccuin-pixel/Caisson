@@ -52,6 +52,8 @@ export function toContractDto(row: ContractRow): Contract {
     report: row.report,
     deliverable: row.deliverable,
     worktreePath: row.worktreePath,
+    worktreeBaseBranch: row.worktreeBaseBranch,
+    worktreeBaseSha: row.worktreeBaseSha,
     landingStatus: row.landingStatus,
     landedBranch: row.landedBranch,
     landedSha: row.landedSha,
@@ -95,6 +97,8 @@ export interface CreateContractServiceInput {
   acceptanceCriteria?: AcceptanceCriteria | null;
   verificationTier?: VerificationTier | null;
   worktreePath?: string | null;
+  worktreeBaseBranch?: string | null;
+  worktreeBaseSha?: string | null;
 }
 
 export class ContractService {
@@ -144,6 +148,10 @@ export class ContractService {
           ? { verificationTier: input.verificationTier }
           : {}),
         ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
+        ...(input.worktreeBaseBranch !== undefined
+          ? { worktreeBaseBranch: input.worktreeBaseBranch }
+          : {}),
+        ...(input.worktreeBaseSha !== undefined ? { worktreeBaseSha: input.worktreeBaseSha } : {}),
       });
       const contract = toContractDto(row);
       this.insert(tx, buildContractChangedDraft({ reason: 'created', contract }));

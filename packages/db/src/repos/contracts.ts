@@ -35,6 +35,8 @@ export interface ContractRow {
   report: string | null;
   deliverable: Deliverable | null;
   worktreePath: string | null;
+  worktreeBaseBranch: string | null;
+  worktreeBaseSha: string | null;
   /** pc-pty-chat-415 (R5) — accept ⇒ land. Null = not applicable. */
   landingStatus: ContractLandingStatus | null;
   landedBranch: string | null;
@@ -58,6 +60,8 @@ export interface CreateContractInput {
   verificationTier?: VerificationTier | null;
   report?: string | null;
   worktreePath?: string | null;
+  worktreeBaseBranch?: string | null;
+  worktreeBaseSha?: string | null;
   status?: ContractStatus;
 }
 
@@ -142,6 +146,8 @@ export function createContractInDb(db: DbExecutor, input: CreateContractInput): 
     report: input.report ?? null,
     deliverable: null,
     worktreePath: input.worktreePath ?? null,
+    worktreeBaseBranch: input.worktreeBaseBranch ?? null,
+    worktreeBaseSha: input.worktreeBaseSha ?? null,
     landingStatus: null,
     landedBranch: null,
     landedSha: null,

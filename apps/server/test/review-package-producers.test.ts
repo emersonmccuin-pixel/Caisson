@@ -100,7 +100,13 @@ test('workflow-gate requestReview emits valid ReviewPackage with owner:human', a
   };
 
   const deps = makeExecutorDeps(
-    { id: runId as ULID, workItemId: null, worktreePath: null },
+    {
+      id: runId as ULID,
+      workItemId: null,
+      worktreePath: null,
+      worktreeBaseBranch: null,
+      worktreeBaseSha: null,
+    },
     workflow,
     opts,
   );
@@ -165,7 +171,13 @@ test('workflow-gate requestReview emits valid ReviewPackage with owner:orchestra
   };
 
   const deps = makeExecutorDeps(
-    { id: runId as ULID, workItemId: null, worktreePath: null },
+    {
+      id: runId as ULID,
+      workItemId: null,
+      worktreePath: null,
+      worktreeBaseBranch: null,
+      worktreeBaseSha: null,
+    },
     workflow,
     opts,
   );

@@ -12,13 +12,13 @@
 // to any caller. This guarantees typecheck / build commands inside the
 // worktree have a complete node_modules and never false-fail with "Cannot
 // find module" errors (pc-pty-chat-305). The install command is detected
-// from the lockfile at the worktree root (pnpm/yarn/npm); repos with no
-// root lockfile (polyglot, non-Node) skip the install instead of failing
-// the run on a bootstrap step they never declared.
+// from a root lockfile, or from nested package.json+lockfile pairs when the
+// repo has no root lockfile; truly polyglot / non-Node repos skip the install
+// instead of failing the run on a bootstrap step they never declared.
 
 import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { readdir, rm } from 'node:fs/promises';
 
 import {
@@ -28,6 +28,7 @@ import {
   deleteBranch as _deleteBranch,
   destroyWorktree as _destroyWorktree,
   ensureMergeWorktree as _ensureMergeWorktree,
+  fastForwardWorktree as _fastForwardWorktree,
   gitMergeState as _gitMergeState,
   getWorktreeStatus as _getWorktreeStatus,
   listBranchesByPrefix as _listBranchesByPrefix,
@@ -36,6 +37,7 @@ import {
   pruneWorktrees as _pruneWorktrees,
   pushBranch as _pushBranch,
   resolveIntegrationTip as _resolveIntegrationTip,
+  resolveLocalBranchHead as _resolveLocalBranchHead,
   updateRef as _updateRef,
   type GitMergeState,
   type WorktreeEntry,
@@ -46,6 +48,13 @@ export interface WorktreeRegistry {
   updatedAt: string;
   worktrees: WorktreeEntry[];
 }
+
+export type ProvisionedWorktreeEntry = WorktreeEntry & {
+  /** Canonical branch the worktree forked from. */
+  baseBranch?: string;
+  /** Commit SHA of `baseBranch` at dispatch/provision time. */
+  baseSha?: string;
+};
 
 /**
  * Dep-injection seam for WorktreeService. All fields optional; defaults are
@@ -126,11 +135,18 @@ export interface WorktreeServiceDeps {
     integrationBranch: string,
     mergeWtPath?: string,
   ) => Promise<string | null>;
+  /** Resolve the current LOCAL canonical branch HEAD for dispatch provenance. */
+  resolveLocalBranchHead?: (
+    workspaceDir: string,
+    integrationBranch: string,
+  ) => Promise<string | null>;
   /**
    * Override for `updateRef` — advances a local branch pointer without real
    * git (used in `tryAdvanceLocalIntegration` tests).
    */
   updateRef?: (workspaceDir: string, branch: string, sha: string) => Promise<void>;
+  /** Override for checked-out branch fast-forward (tests avoid real git). */
+  fastForwardWorktree?: (workspaceDir: string, sha: string) => Promise<void>;
 }
 
 /** Names the engine reaps automatically: per-run isolation worktrees only. */
@@ -160,17 +176,74 @@ const LOCKFILE_INSTALL_COMMANDS: ReadonlyArray<{ lockfile: string; command: stri
   { lockfile: 'package-lock.json', command: 'npm ci' },
 ];
 
+export interface InstallStep {
+  cwd: string;
+  command: string;
+}
+
+const INSTALL_SCAN_SKIP = new Set([
+  '.git',
+  '.hg',
+  '.svn',
+  'node_modules',
+  '.next',
+  '.turbo',
+  '.cache',
+  'dist',
+  'build',
+  'coverage',
+  'out',
+]);
+
 /**
  * Detect the dependency-install command for a worktree from the lockfile at
  * its root. Returns null when no known lockfile exists — polyglot / non-Node
- * repos (or Node projects nested in a subdir) have nothing the engine can
- * frozen-install at the root, so provisioning is a no-op for them.
+ * repos have nothing the engine can frozen-install at the root. Nested Node
+ * projects are handled by `detectInstallSteps`.
  */
 export function detectInstallCommand(cwd: string): string | null {
   for (const { lockfile, command } of LOCKFILE_INSTALL_COMMANDS) {
     if (existsSync(resolve(cwd, lockfile))) return command;
   }
   return null;
+}
+
+/**
+ * Detect every package-manager install that provisioning must run. Root
+ * lockfile wins (normal monorepo case). If the repo has no root lockfile, scan
+ * a shallow tree for nested package.json+lockfile pairs so subdir apps are not
+ * handed to agents without dependencies.
+ */
+export function detectInstallSteps(cwd: string): InstallStep[] {
+  const rootCommand = detectInstallCommand(cwd);
+  if (rootCommand) return [{ cwd, command: rootCommand }];
+
+  const out: InstallStep[] = [];
+  const visit = (dir: string, depth: number) => {
+    if (depth > 4) return;
+    let names: string[];
+    try {
+      names = readdirSync(dir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (INSTALL_SCAN_SKIP.has(name)) continue;
+      const child = resolve(dir, name);
+      const command = existsSync(resolve(child, 'package.json'))
+        ? detectInstallCommand(child)
+        : null;
+      if (command) {
+        out.push({ cwd: child, command });
+        continue;
+      }
+      visit(child, depth + 1);
+    }
+  };
+  visit(cwd, 1);
+  return out;
 }
 
 /**
@@ -182,13 +255,19 @@ export function detectInstallCommand(cwd: string): string | null {
  * Yarn-in-subdir + Bundler repo before node 1 ever ran).
  */
 export function defaultInstallRunner(cwd: string): Promise<void> {
-  const command = detectInstallCommand(cwd);
-  if (command === null) return Promise.resolve();
+  const steps = detectInstallSteps(cwd);
+  if (steps.length === 0) return Promise.resolve();
+  return steps.reduce(
+    (chain, step) => chain.then(() => runInstallStep(step)),
+    Promise.resolve(),
+  );
+}
 
+function runInstallStep(step: InstallStep): Promise<void> {
   return new Promise((res, rej) => {
-    const child = spawn(command, {
+    const child = spawn(step.command, {
       shell: true,
-      cwd,
+      cwd: step.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -203,7 +282,8 @@ export function defaultInstallRunner(cwd: string): Promise<void> {
         const stderr = Buffer.concat(stderrChunks).toString().trim();
         rej(
           new Error(
-            `${command} failed (exit ${code}) in ${cwd}` + (stderr ? `:\n${stderr}` : ''),
+            `${step.command} failed (exit ${code}) in ${step.cwd}` +
+              (stderr ? `:\n${stderr}` : ''),
           ),
         );
       }
@@ -256,16 +336,34 @@ export class WorktreeService {
     return entries;
   }
 
-  async create(name: string): Promise<WorktreeEntry> {
+  async create(name: string): Promise<ProvisionedWorktreeEntry> {
     const wtPath = resolve(this.baseDir, name);
 
-    // Resolve the best-known integration tip so the new run worktree forks
-    // from the latest LANDED state, not the stale main checkout HEAD
-    // (pc-pty-chat-417). Priority: merge-wt HEAD > origin/<integration> > local.
     const integration = await this.getIntegrationBranch();
-    const tipFn = this.deps.resolveIntegrationTip ?? _resolveIntegrationTip;
-    const startPoint =
-      (await tipFn(this.workspaceDir, integration, this.mergeWorktreePath)) ?? undefined;
+    const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
+    const mainStatus = await statusFn(this.workspaceDir);
+    if (mainStatus.branch !== integration) {
+      throw new Error(
+        `MAINLINE GUARD: repo dispatch requires the main checkout to be on "${integration}" ` +
+          `before creating an agent worktree; current checkout is ` +
+          `${mainStatus.branch ? `"${mainStatus.branch}"` : 'detached HEAD'}`,
+      );
+    }
+    if (!mainStatus.clean) {
+      throw new Error(
+        `MAINLINE GUARD: repo dispatch requires a clean "${integration}" checkout before ` +
+          'creating an agent worktree',
+      );
+    }
+
+    const headFn = this.deps.resolveLocalBranchHead ?? _resolveLocalBranchHead;
+    const startPoint = await headFn(this.workspaceDir, integration);
+    if (!startPoint) {
+      throw new Error(
+        `MAINLINE GUARD: could not resolve local branch "${integration}" — ` +
+          'set the project integration branch to an existing local branch before dispatching repo work',
+      );
+    }
 
     const createFn = this.deps.createWorktree ?? _createWorktree;
     const entry = await createFn(this.workspaceDir, wtPath, name, startPoint);
@@ -273,7 +371,7 @@ export class WorktreeService {
     await this.provision(entry.path);
     upsertWorktree({ name, path: entry.path });
     await this.refresh();
-    return entry;
+    return { ...entry, baseBranch: integration, baseSha: startPoint };
   }
 
   async destroy(target: string, force = false): Promise<void> {
@@ -505,17 +603,21 @@ export class WorktreeService {
    *
    * Both the create and attach paths call provision() before returning.
    */
-  async ensureWorktree(name: string): Promise<WorktreeEntry> {
+  async ensureWorktree(name: string): Promise<ProvisionedWorktreeEntry> {
     const pruneFn = this.deps.pruneWorktrees ?? _pruneWorktrees;
     const listFn = this.deps.listWorktrees ?? _listWorktrees;
     await pruneFn(this.workspaceDir);
     const wtPath = resolve(this.baseDir, name);
+    const integration = await this.getIntegrationBranch();
+    const headFn = this.deps.resolveLocalBranchHead ?? _resolveLocalBranchHead;
+    const baseSha = await headFn(this.workspaceDir, integration);
     const existing = await listFn(this.workspaceDir);
     const match = existing.find((e) => normalize(e.path) === normalize(wtPath));
     if (match) {
+      await this.provision(match.path);
       this.cache = { updatedAt: new Date().toISOString(), worktrees: existing };
       upsertWorktree({ name, path: match.path });
-      return match;
+      return { ...match, baseBranch: integration, ...(baseSha ? { baseSha } : {}) };
     }
     try {
       return await this.create(name);
@@ -649,13 +751,9 @@ export class WorktreeService {
    * see the merged work, and so the local ref is available as a fallback
    * start-point for new run worktrees.
    *
-   * Uses `git update-ref` to move the ref pointer directly — no checkout needed.
-   *
-   * GUARD: skipped when the main worktree is on the integration branch.
-   * Moving a checked-out branch pointer WITHOUT updating the index/working tree
-   * desyncs `git status` (phantom staged changes). In that case Option (b) —
-   * `create()` uses `resolveIntegrationTip` which still finds the correct tip
-   * via the merge-worktree HEAD — is sufficient on its own.
+   * When the main worktree is on the integration branch, fast-forward it so
+   * the working tree/index stay coherent. When it is on some other branch,
+   * move only the local integration ref with `git update-ref`.
    *
    * Best-effort: never throws. Failure is logged and the landing is unaffected.
    */
@@ -663,20 +761,25 @@ export class WorktreeService {
     try {
       const integration = await this.getIntegrationBranch();
 
-      // Guard: if the main checkout is on the integration branch, skip to
-      // avoid desyncing the user's working tree.
       const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
-      const { branch: mainBranch } = await statusFn(this.workspaceDir);
-      if (mainBranch === integration) {
-        // Main worktree is on the integration branch. Skipping — `create()`
-        // uses the merge-worktree HEAD via resolveIntegrationTip instead.
-        return;
-      }
+      const { branch: mainBranch, clean } = await statusFn(this.workspaceDir);
 
       // Resolve the most-advanced SHA (merge-wt HEAD > origin > local).
       const tipFn = this.deps.resolveIntegrationTip ?? _resolveIntegrationTip;
       const sha = await tipFn(this.workspaceDir, integration, this.mergeWorktreePath);
       if (!sha) return; // fresh repo or nothing resolvable — nothing to advance to
+
+      if (mainBranch === integration) {
+        if (!clean) {
+          console.warn(
+            `[worktree] skipped fast-forward of ${integration}: main checkout is dirty`,
+          );
+          return;
+        }
+        const ffFn = this.deps.fastForwardWorktree ?? _fastForwardWorktree;
+        await ffFn(this.workspaceDir, sha);
+        return;
+      }
 
       const updateFn = this.deps.updateRef ?? _updateRef;
       await updateFn(this.workspaceDir, integration, sha);

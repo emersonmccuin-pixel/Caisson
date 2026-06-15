@@ -45,6 +45,9 @@ export interface InsertAgentRunRowInput {
   /** Absolute path to the worktree directory the agent was spawned in. Used to
    *  derive the correct CC JSONL path. NULL = main project dir (legacy rows). */
   worktreeDir?: string | null;
+  /** Repo dispatch provenance. NULL for non-repo/legacy rows. */
+  worktreeBaseBranch?: string | null;
+  worktreeBaseSha?: string | null;
   queuedAt: number;
 }
 
@@ -78,6 +81,8 @@ export function insertAgentRunRow(input: InsertAgentRunRowInput): AgentRunRow {
     rev: 0,
     contractId: input.contractId ?? null,
     worktreeDir: input.worktreeDir ?? null,
+    worktreeBaseBranch: input.worktreeBaseBranch ?? null,
+    worktreeBaseSha: input.worktreeBaseSha ?? null,
   };
   getDb().insert(agentRuns).values(row).run();
   return row;

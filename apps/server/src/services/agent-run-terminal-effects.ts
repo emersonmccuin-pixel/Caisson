@@ -398,6 +398,8 @@ async function finishTerminalEffects(args: {
           failureReason,
           projectFolderPath: project.folderPath,
           worktreeDir: input.worktreeDir,
+          worktreeBaseBranch: row.worktreeBaseBranch,
+          worktreeBaseSha: row.worktreeBaseSha,
           // Slice 014a — carry the run + session so the tool-call loader can read
           // the producing run's transcript (powers `tool_called`).
           runId: input.runId,

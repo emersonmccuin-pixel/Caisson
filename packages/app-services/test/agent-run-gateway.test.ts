@@ -32,8 +32,13 @@ function makeRow(over: Partial<AgentRunRow> = {}): AgentRunRow {
     readyAt: 120,
     pid: 4242,
     lastActivityAt: 130,
+    deliveredAt: null,
     completedAt: null,
     rev: 3,
+    contractId: null,
+    worktreeDir: null,
+    worktreeBaseBranch: null,
+    worktreeBaseSha: null,
     ...over,
   };
 }

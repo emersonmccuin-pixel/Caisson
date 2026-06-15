@@ -24,6 +24,8 @@ const runRow: WorkflowRunV2Record = {
   status: 'running',
   workflowYamlSnapshot: snapshot,
   worktreePath: null,
+  worktreeBaseBranch: null,
+  worktreeBaseSha: null,
   dagState: { nodes: { a: { state: 'completed' } } },
   triggerContext: {},
   metadata: {},

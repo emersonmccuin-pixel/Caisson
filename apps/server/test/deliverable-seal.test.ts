@@ -59,6 +59,9 @@ function seedRepoRun(slug: string, worktreeDir: string | null) {
     projectId: p.id as ULID,
     podName: 'code-writer',
     expectedOutput: { kind: 'repo' },
+    worktreePath: worktreeDir,
+    worktreeBaseBranch: worktreeDir ? 'main' : null,
+    worktreeBaseSha: worktreeDir ? 'base123' : null,
   });
   const runId = newId() as ULID;
   insertAgentRunRow({
@@ -71,6 +74,8 @@ function seedRepoRun(slug: string, worktreeDir: string | null) {
     input: 'go',
     contractId: contract.id as ULID,
     worktreeDir: worktreeDir ?? undefined,
+    worktreeBaseBranch: worktreeDir ? 'main' : null,
+    worktreeBaseSha: worktreeDir ? 'base123' : null,
     queuedAt: Date.now(),
   });
   return { p, contract, runId };
@@ -142,10 +147,18 @@ test('seal: clean worktree accepts and stamps engine-read branch + sha over agen
 
   assert.equal(res.status, 200);
   const c = getContract(contract.id as ULID);
-  const d = c!.deliverable as { kind: string; branch?: string; commit?: string };
+  const d = c!.deliverable as {
+    kind: string;
+    branch?: string;
+    commit?: string;
+    baseBranch?: string;
+    baseCommit?: string;
+  };
   assert.equal(d.kind, 'repo');
   assert.equal(d.commit, 'deadbeef42', 'sealed sha must come from git, not the agent claim');
   assert.equal(d.branch, 'agent-12345678', 'sealed branch must come from git, not the agent claim');
+  assert.equal(d.baseBranch, 'main', 'base branch must be stamped from dispatch receipt');
+  assert.equal(d.baseCommit, 'base123', 'base commit must be stamped from dispatch receipt');
 });
 
 test('seal: legacy in-place run (cwd == project folder) is exempt', async () => {

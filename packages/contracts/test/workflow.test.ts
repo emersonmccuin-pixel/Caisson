@@ -31,6 +31,8 @@ const run: WorkflowRunDto = {
   rev: 2,
   workItemId: 'wi1',
   worktreePath: null,
+  worktreeBaseBranch: null,
+  worktreeBaseSha: null,
   lastReason: null,
   createdAt: 1,
   startedAt: 2,

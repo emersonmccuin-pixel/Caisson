@@ -22,6 +22,8 @@ export interface WorkflowRunV2Record {
   status: WorkflowV2.WorkflowRunStatus;
   workflowYamlSnapshot: string;
   worktreePath: string | null;
+  worktreeBaseBranch: string | null;
+  worktreeBaseSha: string | null;
   dagState: WorkflowV2.WorkflowDagState;
   metadata: Record<string, unknown>;
   lastReason: string | null;
@@ -41,6 +43,8 @@ export interface CreateRunInput {
   status?: WorkflowV2.WorkflowRunStatus;
   workItemId?: ULID | null;
   worktreePath?: string | null;
+  worktreeBaseBranch?: string | null;
+  worktreeBaseSha?: string | null;
   dagState?: WorkflowV2.WorkflowDagState;
   metadata?: Record<string, unknown>;
 }
@@ -62,6 +66,8 @@ export function createRun(input: CreateRunInput): WorkflowRunV2Record {
     status: input.status ?? 'pending',
     workflowYamlSnapshot: input.workflowYamlSnapshot,
     worktreePath: input.worktreePath ?? null,
+    worktreeBaseBranch: input.worktreeBaseBranch ?? null,
+    worktreeBaseSha: input.worktreeBaseSha ?? null,
     dagState: input.dagState ?? { nodes: {} },
     metadata: input.metadata ?? {},
     lastReason: null,

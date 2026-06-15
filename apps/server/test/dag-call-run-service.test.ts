@@ -78,7 +78,11 @@ function makeDeps(
     mcpToolCaller: caller,
   } as unknown as DagRunServiceOptions;
   const workflow: WorkflowV2.Workflow = { id: 'wf-call', name: 'Call Test', nodes: [] };
-  return makeExecutorDeps({ id: runId, workItemId: null, worktreePath: null }, workflow, opts);
+  return makeExecutorDeps(
+    { id: runId, workItemId: null, worktreePath: null, worktreeBaseBranch: null, worktreeBaseSha: null },
+    workflow,
+    opts,
+  );
 }
 
 function ctx(over: Partial<DagNodeContext> = {}): DagNodeContext {

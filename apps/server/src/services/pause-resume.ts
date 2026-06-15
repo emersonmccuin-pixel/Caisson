@@ -558,6 +558,9 @@ export interface ContinueAgentPlan {
    *  session by slugifying its working directory, so the cwd must match
    *  exactly what the original dispatch used. */
   worktreeDir: string;
+  /** Repo dispatch provenance carried from the parent run. */
+  worktreeBaseBranch: string | null;
+  worktreeBaseSha: string | null;
 }
 
 export type ContinueAgentResult =
@@ -668,6 +671,8 @@ export function continueAgent(
     podRevisionAtDispatch,
     // Carry the worktree path forward — the continuation spawns in the same dir.
     worktreeDir: parent.worktreeDir,
+    worktreeBaseBranch: parent.worktreeBaseBranch,
+    worktreeBaseSha: parent.worktreeBaseSha,
     queuedAt: now,
   });
 
@@ -686,6 +691,8 @@ export function continueAgent(
       // Use the resolved cwd (same fallback already used for the JSONL guard
       // above) so dispatchContinueAgent never needs a caller-supplied value.
       worktreeDir: jsonlCwd,
+      worktreeBaseBranch: parent.worktreeBaseBranch,
+      worktreeBaseSha: parent.worktreeBaseSha,
     },
   };
 }

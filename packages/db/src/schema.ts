@@ -346,6 +346,9 @@ export const workflowRunsV2 = sqliteTable(
     /** Frozen YAML at dispatch — immune to live edits mid-run. */
     workflowYamlSnapshot: text('workflow_yaml_snapshot').notNull(),
     worktreePath: text('worktree_path'),
+    /** Repo dispatch provenance for workflow-owned worktrees. */
+    worktreeBaseBranch: text('worktree_base_branch'),
+    worktreeBaseSha: text('worktree_base_sha'),
     /** DAG execution state: per-node records + per-reject-edge iteration counts. */
     dagState: text('dag_state', { mode: 'json' })
       .notNull()

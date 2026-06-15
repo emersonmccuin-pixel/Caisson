@@ -251,9 +251,9 @@ test('mergeState: returns all-false state for an unmapped branch', async () => {
   assert.equal(state.pushed, false);
 });
 
-// ── create: start-point resolution (pc-pty-chat-417) ─────────────────────────
+// ── create: mainline-only dispatch base ──────────────────────────────────────
 
-test('create: passes resolveIntegrationTip result as startPoint to createWorktree dep', async () => {
+test('create: forks from current local canonical branch HEAD and returns base receipt', async () => {
   const FAKE_TIP = 'aabbccddee1122334455667788990011aabbccdd';
   const createCalls: Array<{ ws: string; path: string; name: string; startPoint: string | undefined }> = [];
 
@@ -263,7 +263,8 @@ test('create: passes resolveIntegrationTip result as startPoint to createWorktre
       // Return the newly created worktree on the second call (after create)
     ],
     pruneWorktrees: async () => {},
-    resolveIntegrationTip: async () => FAKE_TIP,
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
+    resolveLocalBranchHead: async () => FAKE_TIP,
     createWorktree: async (ws, path, name, startPoint) => {
       createCalls.push({ ws, path, name, startPoint });
       return { path, branch: name, head: FAKE_TIP };
@@ -271,56 +272,60 @@ test('create: passes resolveIntegrationTip result as startPoint to createWorktre
     installRunner: async () => {},
   });
 
-  await svc.create('agent-TEST');
+  const entry = await svc.create('agent-TEST');
 
   assert.equal(createCalls.length, 1, 'createWorktree dep called exactly once');
-  assert.equal(createCalls[0]!.startPoint, FAKE_TIP, 'resolveIntegrationTip result passed as startPoint');
+  assert.equal(createCalls[0]!.startPoint, FAKE_TIP, 'local canonical HEAD passed as startPoint');
   assert.equal(createCalls[0]!.ws, FAKE_WORKSPACE, 'workspaceDir passed correctly');
+  assert.equal(entry.baseBranch, 'dev');
+  assert.equal(entry.baseSha, FAKE_TIP);
 });
 
-test('create: passes undefined startPoint when resolveIntegrationTip returns null (fresh repo)', async () => {
-  const createCalls: Array<{ startPoint: string | undefined }> = [];
-
+test('create: refuses when the main checkout is not on the canonical branch', async () => {
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
     listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' }],
     pruneWorktrees: async () => {},
-    resolveIntegrationTip: async () => null,
-    createWorktree: async (_ws, path, name, startPoint) => {
-      createCalls.push({ startPoint });
-      return { path, branch: name, head: 'freshhead' };
-    },
+    getWorktreeStatus: async () => ({ branch: 'feature/x', clean: true }),
+    resolveLocalBranchHead: async () => 'abc123',
+    createWorktree: async () => { throw new Error('should not create'); },
     installRunner: async () => {},
   });
 
-  await svc.create('agent-FRESH');
-
-  assert.equal(createCalls.length, 1, 'createWorktree dep called exactly once');
-  assert.equal(createCalls[0]!.startPoint, undefined, 'null tip → no startPoint (undefined)');
+  await assert.rejects(
+    () => svc.create('agent-FEATURE'),
+    /MAINLINE GUARD.*"dev".*"feature\/x"/s,
+  );
 });
 
-test('create: resolveIntegrationTip receives the merge-worktree path so local-only repos are covered', async () => {
-  const tipCalls: Array<{ ws: string; integration: string; mergeWtPath: string | undefined }> = [];
+test('create: refuses dirty canonical checkout before creating worktree', async () => {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' }],
+    pruneWorktrees: async () => {},
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: false }),
+    resolveLocalBranchHead: async () => 'abc123',
+    createWorktree: async () => { throw new Error('should not create'); },
+    installRunner: async () => {},
+  });
 
+  await assert.rejects(
+    () => svc.create('agent-DIRTY'),
+    /MAINLINE GUARD.*clean "dev"/,
+  );
+});
+
+test('create: refuses when local canonical branch head cannot be resolved', async () => {
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'trunk', {
     listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'trunk', head: 'abc' }],
     pruneWorktrees: async () => {},
-    resolveIntegrationTip: async (ws, integration, mergeWtPath) => {
-      tipCalls.push({ ws, integration, mergeWtPath });
-      return null;
-    },
-    createWorktree: async (_ws, path, name) => ({ path, branch: name, head: 'h' }),
+    getWorktreeStatus: async () => ({ branch: 'trunk', clean: true }),
+    resolveLocalBranchHead: async () => null,
+    createWorktree: async () => { throw new Error('should not create'); },
     installRunner: async () => {},
   });
 
-  await svc.create('agent-LOCAL');
-
-  assert.equal(tipCalls.length, 1, 'resolveIntegrationTip called exactly once');
-  assert.equal(tipCalls[0]!.ws, FAKE_WORKSPACE);
-  assert.equal(tipCalls[0]!.integration, 'trunk');
-  assert.equal(
-    tipCalls[0]!.mergeWtPath,
-    resolve(FAKE_BASE, '__dev-merge'),
-    'merge-worktree path passed so local-only repos can use it as start-point',
+  await assert.rejects(
+    () => svc.create('agent-NOHEAD'),
+    /MAINLINE GUARD.*could not resolve local branch "trunk"/,
   );
 });
 
@@ -346,20 +351,41 @@ test('tryAdvanceLocalIntegration: advances local ref when main checkout is NOT o
   assert.equal(updateRefCalls[0]!.sha, MERGE_HEAD_SHA, 'merge-head SHA passed');
 });
 
-test('tryAdvanceLocalIntegration: SKIPS when main checkout IS on integration branch (corruption guard)', async () => {
-  const updateRefCalls: Array<unknown>= [];
+test('tryAdvanceLocalIntegration: fast-forwards worktree when main checkout IS on integration branch', async () => {
+  const ffCalls: Array<{ ws: string; sha: string }> = [];
+  const updateRefCalls: Array<unknown> = [];
 
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
     listWorktrees: noOpList,
-    // Main checkout IS on 'dev' — guard must fire.
+    // Main checkout IS on 'dev' — update the worktree/index coherently.
     getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
     resolveIntegrationTip: async () => 'deadbeef1234',
     updateRef: async (...args) => { updateRefCalls.push(args); },
+    fastForwardWorktree: async (ws, sha) => { ffCalls.push({ ws, sha }); },
   });
 
   await svc.tryAdvanceLocalIntegration();
 
-  assert.equal(updateRefCalls.length, 0, 'updateRef must NOT be called when main checkout is on integration branch');
+  assert.equal(updateRefCalls.length, 0, 'updateRef must NOT be called for a checked-out branch');
+  assert.deepEqual(ffCalls, [{ ws: FAKE_WORKSPACE, sha: 'deadbeef1234' }]);
+});
+
+test('tryAdvanceLocalIntegration: skips fast-forward when checked-out integration branch is dirty', async () => {
+  const ffCalls: Array<unknown> = [];
+  const updateRefCalls: Array<unknown> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: noOpList,
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: false }),
+    resolveIntegrationTip: async () => 'deadbeef1234',
+    updateRef: async (...args) => { updateRefCalls.push(args); },
+    fastForwardWorktree: async (...args) => { ffCalls.push(args); },
+  });
+
+  await svc.tryAdvanceLocalIntegration();
+
+  assert.equal(ffCalls.length, 0, 'dirty main checkout must not be fast-forwarded');
+  assert.equal(updateRefCalls.length, 0, 'checked-out integration branch must not use updateRef');
 });
 
 test('tryAdvanceLocalIntegration: no-op when resolveIntegrationTip returns null', async () => {

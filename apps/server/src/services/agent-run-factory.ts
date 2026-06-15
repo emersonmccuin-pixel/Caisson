@@ -125,6 +125,11 @@ export interface DispatchFreshAgentInput {
    *  timeout now means "this step may not run longer than X", the one
    *  FD-17-sanctioned timer kill.) */
   wallClockMs?: number;
+  /** Dispatch provenance for repo worktrees: canonical branch and commit SHA
+   *  the isolated temp branch forked from. Stamped by the server, never trusted
+   *  from an agent. */
+  worktreeBaseBranch?: string | null;
+  worktreeBaseSha?: string | null;
 }
 
 export interface DispatchContinueAgentInput {
@@ -482,6 +487,8 @@ export async function dispatchFreshAgent(
     continues: null,
     podRevisionAtDispatch,
     worktreeDir: input.worktreeDir,
+    worktreeBaseBranch: input.worktreeBaseBranch ?? null,
+    worktreeBaseSha: input.worktreeBaseSha ?? null,
     queuedAt: now,
   });
 
@@ -532,6 +539,9 @@ export async function dispatchFreshAgent(
     podName: input.agentName,
     contractService: deps.contractService,
     expectedOutput: input.expectedOutput,
+    worktreePath: input.worktreeDir,
+    worktreeBaseBranch: input.worktreeBaseBranch ?? null,
+    worktreeBaseSha: input.worktreeBaseSha ?? null,
     // Fresh dispatch: refuse to mint a spec-less (and therefore unverifiable)
     // contract. The chain is inline spec → pod-row default → stock default.
     requireExpectedOutput: true,
@@ -762,6 +772,9 @@ export async function dispatchContinueAgent(
     agentRunId: plan.plan.agentRunId,
     podName: plan.plan.podName,
     contractService: deps.contractService,
+    worktreePath: plan.plan.worktreeDir,
+    worktreeBaseBranch: plan.plan.worktreeBaseBranch,
+    worktreeBaseSha: plan.plan.worktreeBaseSha,
   });
 
   // Register the run-keyed settlement waiter BEFORE start (see fresh path).
@@ -774,6 +787,8 @@ export async function dispatchContinueAgent(
       projectId: input.projectId,
       // Same plan-sourced cwd as preparePodSpawn above.
       worktreeDir: plan.plan.worktreeDir,
+      worktreeBaseBranch: plan.plan.worktreeBaseBranch,
+      worktreeBaseSha: plan.plan.worktreeBaseSha,
       agentName: plan.plan.podName,
       input: input.input,
       dispatcherSessionId: plan.plan.dispatcherSessionId,
@@ -1197,6 +1212,8 @@ export function resolveContractForDispatch(
     acceptanceCriteria?: Parameters<ContractService['create']>[0]['acceptanceCriteria'];
     verificationTier?: Parameters<ContractService['create']>[0]['verificationTier'];
     worktreePath?: string | null;
+    worktreeBaseBranch?: string | null;
+    worktreeBaseSha?: string | null;
     /** Fresh dispatch sets this. When the resolution chain (inline spec → pod-row
      *  default → stock default) yields NO expected_output, abort instead of
      *  minting a spec-less contract — the empty-contract auto-pass fix
@@ -1218,7 +1235,7 @@ export function resolveContractForDispatch(
     // A WI may accumulate many contracts over its lifetime; correctness beats
     // reuse. The continuation path (pc_continue_agent) never passes a spec, so
     // it always lands in the reuse branch. (pc-pty-chat-303)
-    if (args.workItemId && args.expectedOutput == null) {
+    if (args.workItemId && args.expectedOutput == null && !args.requireExpectedOutput) {
       const existing = listForWi(args.workItemId);
       if (existing.length > 0) {
         // Prefer an un-dispatched contract; else the most recently created.
@@ -1283,6 +1300,8 @@ export function resolveContractForDispatch(
         // fallback) so every dispatched contract carries who signs it off.
         verificationTier: args.verificationTier ?? 'auto',
         worktreePath: args.worktreePath ?? null,
+        worktreeBaseBranch: args.worktreeBaseBranch ?? null,
+        worktreeBaseSha: args.worktreeBaseSha ?? null,
       });
       contractId = created.id as ULID;
     }

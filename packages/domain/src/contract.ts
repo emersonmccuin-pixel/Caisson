@@ -143,6 +143,8 @@ export type Deliverable =
       kind: 'repo';
       branch?: string;
       commit?: string;
+      baseBranch?: string;
+      baseCommit?: string;
       diffStat?: { files: number; insertions: number; deletions: number };
       prUrl?: string;
     }

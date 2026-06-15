@@ -67,9 +67,8 @@ function assertIntegrationBranch(name: string): void {
  * Caller owns the path; this primitive runs `git worktree add wtPath -b branchName [startPoint]`.
  *
  * `startPoint` is the commit-ish to fork from instead of the main checkout's
- * current HEAD. Pass the result of `resolveIntegrationTip` so new run branches
- * fork from the latest landed state rather than the (potentially stale) main
- * working tree HEAD.
+ * current HEAD. Repo dispatch callers should pass the current local canonical
+ * branch HEAD after checking the main worktree is on that branch and clean.
  */
 export async function createWorktree(
   workspaceDir: string,
@@ -87,6 +86,30 @@ export async function createWorktree(
   const entry = all.find((w) => normalize(w.path) === normalize(wtAbs));
   if (!entry) throw new Error(`worktree created but not found in list: ${wtAbs}`);
   return entry;
+}
+
+/**
+ * Resolve the LOCAL integration branch's current HEAD. This intentionally does
+ * not inspect origin or the merge worktree: dispatch provenance must be the
+ * exact branch the orchestrator is actively building from, not a cached or
+ * guessed external tip.
+ */
+export async function resolveLocalBranchHead(
+  workspaceDir: string,
+  branch: string,
+): Promise<string | null> {
+  assertIntegrationBranch(branch);
+  try {
+    const { stdout } = await exec(
+      'git',
+      ['rev-parse', '--verify', `refs/heads/${branch}`],
+      { cwd: resolve(workspaceDir) },
+    );
+    const sha = stdout.trim();
+    return sha || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function listWorktrees(workspaceDir: string): Promise<WorktreeEntry[]> {
@@ -433,6 +456,15 @@ export async function resolveIntegrationTip(
 export async function updateRef(workspaceDir: string, branch: string, sha: string): Promise<void> {
   assertIntegrationBranch(branch);
   await exec('git', ['update-ref', `refs/heads/${branch}`, sha], { cwd: resolve(workspaceDir) });
+}
+
+/**
+ * Fast-forward the checked-out worktree to `targetSha`. Used only when the
+ * main checkout is already on the canonical branch; unlike update-ref, this
+ * updates the working tree and index together.
+ */
+export async function fastForwardWorktree(workspaceDir: string, targetSha: string): Promise<void> {
+  await exec('git', ['merge', '--ff-only', targetSha], { cwd: resolve(workspaceDir) });
 }
 
 /**

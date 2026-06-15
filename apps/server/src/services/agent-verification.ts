@@ -89,6 +89,10 @@ export interface RunVerificationInput {
   /** Agent's worktree absolute path. Default `cwd` for `bash_exit_zero` +
    *  the resolution root for `files_exist` relative paths. */
   worktreeDir: string;
+  /** Repo dispatch provenance. When present, git_diff_nonempty compares
+   *  committed work against this exact SHA instead of guessing a base branch. */
+  worktreeBaseBranch?: string | null;
+  worktreeBaseSha?: string | null;
   /** Slice 014a — the producing run + its CC session. The tool-call loader
    *  reads the run's transcript via the session id; optional so legacy callers
    *  + tests can omit them (the loaders then yield empty evidence). */
@@ -525,6 +529,8 @@ export function createWorktreeExecutors(input: {
    *  base for worktree dispatches. Optional: project-less test paths fall
    *  back to the literal base list. */
   project?: Project | null;
+  worktreeBaseBranch?: string | null;
+  worktreeBaseSha?: string | null;
 }): PredicateExecutors {
   const bashTimeoutMs = input.bashTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS;
   return {
@@ -616,6 +622,14 @@ export function createWorktreeExecutors(input: {
       const cwdAbs = cwd === 'project' ? input.projectFolderPath : input.worktreeDir;
 
       if (cwd === 'worktree') {
+        if (input.worktreeBaseSha) {
+          const ancestor = await isAncestor(cwdAbs, input.worktreeBaseSha, bashTimeoutMs);
+          if (ancestor === false) return false;
+          if (ancestor === true) {
+            const count = await countCommitsAhead(cwdAbs, input.worktreeBaseSha, bashTimeoutMs);
+            return count !== null && count > 0;
+          }
+        }
         // Worktree dispatches: assert COMMITTED changes vs the provisioning base.
         // The project's configured integration branch is the authoritative base;
         // the literal list is a fallback for project-less test paths. Try each
@@ -698,6 +712,33 @@ function countCommitsAhead(cwd: string, base: string, timeoutMs: number): Promis
         const n = parseInt(out.trim(), 10);
         finish(isNaN(n) ? null : n);
       }
+    });
+  });
+}
+
+function isAncestor(cwd: string, base: string, timeoutMs: number): Promise<boolean | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const child = spawn('git', ['merge-base', '--is-ancestor', base, 'HEAD'], { cwd });
+    const finish = (val: boolean | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(val);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* best-effort */
+      }
+      finish(null);
+    }, timeoutMs);
+    child.on('error', () => finish(null));
+    child.on('exit', (code) => {
+      if (code === 0) finish(true);
+      else if (code === 1) finish(false);
+      else finish(null);
     });
   });
 }

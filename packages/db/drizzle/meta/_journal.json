@@ -435,6 +435,13 @@
       "when": 1782981000000,
       "tag": "0061_contract_landing",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "6",
+      "when": 1782981100000,
+      "tag": "0062_mainline_dispatch_receipts",
+      "breakpoints": true
     }
   ]
 }

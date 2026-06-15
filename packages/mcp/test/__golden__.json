@@ -1422,7 +1422,7 @@
     },
     {
       "name": "pc_submit_deliverable",
-      "description": "Submit the typed deliverable for YOUR contract — the authoritative output your dispatch is verified against. Call this ONCE, as your final action, before you end your turn; it REPLACES the old \"end your turn and we scrape your transcript / work-item body\" model. The `kind` MUST match your contract's expected output: `answer` → { text } (a direct answer / report); `prose` → { text } or { attachmentId } or { ref } (a written document); `payload` → { data } (structured JSON matching your schema); `repo` → { branch?, commit?, diffStat?, prUrl? } (code you wrote); `external` → { system, handle, idempotencyKey, url? } (an external side-effect you performed, e.g. an email sent); `binary` → { attachmentId, mime, bytes }; `action` → { tool, count } (a tool you were required to call). Optional `report` is free-text to the orchestrator that accompanies the deliverable. Requires PC_AGENT_RUN_ID (set on every dispatched agent). Returns { ok, contractId, status: 'submitted' }.",
+      "description": "Submit the typed deliverable for YOUR contract — the authoritative output your dispatch is verified against. Call this ONCE, as your final action, before you end your turn; it REPLACES the old \"end your turn and we scrape your transcript / work-item body\" model. The `kind` MUST match your contract's expected output: `answer` → { text } (a direct answer / report); `prose` → { text } or { attachmentId } or { ref } (a written document); `payload` → { data } (structured JSON matching your schema); `repo` → { branch?, commit?, diffStat?, prUrl? } (code you wrote; server overwrites branch/commit from git and stamps baseBranch/baseCommit from the dispatch receipt); `external` → { system, handle, idempotencyKey, url? } (an external side-effect you performed, e.g. an email sent); `binary` → { attachmentId, mime, bytes }; `action` → { tool, count } (a tool you were required to call). Optional `report` is free-text to the orchestrator that accompanies the deliverable. Requires PC_AGENT_RUN_ID (set on every dispatched agent). Returns { ok, contractId, status: 'submitted' }.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1441,7 +1441,7 @@
           },
           "deliverable": {
             "type": "object",
-            "description": "the typed deliverable payload (shape depends on kind). The server merges `kind` in, so you may omit it here. answer:{text}; prose:{text|attachmentId|ref}; payload:{data}; repo:{branch?,commit?,diffStat?,prUrl?}; external:{system,handle,idempotencyKey,url?}; binary:{attachmentId,mime,bytes}; action:{tool,count}.",
+            "description": "the typed deliverable payload (shape depends on kind). The server merges `kind` in, so you may omit it here. answer:{text}; prose:{text|attachmentId|ref}; payload:{data}; repo:{branch?,commit?,diffStat?,prUrl?} with branch/commit/baseBranch/baseCommit stamped by the server; external:{system,handle,idempotencyKey,url?}; binary:{attachmentId,mime,bytes}; action:{tool,count}.",
             "additionalProperties": true
           },
           "report": {
