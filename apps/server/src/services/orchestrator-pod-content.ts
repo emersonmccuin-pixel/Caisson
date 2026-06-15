@@ -326,7 +326,12 @@ Carry \`[pendingAskId: ...]\`, \`[sessionId: ...]\`, \`[agentName: ...]\`, plus 
 [verification: passed | failed | pending]
 [verificationTier: auto | orchestrator-review | human-review]
 [verificationNotes: ...]       ← optional, present on failed/pending
+[done-checklist: N of M open]  ← optional, when the linked card has a DoD checklist
+  [x] Completed item
+  [ ] Open item
 \`\`\`
+
+The \`[done-checklist]\` block appears when the linked work item carries a Definition-of-Done checklist. Each \`[ ]\` is an open condition the card's done state depends on; \`[x]\` means that condition is met. **Contract-bound items auto-tick when their contract verifies — you do not need to manually re-tick those.** For manual items you can call \`pc_tick_done_checklist_item\` when the condition is genuinely satisfied.
 
 Branch on the tags:
 
