@@ -343,6 +343,67 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
+    "name": "pc_set_done_checklist",
+    "family": "work-item",
+    "label": "Set done checklist",
+    "description": "Author or replace the Definition-of-Done checklist for a work item. Replaces the entire checklist array with the supplied items. Each item: { id (stable slug you mint, e.g. 'tests-green'), label, done, kind: 'manual'|'contract'|'machine' }. `id` accepts ULID or callsign.",
+    "catalogDescription": "Author or replace a card's done-checklist.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workItemId": {
+          "type": "string",
+          "description": "work item id (ULID or callsign like pc-2.1)"
+        },
+        "items": {
+          "type": "array",
+          "description": "checklist items to set (replaces current list)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "description": "stable item id (e.g. 'tests-green')" },
+              "label": { "type": "string", "description": "human-readable label" },
+              "done": { "type": "boolean", "description": "initial tick state" },
+              "kind": {
+                "type": "string",
+                "enum": ["manual", "contract", "machine"],
+                "description": "'manual' = orchestrator/human ticks; 'contract' = auto-ticks on contract PASS (Slice E); 'machine' = predicate re-evaluated on demand (deferred)"
+              },
+              "contractId": { "type": "string", "description": "bound contract id for kind='contract' items (Slice E)" }
+            },
+            "required": ["id", "label", "done", "kind"]
+          }
+        }
+      },
+      "required": ["workItemId", "items"]
+    }
+  },
+  {
+    "name": "pc_tick_done_checklist_item",
+    "family": "work-item",
+    "label": "Tick done checklist item",
+    "description": "Flip one done-checklist item's tick state on a work item. Safe targeted write — only the `done_checklist` column is updated; no other field is touched. No-ops cleanly if `itemId` doesn't match any item. `workItemId` accepts ULID or callsign.",
+    "catalogDescription": "Flip one box on a card's done-checklist.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workItemId": {
+          "type": "string",
+          "description": "work item id (ULID or callsign like pc-2.1)"
+        },
+        "itemId": {
+          "type": "string",
+          "description": "stable item id matching the DoneChecklistItem.id you set via pc_set_done_checklist"
+        },
+        "done": {
+          "type": "boolean",
+          "description": "true to tick (default); false to un-tick"
+        }
+      },
+      "required": ["workItemId", "itemId"]
+    }
+  },
+  {
     "name": "pc_create_agent",
     "family": "agent",
     "label": "Create an agent pod",
@@ -1962,6 +2023,8 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_search_work_items: 'first-order',
   pc_update_work_item: 'first-order',
   pc_move_work_item: 'first-order',
+  pc_set_done_checklist: 'first-order',
+  pc_tick_done_checklist_item: 'first-order',
   pc_resolve_work_item: 'first-order',
   pc_log_bug: 'first-order',
   pc_capture_todo: 'first-order',

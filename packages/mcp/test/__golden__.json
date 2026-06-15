@@ -269,6 +269,88 @@
       }
     },
     {
+      "name": "pc_set_done_checklist",
+      "description": "Author or replace the Definition-of-Done checklist for a work item. Replaces the entire checklist array with the supplied items. Each item: { id (stable slug you mint, e.g. 'tests-green'), label, done, kind: 'manual'|'contract'|'machine' }. `id` accepts ULID or callsign.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workItemId": {
+            "type": "string",
+            "description": "work item id (ULID or callsign like pc-2.1)"
+          },
+          "items": {
+            "type": "array",
+            "description": "checklist items to set (replaces current list)",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "stable item id (e.g. 'tests-green')"
+                },
+                "label": {
+                  "type": "string",
+                  "description": "human-readable label"
+                },
+                "done": {
+                  "type": "boolean",
+                  "description": "initial tick state"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "manual",
+                    "contract",
+                    "machine"
+                  ],
+                  "description": "'manual' = orchestrator/human ticks; 'contract' = auto-ticks on contract PASS (Slice E); 'machine' = predicate re-evaluated on demand (deferred)"
+                },
+                "contractId": {
+                  "type": "string",
+                  "description": "bound contract id for kind='contract' items (Slice E)"
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "done",
+                "kind"
+              ]
+            }
+          }
+        },
+        "required": [
+          "workItemId",
+          "items"
+        ]
+      }
+    },
+    {
+      "name": "pc_tick_done_checklist_item",
+      "description": "Flip one done-checklist item's tick state on a work item. Safe targeted write — only the `done_checklist` column is updated; no other field is touched. No-ops cleanly if `itemId` doesn't match any item. `workItemId` accepts ULID or callsign.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workItemId": {
+            "type": "string",
+            "description": "work item id (ULID or callsign like pc-2.1)"
+          },
+          "itemId": {
+            "type": "string",
+            "description": "stable item id matching the DoneChecklistItem.id you set via pc_set_done_checklist"
+          },
+          "done": {
+            "type": "boolean",
+            "description": "true to tick (default); false to un-tick"
+          }
+        },
+        "required": [
+          "workItemId",
+          "itemId"
+        ]
+      }
+    },
+    {
       "name": "pc_create_agent",
       "description": "Create a NEW agent pod (DB-resident). Returns the new pod row with its ULID id. Defaults to scope='project' (pod is owned by the current project — set via PC_PROJECT_ID). Pass scope='global' only when the user explicitly says this agent should be reusable across every project. Use this for fresh agent design — the user said 'build me an agent that does X'. For structural design from scratch you should usually dispatch agent-designer first (pc_invoke_agent name='agent-designer') so the design conversation happens in its specialised pod; call pc_create_agent directly only for trivial extractors / utilities or when continuing a design conversation. Stock-pod names (orchestrator/researcher/writer/code-writer/reviewer/planner/extractor/agent-designer) are reserved — 400 if name collides with a global. Broadcasts pod-changed on success.",
       "inputSchema": {
@@ -1732,6 +1814,8 @@
     "mcp__pc-rig__pc_set_focus",
     "mcp__pc-rig__pc_move_work_item",
     "mcp__pc-rig__pc_update_work_item",
+    "mcp__pc-rig__pc_set_done_checklist",
+    "mcp__pc-rig__pc_tick_done_checklist_item",
     "mcp__pc-rig__pc_create_agent",
     "mcp__pc-rig__pc_get_agent",
     "mcp__pc-rig__pc_update_agent",
@@ -1899,6 +1983,18 @@
       "slug": "mcp__pc-rig__pc_update_work_item",
       "label": "Update work item",
       "description": "Edit a card's title, body, fields, or parent.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_set_done_checklist",
+      "label": "Set done checklist",
+      "description": "Author or replace a card's done-checklist.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_tick_done_checklist_item",
+      "label": "Tick done checklist item",
+      "description": "Flip one box on a card's done-checklist.",
       "source": "pc-rig"
     },
     {
