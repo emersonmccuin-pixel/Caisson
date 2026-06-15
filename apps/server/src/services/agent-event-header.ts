@@ -15,6 +15,23 @@ import type {
   VerificationTier,
 } from '@pc/domain';
 
+/** Slice D — render shape for a work item's done-checklist block. Derived from
+ *  `DoneChecklistItem[]` by the caller so this module has no DB dependency.
+ *  Omit / pass null to suppress the block entirely (no-checklist-set case and
+ *  the replay path). */
+export interface DoneChecklistBlock {
+  total: number;
+  open: number;
+  items: Array<{ label: string; done: boolean }>;
+}
+
+function appendDoneChecklistTags(lines: string[], checklist: DoneChecklistBlock): void {
+  lines.push(`[done-checklist: ${checklist.open} of ${checklist.total} open]`);
+  for (const item of checklist.items) {
+    lines.push(`  [${item.done ? 'x' : ' '}] ${item.label}`);
+  }
+}
+
 /** Section 26.5 / slice 020 — verification block carried on terminal envelopes.
  *  Keyed on the CONTRACT id; carries the linked work item id only when one
  *  exists (a contract-only dispatch leaves `workItemId` null). */
@@ -64,6 +81,11 @@ export function buildAgentCompletedBody(args: {
    *  tags let the orchestrator's pod prompt branch on verification outcome
    *  without re-fetching the work item. */
   verification?: VerificationBlock | null;
+  /** Slice D — open done-checklist for the parent work item. Omitted when the
+   *  card has no checklist, or on the replay path (pass null explicitly). When
+   *  null / absent the block is entirely suppressed — output is byte-identical
+   *  to before this slice. */
+  doneChecklist?: DoneChecklistBlock | null;
 }): string {
   const lines: string[] = [
     buildAgentEventHeader('agent-completed'),
@@ -73,6 +95,7 @@ export function buildAgentCompletedBody(args: {
   ];
   if (args.parentWorkItemId) lines.push(`[parentWorkItemId: ${args.parentWorkItemId}]`);
   if (args.verification) appendVerificationTags(lines, args.verification);
+  if (args.doneChecklist) appendDoneChecklistTags(lines, args.doneChecklist);
   lines.push('');
   lines.push('Result:');
   lines.push(args.result || '(no output)');
@@ -154,6 +177,9 @@ export function buildAgentFailedBody(args: {
    *  verification helper flips the WI to failed without running predicates
    *  when the agent died before reporting done). */
   verification?: VerificationBlock | null;
+  /** Slice D — same as the completed-body param; a failed run does not erase
+   *  the card's open done-conditions. Null / absent = block suppressed. */
+  doneChecklist?: DoneChecklistBlock | null;
 }): string {
   const lines: string[] = [
     buildAgentEventHeader('agent-failed'),
@@ -164,6 +190,7 @@ export function buildAgentFailedBody(args: {
   ];
   if (args.parentWorkItemId) lines.push(`[parentWorkItemId: ${args.parentWorkItemId}]`);
   if (args.verification) appendVerificationTags(lines, args.verification);
+  if (args.doneChecklist) appendDoneChecklistTags(lines, args.doneChecklist);
   lines.push('');
   lines.push('Failure:');
   lines.push(args.reason || '(no reason recorded)');

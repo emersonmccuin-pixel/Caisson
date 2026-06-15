@@ -4,6 +4,7 @@ import {
   type AgentInboxEventKind,
   type AgentRunFailureCause,
   type AgentRunRow,
+  type DoneChecklistItem,
   type Project,
   type ULID,
 } from '@pc/domain';
@@ -31,6 +32,7 @@ import {
 import {
   buildAgentCompletedBody,
   buildAgentFailedBody,
+  type DoneChecklistBlock,
   type VerificationBlock,
 } from './agent-event-header.ts';
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
@@ -569,6 +571,12 @@ async function finishTerminalEffects(args: {
   // async tail keeps ONLY verification + the Channel terminal envelope.
   const slug = input.slug ?? project?.slug ?? null;
   if (deps.mailboxEnqueue && slug) {
+    // Slice D — look up the parent WI's done-checklist for the envelope. Sync DB
+    // read is safe here (finishTerminalEffects is already async). Null when the WI
+    // has no checklist or isn't found (block omitted — acceptable degradation).
+    const doneChecklist = row.parentWorkItemId
+      ? (getWorkItem(row.parentWorkItemId)?.doneChecklist ?? null)
+      : null;
     emitTerminalEnvelope({
       mailboxEnqueue: deps.mailboxEnqueue,
       projectId: input.projectId,
@@ -583,6 +591,7 @@ async function finishTerminalEffects(args: {
       note: incidentalNote,
       failureCause,
       verification,
+      doneChecklist,
     });
     // Issue 3 (near-term) — signal the mailbox worker to drain immediately so
     // the terminal envelope reaches the orchestrator within ms, not at the next
@@ -611,11 +620,23 @@ interface EmitTerminalArgs {
   note?: string | null;
   failureCause: AgentRunFailureCause | null;
   verification: VerificationBlock | null;
+  /** Slice D — pre-fetched done-checklist for the parent work item. Pass null
+   *  to suppress the block (replay path, WI not found, no checklist set). */
+  doneChecklist: DoneChecklistItem[] | null;
 }
 
 function emitTerminalEnvelope(args: EmitTerminalArgs): void {
   const kind: AgentInboxEventKind =
     args.terminalStatus === 'completed' ? 'agent-completed' : 'agent-failed';
+  // Slice D — map DoneChecklistItem[] → the render shape the header builders
+  // expect. null when the block must be suppressed (replay path or no checklist).
+  const doneChecklistBlock: DoneChecklistBlock | null = args.doneChecklist
+    ? {
+        total: args.doneChecklist.length,
+        open: args.doneChecklist.filter((i) => !i.done).length,
+        items: args.doneChecklist.map((i) => ({ label: i.label, done: i.done })),
+      }
+    : null;
   const body =
     args.terminalStatus === 'completed'
       ? buildAgentCompletedBody({
@@ -626,6 +647,7 @@ function emitTerminalEnvelope(args: EmitTerminalArgs): void {
           result: args.result,
           note: args.note,
           verification: args.verification,
+          doneChecklist: doneChecklistBlock,
         })
       : buildAgentFailedBody({
           runId: args.runId,
@@ -635,6 +657,7 @@ function emitTerminalEnvelope(args: EmitTerminalArgs): void {
           reason: describeAgentRunFailure(args.failureCause) ?? args.terminalStatus,
           cause: agentFailureCauseToPayload(args.failureCause, args.terminalStatus),
           verification: args.verification,
+          doneChecklist: doneChecklistBlock,
         });
   deliverAgentEnvelope(
     {
@@ -750,6 +773,10 @@ export async function replayMissingTerminalEnvelopes(
         result: row.result ?? '',
         failureCause: row.failureCause,
         verification,
+        // Slice D (Gotcha #3) — replay path must NOT look up current checklist
+        // state (that would render state at replay time, not terminal time —
+        // misleading). Block is always omitted on replay.
+        doneChecklist: null,
       });
       replayed += 1;
     } catch (err) {
