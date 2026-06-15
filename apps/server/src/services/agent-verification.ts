@@ -41,6 +41,7 @@ import {
   getWorkItem,
   listAttachmentsForWorkItem,
   listChildWorkItems,
+  tickDoneChecklistItem,
 } from '@pc/db';
 import type { Contract } from '@pc/contracts';
 import { ContractService, WorkItemMutationGateway } from '@pc/app-services';
@@ -61,6 +62,7 @@ import {
 } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
+import { triggerChecklistAutoMoveIfComplete } from './checklist-auto-move.ts';
 import { workingTreeStatus } from './git-receipts.ts';
 
 /** FD-12 — the one write door (repo write + outbox receipt in one txn). */
@@ -456,6 +458,25 @@ function acceptContract(args: {
     }
     // else 'accept-only': contract is marked passed but the WI stays open
     // until its children all complete (cascade fires from those children).
+
+    // Slice E — auto-tick any kind:'contract' checklist item whose contractId
+    // matches this contract. After ticking, fire the Slice C auto-move path in
+    // case all boxes are now done. Idempotent with the contract roll-up above:
+    // if the WI already reached Done, `triggerChecklistAutoMoveIfComplete` no-ops.
+    const checklist = wiRow.doneChecklist;
+    if (checklist) {
+      const bound = checklist.filter(
+        (item) => item.kind === 'contract' && item.contractId === contractId,
+      );
+      if (bound.length > 0) {
+        for (const item of bound) {
+          tickDoneChecklistItem(workItemId, item.id, true);
+        }
+        if (input.project) {
+          triggerChecklistAutoMoveIfComplete(workItemId, input.project);
+        }
+      }
+    }
   }
   return {
     contractId,
