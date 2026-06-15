@@ -42,6 +42,8 @@ function contract(over: Partial<Contract> = {}): Contract {
     report: null,
     deliverable: null,
     worktreePath: null,
+    worktreeBaseBranch: null,
+    worktreeBaseSha: null,
     status: 'dispatched',
     version: 1,
     createdAt: 1000,
