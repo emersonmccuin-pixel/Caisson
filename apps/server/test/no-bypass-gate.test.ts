@@ -260,6 +260,8 @@ const MUTATOR_IMPORT_ALLOWLIST: Record<string, string> = {
     'appendWorkItemHistory is audit-only (no version bump, deliberately no receipt). M3a verdict 2026-06-04: a WORK-ITEM activity concern, not a run happening — the fold rides the WI activity model (M5/M6), not the run diary.',
   'apps/server/src/features/work-items/routes.ts':
     'fields-only PATCH via gateway; reassignStage = stage-delete bulk fallback whose receipt rides stage.list.changed.',
+  'apps/server/src/services/checklist-auto-move.ts':
+    'Slice C — applyRunOutcome is the no-isDone-stage fallback, called inside gateway.tryCommitWorkItemChange (write + receipt in ONE transaction).',
 };
 
 function listSourceFiles(dir: string): string[] {

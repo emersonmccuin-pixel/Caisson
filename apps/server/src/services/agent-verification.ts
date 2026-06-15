@@ -473,8 +473,11 @@ function acceptContract(args: {
  * Each ancestor's completion is a separate gateway commit (each emits its own
  * `work-item.changed` live-event). Cascade continues until no more ancestors
  * qualify or a workflow root is reached.
+ *
+ * Exported for reuse by the checklist-completion trigger (Slice C) so both
+ * paths share the ONE cascade door.
  */
-function applyRollUpCascade(
+export function applyRollUpCascade(
   justCompletedId: ULID,
   _historyNote: string,
   project: Project | null,
