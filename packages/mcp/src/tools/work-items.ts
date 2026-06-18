@@ -52,11 +52,18 @@ export async function handleWorkItemTool(
         // internal type-safety); emit the raw body verbatim (byte-compat).
         const res = await ctx.client.createWorkItem(targetPath, payload);
         if (res.status >= 200 && res.status < 300) {
-          return ctx.withRichLinkHint(res.body);
+          // A1: after creating a work item the most common next steps are to
+          // dispatch an agent against it or to move/update it.
+          return {
+            ...ctx.withRichLinkHint(res.body),
+            next_valid_actions: ['pc_invoke_agent', 'pc_move_work_item', 'pc_update_work_item'],
+          };
         }
         return {
           content: [{ type: 'text', text: `pc_create_work_item failed (${res.status}): ${res.body}` }],
           isError: true,
+          // A1: creation failure — check what stages/projects exist to pick valid values.
+          next_valid_actions: ['pc_list_stages', 'pc_list_projects'],
         };
       } catch (err) {
         return {
@@ -97,7 +104,11 @@ export async function handleWorkItemTool(
           payload,
         );
         if (res.status >= 200 && res.status < 300) {
-          return ctx.withRichLinkHint(res.body);
+          // A1: after a contract dispatch the caller will want to track the run.
+          return {
+            ...ctx.withRichLinkHint(res.body),
+            next_valid_actions: ['pc_list_my_runs', 'pc_inspect_agent_run'],
+          };
         }
         return {
           content: [
@@ -107,6 +118,9 @@ export async function handleWorkItemTool(
             },
           ],
           isError: true,
+          // A1: dispatch failure — list agents to verify pod name, or use
+          // pc_invoke_agent for a lighter-weight fire-and-forget alternative.
+          next_valid_actions: ['pc_list_agents', 'pc_invoke_agent'],
         };
       } catch (err) {
         return {
@@ -576,11 +590,18 @@ export async function handleWorkItemTool(
           : ctx.projectPath(suffix);
         const res = await ctx.client.getWorkItem(getPath);
         if (res.status >= 200 && res.status < 300) {
-          return ctx.withRichLinkHint(res.body);
+          // A1: after fetching a work item the common follow-ons are to
+          // modify it or drill into its attachments.
+          return {
+            ...ctx.withRichLinkHint(res.body),
+            next_valid_actions: ['pc_update_work_item', 'pc_move_work_item', 'pc_attach_to_work_item'],
+          };
         }
         return {
           content: [{ type: 'text', text: `pc_get_work_item failed (${res.status}): ${res.body}` }],
           isError: true,
+          // A1: item not found — search or list to locate the correct id.
+          next_valid_actions: ['pc_list_work_items', 'pc_search_work_items'],
         };
       } catch (err) {
         return {

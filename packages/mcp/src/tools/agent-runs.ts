@@ -72,13 +72,21 @@ export async function handleAgentRunTool(
           payload,
         );
         if (res.status >= 200 && res.status < 300) {
-          return { content: [{ type: 'text', text: res.body }] };
+          // A1: after a successful invoke the run is in flight — track it or
+          // inspect its early output.
+          return {
+            content: [{ type: 'text', text: res.body }],
+            next_valid_actions: ['pc_list_my_runs', 'pc_inspect_agent_run'],
+          };
         }
         return {
           content: [
             { type: 'text', text: `pc_invoke_agent failed (${res.status}): ${res.body}` },
           ],
           isError: true,
+          // A1: invoke failed — verify the pod name via pc_list_agents, or use
+          // pc_create_agent_work_item for a contract-tracked dispatch instead.
+          next_valid_actions: ['pc_list_agents', 'pc_create_agent_work_item'],
         };
       } catch (err) {
         return {
@@ -543,6 +551,9 @@ export async function handleAgentRunTool(
             { type: 'text', text: `pc_submit_deliverable failed (${res.status}): ${res.body}` },
           ],
           isError: true,
+          // A1: submission failed — re-read the contract to confirm kind/shape,
+          // or ask the orchestrator if the spec is unclear.
+          next_valid_actions: ['pc_get_contract', 'pc_ask_orchestrator'],
         };
       } catch (err) {
         return {
