@@ -16,6 +16,26 @@ export interface ToolResult {
   [key: string]: unknown;
   content: ToolContent[];
   isError?: true;
+  /**
+   * CONVENTION — A1 (next_valid_actions): optional list of tool names the
+   * caller should consider invoking next, derived from the current state.
+   *
+   * Populate on:
+   *   • ERROR returns — tools that help recover from or diagnose the failure.
+   *     Do NOT repeat the tool that just errored (loop-prevention).
+   *   • HIGH-VALUE SUCCESS returns — the most likely follow-on operations
+   *     given what the tool just did (e.g. after creating a work item →
+   *     invoke an agent or move it; after a dispatch → inspect the run).
+   *
+   * Rules for follow-up tool authors:
+   *   • Keep the list short (2–4 names); prefer the most actionable.
+   *   • Derive from actual state where possible (e.g. omit pc_invoke_agent
+   *     when PC_PROJECT_ID is unset); fall back to a static best-guess.
+   *   • Do NOT attempt exhaustive coverage — omit entirely rather than add
+   *     noise. Only populate when it materially helps the caller decide.
+   *   • Field is OPTIONAL. Callers must treat its absence as "no hint".
+   */
+  next_valid_actions?: string[];
 }
 
 export interface ToolContext {
