@@ -1803,6 +1803,19 @@
           "attachmentId"
         ]
       }
+    },
+    {
+      "name": "pc_next_action",
+      "description": "Deterministically return THE single work item to work on next for a project. Priority order: (1) item with focusedAt set (Command-planner focus — picks most-recently focused); (2) oldest item in a non-terminal, non-intake stage (actively in-progress); (3) oldest non-terminal open item overall. Excludes done/cancelled/archived items. Returns { ok, item: { id, callsign, title, stageId, status }, reason, legalNextStages, summary }. `reason` is one of: 'focused', 'oldest in-progress', 'oldest open'. `legalNextStages` is the ordered stage list minus the current stage (all reachable moves). When no open items exist, item is null with reason 'no open items'. Pass `targetProjectId` to read a different project.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "targetProjectId": {
+            "type": "string",
+            "description": "optional: pick next action for a different project (ULID, slug, or display name). Default = this session's project (PC_PROJECT_ID)."
+          }
+        }
+      }
     }
   ],
   "pcRigToolNames": [
@@ -1874,7 +1887,8 @@
     "mcp__pc-rig__pc_update_context_doc",
     "mcp__pc-rig__pc_delete_context_doc",
     "mcp__pc-rig__pc_search",
-    "mcp__pc-rig__pc_get_attachment"
+    "mcp__pc-rig__pc_get_attachment",
+    "mcp__pc-rig__pc_next_action"
   ],
   "toolCatalog": [
     {
@@ -2350,6 +2364,12 @@
       "label": "Read an attachment",
       "description": "Fetch one attachment's content by id.",
       "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_next_action",
+      "label": "Pick next item to work on",
+      "description": "Return the single next item to work on (focused → oldest in-progress → oldest open).",
+      "source": "pc-rig"
     }
   ],
   "capabilities": {
@@ -2375,6 +2395,12 @@
       "family": "work-item"
     },
     "pc_update_work_item": {
+      "family": "work-item"
+    },
+    "pc_set_done_checklist": {
+      "family": "work-item"
+    },
+    "pc_tick_done_checklist_item": {
       "family": "work-item"
     },
     "pc_create_agent": {
@@ -2552,6 +2578,9 @@
       "family": "work-item"
     },
     "pc_get_attachment": {
+      "family": "work-item"
+    },
+    "pc_next_action": {
       "family": "work-item"
     }
   }

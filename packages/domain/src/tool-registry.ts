@@ -2002,6 +2002,22 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "attachmentId"
       ]
     }
+  },
+  {
+    "name": "pc_next_action",
+    "family": "work-item",
+    "label": "Pick next item to work on",
+    "description": "Deterministically return THE single work item to work on next for a project. Priority order: (1) item with focusedAt set (Command-planner focus — picks most-recently focused); (2) oldest item in a non-terminal, non-intake stage (actively in-progress); (3) oldest non-terminal open item overall. Excludes done/cancelled/archived items. Returns { ok, item: { id, callsign, title, stageId, status }, reason, legalNextStages, summary }. `reason` is one of: 'focused', 'oldest in-progress', 'oldest open'. `legalNextStages` is the ordered stage list minus the current stage (all reachable moves). When no open items exist, item is null with reason 'no open items'. Pass `targetProjectId` to read a different project.",
+    "catalogDescription": "Return the single next item to work on (focused → oldest in-progress → oldest open).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "targetProjectId": {
+          "type": "string",
+          "description": "optional: pick next action for a different project (ULID, slug, or display name). Default = this session's project (PC_PROJECT_ID)."
+        }
+      }
+    }
   }
 ];
 
@@ -2105,6 +2121,8 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_get_contract: 'worker',
   pc_list_attachments: 'worker',
   pc_get_attachment: 'worker',
+  // A4 — deterministic next-action picker (Command planner / orchestrator surface).
+  pc_next_action: 'first-order',
 };
 
 /** Bare tool names in registry (= ListTools) order. */
