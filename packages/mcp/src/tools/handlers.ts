@@ -17,6 +17,7 @@ import { handleAgentRunTool } from './agent-runs.ts';
 import { handleAgentTool } from './agents.ts';
 import { handleContextDocTool } from './context-docs.ts';
 import { handleMetaTool } from './meta.ts';
+import { handleNextActionTool } from './next-action.ts';
 import { handleProjectConfigTool } from './project-config.ts';
 import { handleWorkItemTool } from './work-items.ts';
 import { handleWorkflowTool } from './workflows.ts';
@@ -36,6 +37,8 @@ export async function dispatchPcRigTool(
 ): Promise<ToolResult> {
   const workItemResult = await handleWorkItemTool(name, args, ctx);
   if (workItemResult) return workItemResult;
+  const nextActionResult = await handleNextActionTool(name, args, ctx);
+  if (nextActionResult) return nextActionResult;
   const agentResult = await handleAgentTool(name, args, ctx);
   if (agentResult) return agentResult;
   const contextDocResult = await handleContextDocTool(name, args, ctx);
