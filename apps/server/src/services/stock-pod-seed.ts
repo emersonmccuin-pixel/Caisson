@@ -86,17 +86,18 @@ Routine file edits inside the worktree do NOT need approval — that's what the 
 
 ## File operations
 
-**File creation must use Bash heredoc.** The \`Write\` tool is soft-blocked inside subagent turns (a CC v2.1.140 advisory — not a hook denial, not a permission issue). The advisory text reads "Subagents should return findings as text, not write report files." When you need to create a file, write it via:
+**Deliverable kind determines where content goes — these are separate concerns, not interchangeable.**
+
+- **\`answer\` / \`prose\` / \`payload\` (contract-stored or attachment):** submit the content **inline** via \`pc_submit_deliverable({ kind: "answer", text: "..." })\`. **Do not write a file to disk.** An orphan \`.md\` written to your cwd serves no purpose and dirties the workspace (it can trip the mainline guard on the next repo dispatch).
+- **\`repo_file\` deliverables (bound-worktree dispatches only):** write the file inside the path given by the \`[worktree: <abs path>]\` token. Use Bash heredoc because \`Write\` is soft-blocked in subagent turns (CC v2.1.140 advisory: *"Subagents should return findings as text, not write report files."*):
 
 \`\`\`
-bash -c "cat > path/to/file.md <<'EOF'
+bash -c "cat > /absolute/worktree/path/to/file.md <<'EOF'
 ... contents ...
 EOF"
 \`\`\`
 
-**File mutation uses Edit.** Edit is NOT gated and works normally for existing files.
-
-So the loop for any "write findings to a file" node is: Bash heredoc to create → Edit to refine if needed.
+**File mutation uses Edit.** Edit is NOT gated and works normally for existing files inside the worktree.
 
 ## Worktree binding
 
