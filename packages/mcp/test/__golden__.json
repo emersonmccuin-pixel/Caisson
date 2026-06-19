@@ -899,6 +899,19 @@
       }
     },
     {
+      "name": "pc_board_health",
+      "description": "Surface stalled work items — open items in a non-terminal stage with no agent-run, contract, or field activity for N days (default 7). Returns: `stalledItems` (id, callsign, title, stageId, ageInStageDays, lastActivityAt) sorted oldest-first, plus `rollup` counts (totalOpen, totalStalled). Use as a periodic PM check-in: call it before a planning session to spot forgotten work that needs attention or reassignment. `idle_days` is optional (default 7). Read-only; no writes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "idle_days": {
+            "type": "number",
+            "description": "how many days of inactivity before an item is considered stalled (default 7)"
+          }
+        }
+      }
+    },
+    {
       "name": "pc_list_agents",
       "description": "List available agents for this project. Returns global pods plus project overrides/project-only pods. Use before pc_invoke_agent when deciding which specialist to delegate to.",
       "inputSchema": {
@@ -1851,6 +1864,7 @@
     "mcp__pc-rig__pc_list_stages",
     "mcp__pc-rig__pc_list_projects",
     "mcp__pc-rig__pc_list_waiting_on_you",
+    "mcp__pc-rig__pc_board_health",
     "mcp__pc-rig__pc_list_agents",
     "mcp__pc-rig__pc_list_workflows",
     "mcp__pc-rig__pc_fire_workflow",
@@ -2141,6 +2155,12 @@
       "slug": "mcp__pc-rig__pc_list_waiting_on_you",
       "label": "List everything waiting on you",
       "description": "Enumerate everything across ALL projects blocked on the human's input (paused agents, workflow review gates, inbox items).",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_board_health",
+      "label": "Board health / stall report",
+      "description": "Find open cards with no activity for N days (default 7) — the board health / stall signal.",
       "source": "pc-rig"
     },
     {
@@ -2582,6 +2602,9 @@
     },
     "pc_next_action": {
       "family": "work-item"
+    },
+    "pc_board_health": {
+      "family": "project"
     }
   }
 }

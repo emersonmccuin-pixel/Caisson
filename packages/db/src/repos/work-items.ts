@@ -245,6 +245,159 @@ export function searchWorkItems(input: SearchWorkItemsInput): WorkItemSearchResu
   }));
 }
 
+// ── Board health (pc-pty-chat-431) ────────────────────────────────────────────
+
+export interface BoardHealthItem {
+  id: ULID;
+  callsign: string | null;
+  title: string;
+  stageId: string;
+  status: WorkItemStatus;
+  /** Days the item has been in its current stage (from last move-into-stage or creation). */
+  ageInStageDays: number;
+  /** Epoch ms of the newest signal across wi.updatedAt, linked contracts, and agent runs. */
+  lastActivityAt: number;
+}
+
+export interface BoardHealthResult {
+  stalledItems: BoardHealthItem[];
+  rollup: {
+    totalOpen: number;
+    totalStalled: number;
+  };
+}
+
+/**
+ * Board health: stalled open work items for a project.
+ *
+ * "Stalled" = open (non-terminal, non-archived) work item with no activity for
+ * >= idleDays. "Activity" = newest of:
+ *   • work_item.updated_at
+ *   • MAX agent_run.last_activity_at|completed_at|queued_at for runs
+ *     whose contract links to this item (via agent_contracts.work_item_id)
+ *   • MAX agent_run.last_activity_at|completed_at|queued_at for runs
+ *     whose parent_work_item_id points at this item
+ *   • MAX agent_contracts.updated_at for contracts linked to this item
+ *
+ * Uses getRawDb() (correlated subqueries across agent_runs + agent_contracts —
+ * Drizzle's join API can't express the mixed-join pattern cleanly here).
+ */
+export function getBoardHealth(projectId: ULID, idleDays: number): BoardHealthResult {
+  const raw = getRawDb();
+  const now = Date.now();
+  const idleMs = idleDays * 24 * 60 * 60 * 1000;
+  const cutoff = now - idleMs;
+
+  const sql = `
+    SELECT
+      wi.id,
+      wi.callsign,
+      wi.title,
+      wi.stage_id      AS stageId,
+      wi.status,
+      wi.updated_at    AS updatedAt,
+      wi.created_at    AS createdAt,
+      wi.history       AS historyJson,
+      COALESCE(
+        (SELECT MAX(COALESCE(ar.last_activity_at, COALESCE(ar.completed_at, ar.queued_at)))
+         FROM agent_runs ar
+         INNER JOIN agent_contracts ac ON ar.contract_id = ac.id
+         WHERE ac.work_item_id = wi.id
+           AND ac.project_id   = wi.project_id),
+        0
+      ) AS maxRunViaContract,
+      COALESCE(
+        (SELECT MAX(COALESCE(ar.last_activity_at, COALESCE(ar.completed_at, ar.queued_at)))
+         FROM agent_runs ar
+         WHERE ar.parent_work_item_id = wi.id
+           AND ar.project_id          = wi.project_id),
+        0
+      ) AS maxRunViaParent,
+      COALESCE(
+        (SELECT MAX(ac2.updated_at)
+         FROM agent_contracts ac2
+         WHERE ac2.work_item_id = wi.id
+           AND ac2.project_id   = wi.project_id),
+        0
+      ) AS maxContractActivity
+    FROM work_items wi
+    WHERE wi.project_id = ?
+      AND wi.status NOT IN ('complete', 'cancelled', 'archived')
+      AND wi.deleted_at IS NULL
+  `;
+
+  const rows = raw.prepare(sql).all(projectId) as Array<{
+    id: string;
+    callsign: string | null;
+    title: string;
+    stageId: string;
+    status: string;
+    updatedAt: number;
+    createdAt: number;
+    historyJson: string | null;
+    maxRunViaContract: number;
+    maxRunViaParent: number;
+    maxContractActivity: number;
+  }>;
+
+  const totalOpen = rows.length;
+  const stalled: BoardHealthItem[] = [];
+
+  for (const row of rows) {
+    const lastActivityAt = Math.max(
+      row.updatedAt,
+      row.maxRunViaContract,
+      row.maxRunViaParent,
+      row.maxContractActivity,
+    );
+
+    if (lastActivityAt >= cutoff) continue; // active — not stalled
+
+    // Age-in-stage: find the timestamp of the most recent move INTO this stage.
+    // Falls back to createdAt when no move history exists.
+    let stageEnteredAt = row.createdAt;
+    if (row.historyJson) {
+      try {
+        const history = JSON.parse(row.historyJson) as Array<{
+          ts?: string;
+          kind?: string;
+          to?: string;
+        }>;
+        for (const entry of history) {
+          if (entry.kind === 'move' && entry.to === row.stageId && entry.ts) {
+            const ts = new Date(entry.ts).getTime();
+            if (Number.isFinite(ts) && ts > stageEnteredAt) {
+              stageEnteredAt = ts;
+            }
+          }
+        }
+      } catch {
+        // Malformed history — stageEnteredAt stays at createdAt
+      }
+    }
+
+    const ageInStageDays = Math.max(0, Math.floor((now - stageEnteredAt) / (24 * 60 * 60 * 1000)));
+
+    stalled.push({
+      id: row.id as ULID,
+      callsign: row.callsign,
+      title: row.title,
+      stageId: row.stageId,
+      status: row.status as WorkItemStatus,
+      ageInStageDays,
+      lastActivityAt,
+    });
+  }
+
+  // Oldest stall first so the caller sees the most-neglected items at the top.
+  stalled.sort((a, b) => a.lastActivityAt - b.lastActivityAt);
+
+  return {
+    stalledItems: stalled,
+    rollup: { totalOpen, totalStalled: stalled.length },
+  };
+}
+
 /** Inline copy of sanitizeFts5Query (avoids cross-repo import cycle). */
 function sanitizeFts5QueryLocal(query: string): string {
   const tokens = query
