@@ -334,7 +334,16 @@ export async function runVerificationOnTerminal(
     externalHandle: deliverable?.kind === 'external' ? deliverable.handle ?? null : undefined,
   };
 
-  const executors = (deps.executorsFor ?? createWorktreeExecutors)(input);
+  // D2 (pc-pty-chat-440): thread the sealed deliverable commit SHA so that
+  // hasGitDiff can anchor to the COMMITTED artifact (Deliverable.commit) vs
+  // the provisioning base, rather than the live worktree HEAD.
+  const deliverableCommit =
+    deliverable?.kind === 'repo'
+      ? ((deliverable as { kind: string; commit?: string }).commit ?? null)
+      : null;
+  const executors = deps.executorsFor
+    ? deps.executorsFor(input)
+    : createWorktreeExecutors({ ...input, deliverableCommit });
 
   // Flush barrier (Principle 2c / pc-pty-chat-374.5): for worktree dispatches
   // with side-effecting predicates (bash_exit_zero / files_exist), the agent's
@@ -598,6 +607,12 @@ export function createWorktreeExecutors(input: {
   project?: Project | null;
   worktreeBaseBranch?: string | null;
   worktreeBaseSha?: string | null;
+  /** D2 (pc-pty-chat-440): the sealed deliverable commit SHA from the
+   *  contract's Deliverable.commit field. When provided together with
+   *  worktreeBaseSha, hasGitDiff uses `git rev-list --count baseSha..commitSha`
+   *  as the PRIMARY anchor — verifying the committed artifact rather than the
+   *  live worktree HEAD, which may be stale or destroyed after landing. */
+  deliverableCommit?: string | null;
 }): PredicateExecutors {
   const bashTimeoutMs = input.bashTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS;
   return {
@@ -685,25 +700,37 @@ export function createWorktreeExecutors(input: {
         });
       });
     },
-    async hasGitDiff(cwd) {
+    async hasGitDiff(cwd): Promise<boolean | null> {
       const cwdAbs = cwd === 'project' ? input.projectFolderPath : input.worktreeDir;
 
       if (cwd === 'worktree') {
-        if (input.worktreeBaseSha) {
-          const ancestor = await isAncestor(cwdAbs, input.worktreeBaseSha, bashTimeoutMs);
+        // Primary: sealed deliverable commit SHA vs provisioning base SHA.
+        // This is the AUTHORITATIVE check — it verifies the committed artifact
+        // rather than the live worktree HEAD, which may be stale or destroyed
+        // after landing (D2, pc-pty-chat-440).
+        const commitSha = input.deliverableCommit ?? null;
+        const baseSha = input.worktreeBaseSha ?? null;
+        if (commitSha && baseSha) {
+          const count = await countCommitsRange(cwdAbs, baseSha, commitSha, bashTimeoutMs);
+          if (count !== null) return count > 0;
+        }
+
+        // Secondary: worktreeBaseSha → HEAD (base SHA known, no deliverable commit).
+        // Worktree dispatches: assert COMMITTED changes vs the provisioning base.
+        // Working-tree dirtiness is intentionally IGNORED so a clean commit does
+        // NOT false-fail the predicate (pc-pty-chat-207 / pc-pty-chat-281).
+        if (baseSha) {
+          const ancestor = await isAncestor(cwdAbs, baseSha, bashTimeoutMs);
           if (ancestor === false) return false;
           if (ancestor === true) {
-            const count = await countCommitsAhead(cwdAbs, input.worktreeBaseSha, bashTimeoutMs);
+            const count = await countCommitsAhead(cwdAbs, baseSha, bashTimeoutMs);
             return count !== null && count > 0;
           }
         }
-        // Worktree dispatches: assert COMMITTED changes vs the provisioning base.
-        // The project's configured integration branch is the authoritative base;
-        // the literal list is a fallback for project-less test paths. Try each
-        // in order; the first that resolves determines the result. A count > 0
-        // means committed changes exist — working-tree dirtiness is
-        // intentionally IGNORED so a clean commit does NOT false-fail the
-        // predicate (pc-pty-chat-207 / pc-pty-chat-281).
+
+        // Tertiary: well-known base branch names. The project's configured
+        // integration branch is the authoritative base; the literal list is a
+        // fallback for project-less test paths.
         const configured = input.project?.settings.integrationBranch;
         const bases = [...new Set([configured, 'dev', 'main', 'master', 'trunk'])].filter(
           (b): b is string => typeof b === 'string' && b.length > 0,
@@ -712,14 +739,18 @@ export function createWorktreeExecutors(input: {
           const count = await countCommitsAhead(cwdAbs, base, bashTimeoutMs);
           if (count !== null) return count > 0;
         }
-        // No known base branch found (e.g., standalone test repo). Fall through
-        // to working-tree check as a last resort.
+
+        // All committed-diff git calls failed — the worktree may be destroyed
+        // or the git repo is otherwise unreachable. Return null (inconclusive)
+        // per verification-soundness Principle 1: reporting FALSE here would
+        // falsely imply "no work done" when the truth is unknown. The evaluator
+        // routes null → inconclusive → pending (human review), not 'failed'.
+        return null;
       }
 
-      // Project (in-place) dispatches, or worktree with no detectable base:
-      // fall back to checking working-tree dirtiness (original behavior).
-      // Note: for in-place, a clean committed diff still false-fails — fixing
-      // that requires storing the pre-dispatch HEAD at contract creation time.
+      // In-place dispatches (`cwd: 'project'`): no committed-diff anchor without
+      // a stored pre-dispatch HEAD (deferred). Fall back to working-tree dirtiness
+      // as before. Note: a clean committed diff still false-fails for in-place.
       return (await workingTreeStatus(cwdAbs, bashTimeoutMs)) === 'dirty';
     },
   };
@@ -774,6 +805,54 @@ function countCommitsAhead(cwd: string, base: string, timeoutMs: number): Promis
     child.on('exit', (code) => {
       if (code !== 0) {
         // Base branch doesn't exist or git error — caller tries next candidate.
+        finish(null);
+      } else {
+        const n = parseInt(out.trim(), 10);
+        finish(isNaN(n) ? null : n);
+      }
+    });
+  });
+}
+
+/**
+ * Count commits reachable from `to` but NOT reachable from `from`.
+ * Equivalent to `git rev-list --count <from>..<to>`.
+ *
+ * Used by `hasGitDiff` (D2, pc-pty-chat-440) to verify the sealed deliverable
+ * commit has work on top of the provisioning base SHA — the authoritative
+ * committed-diff check that doesn't depend on the live worktree HEAD.
+ * Returns null when either SHA is missing/unreachable or git exits non-zero.
+ */
+function countCommitsRange(
+  cwd: string,
+  from: string,
+  to: string,
+  timeoutMs: number,
+): Promise<number | null> {
+  return new Promise((resolve) => {
+    let out = '';
+    let settled = false;
+    const child = spawn('git', ['rev-list', '--count', `${from}..${to}`], { cwd });
+    const finish = (val: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(val);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* best-effort */
+      }
+      finish(null);
+    }, timeoutMs);
+    child.stdout?.on('data', (d) => {
+      out += String(d);
+    });
+    child.on('error', () => finish(null));
+    child.on('exit', (code) => {
+      if (code !== 0) {
         finish(null);
       } else {
         const n = parseInt(out.trim(), 10);

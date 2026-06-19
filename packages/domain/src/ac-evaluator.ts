@@ -73,10 +73,12 @@ export interface PredicateExecutors {
   /** True when the git tree has relevant changes vs its base.
    *
    *  For worktree dispatches (`cwd: 'worktree'`): returns true when the
-   *  worktree branch has committed changes vs the provisioning base branch —
-   *  working-tree dirtiness is intentionally ignored so a clean commit passes.
-   *  This is the fix for pc-pty-chat-207: a coder agent that commits cleanly
-   *  and leaves a clean working tree must NOT false-fail the predicate.
+   *  worktree branch has committed changes vs the provisioning base — anchored
+   *  to the SEALED deliverable commit when available (D2, pc-pty-chat-440).
+   *  Working-tree dirtiness is intentionally ignored so a clean commit passes.
+   *  Returns **null** when committed-diff evidence is inaccessible (worktree
+   *  destroyed, no git repo) — the evaluator routes null to inconclusive rather
+   *  than false, per verification-soundness Principle 1.
    *
    *  For in-place dispatches (`cwd: 'project'`): falls back to checking
    *  working-tree dirtiness (committed-only detection requires a stored
@@ -84,7 +86,7 @@ export interface PredicateExecutors {
    *
    *  Powers `git_diff_nonempty`. Optional — absent ⇒ the predicate fails with
    *  a clear "no git executor" reason. */
-  hasGitDiff?: (cwd: 'worktree' | 'project') => Promise<boolean>;
+  hasGitDiff?: (cwd: 'worktree' | 'project') => Promise<boolean | null>;
 }
 
 export interface PredicateFailure {
@@ -456,11 +458,23 @@ async function evalBashExitZero(
 async function evalGitDiffNonempty(
   pred: Extract<AcceptancePredicate, { kind: 'git_diff_nonempty' }>,
   executors: PredicateExecutors,
-): Promise<{ pass: boolean; reason?: string }> {
+): Promise<{ pass: boolean; reason?: string; inconclusive?: boolean }> {
   if (!executors.hasGitDiff) {
     return { pass: false, reason: 'no git executor available to check the diff' };
   }
   const has = await executors.hasGitDiff(pred.cwd ?? 'worktree');
+  if (has === null) {
+    // Committed-diff evidence inaccessible (worktree may be destroyed or the
+    // git repo is unreachable). Route to inconclusive — we cannot verify the
+    // sealed deliverable, but that is NOT proof that no work was done.
+    // Principle 1 (verification-soundness): FALSE here would falsely imply
+    // "no work done"; null is the honest verdict when the truth is unknown.
+    return {
+      pass: false,
+      inconclusive: true,
+      reason: 'git diff evidence inaccessible (worktree may no longer exist) — inconclusive',
+    };
+  }
   if (has) return { pass: true };
   return { pass: false, reason: 'git tree has no changes' };
 }
