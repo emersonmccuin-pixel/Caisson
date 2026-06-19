@@ -6,9 +6,9 @@
 //
 // sweepStale(): the boot + periodic backstop — reaps merged run worktrees,
 // merged orphan branches, and unregistered husk dirs; never touches in-use
-// paths, unmerged branches, or non-run dirs (__dev-merge). Every keep carries
-// a reason; every removal failure lands in `failed` (positive receipt — the
-// 2026-06-11 incident was 4 lock-failed removals reported as silent keeps).
+// paths, unmerged branches, or unknown dir names. Every keep carries a reason;
+// every removal failure lands in `failed` (positive receipt — the 2026-06-11
+// incident was 4 lock-failed removals reported as silent keeps).
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -226,14 +226,14 @@ test('sweep: merged orphan branches deleted; in-use names skipped', async () => 
   assert.deepEqual(r.deletedBranches, ['agent-orphan']);
 });
 
-test('sweep: unregistered husk dirs removed; non-run dirs untouched', async () => {
+test('sweep: unregistered husk dirs removed; non-reapable dirs untouched', async () => {
   const removedDirs: string[] = [];
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
     pruneWorktrees: async () => {},
     listWorktrees: async () => [MAIN],
     branchMergedInto: async () => false,
     listBranchesByPrefix: async () => [],
-    listBaseDirNames: async () => ['agent-husk', '__dev-merge', 'random-dir'],
+    listBaseDirNames: async () => ['agent-husk', 'random-dir'],
     removeDirectory: async (p) => { removedDirs.push(p); },
   });
 
@@ -293,4 +293,43 @@ test('sweep: lock-failed worktree is NOT husk-swept in the same pass', async () 
   const r = await svc.sweepStale([]);
   assert.equal(r.failed.length, 1);
   assert.deepEqual(removedDirs, [], 'failed-destroy worktree must survive the husk pass');
+});
+
+// ── pc-pty-chat-445 (Fix 2): __dev-merge is reaped by the sweep ──────────────
+
+test('sweep: __dev-merge husk reaped when not in use (pc-pty-chat-445)', async () => {
+  // The legacy shared merge worktree name is now in REAPABLE_NAME_RE (exact
+  // match). The existing sweep's husk pass collects it; no special boot scan
+  // is needed.
+  const removedDirs: string[] = [];
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    pruneWorktrees: async () => {},
+    listWorktrees: async () => [MAIN], // not registered
+    branchMergedInto: async () => false,
+    listBranchesByPrefix: async () => [],
+    listBaseDirNames: async () => ['__dev-merge'],
+    removeDirectory: async (p) => { removedDirs.push(p); },
+  });
+
+  const r = await svc.sweepStale([]);
+  assert.deepEqual(r.removedHusks, ['__dev-merge'], '__dev-merge must be reaped by the husk pass');
+  assert.deepEqual(removedDirs, [join(FAKE_BASE, '__dev-merge')]);
+});
+
+test('sweep: __dev-merge NOT reaped when in use (guard intact)', async () => {
+  // Even though __dev-merge is now reapable by name, the in-use guard must
+  // still protect it (e.g. a hypothetical caller that still holds a reference).
+  const removedDirs: string[] = [];
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    pruneWorktrees: async () => {},
+    listWorktrees: async () => [MAIN],
+    branchMergedInto: async () => false,
+    listBranchesByPrefix: async () => [],
+    listBaseDirNames: async () => ['__dev-merge'],
+    removeDirectory: async (p) => { removedDirs.push(p); },
+  });
+
+  const r = await svc.sweepStale([join(FAKE_BASE, '__dev-merge')]);
+  assert.deepEqual(r.removedHusks, [], '__dev-merge in use must not be reaped');
+  assert.deepEqual(removedDirs, []);
 });
