@@ -4,12 +4,13 @@ import { resolve as resolvePath } from 'node:path';
 
 import type { Hono } from 'hono';
 import type {
+  AgentRunFailureCause,
   AgentRunStatus,
   PendingAskKind,
   PendingAskOption,
   ULID,
 } from '@pc/domain';
-import { getPodDefaultExpectedOutput } from '@pc/domain';
+import { AGENT_RUN_FAILURE_CAUSES, getPodDefaultExpectedOutput } from '@pc/domain';
 import {
   AgentRunJsonlTailer,
   jsonlPathFor,
@@ -20,6 +21,7 @@ import {
   getAgentRunRow,
   getContract,
   getProjectById,
+  insertAgentRunRow,
   listActiveAgentRunsForProject,
   listAgentProjects,
   listAbandonedContractBranches,
@@ -28,6 +30,8 @@ import {
   listContractsForWorkItem,
   listProjectVisibleAgents,
   markAgentRunDelivered,
+  markAgentRunTerminal,
+  newId,
   resolveAgentForDispatch as defaultResolveAgentForDispatch,
 } from '@pc/db';
 import { ContractService } from '@pc/app-services';
@@ -73,6 +77,10 @@ export interface AgentRunRouteDeps {
    *  inject a fake; production wires to `resolveProject(id)?.worktrees()`. */
   worktreeServiceFor?: (projectId: ULID) => {
     ensureWorktree(name: string): Promise<{ path: string; baseBranch?: string; baseSha?: string }>;
+    /** D1c (pc-pty-chat-440): the path the worktree will occupy, computed
+     *  before the git branch is created. When present, the route pre-inserts
+     *  a DB row to close the sweep gap between branch creation and row insert. */
+    plannedWorktreePath?(name: string): string;
     /** pc-pty-chat-415 (R14) — read-only stranded report (unmerged, no live
      *  run). Optional: tests that only exercise provisioning omit it. */
     listStranded?(inUsePaths: Iterable<string>): Promise<Array<{ name: string; branch: string; path: string | null }>>;
@@ -512,6 +520,10 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     let worktreeDir = project.folderPath;
     let worktreeBaseBranch: string | null = null;
     let worktreeBaseSha: string | null = null;
+    // D1c: declared here so they're in scope for the dispatchFreshAgent call
+    // below (assigned inside the isRepoKind block when the service supports it).
+    let preInsertedRunId: ULID | undefined;
+    let preInsertedCcSessionId: string | undefined;
     // Resolve the EFFECTIVE expected_output for the isolation precondition —
     // same three-tier chain the factory/contract layer uses:
     //   inline body.expectedOutput ?? pod-row stored default ?? stock pod default
@@ -540,12 +552,46 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       // the human rollup; the branch is disposable isolation and must never be
       // reused across separate dispatches.
       const worktreeName = `agent-${randomUUID().slice(0, 8)}`;
+
+      // D1c (pc-pty-chat-440): pre-insert the run row BEFORE the git branch is
+      // created so the sweep's collectInUseWorktreePaths query always sees
+      // worktreeDir → the window where a branch existed with no DB row is closed.
+      const plannedWtDir = wts.plannedWorktreePath?.(worktreeName);
+      if (plannedWtDir) {
+        preInsertedRunId = newId() as ULID;
+        preInsertedCcSessionId = randomUUID();
+        insertAgentRunRow({
+          id: preInsertedRunId,
+          projectId,
+          podName: agentName,
+          dispatcherSessionId,
+          ccSessionId: preInsertedCcSessionId,
+          status: 'queued',
+          input,
+          parentWorkItemId: (workItemId ?? parentWorkItemId) as ULID | null,
+          parentInvokeDepth: depthCheck.childDepth,
+          continues: null,
+          worktreeDir: plannedWtDir,
+          queuedAt: services.now(),
+        });
+      }
+
       try {
         const wt = await wts.ensureWorktree(worktreeName);
         worktreeDir = wt.path;
         worktreeBaseBranch = wt.baseBranch ?? null;
         worktreeBaseSha = wt.baseSha ?? null;
       } catch (err) {
+        if (preInsertedRunId) {
+          markAgentRunTerminal({
+            id: preInsertedRunId,
+            status: 'failed',
+            result: null,
+            failureCause: 'worktree-provision-failed',
+            failureReason: (err as Error).message,
+            completedAt: services.now(),
+          });
+        }
         return c.json(
           {
             ok: false,
@@ -579,6 +625,10 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         // confinement for subagent calls too. Mirrors the workflow convention
         // (PC_WORKFLOW_WORKTREE); reuses the same primitive.
         ...(isRepoKind ? { extraEnv: { PC_WORKFLOW_WORKTREE: worktreeDir } } : {}),
+        // D1c: forward the pre-minted IDs so the factory uses the same row.
+        ...(preInsertedRunId
+          ? { preInsertedRunId, preInsertedCcSessionId }
+          : {}),
       },
       {
         mailboxEnqueue,
@@ -588,6 +638,24 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
     );
 
     if (!result.ok) {
+      // D1c: roll back the pre-inserted row on any factory failure that the
+      // factory did NOT already mark terminal (early returns before the row
+      // insert in the factory). For causes the factory self-handles (it marks
+      // terminal itself), the second call is a harmless rev-bump overwrite.
+      if (preInsertedRunId) {
+        const failureCause: AgentRunFailureCause =
+          AGENT_RUN_FAILURE_CAUSES.includes(result.cause as AgentRunFailureCause)
+            ? (result.cause as AgentRunFailureCause)
+            : 'spawn-error';
+        markAgentRunTerminal({
+          id: preInsertedRunId,
+          status: 'failed',
+          result: null,
+          failureCause,
+          failureReason: result.error,
+          completedAt: services.now(),
+        });
+      }
       // Typed failure status: contract-required + work-item-required are client
       // errors (422); everything else keeps the legacy 200 for back-compat.
       const CLIENT_ERROR_CAUSES: ReadonlySet<string> = new Set(['work-item-required', 'contract-required']);

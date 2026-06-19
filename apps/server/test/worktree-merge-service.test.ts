@@ -46,7 +46,7 @@ after(() => {
 
 // ── mergeBranchIntoIntegration — isolation ───────────────────────────────────
 
-test('mergeBranchIntoIntegration: delegates to dep with the merge worktree path (NOT workspaceDir)', async () => {
+test('mergeBranchIntoIntegration: delegates to dep with the per-landing merge worktree path (NOT workspaceDir)', async () => {
   const calls: Array<{ ws: string; branch: string }> = [];
 
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
@@ -58,8 +58,11 @@ test('mergeBranchIntoIntegration: delegates to dep with the merge worktree path 
 
   await svc.mergeBranchIntoIntegration('wf-TESTABC');
 
+  // D1d: per-landing merge worktree path (__merge-<branch>), not shared __dev-merge.
+  const expectedPath = resolve(FAKE_BASE, '__merge-wf-TESTABC');
   assert.equal(calls.length, 1, 'dep called exactly once');
-  assert.equal(calls[0]!.ws, MERGE_WT_PATH, 'passes merge worktree path, not workspaceDir');
+  assert.equal(calls[0]!.ws, expectedPath, 'passes per-landing merge worktree path');
+  assert.notEqual(calls[0]!.ws, MERGE_WT_PATH, 'must NOT use the shared __dev-merge worktree');
   assert.notEqual(calls[0]!.ws, FAKE_WORKSPACE, 'must NOT pass the user main working tree');
   assert.equal(calls[0]!.branch, 'wf-TESTABC', 'passes branch name');
 });
@@ -215,7 +218,7 @@ test('pushIntegration: propagates errors from the dep', async () => {
 
 // ── mergeState — isolation ────────────────────────────────────────────────────
 
-test('mergeState: delegates to gitMergeState dep with the merge worktree path + integration branch', async () => {
+test('mergeState: delegates to gitMergeState dep with the per-landing merge worktree path + integration branch', async () => {
   const fakeState: GitMergeState = { alreadyMerged: true, mergeInProgress: false, pushed: false };
   const calls: Array<{ ws: string; branch: string; integration: string }> = [];
 
@@ -230,8 +233,11 @@ test('mergeState: delegates to gitMergeState dep with the merge worktree path + 
 
   const result = await svc.mergeState('wf-DONE');
 
+  // D1d: per-landing merge worktree path (__merge-<branch>), not shared __dev-merge.
+  const expectedPath = resolve(FAKE_BASE, '__merge-wf-DONE');
   assert.equal(calls.length, 1, 'dep called exactly once');
-  assert.equal(calls[0]!.ws, MERGE_WT_PATH, 'passes merge worktree path, not workspaceDir');
+  assert.equal(calls[0]!.ws, expectedPath, 'passes per-landing merge worktree path');
+  assert.notEqual(calls[0]!.ws, MERGE_WT_PATH, 'must NOT use the shared __dev-merge worktree');
   assert.notEqual(calls[0]!.ws, FAKE_WORKSPACE, 'must NOT pass the user main working tree');
   assert.equal(calls[0]!.branch, 'wf-DONE', 'passes branch name');
   assert.equal(calls[0]!.integration, 'dev', 'passes the resolved integration branch');
@@ -253,18 +259,18 @@ test('mergeState: returns all-false state for an unmapped branch', async () => {
 
 // ── create: mainline-only dispatch base ──────────────────────────────────────
 
-test('create: forks from current local canonical branch HEAD and returns base receipt', async () => {
+test('create: forks from the integration tip (resolveIntegrationTip) and returns base receipt', async () => {
   const FAKE_TIP = 'aabbccddee1122334455667788990011aabbccdd';
   const createCalls: Array<{ ws: string; path: string; name: string; startPoint: string | undefined }> = [];
 
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
     listWorktrees: async () => [
       { path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' },
-      // Return the newly created worktree on the second call (after create)
     ],
     pruneWorktrees: async () => {},
     getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
-    resolveLocalBranchHead: async () => FAKE_TIP,
+    // D1a: create() uses resolveIntegrationTip, not resolveLocalBranchHead.
+    resolveIntegrationTip: async () => FAKE_TIP,
     createWorktree: async (ws, path, name, startPoint) => {
       createCalls.push({ ws, path, name, startPoint });
       return { path, branch: name, head: FAKE_TIP };
@@ -275,7 +281,7 @@ test('create: forks from current local canonical branch HEAD and returns base re
   const entry = await svc.create('agent-TEST');
 
   assert.equal(createCalls.length, 1, 'createWorktree dep called exactly once');
-  assert.equal(createCalls[0]!.startPoint, FAKE_TIP, 'local canonical HEAD passed as startPoint');
+  assert.equal(createCalls[0]!.startPoint, FAKE_TIP, 'integration tip passed as startPoint');
   assert.equal(createCalls[0]!.ws, FAKE_WORKSPACE, 'workspaceDir passed correctly');
   assert.equal(entry.baseBranch, 'dev');
   assert.equal(entry.baseSha, FAKE_TIP);
@@ -286,7 +292,7 @@ test('create: refuses when the main checkout is not on the canonical branch', as
     listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' }],
     pruneWorktrees: async () => {},
     getWorktreeStatus: async () => ({ branch: 'feature/x', clean: true }),
-    resolveLocalBranchHead: async () => 'abc123',
+    resolveIntegrationTip: async () => 'abc123',
     createWorktree: async () => { throw new Error('should not create'); },
     installRunner: async () => {},
   });
@@ -302,7 +308,7 @@ test('create: refuses dirty canonical checkout before creating worktree', async 
     listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' }],
     pruneWorktrees: async () => {},
     getWorktreeStatus: async () => ({ branch: 'dev', clean: false }),
-    resolveLocalBranchHead: async () => 'abc123',
+    resolveIntegrationTip: async () => 'abc123',
     createWorktree: async () => { throw new Error('should not create'); },
     installRunner: async () => {},
   });
@@ -313,19 +319,19 @@ test('create: refuses dirty canonical checkout before creating worktree', async 
   );
 });
 
-test('create: refuses when local canonical branch head cannot be resolved', async () => {
+test('create: refuses when integration tip cannot be resolved (empty/unborn repo)', async () => {
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'trunk', {
     listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'trunk', head: 'abc' }],
     pruneWorktrees: async () => {},
     getWorktreeStatus: async () => ({ branch: 'trunk', clean: true }),
-    resolveLocalBranchHead: async () => null,
+    resolveIntegrationTip: async () => null,
     createWorktree: async () => { throw new Error('should not create'); },
     installRunner: async () => {},
   });
 
   await assert.rejects(
     () => svc.create('agent-NOHEAD'),
-    /MAINLINE GUARD.*could not resolve local branch "trunk"/,
+    /MAINLINE GUARD.*integration branch "trunk" has no resolvable tip/,
   );
 });
 

@@ -149,8 +149,10 @@ export interface WorktreeServiceDeps {
   fastForwardWorktree?: (workspaceDir: string, sha: string) => Promise<void>;
 }
 
-/** Names the engine reaps automatically: per-run isolation worktrees only. */
-const REAPABLE_NAME_RE = /^(agent|wf)-[A-Za-z0-9._-]+$/;
+/** Names the engine reaps automatically: per-run isolation worktrees AND
+ *  per-landing merge worktrees (torn down after each successful push; husks
+ *  from crash-aborted merges are collected on the next sweep). */
+const REAPABLE_NAME_RE = /^(agent|wf)-[A-Za-z0-9._-]+$|^__merge-[A-Za-z0-9._-]+$/;
 
 export interface WorktreeSweepResult {
   /** Registered worktrees removed (branch merged, not in use). */
@@ -336,6 +338,13 @@ export class WorktreeService {
     return entries;
   }
 
+  /** D1c (pc-pty-chat-440): the path a worktree named `name` will occupy.
+   *  Computed before the git branch is created so the route can pre-insert
+   *  the DB run row, closing the sweep gap between branch creation and insert. */
+  plannedWorktreePath(name: string): string {
+    return resolve(this.baseDir, name);
+  }
+
   async create(name: string): Promise<ProvisionedWorktreeEntry> {
     const wtPath = resolve(this.baseDir, name);
 
@@ -356,12 +365,16 @@ export class WorktreeService {
       );
     }
 
-    const headFn = this.deps.resolveLocalBranchHead ?? _resolveLocalBranchHead;
-    const startPoint = await headFn(this.workspaceDir, integration);
+    // D1a (pc-pty-chat-440): use resolveIntegrationTip (merge-wt HEAD >
+    // origin/<integration> > local ref) so new branches always fork from the
+    // most-advanced landed state — never from a stale local pointer that lags
+    // origin.
+    const tipFn = this.deps.resolveIntegrationTip ?? _resolveIntegrationTip;
+    const startPoint = await tipFn(this.workspaceDir, integration, this.mergeWorktreePath);
     if (!startPoint) {
       throw new Error(
-        `MAINLINE GUARD: could not resolve local branch "${integration}" — ` +
-          'set the project integration branch to an existing local branch before dispatching repo work',
+        `MAINLINE GUARD: integration branch "${integration}" has no resolvable tip — ` +
+          'ensure the integration branch has at least one commit before dispatching repo work',
       );
     }
 
@@ -609,8 +622,10 @@ export class WorktreeService {
     await pruneFn(this.workspaceDir);
     const wtPath = resolve(this.baseDir, name);
     const integration = await this.getIntegrationBranch();
-    const headFn = this.deps.resolveLocalBranchHead ?? _resolveLocalBranchHead;
-    const baseSha = await headFn(this.workspaceDir, integration);
+    // D1a: match-path baseSha — same tip resolution as create() so the returned
+    // receipt is consistent whether the worktree matched or was freshly created.
+    const tipFn = this.deps.resolveIntegrationTip ?? _resolveIntegrationTip;
+    const baseSha = await tipFn(this.workspaceDir, integration, this.mergeWorktreePath);
     const existing = await listFn(this.workspaceDir);
     const match = existing.find((e) => normalize(e.path) === normalize(wtPath));
     if (match) {
@@ -670,7 +685,9 @@ export class WorktreeService {
     return resolve(this.baseDir, '__dev-merge');
   }
 
-  /** Ensure the merge worktree exists at the integration tip. Idempotent. */
+  /** Ensure the shared `__dev-merge` worktree exists (backward-compat path,
+   *  still used by `tryAdvanceLocalIntegration` and `pushIntegration()`
+   *  without a branch arg). */
   private async ensureMergeWorktreeReady(): Promise<{ wtPath: string; integration: string }> {
     const integration = await this.getIntegrationBranch();
     const wtPath = this.mergeWorktreePath;
@@ -679,16 +696,35 @@ export class WorktreeService {
     return { wtPath, integration };
   }
 
+  /** D1d (pc-pty-chat-440): path for the per-landing merge worktree. Each
+   *  landing creates its own `__merge-<branch>` so concurrent landings never
+   *  share merge state (MERGE_HEAD is worktree-local). */
+  landingMergeWorktreePath(branch: string): string {
+    return resolve(this.baseDir, `__merge-${branch}`);
+  }
+
+  /** Ensure a per-landing merge worktree exists at `__merge-<branch>`. */
+  private async ensureLandingMergeWorktreeReady(
+    branch: string,
+  ): Promise<{ wtPath: string; integration: string }> {
+    const integration = await this.getIntegrationBranch();
+    const wtPath = this.landingMergeWorktreePath(branch);
+    const fn = this.deps.ensureMergeWorktree ?? _ensureMergeWorktree;
+    await fn(this.workspaceDir, wtPath, integration);
+    return { wtPath, integration };
+  }
+
   /**
    * Merge `branch` into the integration branch (`--no-ff`) in the
    * engine-controlled merge worktree (NOT in the user's main working tree).
-   * The worktree is in detached HEAD at the integration tip; the merge
-   * advances HEAD. Asserts the worktree is clean before merging; throws
-   * loudly on any violation. Callers should call `mergeState` first for
-   * idempotency.
+   * D1d: each landing uses its own `__merge-<branch>` worktree so concurrent
+   * landings never stomp each other's MERGE_HEAD. The worktree is in detached
+   * HEAD at the integration tip; the merge advances HEAD. Asserts the worktree
+   * is clean before merging; throws loudly on any violation. Callers should
+   * call `mergeState` first for idempotency.
    */
   async mergeBranchIntoIntegration(branch: string): Promise<void> {
-    const { wtPath, integration } = await this.ensureMergeWorktreeReady();
+    const { wtPath, integration } = await this.ensureLandingMergeWorktreeReady(branch);
 
     // Belt-and-suspenders: assert the merge worktree is in a valid state
     // before any destructive git command. Valid states: detached HEAD
@@ -714,33 +750,54 @@ export class WorktreeService {
   }
 
   /**
-   * Push the integration branch to its origin counterpart from the
-   * engine-controlled merge worktree. When the worktree is in detached HEAD
-   * (the normal case after --detach), pushes `HEAD:<integration>` so the
-   * merge commit (not a stale local branch pointer) reaches origin. Call
-   * after a verified merge.
+   * Push the integration branch to its origin counterpart. D1d: when `branch`
+   * is provided, pushes from its per-landing merge worktree; otherwise falls
+   * back to the shared `__dev-merge` worktree (backward-compat). When the
+   * worktree is in detached HEAD (the normal case after --detach), pushes
+   * `HEAD:<integration>` so the merge commit reaches origin. Call after a
+   * verified merge.
    */
-  async pushIntegration(): Promise<void> {
-    const { wtPath, integration } = await this.ensureMergeWorktreeReady();
+  async pushIntegration(branch?: string): Promise<void> {
+    const { wtPath, integration } = branch
+      ? await this.ensureLandingMergeWorktreeReady(branch)
+      : await this.ensureMergeWorktreeReady();
     const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
-    const { branch } = await statusFn(wtPath);
+    const { branch: wtBranch } = await statusFn(wtPath);
     // Detached HEAD (standard merge worktree): push HEAD (the merge commit)
     // to the origin integration branch. Branch-tracking worktree: push the
     // branch normally.
-    const refspec = branch === null ? `HEAD:${integration}` : integration;
+    const refspec = wtBranch === null ? `HEAD:${integration}` : integration;
     const fn = this.deps.pushBranch ?? _pushBranch;
     await fn(wtPath, refspec);
   }
 
+  /** D1d: tear down the per-landing merge worktree after a successful push.
+   *  Best-effort — the sweep collects husks from crash-aborted merges on the
+   *  next cycle. */
+  async teardownLandingMergeWorktree(branch: string): Promise<void> {
+    const wtPath = this.landingMergeWorktreePath(branch);
+    try {
+      const destroyFn = this.deps.destroyWorktree ?? _destroyWorktree;
+      await destroyFn(this.workspaceDir, wtPath, { force: true });
+    } catch (err) {
+      if (!/is not a working tree|No such file|not a valid path/i.test((err as Error).message)) {
+        throw err;
+      }
+      const pruneFn = this.deps.pruneWorktrees ?? _pruneWorktrees;
+      await pruneFn(this.workspaceDir);
+    }
+  }
+
   /**
    * Read-only inspection of merge / push state for `branch` relative to the
-   * integration branch, run from the engine-controlled merge worktree. All
-   * checks are non-destructive. MERGE_HEAD is read from the merge worktree
-   * (each worktree has its own MERGE_HEAD), so it correctly reflects
+   * integration branch, run from the per-landing merge worktree. All checks
+   * are non-destructive. MERGE_HEAD is read from the merge worktree (each
+   * worktree has its own MERGE_HEAD), so it correctly reflects
    * conflicts that occurred there.
    */
   async mergeState(branch: string): Promise<GitMergeState> {
-    const { wtPath, integration } = await this.ensureMergeWorktreeReady();
+    // D1d: per-landing merge worktree so each landing's MERGE_HEAD is isolated.
+    const { wtPath, integration } = await this.ensureLandingMergeWorktreeReady(branch);
     const fn = this.deps.gitMergeState ?? _gitMergeState;
     return fn(wtPath, branch, integration);
   }

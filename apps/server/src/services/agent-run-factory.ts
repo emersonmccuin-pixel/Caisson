@@ -130,6 +130,12 @@ export interface DispatchFreshAgentInput {
    *  from an agent. */
   worktreeBaseBranch?: string | null;
   worktreeBaseSha?: string | null;
+  /** D1c (pc-pty-chat-440): when the route pre-inserts the DB row before
+   *  worktree provisioning to close the sweep gap, it mints the IDs and passes
+   *  them here. The factory uses them and skips its own insert so there is
+   *  exactly one row per dispatch. */
+  preInsertedRunId?: ULID;
+  preInsertedCcSessionId?: string;
 }
 
 export interface DispatchContinueAgentInput {
@@ -376,8 +382,10 @@ export async function dispatchFreshAgent(
     };
   }
 
-  const agentRunId = newId() as ULID;
-  const ccSessionId = randomUUID();
+  // D1c: use pre-minted IDs when the route pre-inserted the DB row, so all
+  // env vars, contracts, and the row all reference the same IDs.
+  const agentRunId = (input.preInsertedRunId ?? newId()) as ULID;
+  const ccSessionId = input.preInsertedCcSessionId ?? randomUUID();
   const scratchDirFn = deps.scratchDirFor ?? defaultScratchDirFor;
   const scratchDir = scratchDirFn(input.projectId, agentRunId);
 
@@ -474,7 +482,10 @@ export async function dispatchFreshAgent(
   // Insert the row BEFORE constructing the AgentRun. If the wrapper throws
   // during construction (shouldn't, but defensively), we still have a row to
   // reconcile-orphan at the next boot.
-  insertAgentRunRow({
+  // D1c: when the route pre-inserted the row (preInsertedRunId set), skip the
+  // insert — that row IS this row; the IDs match so all subsequent writes
+  // (updateAgentRunStatus, setAgentRunContractId, etc.) land correctly.
+  if (!input.preInsertedRunId) insertAgentRunRow({
     id: agentRunId,
     projectId: input.projectId,
     podName: input.agentName,

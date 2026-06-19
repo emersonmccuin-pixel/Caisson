@@ -30,7 +30,9 @@ export interface LandingWorktrees {
   integrationBranch(): Promise<string>;
   mergeState(branch: string): Promise<{ mergeInProgress: boolean; alreadyMerged: boolean; pushed: boolean }>;
   mergeBranchIntoIntegration(branch: string): Promise<void>;
-  pushIntegration(): Promise<void>;
+  /** D1d (pc-pty-chat-440): branch is the run branch being landed; used to
+   *  push from its per-landing merge worktree instead of the shared one. */
+  pushIntegration(branch?: string): Promise<void>;
   teardownAfterMerge(branch: string): Promise<void>;
   /** pc-pty-chat-415 (R12) — reclaim the worktree DIR of abandoned work; the
    *  branch is preserved as the durable record. */
@@ -44,6 +46,9 @@ export interface LandingWorktrees {
    * never throws.
    */
   tryAdvanceLocalIntegration?(): Promise<void>;
+  /** D1d: tear down the per-landing merge worktree after a successful push.
+   *  Optional: callers use `?.()`. Best-effort — sweep collects husks. */
+  teardownLandingMergeWorktree?(branch: string): Promise<void>;
 }
 
 export type LandBranchResult =
@@ -96,7 +101,8 @@ export async function landBranch(
       // the merge itself.
       if (!state.pushed) {
         try {
-          await worktrees.pushIntegration();
+          // D1d: pass branch so push runs from the per-landing merge worktree.
+          await worktrees.pushIntegration(branch);
         } catch (pushErr) {
           const msg = (pushErr as Error).message ?? '';
           if (/rejected|non-fast-forward/i.test(msg)) return { outcome: 'conflict', into };
@@ -114,6 +120,12 @@ export async function landBranch(
       // pc-pty-chat-417: advance the local integration ref so future
       // run worktrees fork from the landed state (best-effort, never throws).
       await worktrees.tryAdvanceLocalIntegration?.();
+      // D1d: tear down the per-landing merge worktree after confirmed push.
+      try {
+        await worktrees.teardownLandingMergeWorktree?.(branch);
+      } catch {
+        /* best-effort — sweep collects husks */
+      }
       await teardownBestEffort();
       return { outcome: 'merged', into, idempotent: true };
     }
@@ -131,7 +143,8 @@ export async function landBranch(
     }
 
     try {
-      await worktrees.pushIntegration();
+      // D1d: pass branch so push runs from the per-landing merge worktree.
+      await worktrees.pushIntegration(branch);
     } catch (pushErr) {
       const msg = (pushErr as Error).message ?? '';
       if (/rejected|non-fast-forward/i.test(msg)) return { outcome: 'conflict', into };
@@ -150,6 +163,12 @@ export async function landBranch(
     // pc-pty-chat-417: advance the local integration ref so future
     // run worktrees fork from the landed state (best-effort, never throws).
     await worktrees.tryAdvanceLocalIntegration?.();
+    // D1d: tear down the per-landing merge worktree after confirmed push.
+    try {
+      await worktrees.teardownLandingMergeWorktree?.(branch);
+    } catch {
+      /* best-effort — sweep collects husks */
+    }
     await teardownBestEffort();
     return { outcome: 'merged', into, idempotent: false };
   } catch (err) {
