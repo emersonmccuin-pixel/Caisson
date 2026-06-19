@@ -2034,6 +2034,56 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         }
       }
     }
+  },
+  {
+    "name": "pc_get_brief",
+    "family": "work-item",
+    "label": "Read work-item dossier (brief)",
+    "description": "Read the persistent dossier for a work item — the running brief that accumulates state, decisions, and open questions across agent turns. Returns { ok, fresh, dossier: { workItemId, state, decisions, openQuestions, updatedByRunId, updatedByAgent, version, createdAt, updatedAt } }. `fresh: true` means no dossier has been written yet (dossier fields are empty defaults — no DB row was created). `work_item_id` accepts a ULID or callsign (e.g. `pc-2.1`).",
+    "catalogDescription": "Read the persistent brief (state / decisions / open questions) for a work item.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_id": {
+          "type": "string",
+          "description": "ULID or callsign of the work item whose dossier to read."
+        }
+      },
+      "required": ["work_item_id"]
+    }
+  },
+  {
+    "name": "pc_update_brief",
+    "family": "work-item",
+    "label": "Update work-item dossier (brief)",
+    "description": "Partial-patch the dossier for a work item. Only the sections you supply are updated; omit a field to leave it unchanged. Pass `expected_version` (the version number from a prior pc_get_brief call) to enable optimistic concurrency — the server will reject the write with a 409 if another agent wrote a newer version in the meantime. Omit `expected_version` for a blind overwrite. Returns { ok, dossier } with the updated row. On conflict: { ok: false, error, current } with the winning row so you can rebase. `work_item_id` accepts a ULID or callsign.",
+    "catalogDescription": "Partial-patch the brief (state / decisions / open questions) for a work item; version-safe.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_id": {
+          "type": "string",
+          "description": "ULID or callsign of the work item whose dossier to update."
+        },
+        "state": {
+          "type": "string",
+          "description": "Current state summary for the work item. Omit to leave unchanged."
+        },
+        "decisions": {
+          "type": "string",
+          "description": "Key decisions made so far. Omit to leave unchanged."
+        },
+        "open_questions": {
+          "type": "string",
+          "description": "Open questions or blockers. Omit to leave unchanged."
+        },
+        "expected_version": {
+          "type": "number",
+          "description": "Optimistic-concurrency guard. Pass the version from your last pc_get_brief call; the server rejects with 409 if the dossier was updated since then. Omit for a blind write."
+        }
+      },
+      "required": ["work_item_id"]
+    }
   }
 ];
 
@@ -2140,6 +2190,9 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_get_attachment: 'worker',
   // A4 — deterministic next-action picker (Command planner / orchestrator surface).
   pc_next_action: 'first-order',
+  // pc-pty-chat-434 — agent dossier (Track B).
+  pc_get_brief: 'first-order',
+  pc_update_brief: 'first-order',
 };
 
 /** Bare tool names in registry (= ListTools) order. */

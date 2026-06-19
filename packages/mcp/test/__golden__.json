@@ -1829,6 +1829,50 @@
           }
         }
       }
+    },
+    {
+      "name": "pc_get_brief",
+      "description": "Read the persistent dossier for a work item — the running brief that accumulates state, decisions, and open questions across agent turns. Returns { ok, fresh, dossier: { workItemId, state, decisions, openQuestions, updatedByRunId, updatedByAgent, version, createdAt, updatedAt } }. `fresh: true` means no dossier has been written yet (dossier fields are empty defaults — no DB row was created). `work_item_id` accepts a ULID or callsign (e.g. `pc-2.1`).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "work_item_id": {
+            "type": "string",
+            "description": "ULID or callsign of the work item whose dossier to read."
+          }
+        },
+        "required": ["work_item_id"]
+      }
+    },
+    {
+      "name": "pc_update_brief",
+      "description": "Partial-patch the dossier for a work item. Only the sections you supply are updated; omit a field to leave it unchanged. Pass `expected_version` (the version number from a prior pc_get_brief call) to enable optimistic concurrency — the server will reject the write with a 409 if another agent wrote a newer version in the meantime. Omit `expected_version` for a blind overwrite. Returns { ok, dossier } with the updated row. On conflict: { ok: false, error, current } with the winning row so you can rebase. `work_item_id` accepts a ULID or callsign.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "work_item_id": {
+            "type": "string",
+            "description": "ULID or callsign of the work item whose dossier to update."
+          },
+          "state": {
+            "type": "string",
+            "description": "Current state summary for the work item. Omit to leave unchanged."
+          },
+          "decisions": {
+            "type": "string",
+            "description": "Key decisions made so far. Omit to leave unchanged."
+          },
+          "open_questions": {
+            "type": "string",
+            "description": "Open questions or blockers. Omit to leave unchanged."
+          },
+          "expected_version": {
+            "type": "number",
+            "description": "Optimistic-concurrency guard. Pass the version from your last pc_get_brief call; the server rejects with 409 if the dossier was updated since then. Omit for a blind write."
+          }
+        },
+        "required": ["work_item_id"]
+      }
     }
   ],
   "pcRigToolNames": [
@@ -1902,7 +1946,9 @@
     "mcp__pc-rig__pc_delete_context_doc",
     "mcp__pc-rig__pc_search",
     "mcp__pc-rig__pc_get_attachment",
-    "mcp__pc-rig__pc_next_action"
+    "mcp__pc-rig__pc_next_action",
+    "mcp__pc-rig__pc_get_brief",
+    "mcp__pc-rig__pc_update_brief"
   ],
   "toolCatalog": [
     {
@@ -2390,6 +2436,18 @@
       "label": "Pick next item to work on",
       "description": "Return the single next item to work on (focused → oldest in-progress → oldest open).",
       "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_get_brief",
+      "label": "Read work-item dossier (brief)",
+      "description": "Read the persistent brief (state / decisions / open questions) for a work item.",
+      "source": "pc-rig"
+    },
+    {
+      "slug": "mcp__pc-rig__pc_update_brief",
+      "label": "Update work-item dossier (brief)",
+      "description": "Partial-patch the brief (state / decisions / open questions) for a work item; version-safe.",
+      "source": "pc-rig"
     }
   ],
   "capabilities": {
@@ -2605,6 +2663,12 @@
     },
     "pc_board_health": {
       "family": "project"
+    },
+    "pc_get_brief": {
+      "family": "work-item"
+    },
+    "pc_update_brief": {
+      "family": "work-item"
     }
   }
 }

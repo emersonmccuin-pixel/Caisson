@@ -112,6 +112,7 @@ export const liveOutbox = sqliteTable(
         | 'contract'
         | 'host-health'
         | 'context-doc'
+        | 'work-item-dossier'
       >(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),
@@ -761,6 +762,9 @@ export {
   pendingAsks,
   // ☠ M4a: agentInbox + agentDeliveryAudit deleted (migration 0041 archive).
 } from './schema-agent-system.ts';
+
+// pc-pty-chat-434 — agent dossier table (Track B).
+export { workItemDossiers } from './schema-dossier.ts';
 
 /**
  * pc-pty-chat-359 P1 — MCP Server Registry. One row per registered server,

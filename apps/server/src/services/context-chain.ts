@@ -10,7 +10,7 @@
 // Budget constant: CONTEXT_CHAIN_BUDGET_CHARS. This is a "dial tuned from real
 // runs" — exported as a named constant for easy adjustment. Current default 20k.
 
-import { listContextChainDocs, type ContextDocWithRank } from '@pc/db';
+import { listContextChainDocs, type ContextDocWithRank, type DossierRow } from '@pc/db';
 import type { ULID } from '@pc/domain';
 
 /** ~20k char budget for the full context chain block (index + inlined bodies).
@@ -165,4 +165,38 @@ export function formatAge(ageMs: number): string {
 export function renderContextChain(chain: string): string {
   if (!chain.trim()) return '';
   return `\n\n${chain}`;
+}
+
+// pc-pty-chat-434 — dossier block injected into the system prompt OUTSIDE the
+// 20k CONTEXT_CHAIN_BUDGET_CHARS (prepended before the context chain), so it
+// never competes with context docs for budget. Non-fatal when no row exists.
+
+/** Per-section character cap for the dossier in the system prompt. */
+const DOSSIER_SECTION_CAP = 2_000;
+
+function cappedSection(label: string, text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  if (trimmed.length <= DOSSIER_SECTION_CAP) return `**${label}:** ${trimmed}`;
+  return `**${label}:** ${trimmed.slice(0, DOSSIER_SECTION_CAP)}… *(truncated)*`;
+}
+
+/** Render the agent dossier as a compact markdown block for the system prompt.
+ *  Returns `''` when `dossier` is null (no row yet — fresh card). */
+export function renderDossierBlock(dossier: DossierRow | null): string {
+  if (!dossier) return '';
+  const sections: string[] = [];
+  const state = cappedSection('State', dossier.state);
+  const decisions = cappedSection('Decisions', dossier.decisions);
+  const openQuestions = cappedSection('Open questions', dossier.openQuestions);
+  if (state) sections.push(state);
+  if (decisions) sections.push(decisions);
+  if (openQuestions) sections.push(openQuestions);
+  if (sections.length === 0) return '';
+  const byLine = dossier.updatedByAgent ? ` *(last updated by ${dossier.updatedByAgent})*` : '';
+  return [
+    `## Work-item brief (v${dossier.version})${byLine}`,
+    '',
+    sections.join('\n\n'),
+  ].join('\n');
 }

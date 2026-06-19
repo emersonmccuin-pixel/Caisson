@@ -4,10 +4,14 @@ import { isWorkItemType } from '@pc/domain';
 import { ContractService } from '@pc/app-services';
 import {
   countWorkItemsInStage,
+  DossierVersionConflictError,
   getBoardHealth,
+  getDb,
+  getDossier,
   getProjectById,
   getWorkItem as dbGetWorkItem,
   getWorkItemByCallsignGlobal,
+  insertLiveEvent,
   listChildWorkItems,
   listFocusedWorkItems as dbListFocusedWorkItems,
   listContractsForWorkItem,
@@ -21,6 +25,7 @@ import {
   updateProjectStages,
   updateWorkItemFields as dbUpdateWorkItemFields,
   updateWorkItemStatus,
+  upsertDossier,
 } from '@pc/db';
 import type { ListWorkItemsOptions, WorkItemAreaFilter } from '@pc/db';
 
@@ -535,6 +540,95 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       const msg = (err as Error).message;
       const is400 = /^unknown stage:|^title required$/.test(msg);
       return c.json({ ok: false, error: msg }, is400 ? 400 : 500);
+    }
+  });
+
+  // pc-pty-chat-434 — agent dossier (Track B).
+  // GET: return the current dossier (fresh empty shape when no row — no DB write).
+  // PUT: partial-patch upsert with optimistic-concurrency guard.
+  app.get('/api/projects/:projectId/work-items/:wiId/dossier', (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const wiRef = c.req.param('wiId');
+    const runtime = deps.resolveProject(projectId);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+
+    const wi = resolveWorkItemRef(runtime.project.id, wiRef);
+    if (!wi) return c.json({ ok: false, error: `unknown work item: ${wiRef}` }, 404);
+    if (wi.deletedAt != null) return c.json({ ok: false, error: `work item is archived: ${wiRef}` }, 404);
+
+    const row = getDossier(wi.id);
+    if (!row) {
+      return c.json({
+        ok: true,
+        fresh: true,
+        dossier: {
+          workItemId: wi.id,
+          state: '',
+          decisions: '',
+          openQuestions: '',
+          updatedByRunId: null,
+          updatedByAgent: null,
+          version: 0,
+          createdAt: null,
+          updatedAt: null,
+        },
+      });
+    }
+    return c.json({ ok: true, fresh: false, dossier: row });
+  });
+
+  app.put('/api/projects/:projectId/work-items/:wiId/dossier', async (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const wiRef = c.req.param('wiId');
+    const runtime = deps.resolveProject(projectId);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+
+    const wi = resolveWorkItemRef(runtime.project.id, wiRef);
+    if (!wi) return c.json({ ok: false, error: `unknown work item: ${wiRef}` }, 404);
+    if (wi.deletedAt != null) return c.json({ ok: false, error: `work item is archived: ${wiRef}` }, 404);
+
+    const body = await c.req.json<{
+      state?: string;
+      decisions?: string;
+      open_questions?: string;
+      expected_version?: number;
+      agent_run_id?: string | null;
+    }>();
+
+    try {
+      const dossier = upsertDossier({
+        workItemId: wi.id,
+        ...(body.state !== undefined ? { state: body.state } : {}),
+        ...(body.decisions !== undefined ? { decisions: body.decisions } : {}),
+        ...(body.open_questions !== undefined ? { openQuestions: body.open_questions } : {}),
+        ...(body.expected_version !== undefined ? { expectedVersion: body.expected_version } : {}),
+        agentRunId: (body.agent_run_id as ULID | null) ?? null,
+      });
+
+      // Emit live event (non-fatal).
+      try {
+        insertLiveEvent(getDb(), {
+          scope: 'project',
+          projectId: runtime.project.id,
+          type: 'work-item-dossier.changed',
+          entity: 'work-item-dossier',
+          entityId: wi.id,
+          version: dossier.version,
+          payload: { workItemId: wi.id, version: dossier.version },
+        });
+      } catch {
+        /* non-fatal */
+      }
+
+      return c.json({ ok: true, dossier });
+    } catch (err) {
+      if (err instanceof DossierVersionConflictError) {
+        return c.json(
+          { ok: false, error: err.message, current: err.currentRow },
+          409,
+        );
+      }
+      return c.json({ ok: false, error: (err as Error).message }, 500);
     }
   });
 
