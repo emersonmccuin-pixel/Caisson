@@ -51,6 +51,11 @@ const TYPE_CHIP: Record<
     icon: '⚡',
     className: 'border-primary/40 bg-primary/15 text-primary',
   },
+  investigation: {
+    label: 'Investigation',
+    icon: '🔍',
+    className: 'border-yellow-500/40 bg-yellow-500/15 text-yellow-700 dark:text-yellow-400',
+  },
 };
 
 type SortBy = 'activity' | 'created' | 'alpha';

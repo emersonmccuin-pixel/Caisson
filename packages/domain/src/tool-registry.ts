@@ -2084,6 +2084,32 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
       },
       "required": ["work_item_id"]
     }
+  },
+  {
+    "name": "pc_synthesize_finding",
+    "family": "work-item",
+    "label": "Fold investigation finding into parent dossier",
+    "description": "Append this investigation's finding to its PARENT work item's dossier. Resolves the investigation item by ULID or callsign, finds its parent, reads the parent's current dossier, and appends the finding (with a timestamp + source-callsign attribution line) to the chosen section via the existing upsertDossier write path. Error if the investigation item has no parent. Use this as your final action when completing an `investigation`-type card — call it before or alongside pc_submit_deliverable so the synthesis lands in the parent's living brief rather than only on the contract.",
+    "catalogDescription": "Append an investigation's finding (dated + attributed) to its parent's dossier section.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_id": {
+          "type": "string",
+          "description": "ULID or callsign of the investigation work item whose finding to synthesize."
+        },
+        "target_section": {
+          "type": "string",
+          "enum": ["state", "decisions", "open_questions"],
+          "description": "Which section of the parent's dossier to append to: 'state' (current situation / findings), 'decisions' (concluded decisions), or 'open_questions' (outstanding blockers / questions)."
+        },
+        "finding": {
+          "type": "string",
+          "description": "The finding to append. Keep it concise (a few sentences or tight bullets). The tool prepends a timestamp + source attribution line automatically."
+        }
+      },
+      "required": ["work_item_id", "target_section", "finding"]
+    }
   }
 ];
 
@@ -2193,6 +2219,8 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   // pc-pty-chat-434 — agent dossier (Track B).
   pc_get_brief: 'first-order',
   pc_update_brief: 'first-order',
+  // pc-pty-chat-438 — investigation type + synthesis fold-up.
+  pc_synthesize_finding: 'worker',
 };
 
 /** Bare tool names in registry (= ListTools) order. */

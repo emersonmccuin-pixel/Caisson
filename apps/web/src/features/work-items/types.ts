@@ -38,7 +38,7 @@ export interface InitiativeNote {
   deletedAt: number | null;
 }
 
-export const WORK_ITEM_TYPES = ['task', 'bug', 'feature', 'spike'] as const;
+export const WORK_ITEM_TYPES = ['task', 'bug', 'feature', 'spike', 'investigation'] as const;
 export type WorkItemType = (typeof WORK_ITEM_TYPES)[number];
 
 export interface WorkItemHistoryEntry {
