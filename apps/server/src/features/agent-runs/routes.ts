@@ -6,11 +6,12 @@ import type { Hono } from 'hono';
 import type {
   AgentRunFailureCause,
   AgentRunStatus,
+  ExpectedOutput,
   PendingAskKind,
   PendingAskOption,
   ULID,
 } from '@pc/domain';
-import { AGENT_RUN_FAILURE_CAUSES, getPodDefaultExpectedOutput } from '@pc/domain';
+import { AGENT_RUN_FAILURE_CAUSES, expectedOutputRequiresWorkItem, getPodDefaultExpectedOutput } from '@pc/domain';
 import {
   AgentRunJsonlTailer,
   jsonlPathFor,
@@ -536,6 +537,22 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
         ? body.expectedOutput
         : ((podRow?.expectedOutput as unknown) ?? getPodDefaultExpectedOutput(agentName) ?? null);
     const isRepoKind = (effectiveSpec as { kind?: unknown } | null)?.kind === 'repo';
+
+    // pc-pty-chat-445 (Fix 1): validate the work-item requirement BEFORE any
+    // side effect. `expectedOutputRequiresWorkItem` is the ONE Decision-4
+    // definition (lives in @pc/domain); dispatchFreshAgent retains its own
+    // check as a defense-in-depth backstop for direct callers.
+    if (effectiveSpec != null && expectedOutputRequiresWorkItem(effectiveSpec as ExpectedOutput) && !workItemId) {
+      return c.json(
+        {
+          ok: false,
+          cause: 'work-item-required',
+          error: `expected_output kind "${(effectiveSpec as { kind: string }).kind}" must land in a work item — attach one via workItemId or create one before dispatching`,
+        },
+        422,
+      );
+    }
+
     if (isRepoKind) {
       const wts = deps.worktreeServiceFor?.(projectId) ?? null;
       if (!wts) {

@@ -149,10 +149,12 @@ export interface WorktreeServiceDeps {
   fastForwardWorktree?: (workspaceDir: string, sha: string) => Promise<void>;
 }
 
-/** Names the engine reaps automatically: per-run isolation worktrees AND
- *  per-landing merge worktrees (torn down after each successful push; husks
- *  from crash-aborted merges are collected on the next sweep). */
-const REAPABLE_NAME_RE = /^(agent|wf)-[A-Za-z0-9._-]+$|^__merge-[A-Za-z0-9._-]+$/;
+/** Names the engine reaps automatically: per-run isolation worktrees, per-
+ *  landing merge worktrees (torn down after each successful push; husks from
+ *  crash-aborted merges are collected on the next sweep), and the legacy
+ *  shared merge worktree name (`__dev-merge`) whose creator was removed in
+ *  pc-pty-chat-443 Fix C — exact match only, never broadened to `__dev-*`. */
+const REAPABLE_NAME_RE = /^(agent|wf)-[A-Za-z0-9._-]+$|^__merge-[A-Za-z0-9._-]+$|^__dev-merge$/;
 
 export interface WorktreeSweepResult {
   /** Registered worktrees removed (branch merged, not in use). */
@@ -503,7 +505,7 @@ export class WorktreeService {
    *  2. merged local `agent-*`/`wf-*` branches with no worktree left,
    *  3. unregistered leftover directories (husks from interrupted removals —
    *     Windows file locks abort `git worktree remove` partway).
-   * Never touches `__dev-merge`, unmerged branches, or in-use paths.
+   * Never touches unmerged branches or in-use paths.
    *
    * Positive receipt: every keep carries a reason; every failure (locked dir,
    * git error) lands in `failed` with the real message — nothing is swallowed.
