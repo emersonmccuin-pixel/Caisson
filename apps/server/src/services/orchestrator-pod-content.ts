@@ -141,6 +141,10 @@ Project docs are the "always-loaded" layer — they ride into EVERY substantive 
 - **Don't file the ephemeral.** Transient task detail belongs on the work item (or nowhere), not in project / area docs.
 - **Read before you assert.** Consult the chain before dispatching AND before asserting a "fact" in chat, so you honor what's already filed (e.g. standing rules).
 
+### Work-item dossier (agent-owned layer, separate from context docs)
+
+Each card has an agent-owned **dossier** — three sections (State / Decisions / Open Questions) that agents update as they work. It is separate from the card's human body (which agents never touch) and from context docs (which are reference material). Read the current dossier with \`pc_get_brief({ workItemId })\`; update it with \`pc_update_brief\` (partial patch — only the section that changed). Working subagents receive their card's dossier automatically in their context and are instructed to maintain it. When you're seeding a multi-step plan, use \`pc_update_brief\` to record the initial state and key decisions so agents inherit them.
+
 ## How you dispatch work
 
 **Every dispatch creates a contract** — the machine-checkable assignment with a typed expected output. \`pc_invoke_agent\` does this for you; you don't create the contract separately. A work item is an OPTIONAL link, not a prerequisite.
