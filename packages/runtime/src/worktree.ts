@@ -167,6 +167,21 @@ export async function branchMergedInto(
   for (const target of targets) {
     try {
       await exec('git', ['merge-base', '--is-ancestor', branch, target], { cwd });
+      // D1b (pc-pty-chat-440): is-ancestor succeeds for a branch forked at
+      // the integration tip (0 commits of its own) because the tip IS a
+      // degenerate ancestor of itself. Guard: if branch tip == target tip,
+      // the branch is a fresh fork with no landed commits of its own — skip.
+      const [branchSha, targetSha] = await Promise.all([
+        exec('git', ['rev-parse', '--verify', branch], { cwd }).then(
+          (r) => r.stdout.trim() || null,
+          () => null as string | null,
+        ),
+        exec('git', ['rev-parse', '--verify', target], { cwd }).then(
+          (r) => r.stdout.trim() || null,
+          () => null as string | null,
+        ),
+      ]);
+      if (branchSha && targetSha && branchSha === targetSha) continue; // fresh branch
       return true;
     } catch {
       /* not an ancestor of this target (or ref missing) — try the next */
@@ -176,9 +191,11 @@ export async function branchMergedInto(
     try {
       const { stdout } = await exec('git', ['cherry', target, branch], { cwd });
       const lines = stdout.split(/\r?\n/).filter((l) => l.trim() !== '');
-      // Zero lines = nothing ahead of the merge-base (ancestry would normally
-      // have caught this); all '-' = every commit has an upstream equivalent.
-      if (lines.every((l) => l.startsWith('-'))) return true;
+      // D1b: require lines.length > 0 — an empty cherry output means the
+      // branch is a fresh fork with no commits of its own. Vacuous truth on
+      // lines.every([]) was returning true before, marking fresh branches as
+      // merged. Any `+` line = not landed; all `-` = patch-equivalent → landed.
+      if (lines.length > 0 && lines.every((l) => l.startsWith('-'))) return true;
     } catch {
       /* target ref missing — try the next */
     }

@@ -55,7 +55,7 @@ test('provision/create: installRunner is called with the new worktree path', asy
     createWorktree: async (_ws, _path, name) => fakeEntry(name),
     listWorktrees: mainOnly,
     getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
-    resolveLocalBranchHead: async () => 'abc1234',
+    resolveIntegrationTip: async () => 'abc1234',
     installRunner: async (cwd) => { installed.push(cwd); },
   });
 
@@ -70,7 +70,7 @@ test('provision/create: install failure propagates — caller never gets a half-
     createWorktree: async (_ws, _path, name) => fakeEntry(name),
     listWorktrees: mainOnly,
     getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
-    resolveLocalBranchHead: async () => 'abc1234',
+    resolveIntegrationTip: async () => 'abc1234',
     installRunner: async () => {
       throw new Error('pnpm install --frozen-lockfile failed (exit 1) in /some/path:\nERR_LOCKFILE');
     },
@@ -94,7 +94,7 @@ test('provision/attach: installRunner is called when branch already exists (orph
     // No match in the initial list → triggers create() attempt.
     listWorktrees: mainOnly,
     getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
-    resolveLocalBranchHead: async () => 'abc1234',
+    resolveIntegrationTip: async () => 'abc1234',
     // Simulate "branch already exists" to force the attach branch.
     createWorktree: async () => { throw new Error('fatal: already exists'); },
     attachWorktree: async (_ws, _path, n) => fakeEntry(n),
@@ -113,7 +113,7 @@ test('provision/attach: install failure propagates — orphan recovery does not 
     pruneWorktrees: async () => {},
     listWorktrees: mainOnly,
     getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
-    resolveLocalBranchHead: async () => 'abc1234',
+    resolveIntegrationTip: async () => 'abc1234',
     createWorktree: async () => { throw new Error('fatal: already exists'); },
     attachWorktree: async (_ws, _path, n) => fakeEntry(n),
     installRunner: async () => {
@@ -142,7 +142,7 @@ test('provision/match: installRunner is called for an already-attached worktree'
       { path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' },
       existingEntry,
     ],
-    resolveLocalBranchHead: async () => 'abc1234',
+    resolveIntegrationTip: async () => 'abc1234',
     installRunner: async (cwd) => { installed.push(cwd); },
   });
 
