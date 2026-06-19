@@ -74,6 +74,17 @@ const gateway = new WorkItemMutationGateway();
  *  their own 10-minute timeout_ms (pc-pty-chat-370) and never hit this. */
 const DEFAULT_BASH_TIMEOUT_MS = 30_000;
 
+/** pc-pty-chat-437 Fix D — causes that are pure infrastructure failures.
+ *  The agent never ran; the contract awaits re-dispatch rather than rejection. */
+const INFRA_FAILURE_CAUSES = new Set<string>([
+  'host-lost',
+  'host-unavailable',
+  'host-crashed',
+  'host-protocol-error',
+  'host-rejected',
+  'server-restart',
+]);
+
 export interface RunVerificationInput {
   /** The first-class contract this run produced (slice 019 — always present on
    *  a dispatched run). Null = no contract; verification is a no-op. */
@@ -82,6 +93,11 @@ export interface RunVerificationInput {
    *  accepted AND this is set, the WI-advance roll-up fires. */
   workItemId?: ULID | null;
   terminalStatus: 'completed' | 'failed' | 'cancelled';
+  /** pc-pty-chat-437 Fix D — the structured failure cause from the terminal
+   *  transition. Infrastructure causes (host-lost, host-unavailable, …) set
+   *  the contract to 'pending' instead of 'failed' so a re-dispatch can try
+   *  again. Agent causes (idle-timeout, …) and null/unknown still reject. */
+  failureCause?: import('@pc/domain').AgentRunFailureCause | null;
   /** Human-readable failure summary when `terminalStatus === 'failed'`. Used
    *  as the contract's verification notes. */
   failureReason: string | null;
@@ -168,10 +184,37 @@ export async function runVerificationOnTerminal(
   const workItemId = (contract.workItemId ?? input.workItemId ?? null) as ULID | null;
   const tier: VerificationTier = contract.verificationTier ?? 'auto';
 
-  // Agent died before reporting done. No predicate eval — the contract
-  // can't be satisfied if the agent never finished the deliverable the
-  // criteria check against.
+  // Agent run ended in failure. Split on the cause:
+  //
+  //   Infrastructure failure (host-lost, server-restart, …): the agent never
+  //   ran; the contract should NOT be rejected. Set to 'pending' so a
+  //   re-dispatch can fulfil the contract without minting a new one.
+  //
+  //   Agent failure (idle-timeout, unexpected-exit, …) or unknown/null: the
+  //   agent ran and failed (or the cause is unknown — preserve prior behavior).
+  //   Reject the contract immediately.
   if (input.terminalStatus === 'failed') {
+    const cause = input.failureCause ?? null;
+    if (cause && INFRA_FAILURE_CAUSES.has(cause)) {
+      // Infrastructure failure — agent never ran; contract awaits re-dispatch.
+      const notes =
+        `infrastructure failure (${cause}) — agent never ran; contract awaits re-dispatch`;
+      service.setVerification({
+        id: input.contractId,
+        verificationStatus: 'pending',
+        verificationNotes: notes,
+        verificationTier: tier,
+      });
+      return {
+        contractId: input.contractId,
+        workItemId,
+        verificationStatus: 'pending',
+        verificationTier: tier,
+        notes,
+        predicatesEvaluated: 0,
+      };
+    }
+    // Agent ran and failed (or cause unknown) — reject the contract as before.
     const notes = input.failureReason ?? 'agent run failed';
     service.setVerification({
       id: input.contractId,

@@ -140,6 +140,7 @@ import { migrateStoredWorkflowDefsToV3 } from './services/workflow-def-migrate-v
 import { cancelWorkflowRunCascade } from './services/workflow-run-cancel.ts';
 import { createAgentRunReconciler } from './services/agent-run-reconciler.ts';
 import { getActiveRunRegistry } from './services/agent-active-runs.ts';
+import { reHomeRunOnCurrentHost } from './services/agent-run-rehome.ts';
 import {
   collectOpenChecklistCards,
   formatSweepBlock,
@@ -583,6 +584,9 @@ const agentRunReconciler = createAgentRunReconciler({
       console.warn('[mailbox] immediate drain failed:', (err as Error).message);
     }
   },
+  // pc-pty-chat-437 Fix E — re-home queued/spawning runs onto the current live
+  // host when the original host was replaced between enqueue and spawn.
+  reHomeQueuedRun: (row) => reHomeRunOnCurrentHost(row, hostConnection),
 });
 try {
   await agentRunReconciler.boot();

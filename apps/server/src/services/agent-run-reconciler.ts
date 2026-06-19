@@ -75,6 +75,12 @@ export interface AgentRunReconcilerDeps {
   /** `queued`/`spawning` row the host never reports → host-lost after this many
    *  consecutive ticks (default 8 ≈ 2min; env PC_SPAWN_LOST_TICKS). */
   spawnLostAfterTicks?: number;
+  /** pc-pty-chat-437 Fix E — re-home a queued/spawning run on the current live
+   *  host instead of finalizing immediately. Absent ⇒ no re-home (existing
+   *  behavior for callers that don't wire the new dep). */
+  reHomeQueuedRun?: (row: import('@pc/domain').AgentRunRow) => Promise<'re-sent' | 'failed' | 'skip'>;
+  /** Maximum re-home attempts before giving up. Default 3. */
+  maxReHomeAttempts?: number;
   now?: () => number;
   log?: (msg: string) => void;
   warn?: (msg: string) => void;
@@ -144,6 +150,8 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
 
   // Loop-owned state (persists across ticks; the false-positive guards).
   const hostMissingTicks = new Map<string, number>();
+  // pc-pty-chat-437 Fix E — re-home attempt counter (run id → attempts made).
+  const reHomeAttempts = new Map<string, number>();
   const stalledRuns = new Set<string>();
   // P9 ladder rung 2 — runs already orchestrator-notified this stall episode.
   const notifiedRuns = new Set<string>();
@@ -308,7 +316,7 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
     const reachable = refreshed && host.isConnected();
     const held = !reachable;
 
-    const hostReconcile = (deps.reconcileHost ?? reconcileAgentRunsAgainstHost)({
+    const hostReconcile = await (deps.reconcileHost ?? reconcileAgentRunsAgainstHost)({
       hostClient: host,
       activeRunRegistry: registry,
       broadcast: deps.broadcast,
@@ -332,6 +340,10 @@ export function createAgentRunReconciler(deps: AgentRunReconcilerDeps): AgentRun
       backfillOnRegister: true,
       ...(deps.replayEnvelopes ? { replayEnvelopes: deps.replayEnvelopes } : {}),
       ...(deps.onMailboxEnqueued ? { onMailboxEnqueued: deps.onMailboxEnqueued } : {}),
+      // pc-pty-chat-437 Fix E — thread re-home deps.
+      ...(deps.reHomeQueuedRun ? { reHomeQueuedRun: deps.reHomeQueuedRun } : {}),
+      ...(deps.maxReHomeAttempts !== undefined ? { maxReHomeAttempts: deps.maxReHomeAttempts } : {}),
+      reHomeAttempts,
     });
 
     // The P9/FD-17 stall ladder: badge (rung 1) + verify-alive→orchestrator

@@ -117,7 +117,7 @@ function registerHostHandle(
   return handle;
 }
 
-test('reconcileAgentRunsAgainstHost re-seeds a registered host handle on a non-terminal sweep (C-coherence)', () => {
+test('reconcileAgentRunsAgainstHost re-seeds a registered host handle on a non-terminal sweep (C-coherence)', async () => {
   let currentRow = row('run-coherence', { status: 'spawning' });
   const host = new FakeHostClient([hostRun('run-coherence', 'running')]);
   const registry = new ActiveRunRegistry();
@@ -129,7 +129,7 @@ test('reconcileAgentRunsAgainstHost re-seeds a registered host handle on a non-t
   );
   assert.equal(handle.getState(), 'spawning');
 
-  const res = reconcileAgentRunsAgainstHost({
+  const res = await reconcileAgentRunsAgainstHost({
     hostClient: host,
     activeRunRegistry: registry,
     listNonTerminalRuns: () => [currentRow],
@@ -230,7 +230,7 @@ function hostLostDeps(opts: {
   };
 }
 
-test('T1.4 host absent, missing < threshold → NOT finalized; counter increments', () => {
+test('T1.4 host absent, missing < threshold → NOT finalized; counter increments', async () => {
   const calls: TerminalCall[] = [];
   const missingTicks = new Map<string, number>();
   const { deps } = hostLostDeps({
@@ -242,13 +242,13 @@ test('T1.4 host absent, missing < threshold → NOT finalized; counter increment
     calls,
   });
 
-  const res = reconcileAgentRunsAgainstHost(deps);
+  const res = await reconcileAgentRunsAgainstHost(deps);
   assert.equal(res.hostLost, 0);
   assert.equal(calls.length, 0);
   assert.equal(missingTicks.get('run-lost'), 1);
 });
 
-test('T1.4 host absent, missing >= threshold → finalized failed/host-lost; counter cleared', () => {
+test('T1.4 host absent, missing >= threshold → finalized failed/host-lost; counter cleared', async () => {
   const calls: TerminalCall[] = [];
   const missingTicks = new Map<string, number>([['run-lost', 1]]);
   const { deps } = hostLostDeps({
@@ -260,7 +260,7 @@ test('T1.4 host absent, missing >= threshold → finalized failed/host-lost; cou
     calls,
   });
 
-  const res = reconcileAgentRunsAgainstHost(deps);
+  const res = await reconcileAgentRunsAgainstHost(deps);
   assert.equal(res.hostLost, 1);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].status, 'failed');
@@ -269,7 +269,7 @@ test('T1.4 host absent, missing >= threshold → finalized failed/host-lost; cou
   assert.equal(missingTicks.has('run-lost'), false);
 });
 
-test('T1.4 host CONNECTED but row not owned (missing from list-runs) → host-lost after threshold', () => {
+test('T1.4 host CONNECTED but row not owned (missing from list-runs) → host-lost after threshold', async () => {
   const calls: TerminalCall[] = [];
   // hostAuthoritativelyAbsent reflects "the run is absent from a successful
   // list-runs" — the watchdog sets it from connection + ownership. Other runs
@@ -284,12 +284,12 @@ test('T1.4 host CONNECTED but row not owned (missing from list-runs) → host-lo
     calls,
   });
 
-  const res = reconcileAgentRunsAgainstHost(deps);
+  const res = await reconcileAgentRunsAgainstHost(deps);
   assert.equal(res.hostLost, 1);
   assert.equal(calls[0].failureCause, 'host-lost');
 });
 
-test('T1.4 false-positive guard: no absence signal → no finalize, no increment', () => {
+test('T1.4 false-positive guard: no absence signal → no finalize, no increment', async () => {
   const calls: TerminalCall[] = [];
   const missingTicks = new Map<string, number>([['run-lost', 1]]);
   const { deps } = hostLostDeps({
@@ -301,21 +301,21 @@ test('T1.4 false-positive guard: no absence signal → no finalize, no increment
     calls,
   });
 
-  const res = reconcileAgentRunsAgainstHost(deps);
+  const res = await reconcileAgentRunsAgainstHost(deps);
   assert.equal(res.hostLost, 0);
   assert.equal(calls.length, 0);
   // Counter untouched (still 1) — a withheld signal never advances it.
   assert.equal(missingTicks.get('run-lost'), 1);
 });
 
-test('T1.4 refreshRuns-threw shape (no counter + no absence) → no finalize, counter untouched', () => {
+test('T1.4 refreshRuns-threw shape (no counter + no absence) → no finalize, counter untouched', async () => {
   // Mirrors the watchdog wiring: when refreshRuns() THROWS this tick, it passes
   // hostAuthoritativelyAbsent:false AND withholds the counter (undefined). The
   // reconcile must not finalize and must not mutate any standing counter.
   const calls: TerminalCall[] = [];
   const standing = new Map<string, number>([['run-lost', 1]]);
   const host = new FakeHostClient([]);
-  const res = reconcileAgentRunsAgainstHost({
+  const res = await reconcileAgentRunsAgainstHost({
     hostClient: host,
     listNonTerminalRuns: () => [row('run-lost', { status: 'running' })],
     hostAuthoritativelyAbsent: false,
@@ -331,7 +331,7 @@ test('T1.4 refreshRuns-threw shape (no counter + no absence) → no finalize, co
   assert.equal(standing.get('run-lost'), 1); // never touched
 });
 
-test('T1.4 row reappears in list-runs before threshold → counter resets, no finalize', () => {
+test('T1.4 row reappears in list-runs before threshold → counter resets, no finalize', async () => {
   const calls: TerminalCall[] = [];
   const missingTicks = new Map<string, number>([['run-back', 1]]);
   let currentRow = row('run-back', { status: 'running' });
@@ -344,7 +344,7 @@ test('T1.4 row reappears in list-runs before threshold → counter resets, no fi
     calls,
   });
   // getAgentRun/updateStatus so the matched-row branch is happy.
-  const res = reconcileAgentRunsAgainstHost({
+  const res = await reconcileAgentRunsAgainstHost({
     ...deps,
     getAgentRun: () => currentRow,
     updateStatus: (input) => {
@@ -357,7 +357,7 @@ test('T1.4 row reappears in list-runs before threshold → counter resets, no fi
   assert.equal(missingTicks.has('run-back'), false); // reset on reappearance
 });
 
-test('FD-14 LAW: paused row, host absent → NEVER host-lost, counter dropped', () => {
+test('FD-14 LAW: paused row, host absent → NEVER host-lost, counter dropped', async () => {
   const calls: TerminalCall[] = [];
   const missingTicks = new Map<string, number>([['run-paused', 50]]);
   const { deps } = hostLostDeps({
@@ -370,7 +370,7 @@ test('FD-14 LAW: paused row, host absent → NEVER host-lost, counter dropped', 
     calls,
   });
 
-  const res = reconcileAgentRunsAgainstHost(deps);
+  const res = await reconcileAgentRunsAgainstHost(deps);
   assert.equal(res.hostLost, 0);
   assert.equal(calls.length, 0);
   // The reconciler can never finalize paused — its counter is dropped, so it
@@ -378,7 +378,7 @@ test('FD-14 LAW: paused row, host absent → NEVER host-lost, counter dropped', 
   assert.equal(missingTicks.has('run-paused'), false);
 });
 
-test('FD-14 LAW: paused row WITHOUT an open ask is still never finalized', () => {
+test('FD-14 LAW: paused row WITHOUT an open ask is still never finalized', async () => {
   // Pre-Step-2 the BOOT reconcile killed paused-without-ask rows. The law has
   // no exceptions: only the ask flow may end a paused run.
   const calls: TerminalCall[] = [];
@@ -393,12 +393,12 @@ test('FD-14 LAW: paused row WITHOUT an open ask is still never finalized', () =>
     calls,
   });
 
-  const res = reconcileAgentRunsAgainstHost(deps);
+  const res = await reconcileAgentRunsAgainstHost(deps);
   assert.equal(res.hostLost, 0);
   assert.equal(calls.length, 0);
 });
 
-test('Step 2: spawning row absent below spawn threshold → counter stands, no finalize', () => {
+test('Step 2: spawning row absent below spawn threshold → counter stands, no finalize', async () => {
   const calls: TerminalCall[] = [];
   // A slow-spawning run may legitimately not be in the host list yet — it gets
   // a LONGER threshold than running, not immunity.
@@ -412,7 +412,7 @@ test('Step 2: spawning row absent below spawn threshold → counter stands, no f
     calls,
   });
 
-  const res = reconcileAgentRunsAgainstHost({ ...deps, spawnLostAfterTicks: 8 });
+  const res = await reconcileAgentRunsAgainstHost({ ...deps, spawnLostAfterTicks: 8 });
   assert.equal(res.hostLost, 0);
   assert.equal(calls.length, 0);
   // Counter advances toward the spawn threshold (was 5, now 6) — pre-Step-2 it
@@ -420,7 +420,7 @@ test('Step 2: spawning row absent below spawn threshold → counter stands, no f
   assert.equal(missingTicks.get('run-spawning'), 6);
 });
 
-test('Step 2: spawning row the host never reports → host-lost at spawn threshold (stuck-forever gap closed)', () => {
+test('Step 2: spawning row the host never reports → host-lost at spawn threshold (stuck-forever gap closed)', async () => {
   const calls: TerminalCall[] = [];
   const missingTicks = new Map<string, number>([['run-spawning', 7]]);
   const { deps } = hostLostDeps({
@@ -432,7 +432,7 @@ test('Step 2: spawning row the host never reports → host-lost at spawn thresho
     calls,
   });
 
-  const res = reconcileAgentRunsAgainstHost({ ...deps, spawnLostAfterTicks: 8 });
+  const res = await reconcileAgentRunsAgainstHost({ ...deps, spawnLostAfterTicks: 8 });
   assert.equal(res.hostLost, 1);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].status, 'failed');
@@ -440,7 +440,7 @@ test('Step 2: spawning row the host never reports → host-lost at spawn thresho
   assert.equal(missingTicks.has('run-spawning'), false);
 });
 
-test('Step 2: queued row missing from a reachable host → same spawn-threshold path', () => {
+test('Step 2: queued row missing from a reachable host → same spawn-threshold path', async () => {
   const calls: TerminalCall[] = [];
   const missingTicks = new Map<string, number>([['run-queued', 7]]);
   const { deps } = hostLostDeps({
@@ -452,18 +452,18 @@ test('Step 2: queued row missing from a reachable host → same spawn-threshold 
     calls,
   });
 
-  const res = reconcileAgentRunsAgainstHost({ ...deps, spawnLostAfterTicks: 8 });
+  const res = await reconcileAgentRunsAgainstHost({ ...deps, spawnLostAfterTicks: 8 });
   assert.equal(res.hostLost, 1);
   assert.equal(calls[0].failureCause, 'host-lost');
 });
 
-test('Step 2: self-healing reattach — matched host run with no registry entry gets registered on a tick', () => {
+test('Step 2: self-healing reattach — matched host run with no registry entry gets registered on a tick', async () => {
   let currentRow = row('run-selfheal', { status: 'running' });
   const host = new FakeHostClient([hostRun('run-selfheal', 'running')]);
   const registry = new ActiveRunRegistry();
   assert.ok(!registry.get('run-selfheal' as ULID), 'starts unregistered');
 
-  const res = reconcileAgentRunsAgainstHost({
+  const res = await reconcileAgentRunsAgainstHost({
     hostClient: host,
     activeRunRegistry: registry,
     registerMissingHandles: true,
@@ -482,7 +482,7 @@ test('Step 2: self-healing reattach — matched host run with no registry entry 
   assert.ok(entry!.run instanceof HostBackedActiveRunHandle);
 
   // Second tick: already registered → no double-register.
-  const res2 = reconcileAgentRunsAgainstHost({
+  const res2 = await reconcileAgentRunsAgainstHost({
     hostClient: host,
     activeRunRegistry: registry,
     registerMissingHandles: true,
@@ -500,7 +500,7 @@ test('Step 2: self-healing reattach — matched host run with no registry entry 
 // host had actually started it) must be cancelled once the row has been
 // terminal past the grace window. Nothing else converges it: the row loop only
 // iterates non-terminal DB rows.
-test('ghost reaper: live host run with a terminal DB row past grace gets a cancel', () => {
+test('ghost reaper: live host run with a terminal DB row past grace gets a cancel', async () => {
   const host = new FakeHostClient([hostRun('run-ghost', 'running')]);
   const terminalRow = row('run-ghost', {
     status: 'failed',
@@ -508,7 +508,7 @@ test('ghost reaper: live host run with a terminal DB row past grace gets a cance
     completedAt: 1_700_000_000_000,
   });
 
-  const res = reconcileAgentRunsAgainstHost({
+  const res = await reconcileAgentRunsAgainstHost({
     hostClient: host,
     listNonTerminalRuns: () => [],
     getAgentRun: (id) => (id === ('run-ghost' as ULID) ? terminalRow : null),
@@ -522,7 +522,7 @@ test('ghost reaper: live host run with a terminal DB row past grace gets a cance
   assert.deepEqual(host.commands, [{ type: 'cancel', runId: 'run-ghost' }]);
 });
 
-test('ghost reaper holds inside the grace window and on an unconfirmed host list', () => {
+test('ghost reaper holds inside the grace window and on an unconfirmed host list', async () => {
   const terminalRow = row('run-ghost2', {
     status: 'failed',
     failureCause: 'host-unavailable',
@@ -531,7 +531,7 @@ test('ghost reaper holds inside the grace window and on an unconfirmed host list
 
   // Inside the grace window → no cancel (never race in-flight terminal effects).
   const hostA = new FakeHostClient([hostRun('run-ghost2', 'running')]);
-  const inGrace = reconcileAgentRunsAgainstHost({
+  const inGrace = await reconcileAgentRunsAgainstHost({
     hostClient: hostA,
     listNonTerminalRuns: () => [],
     getAgentRun: () => terminalRow,
@@ -545,7 +545,7 @@ test('ghost reaper holds inside the grace window and on an unconfirmed host list
 
   // Stale/unconfirmed host list → no cancel (HOLD on no-information).
   const hostB = new FakeHostClient([hostRun('run-ghost2', 'running')]);
-  const unconfirmed = reconcileAgentRunsAgainstHost({
+  const unconfirmed = await reconcileAgentRunsAgainstHost({
     hostClient: hostB,
     listNonTerminalRuns: () => [],
     getAgentRun: () => terminalRow,
@@ -558,10 +558,10 @@ test('ghost reaper holds inside the grace window and on an unconfirmed host list
   assert.deepEqual(hostB.commands, []);
 });
 
-test('ghost reaper never touches a live host run whose row is non-terminal', () => {
+test('ghost reaper never touches a live host run whose row is non-terminal', async () => {
   const liveRow = row('run-live', { status: 'running' });
   const host = new FakeHostClient([hostRun('run-live', 'running')]);
-  const res = reconcileAgentRunsAgainstHost({
+  const res = await reconcileAgentRunsAgainstHost({
     hostClient: host,
     listNonTerminalRuns: () => [liveRow],
     getAgentRun: () => liveRow,
