@@ -189,7 +189,7 @@ test('reconcile sweep self-heals after a host port change (refreshRuns re-discov
   // The sweep reconciles non-terminal rows against the freshly pulled snapshots.
   let currentRow = row('sweep-run', { status: 'running' });
   let terminalApplied = 0;
-  const res = reconcileAgentRunsAgainstHost({
+  const res = await reconcileAgentRunsAgainstHost({
     hostClient: conn,
     listNonTerminalRuns: () => [currentRow],
     getAgentRun: () => currentRow,

@@ -114,6 +114,17 @@ export interface AgentHostReattachDeps {
    *  notify tail threw before enqueuing it. Test seam; defaults to the real
    *  idempotent replay. */
   replayEnvelopes?: typeof replayMissingTerminalEnvelopes;
+  /** pc-pty-chat-437 Fix A — attempt to re-send a queued/spawning run to the
+   *  current live host when the original host was replaced. Returns 're-sent'
+   *  (counters cleared), 'failed' (retry next tick), or 'skip' (pod gone;
+   *  fall through to finalize). Absent ⇒ no re-home (existing behavior). */
+  reHomeQueuedRun?: (row: AgentRunRow) => Promise<'re-sent' | 'failed' | 'skip'>;
+  /** Maximum re-home attempts before giving up and finalizing host-lost.
+   *  Default 3. */
+  maxReHomeAttempts?: number;
+  /** Caller-owned counter: run id → number of re-home attempts made. Persists
+   *  across ticks; reset when the run reappears on the host or is finalized. */
+  reHomeAttempts?: Map<string, number>;
 }
 
 export interface ReconcileSweepResult {
@@ -157,9 +168,9 @@ export interface ReconcileSweepResult {
  * `refreshRuns` blip) — the row is left untouched (the original conservatism),
  * so a just-dispatched run or a mid-respawn host never false-kills a live run.
  */
-export function reconcileAgentRunsAgainstHost(
+export async function reconcileAgentRunsAgainstHost(
   deps: AgentHostReattachDeps,
-): ReconcileSweepResult {
+): Promise<ReconcileSweepResult> {
   const rows = (deps.listNonTerminalRuns ?? defaultListNonTerminalAgentRuns)();
   const hostRuns = deps.hostClient.listRuns();
   const hostByRunId = new Map(hostRuns.map((run) => [run.runId, run]));
@@ -177,7 +188,7 @@ export function reconcileAgentRunsAgainstHost(
     const hostRun = hostByRunId.get(row.id);
     // T1.4 — row absent from (or mismatched against) the host's live snapshots.
     if (!hostRun || !hostSnapshotMatchesRow(row, hostRun)) {
-      hostLost += handleHostMissingRow(row, {
+      hostLost += await handleHostMissingRow(row, {
         deps,
         missingTicks,
         lostAfter,
@@ -188,6 +199,7 @@ export function reconcileAgentRunsAgainstHost(
 
     // Row IS owned by the host again — clear any standing missing-tick counter.
     missingTicks?.delete(row.id);
+    deps.reHomeAttempts?.delete(row.id);
 
     if (isTerminalState(hostRun.state)) {
       terminalApplied += applyHostTerminalSnapshot(hostRun, deps);
@@ -319,8 +331,13 @@ export function reconcileAgentRunsAgainstHost(
  *  `paused` NEVER (FD-14 law: a paused run is host-less by design while it
  *  waits on an ask — only the ask flow may end it), (4) the row has been
  *  missing for enough consecutive ticks. Else leaves the row untouched.
- *  Returns 1 if finalized, else 0. */
-function handleHostMissingRow(
+ *  Returns 1 if finalized, else 0.
+ *
+ *  pc-pty-chat-437 Fix A — before finalizing a queued/spawning row, attempt
+ *  to re-home it on the current live host (bounded by `maxReHomeAttempts`).
+ *  Running rows go straight to finalize (CC child was alive; state is gone).
+ *  Paused rows are never touched (FD-14). */
+async function handleHostMissingRow(
   row: AgentRunRow,
   ctx: {
     deps: AgentHostReattachDeps;
@@ -328,7 +345,7 @@ function handleHostMissingRow(
     lostAfter: number;
     spawnLostAfter: number;
   },
-): number {
+): Promise<number> {
   const { deps, missingTicks, lostAfter, spawnLostAfter } = ctx;
 
   // Conservative gates: without the authoritative-absence signal or a counter,
@@ -339,6 +356,7 @@ function handleHostMissingRow(
   // counter so it can never accrue toward finalize.
   if (row.status === 'paused') {
     missingTicks.delete(row.id);
+    deps.reHomeAttempts?.delete(row.id);
     return 0;
   }
 
@@ -347,6 +365,24 @@ function handleHostMissingRow(
   const ticks = (missingTicks.get(row.id) ?? 0) + 1;
   missingTicks.set(row.id, ticks);
   if (ticks < threshold) return 0;
+
+  // pc-pty-chat-437 Fix A — queued/spawning rows: attempt re-home before
+  // giving up. Running rows go directly to finalize (CC child was alive).
+  if (row.status !== 'running' && deps.reHomeQueuedRun && deps.reHomeAttempts) {
+    const attempts = (deps.reHomeAttempts.get(row.id) ?? 0) + 1;
+    deps.reHomeAttempts.set(row.id, attempts);
+    if (attempts <= (deps.maxReHomeAttempts ?? 3)) {
+      const result = await deps.reHomeQueuedRun(row);
+      if (result === 're-sent') {
+        // Run is back on the new host — reset both counters.
+        missingTicks.delete(row.id);
+        deps.reHomeAttempts.delete(row.id);
+        return 0; // don't finalize
+      }
+      // 'failed' or 'skip': fall through to finalize immediately.
+    }
+    // attempts exhausted: fall through to finalize.
+  }
 
   const applied = (deps.applyTerminalEffects ?? applyAgentRunTerminalEffects)(
     {
@@ -380,8 +416,9 @@ function handleHostMissingRow(
     },
   ).applied;
 
-  // Finalized (or already terminal) — drop the counter either way.
+  // Finalized (or already terminal) — drop both counters either way.
   missingTicks.delete(row.id);
+  deps.reHomeAttempts?.delete(row.id);
   return applied;
 }
 

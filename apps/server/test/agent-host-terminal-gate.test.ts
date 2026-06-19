@@ -179,7 +179,7 @@ test('reconcile-sweep: a host terminal enqueues ONE mailbox turn', async () => {
   const mb = fakeMailbox();
   const snap = terminalSnapshot(runId, projectId);
 
-  const res = reconcileAgentRunsAgainstHost({
+  const res = await reconcileAgentRunsAgainstHost({
     hostClient: { sendCommand: () => undefined, listRuns: () => [snap] } as never,
     mailboxEnqueue: mb.port,
     broadcast: () => {},

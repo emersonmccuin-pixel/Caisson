@@ -397,6 +397,7 @@ async function finishTerminalEffects(args: {
           contractId,
           workItemId,
           terminalStatus: input.status,
+          failureCause,
           failureReason,
           projectFolderPath: project.folderPath,
           worktreeDir: input.worktreeDir,
