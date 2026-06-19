@@ -466,6 +466,7 @@ export async function resolveIntegrationTip(
   // not the best. Drop it and re-run the most-advanced check on the real
   // candidates (origin + local). Never return a stale merge-wt as the fork
   // point; prefer origin/<integration> over a diverged __dev-merge HEAD.
+  // A diverged merge-wt HEAD is a frozen orphan — it must never be used as a fork point for new run worktrees (pc-pty-chat-443).
   if (mergeWtSha) {
     const withoutMergeWt = unique.filter((sha) => sha !== mergeWtSha);
     if (withoutMergeWt.length === 0) {
