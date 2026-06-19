@@ -31,7 +31,7 @@ function makeMergeToIntegration(
       if (state.alreadyMerged) {
         if (!state.pushed) {
           try {
-            await fakeWorktrees.pushIntegration();
+            await fakeWorktrees.pushIntegration(branch);
           } catch (pushErr) {
             const msg = (pushErr as Error).message ?? '';
             if (/rejected|non-fast-forward/i.test(msg)) { emitConflict(); return { outcome: 'conflict' }; }
@@ -49,7 +49,7 @@ function makeMergeToIntegration(
         return { outcome: 'failed', error: `branch tip not ancestor of ${into}` };
       }
       try {
-        await fakeWorktrees.pushIntegration();
+        await fakeWorktrees.pushIntegration(branch);
       } catch (pushErr) {
         const msg = (pushErr as Error).message ?? '';
         if (/rejected|non-fast-forward/i.test(msg)) { emitConflict(); return { outcome: 'conflict' }; }

@@ -645,3 +645,182 @@ test('updateRef: advances a local branch ref without checking it out', async () 
     rmSync(repo5, { recursive: true, force: true });
   }
 });
+
+// ── resolveIntegrationTip — pc-pty-chat-443 Fix B tests ─────────────────────
+// Test 1: diverged merge-wt HEAD is dropped; origin tip is returned instead.
+// Test 2: genuinely-ahead merge-wt still wins (local-only case preserved).
+// Test 5: absent mergeWtPath dir falls back to origin cleanly.
+
+test('443-T1: resolveIntegrationTip drops a DIVERGED merge-wt candidate → returns origin tip', async () => {
+  // Strategy: single repo with a remote. Start at C0. Create a LOCAL diverged
+  // branch commit C_stale (the frozen __dev-merge simulation). Then advance
+  // upstream to C1 so origin/dev=C1. C_stale and C1 both descend from C0 but
+  // are NOT ancestors of each other — genuinely diverged. The merge worktree
+  // is at C_stale. resolveIntegrationTip must return C1 (origin/dev), not
+  // C_stale (the stale diverged merge-wt HEAD).
+  const upstream = mkdtempSync(join(tmpdir(), 'pc-443t1-up-'));
+  const repo = mkdtempSync(join(tmpdir(), 'pc-443t1-repo-'));
+  const mergeWtParent = mkdtempSync(join(tmpdir(), 'pc-443t1-mwt-'));
+  const mergeWtPath = join(mergeWtParent, '__dev-merge');
+  const g = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'ignore' });
+  const gOut = (...args: string[]) => execFileSync('git', args, { cwd: repo }).toString().trim();
+  try {
+    // 1. Set up bare upstream with an initial commit, clone to repo.
+    const seedWork = mkdtempSync(join(tmpdir(), 'pc-443t1-seed-'));
+    try {
+      execFileSync('git', ['init', '--bare', '-b', 'dev'], { cwd: upstream, stdio: 'ignore' });
+      const gs = (...args: string[]) => execFileSync('git', args, { cwd: seedWork, stdio: 'ignore' });
+      gs('init', '-b', 'dev');
+      gs('config', 'user.email', 't@t');
+      gs('config', 'user.name', 't');
+      gs('config', 'commit.gpgsign', 'false');
+      writeFileSync(join(seedWork, 'base.txt'), 'base\n');
+      gs('add', '.');
+      gs('commit', '-m', 'C0 initial');
+      gs('remote', 'add', 'origin', upstream);
+      gs('push', 'origin', 'dev');
+    } finally {
+      rmSync(seedWork, { recursive: true, force: true });
+    }
+    execFileSync('git', ['clone', upstream, repo], { stdio: 'ignore' });
+    g('config', 'user.email', 't@t');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+
+    // 2. In repo: create C_stale (a diverged branch commit off C0).
+    g('checkout', '-b', 'stale-branch');
+    writeFileSync(join(repo, 'stale.txt'), 'stale content\n');
+    g('add', '.');
+    g('commit', '-m', 'C_stale diverged');
+    const staleSha = gOut('rev-parse', 'HEAD');
+    g('checkout', 'dev'); // back to dev (at C0)
+
+    // 3. Advance upstream to C1 via a second clone (simulates a landing push).
+    const landWork = mkdtempSync(join(tmpdir(), 'pc-443t1-land-'));
+    let originTip: string;
+    try {
+      execFileSync('git', ['clone', upstream, landWork], { stdio: 'ignore' });
+      const gl = (...args: string[]) => execFileSync('git', args, { cwd: landWork, stdio: 'ignore' });
+      gl('config', 'user.email', 't@t');
+      gl('config', 'user.name', 't');
+      gl('config', 'commit.gpgsign', 'false');
+      writeFileSync(join(landWork, 'landed.txt'), 'landed\n');
+      gl('add', '.');
+      gl('commit', '-m', 'C1 landing');
+      gl('push', 'origin', 'dev');
+      originTip = execFileSync('git', ['rev-parse', 'dev'], { cwd: landWork }).toString().trim();
+    } finally {
+      rmSync(landWork, { recursive: true, force: true });
+    }
+    // Fetch in repo so origin/dev = C1.
+    g('fetch', 'origin');
+
+    // 4. Create the merge worktree at the stale diverged SHA (C_stale is in
+    //    the local object store since it was committed in step 2).
+    execFileSync('git', ['worktree', 'add', '--detach', mergeWtPath, staleSha], {
+      cwd: repo,
+      stdio: 'ignore',
+    });
+
+    // Pre-conditions.
+    const resolvedOriginSha = gOut('rev-parse', 'origin/dev');
+    assert.equal(resolvedOriginSha, originTip, 'pre-condition: origin/dev = C1');
+    assert.notEqual(resolvedOriginSha, staleSha, 'pre-condition: C1 != C_stale (genuinely diverged)');
+
+    // 5. THE FIX B assertion.
+    const tip = await resolveIntegrationTip(repo, 'dev', mergeWtPath);
+    assert.equal(tip, originTip, '443-T1: diverged merge-wt HEAD must be dropped; origin/dev (C1) must win');
+    assert.notEqual(tip, staleSha, '443-T1: stale diverged C_stale SHA must NOT be returned');
+  } finally {
+    try { execFileSync('git', ['worktree', 'remove', '--force', mergeWtPath], { cwd: repo, stdio: 'ignore' }); } catch { /* best-effort */ }
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(upstream, { recursive: true, force: true });
+    rmSync(mergeWtParent, { recursive: true, force: true });
+  }
+});
+
+test('443-T2: resolveIntegrationTip keeps merge-wt HEAD when it is GENUINELY ahead (local-only case preserved)', async () => {
+  // Identical setup to the existing local-only test above: no remote, merge
+  // worktree has the freshest commit. Fix B must NOT affect this case.
+  // (Regression guard: this is the legitimate path that must still win.)
+  const localRepo = mkdtempSync(join(tmpdir(), 'pc-443t2-'));
+  const mergeWtParent = mkdtempSync(join(tmpdir(), 'pc-443t2-mwt-'));
+  const mergeWtPath = join(mergeWtParent, '__dev-merge');
+  const g = (...args: string[]) => execFileSync('git', args, { cwd: localRepo, stdio: 'ignore' });
+  try {
+    g('init', '-b', 'dev');
+    g('config', 'user.email', 't@t');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(localRepo, 'base.txt'), 'base\n');
+    g('add', '.');
+    g('commit', '-m', 'initial');
+
+    g('checkout', '-b', 'agent-t2');
+    writeFileSync(join(localRepo, 't2.txt'), 't2 work\n');
+    g('add', '.');
+    g('commit', '-m', 't2 work');
+    g('checkout', 'dev');
+
+    const devTipBefore = execFileSync('git', ['rev-parse', 'dev'], { cwd: localRepo }).toString().trim();
+
+    // Simulate a local landing: merge into __dev-merge worktree (no remote push).
+    execFileSync('git', ['worktree', 'add', '--detach', mergeWtPath, 'dev'], {
+      cwd: localRepo,
+      stdio: 'ignore',
+    });
+    execFileSync('git', ['merge', '--no-ff', 'agent-t2'], { cwd: mergeWtPath, stdio: 'ignore' });
+    const mergeWtHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: mergeWtPath }).toString().trim();
+
+    assert.notEqual(mergeWtHead, devTipBefore, 'pre-condition: merge commit advanced ahead of dev');
+
+    // Fix B must preserve this: merge-wt HEAD is genuinely ahead → must still win.
+    const tip = await resolveIntegrationTip(localRepo, 'dev', mergeWtPath);
+    assert.equal(tip, mergeWtHead, '443-T2: genuinely-ahead merge-wt HEAD must still win (local-only case)');
+    assert.notEqual(tip, devTipBefore, '443-T2: stale local dev must NOT be selected');
+  } finally {
+    try { execFileSync('git', ['worktree', 'remove', '--force', mergeWtPath], { cwd: localRepo, stdio: 'ignore' }); } catch { /* best-effort */ }
+    rmSync(localRepo, { recursive: true, force: true });
+    rmSync(mergeWtParent, { recursive: true, force: true });
+  }
+});
+
+test('443-T5: resolveIntegrationTip with absent mergeWtPath falls back to origin cleanly', async () => {
+  // The absent-dir case: pass a mergeWtPath that does not exist on disk.
+  // Should not throw; origin/dev must be returned as the tip.
+  const upstream = mkdtempSync(join(tmpdir(), 'pc-443t5-up-'));
+  const repo = mkdtempSync(join(tmpdir(), 'pc-443t5-repo-'));
+  const absentPath = join(repo, '__dev-merge-absent');
+  const g = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'ignore' });
+  try {
+    execFileSync('git', ['init', '--bare', '-b', 'dev'], { cwd: upstream, stdio: 'ignore' });
+    const seed = mkdtempSync(join(tmpdir(), 'pc-443t5-seed-'));
+    try {
+      const gs = (...args: string[]) => execFileSync('git', args, { cwd: seed, stdio: 'ignore' });
+      gs('init', '-b', 'dev');
+      gs('config', 'user.email', 't@t');
+      gs('config', 'user.name', 't');
+      gs('config', 'commit.gpgsign', 'false');
+      writeFileSync(join(seed, 'base.txt'), 'base\n');
+      gs('add', '.');
+      gs('commit', '-m', 'initial');
+      gs('remote', 'add', 'origin', upstream);
+      gs('push', 'origin', 'dev');
+    } finally {
+      rmSync(seed, { recursive: true, force: true });
+    }
+    execFileSync('git', ['clone', upstream, repo], { stdio: 'ignore' });
+    g('config', 'user.email', 't@t');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+
+    const originTip = execFileSync('git', ['rev-parse', 'origin/dev'], { cwd: repo }).toString().trim();
+
+    // The merge-wt dir does not exist — must not throw, must return origin tip.
+    const tip = await resolveIntegrationTip(repo, 'dev', absentPath);
+    assert.equal(tip, originTip, '443-T5: absent mergeWtPath must fall back to origin/dev cleanly');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+    rmSync(upstream, { recursive: true, force: true });
+  }
+});

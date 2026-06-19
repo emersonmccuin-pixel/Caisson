@@ -163,9 +163,13 @@ test('non-dev integration branch: guard accepts the configured branch, rejects d
 });
 
 // ── pushIntegration — isolation ──────────────────────────────────────────────
+// Post-pc-pty-chat-443 Fix C: pushIntegration always requires a branch arg;
+// the old no-branch shared __dev-merge path has been removed.
 
-test('pushIntegration: delegates to pushBranch dep with the merge worktree path (NOT workspaceDir)', async () => {
+test('pushIntegration: delegates to pushBranch dep with the per-landing merge worktree path (NOT workspaceDir)', async () => {
   const calls: Array<{ ws: string; ref: string }> = [];
+  const LANDING_BRANCH = 'agent-push-test';
+  const PER_LANDING_PATH = resolve(FAKE_BASE, `__merge-${LANDING_BRANCH}`);
 
   // When getWorktreeStatus returns branch:'dev', pushIntegration should use
   // 'dev' as the refspec (branch-tracking worktree mode).
@@ -176,16 +180,19 @@ test('pushIntegration: delegates to pushBranch dep with the merge worktree path 
     pushBranch: async (ws, ref) => { calls.push({ ws, ref }); },
   });
 
-  await svc.pushIntegration();
+  await svc.pushIntegration(LANDING_BRANCH);
 
   assert.equal(calls.length, 1, 'dep called exactly once');
-  assert.equal(calls[0]!.ws, MERGE_WT_PATH, 'passes merge worktree path, not workspaceDir');
+  assert.equal(calls[0]!.ws, PER_LANDING_PATH, 'passes per-landing merge worktree path');
+  assert.notEqual(calls[0]!.ws, MERGE_WT_PATH, 'must NOT use the shared __dev-merge path');
   assert.notEqual(calls[0]!.ws, FAKE_WORKSPACE, 'must NOT pass the user main working tree');
   assert.equal(calls[0]!.ref, 'dev', 'branch-tracking mode uses the branch refspec');
 });
 
 test('pushIntegration: detached HEAD mode uses HEAD:<integration> refspec', async () => {
   const calls: Array<{ ws: string; ref: string }> = [];
+  const LANDING_BRANCH = 'agent-detached-test';
+  const PER_LANDING_PATH = resolve(FAKE_BASE, `__merge-${LANDING_BRANCH}`);
 
   // When getWorktreeStatus returns branch:null (detached HEAD — our standard
   // merge worktree mode), pushIntegration must use 'HEAD:<integration>' to
@@ -198,10 +205,11 @@ test('pushIntegration: detached HEAD mode uses HEAD:<integration> refspec', asyn
     pushBranch: async (ws, ref) => { calls.push({ ws, ref }); },
   });
 
-  await svc.pushIntegration();
+  await svc.pushIntegration(LANDING_BRANCH);
 
   assert.equal(calls.length, 1, 'dep called exactly once');
-  assert.equal(calls[0]!.ws, MERGE_WT_PATH, 'passes merge worktree path');
+  assert.equal(calls[0]!.ws, PER_LANDING_PATH, 'passes per-landing merge worktree path');
+  assert.notEqual(calls[0]!.ws, MERGE_WT_PATH, 'must NOT use the shared __dev-merge path');
   assert.equal(calls[0]!.ref, 'HEAD:trunk', 'detached mode uses HEAD:<integration> refspec');
 });
 
@@ -213,7 +221,7 @@ test('pushIntegration: propagates errors from the dep', async () => {
     pushBranch: async () => { throw new Error('push rejected'); },
   });
 
-  await assert.rejects(() => svc.pushIntegration(), /push rejected/);
+  await assert.rejects(() => svc.pushIntegration('agent-err-test'), /push rejected/);
 });
 
 // ── mergeState — isolation ────────────────────────────────────────────────────
