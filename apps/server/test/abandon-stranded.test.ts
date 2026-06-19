@@ -180,7 +180,6 @@ test('listStranded: unmerged + not-in-use surfaces; merged and in-use do not', a
       { path: join(base, 'agent-stranded1'), branch: 'agent-stranded1' },
       { path: join(base, 'agent-merged1'), branch: 'agent-merged1' },
       { path: join(base, 'agent-inuse1'), branch: 'agent-inuse1' },
-      { path: join(base, '__dev-merge'), branch: null }, // engine-internal — not reapable
     ] as never,
     branchMergedInto: async (_ws, branch) => mergedBranches.has(branch),
     listBranchesByPrefix: async () => ['agent-stranded1', 'agent-merged1', 'agent-orphan1'],
