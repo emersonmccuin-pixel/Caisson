@@ -261,8 +261,16 @@ test('branchMergedInto: cherry-picked work counts as landed; un-picked commits d
     const tip = execFileSync('git', ['rev-parse', 'agent-cp'], { cwd: repo3 }).toString().trim();
 
     // Integrate by CHERRY-PICK (not merge) — tip is NOT an ancestor.
+    // Force GIT_COMMITTER_DATE to a fixed past date so the cherry-pick commit
+    // always has a different SHA from the original (on fast machines both land
+    // in the same second and produce identical SHAs, which breaks the D1b
+    // SHA-guard in branchMergedInto).
     g('checkout', 'phase-branch');
-    g('cherry-pick', tip);
+    execFileSync('git', ['cherry-pick', tip], {
+      cwd: repo3,
+      stdio: 'ignore',
+      env: { ...process.env, GIT_COMMITTER_DATE: 'Sat Jan 1 00:00:00 2000 +0000' },
+    });
 
     assert.equal(
       await branchMergedInto(repo3, 'agent-cp', 'phase-branch'),
@@ -284,6 +292,51 @@ test('branchMergedInto: cherry-picked work counts as landed; un-picked commits d
     );
   } finally {
     rmSync(repo3, { recursive: true, force: true });
+  }
+});
+
+// ── D1b: branchMergedInto fresh-branch fix (pc-pty-chat-440) ─────────────────
+
+test('D1b: branchMergedInto — fresh branch at integration tip returns false (not merged)', async () => {
+  // A branch forked from integration with 0 commits of its own must return
+  // false — it was never merged, just created. Before D1b the is-ancestor
+  // check returned true because the tip IS an ancestor (degenerate: of itself).
+  const repo4 = mkdtempSync(join(tmpdir(), 'pc-d1b-fresh-'));
+  const g = (...args: string[]) => execFileSync('git', args, { cwd: repo4, stdio: 'ignore' });
+  try {
+    g('init', '-b', 'dev');
+    g('config', 'user.email', 't@t');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(repo4, 'base.txt'), 'base\n');
+    g('add', '.');
+    g('commit', '-m', 'initial');
+
+    // Fresh branch — 0 commits ahead of dev.
+    g('checkout', '-b', 'agent-fresh');
+    g('checkout', 'dev');
+
+    assert.equal(
+      await branchMergedInto(repo4, 'agent-fresh', 'dev'),
+      false,
+      'D1b: fresh branch at integration tip must NOT be considered merged',
+    );
+
+    // Add a commit to the agent branch, then merge — THEN it must be true.
+    g('checkout', 'agent-fresh');
+    writeFileSync(join(repo4, 'work.txt'), 'agent work\n');
+    g('add', '.');
+    g('commit', '-m', 'agent work');
+    g('checkout', 'dev');
+    g('merge', '--no-ff', 'agent-fresh');
+
+    assert.equal(
+      await branchMergedInto(repo4, 'agent-fresh', 'dev'),
+      true,
+      'D1b: after merge, branch must be considered merged',
+    );
+  } finally {
+    rmSync(repo4, { recursive: true, force: true });
   }
 });
 
