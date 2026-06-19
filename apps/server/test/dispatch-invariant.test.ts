@@ -465,3 +465,56 @@ test("dispatch-invariant (E2, pc-pty-chat-415 R3): factory refuses a repo-kind d
   const runs = listAgentRunsForSession(project.id as ULID, sessionId, { limit: 10 });
   assert.equal(runs.length, 0, "isolation refusal must not insert an agent_runs row");
 });
+
+// ── (F) pc-pty-chat-439: non-repo dispatch uses scratch dir, not project root ──
+
+test("dispatch-invariant (F, pc-pty-chat-439): non-repo dispatch cwd is scratch dir, not project.folderPath", async () => {
+  const projectFolderPath = join(tmpDir, "inv-f-main-repo");
+  const project = createProject({
+    slug: "inv-f-" + Date.now(),
+    name: "Invariant F",
+    stages,
+    folderPath: projectFolderPath,
+  });
+
+  const capturedWorktreeDir = { value: "" };
+
+  const app = mkApp({
+    dispatchResult: {
+      ok: true,
+      agentRunId: newId() as ULID,
+      ccSessionId: "cc-inv-f",
+      podName: "researcher",
+      initialState: "queued",
+      startedAt: Date.now(),
+      done: new Promise<never>(() => {}),
+    },
+    capturedWorktreeDir,
+  });
+
+  const res = await app.request(
+    "/api/projects/" + project.id + "/agents/researcher/invoke",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: "investigate something",
+        dispatcherSessionId: "orch-session-f",
+        expectedOutput: { kind: "answer" }, // non-repo: must get scratch dir
+      }),
+    },
+  );
+
+  assert.equal(res.status, 200, "non-repo dispatch should succeed");
+  const body = await json<{ ok: boolean }>(res);
+  assert.equal(body.ok, true);
+  assert.notEqual(
+    capturedWorktreeDir.value,
+    projectFolderPath,
+    "non-repo dispatch must not run in the live project folder",
+  );
+  assert.ok(
+    capturedWorktreeDir.value.startsWith(join(tmpDir, "scratch")),
+    `worktreeDir (${capturedWorktreeDir.value}) must be under PC_DATA_DIR/scratch`,
+  );
+});
