@@ -398,13 +398,16 @@ export async function resolveIntegrationTip(
   const cwd = resolve(workspaceDir);
   const candidates: string[] = [];
 
+  // Track the merge-wt SHA separately so the diverged fallback can drop it.
+  let mergeWtSha: string | null = null;
+
   // 1. Merge worktree HEAD (freshest; only source in local-only repos).
   if (mergeWtPath) {
     try {
       const sha = (
         await exec('git', ['rev-parse', 'HEAD'], { cwd: resolve(mergeWtPath) })
       ).stdout.trim();
-      if (sha) candidates.push(sha);
+      if (sha) { candidates.push(sha); mergeWtSha = sha; }
     } catch {
       /* merge worktree absent or not yet created — not an error */
     }
@@ -442,8 +445,8 @@ export async function resolveIntegrationTip(
 
   // Find the most-advanced: the SHA that has every other candidate as an
   // ancestor (i.e. it is reachable from / contains all of them).
-  // If the candidates are on diverged branches (should not happen in normal
-  // operation), fall through to the first/highest-priority candidate.
+  // Legitimate local-only case: when the merge-wt HEAD is genuinely ahead
+  // (has origin as an ancestor), the loop returns it here — correct.
   for (const sha of unique) {
     let allAncestors = true;
     for (const other of unique) {
@@ -457,7 +460,41 @@ export async function resolveIntegrationTip(
     }
     if (allAncestors) return sha;
   }
-  return unique[0]!; // diverged: best-effort fallback to merge-wt HEAD
+
+  // Diverged fallback — no candidate dominates. A merge-wt HEAD that is
+  // DIVERGED from origin/<integration> is the worst candidate (frozen orphan),
+  // not the best. Drop it and re-run the most-advanced check on the real
+  // candidates (origin + local). Never return a stale merge-wt as the fork
+  // point; prefer origin/<integration> over a diverged __dev-merge HEAD.
+  if (mergeWtSha) {
+    const withoutMergeWt = unique.filter((sha) => sha !== mergeWtSha);
+    if (withoutMergeWt.length === 0) {
+      // Merge-wt was the only resolvable source (no remote, no local).
+      // Local-only but diverged — shouldn't happen in practice; return null
+      // rather than a stale fork point.
+      return null;
+    }
+    if (withoutMergeWt.length === 1) return withoutMergeWt[0]!;
+    // Re-run most-advanced on the remaining real candidates.
+    for (const sha of withoutMergeWt) {
+      let allAncestors = true;
+      for (const other of withoutMergeWt) {
+        if (other === sha) continue;
+        try {
+          await exec('git', ['merge-base', '--is-ancestor', other, sha], { cwd });
+        } catch {
+          allAncestors = false;
+          break;
+        }
+      }
+      if (allAncestors) return sha;
+    }
+    // Still diverged among real candidates — return origin-priority first.
+    return withoutMergeWt[0]!;
+  }
+
+  // No mergeWtPath supplied: return the first/highest-priority diverged candidate.
+  return unique[0]!;
 }
 
 /**

@@ -75,7 +75,12 @@ import { ProjectRegistry } from './services/project-registry.ts';
 import type { ProjectRuntime } from './services/project-runtime.ts';
 import { ProjectScaffold } from './services/project-scaffold.ts';
 import { registerFileRoutes } from './features/files/routes.ts';
-import { resolveClaudeBinary, setBundledClaudeExe } from '@pc/runtime';
+import {
+  destroyWorktree as _destroyWorktreeForCleanup,
+  pruneWorktrees as _pruneWorktreesForCleanup,
+  resolveClaudeBinary,
+  setBundledClaudeExe,
+} from '@pc/runtime';
 import {
   applyClaudeRuntimeSettings,
   readSettings,
@@ -719,6 +724,29 @@ void worktreeSweep.runOnce();
     if (typeof worktreeSweepTimer.unref === 'function') worktreeSweepTimer.unref();
   }
 }
+
+// pc-pty-chat-443: one-time boot removal of stranded `__dev-merge` worktrees
+// across all projects. REAPABLE_NAME_RE matches `__merge-*` but not `__dev-*`,
+// so the normal sweep never collects these dirs. Post-Fix-C no code path writes
+// to them, so any remaining `__dev-merge` dir is a frozen orphan and safe to
+// destroy. Fire-and-forget: a slow git/disk must not block startup.
+void (async () => {
+  for (const project of listProjects()) {
+    const devMergePath = resolve(DATA, 'worktrees', project.slug, '__dev-merge');
+    if (!existsSync(devMergePath)) continue;
+    try {
+      await _destroyWorktreeForCleanup(project.folderPath, devMergePath, { force: true });
+    } catch {
+      /* not registered or locked — best-effort; prune will clean the ref */
+    }
+    try {
+      await _pruneWorktreesForCleanup(project.folderPath);
+    } catch {
+      /* best-effort — not fatal */
+    }
+    console.log(`[worktree-cleanup] removed stale __dev-merge for ${project.slug}`);
+  }
+})();
 
 // pc-pty-chat-415 (R5) — accept ⇒ land. Wire the per-project WorktreeService
 // accessor the landing service uses (services can't reach the project

@@ -30,9 +30,9 @@ export interface LandingWorktrees {
   integrationBranch(): Promise<string>;
   mergeState(branch: string): Promise<{ mergeInProgress: boolean; alreadyMerged: boolean; pushed: boolean }>;
   mergeBranchIntoIntegration(branch: string): Promise<void>;
-  /** D1d (pc-pty-chat-440): branch is the run branch being landed; used to
-   *  push from its per-landing merge worktree instead of the shared one. */
-  pushIntegration(branch?: string): Promise<void>;
+  /** D1d (pc-pty-chat-440): branch is the run branch being landed; pushes from
+   *  its per-landing merge worktree. Always required post-pc-pty-chat-443. */
+  pushIntegration(branch: string): Promise<void>;
   teardownAfterMerge(branch: string): Promise<void>;
   /** pc-pty-chat-415 (R12) — reclaim the worktree DIR of abandoned work; the
    *  branch is preserved as the durable record. */

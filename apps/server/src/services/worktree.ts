@@ -365,12 +365,14 @@ export class WorktreeService {
       );
     }
 
-    // D1a (pc-pty-chat-440): use resolveIntegrationTip (merge-wt HEAD >
-    // origin/<integration> > local ref) so new branches always fork from the
-    // most-advanced landed state — never from a stale local pointer that lags
-    // origin.
+    // D1a (pc-pty-chat-440): use resolveIntegrationTip (origin/<integration> >
+    // local ref) so new branches always fork from the most-advanced landed
+    // state — never from a stale local pointer that lags origin. The shared
+    // merge-worktree path is deliberately NOT passed: it was a write-once
+    // orphan (pc-pty-chat-443) whose frozen HEAD caused deterministic stale
+    // forks. origin/<integration> is the authoritative pushed tip.
     const tipFn = this.deps.resolveIntegrationTip ?? _resolveIntegrationTip;
-    const startPoint = await tipFn(this.workspaceDir, integration, this.mergeWorktreePath);
+    const startPoint = await tipFn(this.workspaceDir, integration);
     if (!startPoint) {
       throw new Error(
         `MAINLINE GUARD: integration branch "${integration}" has no resolvable tip — ` +
@@ -624,8 +626,9 @@ export class WorktreeService {
     const integration = await this.getIntegrationBranch();
     // D1a: match-path baseSha — same tip resolution as create() so the returned
     // receipt is consistent whether the worktree matched or was freshly created.
+    // No mergeWtPath: see create() comment (pc-pty-chat-443 fix A).
     const tipFn = this.deps.resolveIntegrationTip ?? _resolveIntegrationTip;
-    const baseSha = await tipFn(this.workspaceDir, integration, this.mergeWorktreePath);
+    const baseSha = await tipFn(this.workspaceDir, integration);
     const existing = await listFn(this.workspaceDir);
     const match = existing.find((e) => normalize(e.path) === normalize(wtPath));
     if (match) {
@@ -659,42 +662,24 @@ export class WorktreeService {
 
   // ── Merge / push wrappers (pc-pty-chat-270) ──────────────────────────────
   //
-  // ALL merge operations run inside a dedicated, engine-controlled merge
-  // worktree (`<baseDir>/__dev-merge/`) — NEVER in `workspaceDir` (the
-  // user's main checkout). This eliminates the bug where `git merge` would
-  // run in the user's repo regardless of which branch they had checked out
-  // or whether their tree was dirty.
+  // ALL merge operations run inside a dedicated, engine-controlled per-landing
+  // merge worktree (`<baseDir>/__merge-<branch>/`) — NEVER in `workspaceDir`
+  // (the user's main checkout). This eliminates the bug where `git merge`
+  // would run in the user's repo regardless of which branch they had checked
+  // out or whether their tree was dirty. D1d gives each landing its own
+  // worktree so concurrent landings never share MERGE_HEAD state.
   //
   // The merge worktree is detached at the integration branch's tip — no dep
-  // install. It is created lazily and reused across merge steps (the lineage
-  // guard in ensureMergeWorktree recreates it when stale).
+  // install. It is created lazily per landing (the lineage guard in
+  // ensureMergeWorktree recreates it when stale).
   //
   // `mergeBranchIntoIntegration` additionally asserts that the worktree is on
   // the integration branch (or detached) and clean before touching anything
   // (belt-and-suspenders guard). A violation returns loudly — never silently
   // merges into the wrong place.
-
-  /**
-   * Absolute path to the engine-controlled merge worktree. Lives under the
-   * same `baseDir` as run worktrees but is NOT dep-provisioned. The dir is
-   * still NAMED `__dev-merge` for historical reasons: renaming would orphan a
-   * git-registered worktree per project on upgrade (REAPABLE_NAME_RE matches
-   * neither name, so the sweep would never collect the old one).
-   */
-  get mergeWorktreePath(): string {
-    return resolve(this.baseDir, '__dev-merge');
-  }
-
-  /** Ensure the shared `__dev-merge` worktree exists (backward-compat path,
-   *  still used by `tryAdvanceLocalIntegration` and `pushIntegration()`
-   *  without a branch arg). */
-  private async ensureMergeWorktreeReady(): Promise<{ wtPath: string; integration: string }> {
-    const integration = await this.getIntegrationBranch();
-    const wtPath = this.mergeWorktreePath;
-    const fn = this.deps.ensureMergeWorktree ?? _ensureMergeWorktree;
-    await fn(this.workspaceDir, wtPath, integration);
-    return { wtPath, integration };
-  }
+  //
+  // NOTE: the shared `__dev-merge` worktree (pre-pc-pty-chat-443) has been
+  // removed. Only the per-landing `__merge-<branch>` path remains.
 
   /** D1d (pc-pty-chat-440): path for the per-landing merge worktree. Each
    *  landing creates its own `__merge-<branch>` so concurrent landings never
@@ -750,17 +735,16 @@ export class WorktreeService {
   }
 
   /**
-   * Push the integration branch to its origin counterpart. D1d: when `branch`
-   * is provided, pushes from its per-landing merge worktree; otherwise falls
-   * back to the shared `__dev-merge` worktree (backward-compat). When the
-   * worktree is in detached HEAD (the normal case after --detach), pushes
+   * Push the integration branch to its origin counterpart. D1d: pushes from
+   * the per-landing merge worktree (`__merge-<branch>`). When the worktree is
+   * in detached HEAD (the normal case after --detach), pushes
    * `HEAD:<integration>` so the merge commit reaches origin. Call after a
-   * verified merge.
+   * verified merge. `branch` is the run branch being landed — always required
+   * (landing-service.ts always provides it; the old no-branch shared-worktree
+   * path has been removed, pc-pty-chat-443 Fix C).
    */
-  async pushIntegration(branch?: string): Promise<void> {
-    const { wtPath, integration } = branch
-      ? await this.ensureLandingMergeWorktreeReady(branch)
-      : await this.ensureMergeWorktreeReady();
+  async pushIntegration(branch: string): Promise<void> {
+    const { wtPath, integration } = await this.ensureLandingMergeWorktreeReady(branch);
     const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
     const { branch: wtBranch } = await statusFn(wtPath);
     // Detached HEAD (standard merge worktree): push HEAD (the merge commit)
@@ -821,9 +805,10 @@ export class WorktreeService {
       const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
       const { branch: mainBranch, clean } = await statusFn(this.workspaceDir);
 
-      // Resolve the most-advanced SHA (merge-wt HEAD > origin > local).
+      // Resolve the most-advanced SHA (origin > local). No mergeWtPath: the
+      // shared __dev-merge is a dead path post-pc-pty-chat-443 fix A.
       const tipFn = this.deps.resolveIntegrationTip ?? _resolveIntegrationTip;
-      const sha = await tipFn(this.workspaceDir, integration, this.mergeWorktreePath);
+      const sha = await tipFn(this.workspaceDir, integration);
       if (!sha) return; // fresh repo or nothing resolvable — nothing to advance to
 
       if (mainBranch === integration) {
