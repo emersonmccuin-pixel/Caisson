@@ -21,6 +21,7 @@ import { handleMetaTool } from './meta.ts';
 import { handleNextActionTool } from './next-action.ts';
 import { handleProjectConfigTool } from './project-config.ts';
 import { handleWorkItemTool } from './work-items.ts';
+import { handleWorkItemDossierTool } from './work-item-dossiers.ts';
 import { handleWorkflowTool } from './workflows.ts';
 
 export type PcRigHandler = (
@@ -38,6 +39,8 @@ export async function dispatchPcRigTool(
 ): Promise<ToolResult> {
   const workItemResult = await handleWorkItemTool(name, args, ctx);
   if (workItemResult) return workItemResult;
+  const dossierResult = await handleWorkItemDossierTool(name, args, ctx);
+  if (dossierResult) return dossierResult;
   const nextActionResult = await handleNextActionTool(name, args, ctx);
   if (nextActionResult) return nextActionResult;
   const boardHealthResult = await handleBoardHealthTool(name, args, ctx);

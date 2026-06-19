@@ -475,3 +475,14 @@ export type {
   MailboxRecipientRow,
   WriteAuditInput,
 } from './repos/mailbox.ts';
+
+// pc-pty-chat-434 — agent dossier repo (Track B).
+export {
+  getDossier,
+  upsertDossier,
+  DossierVersionConflictError,
+} from './repos/work-item-dossiers.ts';
+export type {
+  DossierRow,
+  UpsertDossierInput,
+} from './repos/work-item-dossiers.ts';

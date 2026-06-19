@@ -1251,6 +1251,9 @@ const RESEARCHER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_get_context_doc',
     // Read sibling cards for context — only the pinned work item is force-merged.
     'mcp__pc-rig__pc_list_work_items',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
   ]),
   model: 'opus',
   effort: null,
@@ -1278,6 +1281,9 @@ const WRITER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
   ]),
   model: 'sonnet',
   effort: 'medium',
@@ -1304,6 +1310,9 @@ const REVIEWER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
   ]),
   model: 'sonnet',
   effort: 'high',
@@ -1329,6 +1338,9 @@ const PLANNER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
   ]),
   model: 'opus',
   effort: 'high',
@@ -1431,6 +1443,9 @@ const CODE_WRITER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
   ]),
   model: 'sonnet',
   effort: 'high',
@@ -1456,6 +1471,9 @@ const EXTRACTOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
   ]),
   model: 'sonnet',
   effort: 'medium',

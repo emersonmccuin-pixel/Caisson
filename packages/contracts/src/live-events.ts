@@ -19,7 +19,8 @@ export type LiveEventEntity =
   | 'area'
   | 'contract'
   | 'host-health'
-  | 'context-doc';
+  | 'context-doc'
+  | 'work-item-dossier';
 
 /** Canonical live-event type names. Replay accepts these for `type=` filtering. */
 export type LiveEventTypeName =
@@ -256,7 +257,8 @@ function isLiveEventEntity(value: unknown): value is LiveEventEntity {
     value === 'area' ||
     value === 'contract' ||
     value === 'host-health' ||
-    value === 'context-doc'
+    value === 'context-doc' ||
+    value === 'work-item-dossier'
   );
 }
 

@@ -512,6 +512,10 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_add_context_doc',
     'mcp__pc-rig__pc_update_context_doc',
     'mcp__pc-rig__pc_search',
+    // pc-pty-chat-434 — orchestrator can read + update the persistent brief
+    // for any work item (state / decisions / open questions across turns).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
     // FD-16 — the on-demand door: search the full catalog + execute on-demand
     // tier tools (diagnostics/config; audited). Defaults still steer to
     // specialists; see "The on-demand door" prompt section.

@@ -15,14 +15,14 @@
 // treat that as a loud spawn error; the old project-root fallback was removed
 // when PC's runtime became isolated from terminal Claude Code sessions.
 
-import { getPodForSpawn, getMcpServerRegistry, listMcpAttachmentsForAgent } from '@pc/db';
+import { getDossier, getPodForSpawn, getMcpServerRegistry, listMcpAttachmentsForAgent } from '@pc/db';
 import type { PodMcpServerConfig, ULID } from '@pc/domain';
 import { materializePodPlugin, type MaterializedPluginPod, type PodWorkItemContext } from '@pc/runtime';
 import {
   prepareClaudeRuntimeFiles,
   type ClaudeRuntimeIdentity,
 } from './claude-runtime-bundle.ts';
-import { buildContextChain } from './context-chain.ts';
+import { buildContextChain, renderDossierBlock } from './context-chain.ts';
 import { PC_RIG_TOOL_NAMES } from './pod-tool-catalog.ts';
 import {
   renderAgentRosterForCaisson,
@@ -133,16 +133,28 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
   let contextChain: string | undefined;
   let injectedContextDocIds: ULID[] = [];
   if (input.workItem?.workItemId && input.projectId) {
+    // pc-pty-chat-434 — prepend the dossier block OUTSIDE the 20k budget.
+    // Non-fatal: a missing dossier is better than a spawn failure.
+    let dossierBlock = '';
+    try {
+      const dossierRow = getDossier(input.workItem.workItemId as ULID);
+      dossierBlock = renderDossierBlock(dossierRow);
+    } catch {
+      dossierBlock = '';
+    }
+
     try {
       const chain = buildContextChain({
         workItemId: input.workItem.workItemId as ULID,
         projectId: input.projectId,
       });
-      contextChain = chain.markdown || undefined;
+      const chainMarkdown = chain.markdown || '';
+      const combined = [dossierBlock, chainMarkdown].filter(Boolean).join('\n\n');
+      contextChain = combined || undefined;
       injectedContextDocIds = chain.inlinedDocIds;
     } catch {
       // Non-fatal: missing context chain is better than a spawn failure.
-      contextChain = undefined;
+      contextChain = dossierBlock || undefined;
       injectedContextDocIds = [];
     }
   }
