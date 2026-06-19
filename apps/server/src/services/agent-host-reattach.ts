@@ -379,9 +379,16 @@ async function handleHostMissingRow(
         deps.reHomeAttempts.delete(row.id);
         return 0; // don't finalize
       }
-      // 'failed' or 'skip': fall through to finalize immediately.
+      if (result === 'failed') {
+        // Transient send failure — do NOT finalize; retry on the next tick.
+        // reHomeAttempts keeps incrementing; once it exceeds maxReHomeAttempts
+        // the guard above is skipped and we fall through to finalize.
+        return 0;
+      }
+      // result === 'skip' (pod genuinely gone/unrecoverable): fall through to
+      // finalize immediately.
     }
-    // attempts exhausted: fall through to finalize.
+    // attempts exhausted (> maxReHomeAttempts): fall through to finalize.
   }
 
   const applied = (deps.applyTerminalEffects ?? applyAgentRunTerminalEffects)(

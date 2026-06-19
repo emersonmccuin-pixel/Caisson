@@ -83,28 +83,40 @@ test('4a-2: spawning row, re-home succeeds -> counters reset', async () => {
 // 4b: Re-home failure / exhaustion
 // ---------------------------------------------------------------------------
 
-test('4b-1: re-home returns failed -> fall through to finalize on same tick', async () => {
+test('4b-1: re-home returns failed -> NOT finalized; retried up to max; only finalized after exhaustion', async () => {
   const terminalCalls: TerminalCall[] = [];
   const reHomeCalls: string[] = [];
+  // Shared state persists across ticks (mirrors the real reconciler loop).
   const missingTicks = new Map<string, number>([['run-f', 7]]);
   const reHomeAttempts = new Map<string, number>();
+  const MAX_ATTEMPTS = 3;
 
-  const res = await reconcileAgentRunsAgainstHost({
+  const reconcileOpts = {
     hostClient: emptyHostClient,
     listNonTerminalRuns: () => [makeRow('run-f')],
     missingFromHostTicks: missingTicks,
     reHomeAttempts,
     hostAuthoritativelyAbsent: true,
     spawnLostAfterTicks: 8,
-    maxReHomeAttempts: 3,
-    reHomeQueuedRun: async (r: AgentRunRow) => { reHomeCalls.push(r.id); return 'failed'; },
+    maxReHomeAttempts: MAX_ATTEMPTS,
+    reHomeQueuedRun: async (r: AgentRunRow) => { reHomeCalls.push(r.id); return 'failed' as const; },
     applyTerminalEffects: ((inp: TerminalCall) => { terminalCalls.push(inp); return { applied: 1 }; }) as never,
-  });
+  };
 
-  assert.equal(res.hostLost, 1, 'finalized');
-  assert.equal(terminalCalls.length, 1, 'terminal effects applied');
+  // Ticks 1-3: 'failed' result → must NOT finalize; retry next tick.
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    const res = await reconcileAgentRunsAgainstHost(reconcileOpts);
+    assert.equal(res.hostLost, 0, 'tick ' + (i + 1) + ': must not finalize on transient failure');
+    assert.equal(terminalCalls.length, 0, 'tick ' + (i + 1) + ': applyTerminalEffects must not be called');
+  }
+  assert.equal(reHomeCalls.length, MAX_ATTEMPTS, 're-home called once per tick up to max');
+
+  // Tick 4: attempts exhausted (> max) → re-home NOT called; finalize.
+  const finalRes = await reconcileAgentRunsAgainstHost(reconcileOpts);
+  assert.equal(finalRes.hostLost, 1, 'finalized after exhaustion');
+  assert.equal(reHomeCalls.length, MAX_ATTEMPTS, 're-home NOT called on final tick (exhausted)');
+  assert.equal(terminalCalls.length, 1, 'applyTerminalEffects called once on final tick');
   assert.equal(terminalCalls[0]!.failureCause, 'host-lost');
-  assert.equal(reHomeCalls.length, 1, 're-home called before finalize');
 });
 
 test('4b-2: attempts exhausted -> finalize without re-home call', async () => {
@@ -130,7 +142,7 @@ test('4b-2: attempts exhausted -> finalize without re-home call', async () => {
   assert.equal(terminalCalls.length, 1);
 });
 
-test('4c: re-home returns skip -> finalize immediately, re-home called once', async () => {
+test('4c: re-home returns skip (pod gone) -> finalize immediately on first invocation', async () => {
   const terminalCalls: TerminalCall[] = [];
   const reHomeCalls: string[] = [];
   const missingTicks = new Map<string, number>([['run-sk', 7]]);
@@ -143,13 +155,18 @@ test('4c: re-home returns skip -> finalize immediately, re-home called once', as
     reHomeAttempts,
     hostAuthoritativelyAbsent: true,
     spawnLostAfterTicks: 8,
+    maxReHomeAttempts: 3,
     reHomeQueuedRun: async (r: AgentRunRow) => { reHomeCalls.push(r.id); return 'skip'; },
     applyTerminalEffects: ((inp: TerminalCall) => { terminalCalls.push(inp); return { applied: 1 }; }) as never,
   });
 
-  assert.equal(res.hostLost, 1);
+  // 'skip' is unrecoverable — must finalize on the FIRST invocation, not retry.
+  assert.equal(res.hostLost, 1, 'finalized immediately on skip');
+  assert.equal(reHomeCalls.length, 1, 're-home called exactly once');
+  assert.equal(terminalCalls.length, 1, 'applyTerminalEffects called on same tick as skip');
   assert.equal(terminalCalls[0]!.failureCause, 'host-lost');
-  assert.equal(reHomeCalls.length, 1, 're-home called once then fell through');
+  // reHomeAttempts would have been 1 during the call, well within maxReHomeAttempts=3.
+  assert.equal(reHomeAttempts.has('run-sk'), false, 'counter cleared after finalize');
 });
 
 // ---------------------------------------------------------------------------
