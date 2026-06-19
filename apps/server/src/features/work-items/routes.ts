@@ -4,6 +4,7 @@ import { isWorkItemType } from '@pc/domain';
 import { ContractService } from '@pc/app-services';
 import {
   countWorkItemsInStage,
+  getBoardHealth,
   getProjectById,
   getWorkItem as dbGetWorkItem,
   getWorkItemByCallsignGlobal,
@@ -147,6 +148,26 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
         ...(openParam === '1' ? { open: true } : {}),
       });
       return c.json({ ok: true, results });
+    } catch (err) {
+      return c.json({ ok: false, error: (err as Error).message }, 500);
+    }
+  });
+
+  // ── Board health (pc-pty-chat-431) — stalled open items + rollup counts.
+  // MUST be registered BEFORE /api/projects/:projectId/work-items so the literal
+  // segment doesn't collide with the /:wiId param route further down.
+  app.get('/api/projects/:projectId/board-health', (c) => {
+    const id = c.req.param('projectId');
+    const runtime = deps.resolveProject(id);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+
+    const idleDaysRaw = Number(c.req.query('idle_days') ?? 7);
+    const idleDays =
+      Number.isFinite(idleDaysRaw) && idleDaysRaw > 0 ? Math.floor(idleDaysRaw) : 7;
+
+    try {
+      const result = getBoardHealth(runtime.project.id, idleDays);
+      return c.json({ ok: true, idleDays, ...result });
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 500);
     }

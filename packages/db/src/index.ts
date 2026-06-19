@@ -56,6 +56,7 @@ export {
   applyRunOutcome,
   countWorkItemsInStage,
   createWorkItem,
+  getBoardHealth,
   getWorkItem,
   getWorkItemByCallsign,
   getWorkItemByCallsignGlobal,
@@ -79,6 +80,8 @@ export {
   WorkItemVersionConflictError,
 } from './repos/work-items.ts';
 export type {
+  BoardHealthItem,
+  BoardHealthResult,
   CreateWorkItemInput,
   ListWorkItemsOptions,
   PatchWorkItemInput,

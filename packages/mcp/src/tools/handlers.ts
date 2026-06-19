@@ -15,6 +15,7 @@ import { PC_RIG_TOOL_REGISTRY } from '@pc/domain/tool-registry';
 import type { ToolContext, ToolResult } from './context.ts';
 import { handleAgentRunTool } from './agent-runs.ts';
 import { handleAgentTool } from './agents.ts';
+import { handleBoardHealthTool } from './board-health.ts';
 import { handleContextDocTool } from './context-docs.ts';
 import { handleMetaTool } from './meta.ts';
 import { handleProjectConfigTool } from './project-config.ts';
@@ -36,6 +37,8 @@ export async function dispatchPcRigTool(
 ): Promise<ToolResult> {
   const workItemResult = await handleWorkItemTool(name, args, ctx);
   if (workItemResult) return workItemResult;
+  const boardHealthResult = await handleBoardHealthTool(name, args, ctx);
+  if (boardHealthResult) return boardHealthResult;
   const agentResult = await handleAgentTool(name, args, ctx);
   if (agentResult) return agentResult;
   const contextDocResult = await handleContextDocTool(name, args, ctx);

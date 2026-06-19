@@ -1016,6 +1016,22 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
+    "name": "pc_board_health",
+    "family": "project",
+    "label": "Board health / stall report",
+    "description": "Surface stalled work items — open items in a non-terminal stage with no agent-run, contract, or field activity for N days (default 7). Returns: `stalledItems` (id, callsign, title, stageId, ageInStageDays, lastActivityAt) sorted oldest-first, plus `rollup` counts (totalOpen, totalStalled). Use as a periodic PM check-in: call it before a planning session to spot forgotten work that needs attention or reassignment. `idle_days` is optional (default 7). Read-only; no writes.",
+    "catalogDescription": "Find open cards with no activity for N days (default 7) — the board health / stall signal.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idle_days": {
+          "type": "number",
+          "description": "how many days of inactivity before an item is considered stalled (default 7)"
+        }
+      }
+    }
+  },
+  {
     "name": "pc_list_agents",
     "family": "agent",
     "label": "List available agents",
@@ -2041,6 +2057,7 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_list_stages: 'first-order',
   pc_list_projects: 'first-order',
   pc_list_waiting_on_you: 'first-order',
+  pc_board_health: 'first-order',
   pc_list_workflows: 'first-order',
   pc_list_field_schemas: 'first-order',
   pc_list_areas: 'first-order',
