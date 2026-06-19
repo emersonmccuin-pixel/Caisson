@@ -83,6 +83,7 @@ const TYPE_LABELS: Record<WorkItemType, string> = {
   bug: '🐛 Bug',
   feature: '✨ Feature',
   spike: '⚡ Spike',
+  investigation: '🔍 Investigation',
 };
 
 function shallowEqualRecord(a: Record<string, unknown>, b: Record<string, unknown>): boolean {

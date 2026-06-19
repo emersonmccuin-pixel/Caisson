@@ -368,5 +368,7 @@ function labelType(t: WorkItemType): string {
       return 'Feature';
     case 'spike':
       return 'Spike';
+    case 'investigation':
+      return 'Investigation';
   }
 }

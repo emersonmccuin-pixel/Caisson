@@ -16,7 +16,7 @@ export type WorkItemStatus =
 
 /** Built-in, fixed-set work-item types. Extendable later — not per-project
  *  configurable today (rationale in the work-item type contract). */
-export const WORK_ITEM_TYPES = ['task', 'bug', 'feature', 'spike'] as const;
+export const WORK_ITEM_TYPES = ['task', 'bug', 'feature', 'spike', 'investigation'] as const;
 export type WorkItemType = (typeof WORK_ITEM_TYPES)[number];
 
 export function isWorkItemType(value: unknown): value is WorkItemType {

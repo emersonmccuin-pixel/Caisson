@@ -65,6 +65,7 @@ const TYPE_CHIP: Record<
   bug: { icon: '🐛', label: 'Bug', className: 'border-destructive/40 bg-destructive/15 text-destructive' },
   feature: { icon: '✨', label: 'Feature', className: 'border-success/40 bg-success/15 text-success' },
   spike: { icon: '⚡', label: 'Spike', className: 'border-primary/40 bg-primary/15 text-primary' },
+  investigation: { icon: '🔍', label: 'Investigation', className: 'border-yellow-500/40 bg-yellow-500/15 text-yellow-700 dark:text-yellow-400' },
 };
 
 interface CreateModalState {

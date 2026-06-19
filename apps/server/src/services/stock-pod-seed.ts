@@ -43,7 +43,9 @@ const MERMAID_DIAGRAM_RULE =
 // it as starting truth and write back meaningful decisions via pc_update_brief.
 const DOSSIER_SECTION = `## Dossier
 
-When your context includes a **Work-item brief** block (State / Decisions / Open Questions), treat it as your starting truth — read it before acting. After any meaningful decision or completed chunk of work, call \`pc_update_brief\` to patch only the section you changed. Keep each section under 2000 characters.`;
+When your context includes a **Work-item brief** block (State / Decisions / Open Questions), treat it as your starting truth — read it before acting. After any meaningful decision or completed chunk of work, call \`pc_update_brief\` to patch only the section you changed. Keep each section under 2000 characters.
+
+**Investigation cards:** if you are dispatched against a work item whose type is \`investigation\`, call \`pc_synthesize_finding\` before (or alongside) \`pc_submit_deliverable\` to fold your key finding into the PARENT card's chosen dossier section. Pass the investigation item's id as \`work_item_id\` — the tool resolves the parent automatically.`;
 
 const RESEARCHER_PROMPT = `You are a researcher + scribe. Use Read, Glob, and Grep to gather context (these can reach anywhere on the user's filesystem — see Worktree binding below); use WebFetch + WebSearch for external information; use Bash + Edit to write or mutate files inside the bound worktree (when one is given). Keep summaries terse — bullets over paragraphs.
 
@@ -1274,6 +1276,8 @@ const RESEARCHER_POD_CONTENT: CreateAgentInput = {
     // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
     'mcp__pc-rig__pc_get_brief',
     'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'opus',
   effort: null,
@@ -1304,6 +1308,8 @@ const WRITER_POD_CONTENT: CreateAgentInput = {
     // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
     'mcp__pc-rig__pc_get_brief',
     'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'sonnet',
   effort: 'medium',
@@ -1333,6 +1339,8 @@ const REVIEWER_POD_CONTENT: CreateAgentInput = {
     // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
     'mcp__pc-rig__pc_get_brief',
     'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'sonnet',
   effort: 'high',
@@ -1361,6 +1369,8 @@ const PLANNER_POD_CONTENT: CreateAgentInput = {
     // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
     'mcp__pc-rig__pc_get_brief',
     'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'opus',
   effort: 'high',
@@ -1466,6 +1476,8 @@ const CODE_WRITER_POD_CONTENT: CreateAgentInput = {
     // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
     'mcp__pc-rig__pc_get_brief',
     'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'sonnet',
   effort: 'high',
@@ -1494,6 +1506,8 @@ const EXTRACTOR_POD_CONTENT: CreateAgentInput = {
     // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
     'mcp__pc-rig__pc_get_brief',
     'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'sonnet',
   effort: 'medium',
