@@ -130,6 +130,21 @@ export interface FieldSchemaInput {
   order: number;
 }
 
+/** pc-pty-chat-434 — agent dossier row as returned by
+ *  GET /api/projects/:projectId/work-items/:wiId/dossier.
+ *  `createdAt`/`updatedAt` are null when `fresh=true` (no DB row exists yet). */
+export interface DossierRow {
+  workItemId: ULID;
+  state: string;
+  decisions: string;
+  openQuestions: string;
+  updatedByRunId: ULID | null;
+  updatedByAgent: string | null;
+  version: number;
+  createdAt: number | null;
+  updatedAt: number | null;
+}
+
 export interface Attachment {
   id: ULID;
   workItemId: ULID;
