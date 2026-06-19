@@ -112,6 +112,16 @@ test('git_diff_nonempty uses the executor; fails closed when absent', async () =
   assert.match(noGit.failures[0]!.reason, /no git executor/);
 });
 
+// D2 (pc-pty-chat-440): null from hasGitDiff → inconclusive, not pass:false
+test('D2: git_diff_nonempty null result → inconclusive (not a work failure)', async () => {
+  const crit: AcceptanceCriteria = [{ kind: 'git_diff_nonempty', cwd: 'worktree' }];
+  const nullExec: PredicateExecutors = { ...noExec, hasGitDiff: async () => null };
+  const result = await evaluateAcceptance(crit, ctx(), nullExec);
+  assert.equal(result.pass, false, 'pass must be false when evidence is inaccessible');
+  assert.equal(result.failures[0]!.inconclusive, true, 'failure must be tagged inconclusive');
+  assert.match(result.failures[0]!.reason, /inconclusive/, 'reason must mention inconclusive');
+});
+
 // ── v1 regression (superset must not change v1 behavior) ────────────────────
 
 test('v1 predicates still evaluate identically', async () => {
@@ -246,6 +256,32 @@ test('repo checks as plain strings (279 fix): normalize to command shape, no thr
     { kind: 'git_diff_nonempty', cwd: 'worktree' },
     { kind: 'bash_exit_zero', command: 'pnpm --filter @pc/contracts typecheck', cwd: 'worktree', timeout_ms: 600_000 },
     { kind: 'bash_exit_zero', command: 'pnpm -r typecheck', cwd: 'worktree', timeout_ms: 600_000 },
+  ]);
+});
+
+// D3 (pc-pty-chat-440): bare preset names coerce to `pnpm <name>`
+test('D3: bare preset names (build/test/lint/typecheck) coerce to `pnpm <name>`', () => {
+  // Each bare preset name must become `pnpm <name>`, not the literal command.
+  const result = deriveAcceptanceCriteriaV2({
+    kind: 'repo',
+    checks: ['typecheck', 'build', 'lint', 'test'] as never,
+  });
+  assert.deepEqual(result, [
+    { kind: 'git_diff_nonempty', cwd: 'worktree' },
+    { kind: 'bash_exit_zero', command: 'pnpm typecheck', cwd: 'worktree', timeout_ms: 600_000 },
+    { kind: 'bash_exit_zero', command: 'pnpm build', cwd: 'worktree', timeout_ms: 600_000 },
+    { kind: 'bash_exit_zero', command: 'pnpm lint', cwd: 'worktree', timeout_ms: 600_000 },
+    { kind: 'bash_exit_zero', command: 'pnpm test', cwd: 'worktree', timeout_ms: 600_000 },
+  ]);
+  // Full command strings (with spaces / flags) stay as-is, not re-prefixed.
+  const full = deriveAcceptanceCriteriaV2({
+    kind: 'repo',
+    checks: ['pnpm typecheck', 'pnpm -r test'] as never,
+  });
+  assert.deepEqual(full, [
+    { kind: 'git_diff_nonempty', cwd: 'worktree' },
+    { kind: 'bash_exit_zero', command: 'pnpm typecheck', cwd: 'worktree', timeout_ms: 600_000 },
+    { kind: 'bash_exit_zero', command: 'pnpm -r test', cwd: 'worktree', timeout_ms: 600_000 },
   ]);
 });
 

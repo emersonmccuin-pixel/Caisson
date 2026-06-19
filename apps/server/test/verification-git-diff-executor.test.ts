@@ -222,6 +222,72 @@ test('(370) runBash: per-predicate timeoutMs overrides the executor default', as
   }
 });
 
+// D2 (pc-pty-chat-440): non-git / destroyed worktree → null (inconclusive)
+test('D2: hasGitDiff returns null for a non-git worktree (all git calls fail)', async () => {
+  // A plain temp dir has no git repo — every git call returns null, so
+  // hasGitDiff must return null (inconclusive), NOT false.
+  const dir = mkdtempSync(join(tmpdir(), 'pc-gitdiff-nogit-'));
+  try {
+    const exec = createWorktreeExecutors({ worktreeDir: dir, projectFolderPath: dir });
+    const result = await exec.hasGitDiff!('worktree');
+    assert.equal(result, null, 'non-git directory must yield null (inconclusive), not false');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// D2 (pc-pty-chat-440): deliverableCommit + worktreeBaseSha → primary anchor
+test('D2: deliverableCommit + worktreeBaseSha detects committed work via the sealed artifact', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-gitdiff-sealed-'));
+  try {
+    setupRepo(dir);
+    const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
+
+    // Simulate agent committing work
+    writeFileSync(join(dir, 'work.ts'), 'export const done = true;');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-m', 'feat: agent work committed');
+    const commitSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
+
+    const exec = createWorktreeExecutors({
+      worktreeDir: dir,
+      projectFolderPath: dir,
+      worktreeBaseSha: baseSha,
+      deliverableCommit: commitSha,
+    });
+    assert.equal(
+      await exec.hasGitDiff!('worktree'),
+      true,
+      'deliverableCommit vs baseSha must detect committed agent work',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// D2: when deliverableCommit equals baseSha, no new commits → false
+test('D2: deliverableCommit == baseSha → false (no new commits)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pc-gitdiff-nodelta-'));
+  try {
+    setupRepo(dir);
+    const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
+
+    const exec = createWorktreeExecutors({
+      worktreeDir: dir,
+      projectFolderPath: dir,
+      worktreeBaseSha: baseSha,
+      deliverableCommit: baseSha, // same SHA → no new commits
+    });
+    assert.equal(
+      await exec.hasGitDiff!('worktree'),
+      false,
+      'deliverableCommit == baseSha must report no changes',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // pc-pty-chat-207 in_place: for in_place isolation the fallback is working-tree
 // dirtiness (committed-only detection requires a stored pre-dispatch HEAD).
 // An uncommitted dirty tree PASSES in_place; a clean tree does not.
