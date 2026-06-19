@@ -16,6 +16,7 @@ import type { Area } from '@/features/areas/client';
 import { WORK_ITEM_TYPES, WorkItemConflictError, WorkItemFieldValidationError, workItemsApi, type Attachment, type FieldSchema, type WorkItem, type WorkItemPatch, type WorkItemType } from '@/features/work-items/client';
 import { hasNewAttachmentFrameFor } from '@/features/work-items/attachment-live-events';
 import { latestFieldSchemas, workItemHistoryRows } from '@/features/work-items/work-item-live-events';
+import { useWorkItemDossier } from '@/hooks/use-work-item-dossier';
 import type { WsEnvelope } from '@/features/runtime/ws-types';
 import { useProjectAreas } from '@/hooks/use-project-areas';
 import { useLiveEvents } from '@/store/live-store';
@@ -24,7 +25,7 @@ import { FullsizeButton, useFullsizeModal } from '../useFullsizeModal';
 import { TypedFieldEditor } from './TypedFieldEditor';
 import { WorkLogSection } from './WorkLogSection';
 
-type TabId = 'overview' | 'children' | 'attachments' | 'worklog' | 'activity';
+type TabId = 'overview' | 'children' | 'attachments' | 'worklog' | 'activity' | 'dossier';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -32,6 +33,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'attachments', label: 'Attachments' },
   { id: 'worklog', label: 'Work Log' },
   { id: 'activity', label: 'Activity' },
+  { id: 'dossier', label: 'Dossier' },
 ];
 
 interface WorkItemDetailModalProps {
@@ -444,6 +446,9 @@ export function WorkItemDetailModal({
               events={events}
               stageNameById={stageNameById}
             />
+          )}
+          {tab === 'dossier' && (
+            <DossierTab projectId={project.id} workItemId={baseline.id} />
           )}
         </div>
 
@@ -1146,6 +1151,92 @@ interface ActivityRow {
   ts: number;
   actor: string;
   text: string;
+}
+
+// pc-pty-chat-436 — agent dossier tab (read-only).
+//
+// Renders the 3 agent-maintained sections (State / Decisions / Open Questions)
+// with a provenance line and a fresh/empty fallback. Visually distinct from the
+// human body panel to reinforce the agent-layer boundary. Updates live via the
+// `work-item-dossier.changed` live event (handled inside useWorkItemDossier).
+
+function DossierTab({
+  projectId,
+  workItemId,
+}: {
+  projectId: string;
+  workItemId: string;
+}) {
+  const { dossier, fresh, loading, error } = useWorkItemDossier(projectId, workItemId);
+
+  if (loading) {
+    return <div className="text-xs text-muted-foreground">Loading…</div>;
+  }
+  if (error) {
+    return (
+      <div className="border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+        {error}
+      </div>
+    );
+  }
+
+  const hasContent =
+    !fresh &&
+    dossier &&
+    (dossier.state.trim() || dossier.decisions.trim() || dossier.openQuestions.trim());
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Agent-layer header — visually separates this from the human body */}
+      <div className="flex items-center gap-2 border-b border-border pb-2">
+        <span className="border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-primary">
+          Agent dossier
+        </span>
+        <span className="text-xs text-muted-foreground">read-only · maintained by agents</span>
+      </div>
+
+      {!hasContent ? (
+        <div className="border border-dashed border-border px-3 py-8 text-center text-xs text-muted-foreground">
+          No dossier yet — agents will populate this as they work.
+        </div>
+      ) : (
+        <>
+          <DossierSection label="State" text={dossier.state} />
+          <DossierSection label="Decisions" text={dossier.decisions} />
+          <DossierSection label="Open Questions" text={dossier.openQuestions} />
+          <div className="flex flex-wrap items-center gap-x-2 border-t border-border pt-2 text-[11px] text-muted-foreground">
+            {dossier.updatedByAgent && (
+              <>
+                <span>last updated by <span className="text-foreground">{dossier.updatedByAgent}</span></span>
+                <span aria-hidden>·</span>
+              </>
+            )}
+            {dossier.updatedAt && (
+              <>
+                <span title={new Date(dossier.updatedAt).toLocaleString()}>
+                  {formatRelative(dossier.updatedAt)}
+                </span>
+                <span aria-hidden>·</span>
+              </>
+            )}
+            <span>v{dossier.version}</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DossierSection({ label, text }: { label: string; text: string }) {
+  if (!text.trim()) return null;
+  return (
+    <div className="flex flex-col gap-1.5 border border-primary/20 bg-primary/5 px-3 py-2.5">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-primary/70">
+        {label}
+      </div>
+      <Markdown text={text} className="text-xs" />
+    </div>
+  );
 }
 
 function ActivityTab({

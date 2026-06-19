@@ -5,6 +5,7 @@ import {
   WorkItemConflictError,
   WorkItemFieldValidationError,
   type Attachment,
+  type DossierRow,
   type FieldSchema,
   type FieldSchemaInput,
   type Initiative,
@@ -280,6 +281,11 @@ export const workItemsApi = {
     getJson<{ ok: true; attachment: Attachment }>(
       `/api/projects/${projectId}/attachments/${aId}`,
     ).then((r) => r.attachment),
+
+  getDossier: (projectId: ULID, wiId: ULID) =>
+    getJson<{ ok: true; fresh: boolean; dossier: DossierRow }>(
+      `/api/projects/${projectId}/work-items/${wiId}/dossier`,
+    ),
 
   deleteAttachment: async (projectId: ULID, wiId: ULID, aId: ULID): Promise<void> => {
     const res = await fetch(
