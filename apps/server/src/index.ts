@@ -119,6 +119,10 @@ import {
   STALE_ASK_SWEEP_MS,
   sweepStalePendingAsks,
 } from './services/pending-ask-watchdog.ts';
+import {
+  sweepWorkItemStallWarn,
+  resolveWorkItemStallSweepMs,
+} from './services/work-item-stall-warn.ts';
 import { registerPodRoutes } from './routes/pod-routes.ts';
 import { registerWorkflowRoutes } from './routes/workflow-routes.ts';
 import { registerMcpServerRoutes } from './features/mcp-servers/routes.ts';
@@ -1030,6 +1034,29 @@ const staleAskSweep = setInterval(() => {
 }, STALE_ASK_SWEEP_MS);
 if (typeof staleAskSweep.unref === 'function') staleAskSweep.unref();
 
+// pc-pty-chat-433 — A3: proactive work-item stall sweep. For each project,
+// pushes ONE consolidated orchestrator-turn mailbox message when open items
+// have had no activity for PC_WORK_ITEM_STALL_IDLE_DAYS (default 7). Debounced
+// per-item per stall episode via `workItemNotifiedItems` (caller-owned state).
+// Shares the stall query with A2 — both call getBoardHealth (@pc/db) directly.
+const workItemNotifiedItems = new Map<string, Set<string>>();
+const workItemStallSweep = setInterval(() => {
+  try {
+    const result = sweepWorkItemStallWarn({
+      notifiedItems: workItemNotifiedItems,
+      mailboxEnqueue: enqueueMailboxAndFanout,
+    });
+    if (result.notified > 0) {
+      console.log(
+        `[board-health] stall-sweep: checked=${result.checked}, notified=${result.notified}, newStalled=${result.newStalled}`,
+      );
+    }
+  } catch (err) {
+    console.warn('[board-health] stall sweep failed:', (err as Error).message);
+  }
+}, resolveWorkItemStallSweepMs());
+if (typeof workItemStallSweep.unref === 'function') workItemStallSweep.unref();
+
 // Slice 015a — universal post-commit relay drain. Gateways write the outbox row
 // in-txn; this short-interval drain fans the committed rows to subscribers
 // regardless of which subsystem wrote them, so 015a delivers via the relay for
@@ -1493,6 +1520,7 @@ function gracefulShutdown(): void {
   agentRunReconciler.stop();
   clearInterval(mailboxWorkerSweep);
   clearInterval(staleAskSweep);
+  clearInterval(workItemStallSweep);
   clearInterval(liveRelayDrainSweep);
   clearInterval(liveOutboxPruneSweep);
   // Send clean close frames (1001 "going away") to every live WS client so
