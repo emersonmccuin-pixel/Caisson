@@ -37,6 +37,14 @@ import { WORKFLOW_DOCTOR_POD_CONTENT } from './workflow-doctor-pod-content.ts';
 const MERMAID_DIAGRAM_RULE =
   '- Diagrams: when you need to produce a diagram, flowchart, or graph, emit it as a ```mermaid code fence — the app renders Mermaid inline. Never use ASCII art or prose descriptions when a Mermaid diagram would do.';
 
+// pc-pty-chat-435 — shared dossier instruction injected into every working
+// subagent pod. When a work item is linked, its agent-owned brief (State /
+// Decisions / Open Questions) is injected into the context; agents should read
+// it as starting truth and write back meaningful decisions via pc_update_brief.
+const DOSSIER_SECTION = `## Dossier
+
+When your context includes a **Work-item brief** block (State / Decisions / Open Questions), treat it as your starting truth — read it before acting. After any meaningful decision or completed chunk of work, call \`pc_update_brief\` to patch only the section you changed. Keep each section under 2000 characters.`;
+
 const RESEARCHER_PROMPT = `You are a researcher + scribe. Use Read, Glob, and Grep to gather context (these can reach anywhere on the user's filesystem — see Worktree binding below); use WebFetch + WebSearch for external information; use Bash + Edit to write or mutate files inside the bound worktree (when one is given). Keep summaries terse — bullets over paragraphs.
 
 ## Two dispatch shapes
@@ -94,6 +102,8 @@ The \`[worktree: <abs path>]\` token tells you where your *writes* go. Edit / Ba
 
 If a write target is given as a bare filename (\`findings.md\`), resolve it against the bound worktree path.
 
+${DOSSIER_SECTION}
+
 ## Style
 
 ${MERMAID_DIAGRAM_RULE}`;
@@ -129,6 +139,8 @@ Final message structure:
 - One-line meta below: what choices you made (audience read, tone, length call).
 
 Submit the draft via \`pc_submit_deliverable\` (kind \`prose\` or \`answer\`, matching your contract) as your final action. For long drafts where your contract links an output work item, also attach the full text there and keep the chat reply scannable.
+
+${DOSSIER_SECTION}
 
 ## Style
 
@@ -174,6 +186,8 @@ Criteria gaps (if any):
 \`\`\`
 
 Submit the verdict via \`pc_submit_deliverable\` (kind \`payload\` for a structured verdict, or \`answer\`) as your final action. For long reviews where your contract links an output work item, also attach the full notes there; surface the verdict + the top 3-5 comments inline.
+
+${DOSSIER_SECTION}
 
 ## Style
 
@@ -224,6 +238,8 @@ Unknowns:
 \`\`\`
 
 Submit the plan via \`pc_submit_deliverable\` (kind \`answer\` addressing the steps + summary) as your final action. For long plans where your contract links an output work item, also attach the full plan there; surface a numbered outline inline.
+
+${DOSSIER_SECTION}
 
 ## Style
 
@@ -1174,6 +1190,8 @@ Submit the change via \`pc_submit_deliverable\` (kind \`repo\`) as your final ac
 
 If the project has a \`CLAUDE.md\` at root or in the touched subdirectory, read it before writing — project-specific conventions override these defaults.
 
+${DOSSIER_SECTION}
+
 ## Style
 
 - Terse. The diff or the path list speaks for itself.
@@ -1221,6 +1239,8 @@ Ambiguous fields:
 \`\`\`
 
 Submit the JSON via \`pc_submit_deliverable\` (kind \`payload\`) as your final action. For large extractions where your contract links an output work item, also attach the JSON there via \`pc_attach_to_work_item\`; surface a summary (counts, ambiguity flags) inline.
+
+${DOSSIER_SECTION}
 
 ## Style
 
