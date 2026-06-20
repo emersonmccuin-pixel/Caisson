@@ -15,7 +15,7 @@
 // treat that as a loud spawn error; the old project-root fallback was removed
 // when PC's runtime became isolated from terminal Claude Code sessions.
 
-import { getDossier, getPodForSpawn, getMcpServerRegistry, listMcpAttachmentsForAgent } from '@pc/db';
+import { getDossier, getPodForSpawn, getMcpServerRegistry, listMcpAttachmentsForAgent, listMcpServersRegistry } from '@pc/db';
 import type { PodMcpServerConfig, ULID } from '@pc/domain';
 import { materializePodPlugin, type MaterializedPluginPod, type PodWorkItemContext } from '@pc/runtime';
 import {
@@ -60,6 +60,10 @@ export interface PreparePodSpawnInput {
   serverPort?: number;
   projectSlug?: string | null;
   projectName?: string | null;
+  /** pc-pty-chat-451 — when true, project-scoped registered MCP servers are
+   *  auto-included without an explicit attachment row. Set true only for the
+   *  orchestrator spawn; dispatched worker agents keep explicit-attach-only. */
+  includeProjectServers?: boolean;
 }
 
 export interface PodSpawnPrep {
@@ -164,7 +168,11 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
   // the orchestrator is just another agentId with its own attachments row set.
   // pc-pty-chat-450 — pass spawnProjectId so project-scoped servers are only
   // included when the spawn project matches the server's project.
-  const registry = buildRegistryMcpConfig(bundle.agent.id, input.projectId ?? null);
+  // pc-pty-chat-451 — pass includeProjectServers flag (true only for the
+  // orchestrator spawn; workers stay explicit-attach-only).
+  const registry = buildRegistryMcpConfig(bundle.agent.id, input.projectId ?? null, {
+    includeProjectServers: input.includeProjectServers,
+  });
 
   const materialised: MaterializedPluginPod = materializePodPlugin({
     bundle,
@@ -214,9 +222,22 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
  *  regardless of `spawnProjectId`. When `spawnProjectId` is null (no project
  *  context) project-scoped servers are excluded entirely.
  *
+ *  `opts.includeProjectServers` — pc-pty-chat-451 orchestrator auto-include.
+ *  When true (and `spawnProjectId` is not null), all project-scoped registered
+ *  servers for the spawn project are merged in without needing an explicit
+ *  attachment row. Explicit attachments win on dedupe: if the same server name
+ *  was already wired via an attachment row, the attachment's `enabledTools`
+ *  takes precedence. Global servers are NEVER auto-included by this flag —
+ *  they still require an explicit attachment. Set true only for the orchestrator
+ *  spawn caller; dispatched worker agents keep explicit-attach-only.
+ *
  *  Non-fatal: any DB or registry-read error is silently swallowed so that a
  *  missing registry row or a probe failure never prevents spawn. */
-export function buildRegistryMcpConfig(agentId: ULID, spawnProjectId: ULID | null = null): {
+export function buildRegistryMcpConfig(
+  agentId: ULID,
+  spawnProjectId: ULID | null = null,
+  opts: { includeProjectServers?: boolean } = {},
+): {
   servers: Record<string, PodMcpServerConfig>;
   catalog: Record<string, readonly string[]>;
 } {
@@ -237,6 +258,19 @@ export function buildRegistryMcpConfig(agentId: ULID, spawnProjectId: ULID | nul
       servers[row.name] = row.transport as unknown as PodMcpServerConfig;
       catalog[row.name] =
         att.enabledTools === '*' ? (row.discoveredTools ?? []) : att.enabledTools;
+    }
+    // pc-pty-chat-451 — auto-include project-scoped servers for the orchestrator.
+    // Project-registered servers that are NOT explicitly attached are merged in
+    // with '*' semantics (discoveredTools ?? []). Explicit attachments take
+    // precedence: any server name already wired above is skipped here.
+    if (opts.includeProjectServers && spawnProjectId) {
+      const projectServers = listMcpServersRegistry({ projectId: spawnProjectId });
+      for (const row of projectServers) {
+        // Attachment wins — skip if already present from the attachment loop.
+        if (row.name in servers) continue;
+        servers[row.name] = row.transport as unknown as PodMcpServerConfig;
+        catalog[row.name] = row.discoveredTools ?? [];
+      }
     }
   } catch {
     // Non-fatal: never block spawn because the registry is unavailable.

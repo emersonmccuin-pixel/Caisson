@@ -1320,7 +1320,28 @@ registerWorkflowRoutes(app, {
   },
 });
 
-registerMcpServerRoutes(app, { resolveProject, probe: probeMcpServer });
+registerMcpServerRoutes(app, {
+  resolveProject,
+  probe: probeMcpServer,
+  // pc-pty-chat-451 — kill + re-ensure the orchestrator so it immediately
+  // picks up any project-scoped server that was just registered or deleted.
+  // Mirrors the onPodChanged → restartIfOrchestratorPod + ensureOrchestratorPty
+  // pattern; history is preserved via --resume.
+  restartProjectOrchestrator: (projectId) => {
+    const runtime = resolveProject(projectId);
+    if (!runtime) return;
+    const restarted = runtime.restartOrchestratorForMcpChange();
+    if (restarted) {
+      try {
+        ensureOrchestratorPty(runtime.project.id, runtime);
+      } catch (err) {
+        console.error(
+          `[pc] orchestrator restart-on-mcp-change failed for ${projectId}: ${(err as Error).message}`,
+        );
+      }
+    }
+  },
+});
 
 registerPodRoutes(app, {
   resetStockPodToDefault: (name, reason) => {
