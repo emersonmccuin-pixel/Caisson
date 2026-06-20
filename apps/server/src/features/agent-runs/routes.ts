@@ -562,7 +562,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
             error: 'no worktree service available for this project — cannot provision isolation',
             cause: 'worktree-provision-failed',
           },
-          503,
+          409,
         );
       }
       // Fresh repo dispatches always use a unique temp branch. The work item is
@@ -615,7 +615,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
             error: `worktree provisioning failed: ${(err as Error).message}`,
             cause: 'worktree-provision-failed',
           },
-          503,
+          409,
         );
       }
     } else {

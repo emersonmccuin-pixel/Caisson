@@ -2,6 +2,10 @@
 // into the verifier call. Guards that the failureCause arriving in the terminal
 // effects input is passed through to runVerificationOnTerminal so Fix D's
 // INFRA_FAILURE_CAUSES split can fire correctly.
+//
+// pc-pty-chat-448 — replay safety-net tests: the principled invariant that
+// status==='failed' && spawnedAt===null rows are never replayed (they were
+// reported synchronously to the caller).
 
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,7 +13,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { ULID } from '@pc/domain';
+import type { AgentRunFailureCause, ULID } from '@pc/domain';
 import type { RunVerificationInput, VerificationOutcome } from '../src/services/agent-verification.ts';
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-te-failurecause-'));
@@ -19,11 +23,14 @@ const {
   closeDb,
   createOrchestratorSession,
   createProject,
+  getAgentRunRow,
   insertAgentRunRow,
+  markAgentRunTerminal,
   newId,
   runMigrations,
+  updateAgentRunStatus,
 } = await import('@pc/db');
-const { applyAgentRunTerminalEffects } = await import(
+const { applyAgentRunTerminalEffects, replayMissingTerminalEnvelopes } = await import(
   '../src/services/agent-run-terminal-effects.ts'
 );
 
@@ -175,4 +182,132 @@ test('4d-3: failureCause idle-timeout threaded to verifier (agent cause)', async
 
   assert.equal(verifierCalls.length, 1);
   assert.equal(verifierCalls[0]!.failureCause, 'idle-timeout');
+});
+
+// ─────────────────────────── S3 replay invariant tests ───────────────────────
+//
+// pc-pty-chat-448 — the principled skip rule: a failed run with spawnedAt===null
+// was never spawned; its failure was synchronously returned to the caller.
+// Replay must NEVER emit an agent-failed envelope for it.
+
+function seedTerminalRun(
+  slug: string,
+  opts: {
+    failureCause: AgentRunFailureCause;
+    spawnedAt: number | null;
+  },
+): { runId: ULID; projectId: ULID } {
+  const project = createProject({
+    slug,
+    name: slug,
+    stages: [{ id: 'todo', name: 'Todo', order: 0 }],
+    folderPath: join(tmpDir, slug),
+  });
+  const session = createOrchestratorSession({
+    projectId: project.id,
+    providerSessionId: 'cc-replay',
+  });
+  const runId = newId() as ULID;
+  insertAgentRunRow({
+    id: runId,
+    projectId: project.id,
+    podName: 'researcher',
+    dispatcherSessionId: session.id,
+    ccSessionId: 'cc-replay',
+    status: 'queued',
+    input: 'go',
+    queuedAt: Date.now(),
+  });
+  if (opts.spawnedAt !== null) {
+    updateAgentRunStatus({ id: runId, status: 'running', spawnedAt: opts.spawnedAt });
+  }
+  markAgentRunTerminal({
+    id: runId,
+    status: 'failed',
+    result: null,
+    failureCause: opts.failureCause,
+    failureReason: 'test',
+    completedAt: Date.now(),
+  });
+  return { runId, projectId: project.id };
+}
+
+test('replay-1 (pc-pty-chat-448): failed+spawnedAt===null+worktree-provision-failed is skipped', async () => {
+  const { runId } = seedTerminalRun('rp-wt-provision', {
+    failureCause: 'worktree-provision-failed',
+    spawnedAt: null,
+  });
+
+  let enqueued = 0;
+  const result = await replayMissingTerminalEnvelopes({
+    listRecentTerminalRuns: () => {
+      const row = getAgentRunRow(runId);
+      return row ? [row] : [];
+    },
+    hasMailboxKey: () => false, // pretend key is absent → would replay if not skipped
+    mailboxEnqueue: () => { enqueued += 1; },
+  });
+
+  assert.equal(result.replayed, 0, 'pre-spawn failed run must not be replayed');
+  assert.equal(enqueued, 0);
+});
+
+test('replay-2 (pc-pty-chat-448): failed+spawnedAt===null+spawn-error (arbitrary cause) is skipped', async () => {
+  const { runId } = seedTerminalRun('rp-spawn-error', {
+    failureCause: 'spawn-error',
+    spawnedAt: null,
+  });
+
+  let enqueued = 0;
+  const result = await replayMissingTerminalEnvelopes({
+    listRecentTerminalRuns: () => {
+      const row = getAgentRunRow(runId);
+      return row ? [row] : [];
+    },
+    hasMailboxKey: () => false,
+    mailboxEnqueue: () => { enqueued += 1; },
+  });
+
+  assert.equal(result.replayed, 0, 'arbitrary pre-spawn failed run must not be replayed');
+  assert.equal(enqueued, 0);
+});
+
+test('replay-3 (pc-pty-chat-448): failed+spawnedAt===null+host-unavailable is still skipped (generalised rule)', async () => {
+  const { runId } = seedTerminalRun('rp-host-unavail', {
+    failureCause: 'host-unavailable',
+    spawnedAt: null,
+  });
+
+  let enqueued = 0;
+  const result = await replayMissingTerminalEnvelopes({
+    listRecentTerminalRuns: () => {
+      const row = getAgentRunRow(runId);
+      return row ? [row] : [];
+    },
+    hasMailboxKey: () => false,
+    mailboxEnqueue: () => { enqueued += 1; },
+  });
+
+  assert.equal(result.replayed, 0, 'host-* pre-spawn skip is preserved by the general rule');
+  assert.equal(enqueued, 0);
+});
+
+test('replay-4 (pc-pty-chat-448): failed+spawnedAt!==null (genuinely spawned, tail dropped) IS replayed', async () => {
+  const { runId } = seedTerminalRun('rp-spawned-fail', {
+    failureCause: 'idle-timeout',
+    spawnedAt: Date.now() - 5000,
+  });
+
+  let enqueued = 0;
+  const result = await replayMissingTerminalEnvelopes({
+    listRecentTerminalRuns: () => {
+      const row = getAgentRunRow(runId);
+      return row ? [row] : [];
+    },
+    hasMailboxKey: () => false, // key absent — tail genuinely dropped
+    mailboxEnqueue: () => { enqueued += 1; },
+  });
+
+  assert.equal(result.replayed, 1, 'a genuinely-spawned failed run with no key must be replayed');
+  assert.equal(enqueued, 1);
 });

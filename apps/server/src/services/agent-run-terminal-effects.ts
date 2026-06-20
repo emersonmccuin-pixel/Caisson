@@ -733,19 +733,19 @@ export async function replayMissingTerminalEnvelopes(
   let replayed = 0;
   for (const row of rows) {
     const status = row.status as TerminalStatus;
-    // Spawn-flakiness fix (2026-06-10) — a dispatch that failed BEFORE any
-    // spawn on a host start receipt already returned that failure
-    // SYNCHRONOUSLY to its dispatcher (the pc_invoke_agent tool result / the
-    // workflow settlement). Replaying an agent-failed envelope for it minutes
-    // later re-pages the orchestrator about a failure it has typically already
-    // retried — pure noise. The sync receipt is the notification; skip.
-    if (
-      status === 'failed' &&
-      row.spawnedAt === null &&
-      (row.failureCause === 'host-unavailable' ||
-        row.failureCause === 'host-rejected' ||
-        row.failureCause === 'host-protocol-error')
-    ) {
+    // Pre-spawn synchronous failure invariant (pc-pty-chat-448) — a run that
+    // failed with spawnedAt===null NEVER spawned; its failure was determined
+    // during the synchronous dispatch request and returned to the caller as the
+    // tool result / workflow settlement.  The caller already has the failure
+    // signal, so replaying an agent-failed envelope minutes later is pure noise.
+    //
+    // This generalises the former host-* cause deny-list to ALL pre-spawn
+    // failures (worktree-provision-failed, spawn-error, host-unavailable,
+    // host-rejected, host-protocol-error, etc.).  Every other finalize path
+    // (cancel, reconcile, boot-sweep) already writes the idempotency key via
+    // applyAgentRunTerminalEffects, so the hasKey check below protects them
+    // regardless of this skip.
+    if (status === 'failed' && row.spawnedAt === null) {
       continue;
     }
     const kind: AgentInboxEventKind =

@@ -5,6 +5,10 @@ import { withConnRetry } from './retry.ts';
 export interface ServerResponse {
   status: number;
   body: string;
+  /** Populated from the `retry-after` response header when present. A 503 that
+   *  carries this field is explicit server backpressure on a safe-to-retry-identical
+   *  request; the retry transport gates on its presence. Absent = not set. */
+  retryAfter?: string | null;
 }
 
 export interface ToolContent {
@@ -104,7 +108,11 @@ function httpWithBodyOnce(
         const chunks: Buffer[] = [];
         r.on('data', (c) => chunks.push(c as Buffer));
         r.on('end', () =>
-          res({ status: r.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf-8') }),
+          res({
+            status: r.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf-8'),
+            retryAfter: (r.headers['retry-after'] as string | undefined) ?? null,
+          }),
         );
       },
     );
@@ -126,7 +134,11 @@ function httpWithoutBodyOnce(
         const chunks: Buffer[] = [];
         r.on('data', (c) => chunks.push(c as Buffer));
         r.on('end', () =>
-          res({ status: r.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf-8') }),
+          res({
+            status: r.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf-8'),
+            retryAfter: (r.headers['retry-after'] as string | undefined) ?? null,
+          }),
         );
       },
     );
