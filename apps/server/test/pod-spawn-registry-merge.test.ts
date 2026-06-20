@@ -200,6 +200,117 @@ test('buildRegistryMcpConfig — global server resolves for any spawnProjectId i
   assert.ok(r2.servers[updated.name], 'global server resolves with a project spawnProjectId');
 });
 
+// ── pc-pty-chat-451: orchestrator auto-include project servers ────────────────
+
+test('buildRegistryMcpConfig — includeProjectServers:true merges project-scoped servers (no attachment row)', () => {
+  const agent = makeAgent();
+  const project = makeProject();
+  const tools = ['mcp__auto-srv__read', 'mcp__auto-srv__write'];
+  const server = makeProjectScopedServer(project.id, tools);
+  // Deliberately no upsertMcpAttachment call — server is only registered.
+
+  const updated = getMcpServerRegistry(server.id)!;
+  const result = buildRegistryMcpConfig(
+    agent.id,
+    project.id as import('@pc/domain').ULID,
+    { includeProjectServers: true },
+  );
+
+  assert.ok(result.servers[updated.name], 'server included without explicit attachment');
+  assert.deepEqual(
+    [...result.catalog[updated.name]].sort(),
+    [...tools].sort(),
+    'catalog uses discoveredTools (* semantics)',
+  );
+});
+
+test('buildRegistryMcpConfig — includeProjectServers:false (worker default) does NOT auto-include', () => {
+  const agent = makeAgent();
+  const project = makeProject();
+  const tools = ['mcp__worker-srv__op'];
+  const server = makeProjectScopedServer(project.id, tools);
+
+  const updated = getMcpServerRegistry(server.id)!;
+  // default opts (no includeProjectServers)
+  const result = buildRegistryMcpConfig(agent.id, project.id as import('@pc/domain').ULID);
+
+  assert.equal(result.servers[updated.name], undefined, 'server absent without includeProjectServers');
+  assert.equal(result.catalog[updated.name], undefined, 'catalog absent without includeProjectServers');
+});
+
+test('buildRegistryMcpConfig — includeProjectServers dedupes: attachment enabledTools wins over auto-include', () => {
+  const agent = makeAgent();
+  const project = makeProject();
+  const discoveredTools = ['mcp__dup-srv__a', 'mcp__dup-srv__b', 'mcp__dup-srv__c'];
+  const server = makeProjectScopedServer(project.id, discoveredTools);
+  // Attach with an explicit tool subset — this should win over discoveredTools.
+  const explicitTools = ['mcp__dup-srv__a'];
+  upsertMcpAttachment({ agentId: agent.id, mcpServerId: server.id, enabledTools: explicitTools });
+
+  const updated = getMcpServerRegistry(server.id)!;
+  const result = buildRegistryMcpConfig(
+    agent.id,
+    project.id as import('@pc/domain').ULID,
+    { includeProjectServers: true },
+  );
+
+  assert.deepEqual(
+    result.catalog[updated.name],
+    explicitTools,
+    'explicit attachment enabledTools wins over auto-include discoveredTools',
+  );
+});
+
+test('buildRegistryMcpConfig — global servers are NOT auto-included by includeProjectServers', () => {
+  const agent = makeAgent();
+  const project = makeProject();
+  // Create a global server — NOT attached to the agent, NOT project-scoped.
+  const globalServer = makeRegistryServer(['mcp__global-auto__op']);
+
+  const updated = getMcpServerRegistry(globalServer.id)!;
+  const result = buildRegistryMcpConfig(
+    agent.id,
+    project.id as import('@pc/domain').ULID,
+    { includeProjectServers: true },
+  );
+
+  assert.equal(
+    result.servers[updated.name],
+    undefined,
+    'global server not auto-included even with includeProjectServers:true',
+  );
+});
+
+test('buildRegistryMcpConfig — server registered after first spawn appears on next (resume) spawn config', () => {
+  // Simulates resume pickup: buildRegistryMcpConfig always reads live DB state,
+  // so a server registered after the initial spawn is included on the next call.
+  const agent = makeAgent();
+  const project = makeProject();
+
+  // First "spawn" — no project servers yet.
+  const firstResult = buildRegistryMcpConfig(
+    agent.id,
+    project.id as import('@pc/domain').ULID,
+    { includeProjectServers: true },
+  );
+  const before = Object.keys(firstResult.servers).length;
+
+  // Register a server after the first spawn.
+  const tools = ['mcp__late-srv__ping'];
+  const server = makeProjectScopedServer(project.id, tools);
+  const updated = getMcpServerRegistry(server.id)!;
+
+  // Second "spawn" (resume) — reads fresh DB state.
+  const secondResult = buildRegistryMcpConfig(
+    agent.id,
+    project.id as import('@pc/domain').ULID,
+    { includeProjectServers: true },
+  );
+
+  assert.equal(Object.keys(secondResult.servers).length, before + 1, 'one more server on resume');
+  assert.ok(secondResult.servers[updated.name], 'newly registered server present on resume spawn');
+});
+
 test('wildcard expansion uses registry catalog — mcp__server__* resolves to discovered tools', () => {
   const agent = makeAgent();
   const tools = ['mcp__my-registry-srv__read', 'mcp__my-registry-srv__write'];
