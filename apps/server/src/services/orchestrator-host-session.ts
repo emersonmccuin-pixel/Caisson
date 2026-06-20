@@ -402,10 +402,12 @@ export class OrchestratorHostSession extends EventEmitter {
       transcriptPath: this.input.transcriptPath,
       model: this.input.model,
       requireReadySignal: this.input.requireReadySignal,
-      // Resumes may load sessions that predate the current MCP config —
-      // composer readiness is enough (mirrors the old ensurePty policy).
-      requireMcpHandshake:
-        mode === 'resume' ? false : this.input.requireMcpHandshake,
+      // pc-pty-chat-450: CLI 2.1.183 live-confirms --resume --mcp-config <new>
+      // --strict-mcp-config DOES load fresh servers. The pc-rig MCP handshake
+      // fires on both fresh and resume; honour the caller's flag symmetrically
+      // so resumed orchestrators wait for attached servers before the first
+      // turn (bounded by the host's 60s ready-timeout, which fail-opens).
+      requireMcpHandshake: this.input.requireMcpHandshake,
       remoteControl: this.input.remoteControl,
       cols: this.input.cols,
       rows: this.input.rows,

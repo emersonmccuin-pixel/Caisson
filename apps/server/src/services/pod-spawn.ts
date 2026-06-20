@@ -162,7 +162,9 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
   // pc-pty-chat-359 P4a — merge registry-based MCP servers into the spawn
   // config. Both dispatched agents and the orchestrator go through this path;
   // the orchestrator is just another agentId with its own attachments row set.
-  const registry = buildRegistryMcpConfig(bundle.agent.id);
+  // pc-pty-chat-450 — pass spawnProjectId so project-scoped servers are only
+  // included when the spawn project matches the server's project.
+  const registry = buildRegistryMcpConfig(bundle.agent.id, input.projectId ?? null);
 
   const materialised: MaterializedPluginPod = materializePodPlugin({
     bundle,
@@ -206,9 +208,15 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
  *    tools, which is the safe default rather than a hard spawn failure).
  *  - `enabledTools: string[]` → catalog entry uses the explicit selection.
  *
+ *  `spawnProjectId` — pc-pty-chat-450 project-scope filter. A project-scoped
+ *  registry server is included ONLY when the spawn's project matches the
+ *  server's `projectId`. Global servers (`scope === 'global'`) always apply
+ *  regardless of `spawnProjectId`. When `spawnProjectId` is null (no project
+ *  context) project-scoped servers are excluded entirely.
+ *
  *  Non-fatal: any DB or registry-read error is silently swallowed so that a
  *  missing registry row or a probe failure never prevents spawn. */
-export function buildRegistryMcpConfig(agentId: ULID): {
+export function buildRegistryMcpConfig(agentId: ULID, spawnProjectId: ULID | null = null): {
   servers: Record<string, PodMcpServerConfig>;
   catalog: Record<string, readonly string[]>;
 } {
@@ -219,6 +227,9 @@ export function buildRegistryMcpConfig(agentId: ULID): {
     for (const att of attachments) {
       const row = getMcpServerRegistry(att.mcpServerId);
       if (!row) continue;
+      // Project-scoped servers only apply when the spawn's project matches.
+      // Global servers always apply.
+      if (row.scope === 'project' && row.projectId !== spawnProjectId) continue;
       // Slice 7+ will call resolveTransportSecrets here. Until then, cast to
       // PodMcpServerConfig — safe after the Slice 2 migration runs (no plain
       // tokens remain in the DB; SecretRefs are opaque to the spawn path until

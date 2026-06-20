@@ -58,6 +58,7 @@ import type {
   AgentEffort,
   AgentMcpAttachmentRow,
   AgentModel,
+  McpDiscoveryStatus,
   PodAgentRow,
   PodAuditActor,
   PodAuditField,
@@ -120,10 +121,30 @@ export type ContextDocWithReadStats = ContextDocRow & {
   lastReadAt: number | null;
 };
 
+/** One registry MCP server attachment as surfaced in the pod bundle. Includes
+ *  enough for the UI (and the orchestrator) to verify wiring without a second
+ *  round-trip to the mcp-attachments route. */
+export interface BundleMcpAttachment {
+  mcpServerId: ULID;
+  name: string;
+  scope: PodScope;
+  projectId: ULID | null;
+  enabledTools: string[] | '*';
+  discoveryStatus: McpDiscoveryStatus;
+  /** Number of tools found in the last successful discovery probe.
+   *  Null when the server has never been probed (`discoveryStatus === 'stale'`
+   *  with no prior ok run). */
+  discoveredToolCount: number | null;
+}
+
 export interface PodBundle {
   agent: PodAgentRow;
   contextDocs: ContextDocWithReadStats[];
   secrets: PublicPodSecret[];
+  /** pc-pty-chat-450 — registry MCP servers attached to this pod, with enough
+   *  detail to verify wiring (server name, scope, project, granted tools,
+   *  discovery status + tool count). Empty when no servers are attached. */
+  mcpAttachments: BundleMcpAttachment[];
 }
 
 /** Join read receipts onto a doc list. Best-effort — stats default to
@@ -146,10 +167,28 @@ function withReadStats(docs: ContextDocRow[]): ContextDocWithReadStats[] {
 export function getPodBundle(agentId: ULID): PodBundle | null {
   const agent = getAgentById(agentId);
   if (!agent) return null;
+  // pc-pty-chat-450 — include registry MCP attachments so the UI and the
+  // orchestrator can verify wiring without a separate round trip.
+  const rawAttachments = listMcpAttachmentsForAgent(agentId);
+  const mcpAttachments: BundleMcpAttachment[] = [];
+  for (const att of rawAttachments) {
+    const reg = getMcpServerRegistry(att.mcpServerId);
+    if (!reg) continue; // deleted server — skip silently
+    mcpAttachments.push({
+      mcpServerId: att.mcpServerId,
+      name: reg.name,
+      scope: reg.scope,
+      projectId: reg.projectId,
+      enabledTools: att.enabledTools,
+      discoveryStatus: reg.discoveryStatus,
+      discoveredToolCount: reg.discoveredTools !== null ? reg.discoveredTools.length : null,
+    });
+  }
   return {
     agent,
     contextDocs: withReadStats(listContextDocsForScope({ scope: { agentId: agent.id } })),
     secrets: listSecrets({ agentId: agent.id, scope: agent.scope }).map(publicSecret),
+    mcpAttachments,
   };
 }
 
