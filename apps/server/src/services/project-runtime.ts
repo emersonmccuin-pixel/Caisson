@@ -548,7 +548,11 @@ export class ProjectRuntime {
         transcriptPath: resolve(sessionDir, 'transcript.log'),
         model: 'opus',
         requireReadySignal: true,
-        requireMcpHandshake: !session.resume,
+        // pc-pty-chat-450: CLI 2.1.183 live-confirms --resume --mcp-config
+        // --strict-mcp-config loads fresh servers. Wait for the pc-rig
+        // handshake on both fresh and resume so attached servers are connected
+        // before the first user turn. The host's 60s ready-timeout fail-opens.
+        requireMcpHandshake: true,
         remoteControl,
         cols: this.orchestratorCols,
         rows: this.orchestratorRows,

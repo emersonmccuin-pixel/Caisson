@@ -19,6 +19,7 @@ const {
   runMigrations,
   createAgent,
   createMcpServerRegistry,
+  createProject,
   getMcpServerRegistry,
   setMcpServerDiscovery,
   upsertMcpAttachment,
@@ -45,6 +46,29 @@ function makeRegistryServer(discoveredTools: string[] | null = null) {
   const server = createMcpServerRegistry({
     scope: 'global',
     name: 'reg-srv-' + Date.now() + '-' + Math.random(),
+    transport: { command: 'node', args: ['server.js'] },
+  });
+  if (discoveredTools !== null) {
+    setMcpServerDiscovery(server.id, { status: 'ok', tools: discoveredTools });
+  }
+  return server;
+}
+
+function makeProject() {
+  const slug = 'test-proj-' + Date.now() + '-' + Math.random();
+  return createProject({
+    slug,
+    name: slug,
+    stages: [{ id: 'todo', name: 'Todo', order: 0 }],
+    folderPath: join(tmpdir(), slug),
+  });
+}
+
+function makeProjectScopedServer(projectId: string, discoveredTools: string[] | null = null) {
+  const server = createMcpServerRegistry({
+    scope: 'project',
+    projectId: projectId as import('@pc/domain').ULID,
+    name: 'proj-srv-' + Date.now() + '-' + Math.random(),
     transport: { command: 'node', args: ['server.js'] },
   });
   if (discoveredTools !== null) {
@@ -121,6 +145,59 @@ test('buildRegistryMcpConfig — multiple attachments each produce an entry', ()
   assert.ok(result.servers[s2.name]);
   assert.deepEqual([...result.catalog[s1.name]].sort(), [...tools1].sort());
   assert.deepEqual([...result.catalog[s2.name]].sort(), [...tools2].sort());
+});
+
+// ── pc-pty-chat-450: project-scope filter ─────────────────────────────────────
+
+test('buildRegistryMcpConfig — project-scoped server resolves when spawnProjectId matches', () => {
+  const agent = makeAgent();
+  const project = makeProject();
+  const tools = ['mcp__proj-srv__read'];
+  const server = makeProjectScopedServer(project.id, tools);
+  upsertMcpAttachment({ agentId: agent.id, mcpServerId: server.id, enabledTools: '*' });
+
+  const updated = getMcpServerRegistry(server.id)!;
+  const result = buildRegistryMcpConfig(agent.id, project.id as import('@pc/domain').ULID);
+
+  assert.ok(result.servers[updated.name], 'server transport present when projectId matches');
+  assert.deepEqual(
+    [...result.catalog[updated.name]].sort(),
+    [...tools].sort(),
+    'catalog populated when projectId matches',
+  );
+});
+
+test('buildRegistryMcpConfig — project-scoped server is skipped when spawnProjectId differs', () => {
+  const agent = makeAgent();
+  const project = makeProject();
+  const otherProject = makeProject();
+  const tools = ['mcp__proj-srv__write'];
+  const server = makeProjectScopedServer(project.id, tools);
+  upsertMcpAttachment({ agentId: agent.id, mcpServerId: server.id, enabledTools: '*' });
+
+  const updated = getMcpServerRegistry(server.id)!;
+  const result = buildRegistryMcpConfig(agent.id, otherProject.id as import('@pc/domain').ULID);
+
+  assert.equal(result.servers[updated.name], undefined, 'server absent when projectId differs');
+  assert.equal(result.catalog[updated.name], undefined, 'catalog absent when projectId differs');
+});
+
+test('buildRegistryMcpConfig — global server resolves for any spawnProjectId including null', () => {
+  const agent = makeAgent();
+  const project = makeProject();
+  const tools = ['mcp__global-srv__ping'];
+  const server = makeRegistryServer(tools);
+  upsertMcpAttachment({ agentId: agent.id, mcpServerId: server.id, enabledTools: '*' });
+
+  const updated = getMcpServerRegistry(server.id)!;
+
+  // null spawnProjectId
+  const r1 = buildRegistryMcpConfig(agent.id, null);
+  assert.ok(r1.servers[updated.name], 'global server resolves with null spawnProjectId');
+
+  // arbitrary projectId
+  const r2 = buildRegistryMcpConfig(agent.id, project.id as import('@pc/domain').ULID);
+  assert.ok(r2.servers[updated.name], 'global server resolves with a project spawnProjectId');
 });
 
 test('wildcard expansion uses registry catalog — mcp__server__* resolves to discovered tools', () => {

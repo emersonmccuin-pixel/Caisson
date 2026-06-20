@@ -113,9 +113,13 @@ export interface LowLevelSpawnInput {
   requireReadySignal?: boolean;
   /** Optional handshake timeout. Default 60s. */
   handshakeTimeoutMs?: number;
-  /** Main resume spawns can load historical Claude sessions that do not honor
-   *  the current dev-channel MCP config. In that case remote-control composer
-   *  readiness is enough to accept typed sends. Default true. */
+  /** When false, the MCP handshake signal is not awaited — only the
+   *  composer-ready sequence gates the ready state. Defaults to true.
+   *  Historic note: this was set false for resume spawns under the assumption
+   *  that `--resume` ignored a freshly-passed `--mcp-config`, but CLI 2.1.183
+   *  live-confirms that `--resume --mcp-config <cfg> --strict-mcp-config` DOES
+   *  load the fresh config (pc-pty-chat-450). The flag is now symmetric across
+   *  fresh and resume so attached servers are connected before the first turn. */
   requireMcpHandshake?: boolean;
   /** Optional ready timeout. Default 60s. */
   readyTimeoutMs?: number;
