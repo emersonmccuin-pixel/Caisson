@@ -81,8 +81,11 @@ export interface AgentHostStartRunRequest {
   model?: string;
   /** Require CC's composer-ready UI marker in the ready gate. */
   requireReadySignal?: boolean;
-  /** Gate readiness on the MCP handshake. The orchestrator disables this on
-   *  resume (historical sessions may predate the current MCP config). */
+  /** Gate readiness on the MCP handshake. Symmetric across fresh and resume
+   *  (pc-pty-chat-450): CLI 2.1.183 live-confirms `--resume --mcp-config <cfg>
+   *  --strict-mcp-config` loads the fresh config, and the ready gate is built
+   *  for the handshake firing on resume — so resumed orchestrators wait for
+   *  attached servers too, rather than disabling the gate on resume. */
   requireMcpHandshake?: boolean;
   /** Launch the session remote-ready (`--remote-control`). Orchestrator-only;
    *  dispatched agent workers omit it. */
