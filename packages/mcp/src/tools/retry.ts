@@ -2,7 +2,11 @@
 // tool call hits the API over 127.0.0.1; during an API restart the raw
 // http.request rejects (ECONNREFUSED) with no retry. This mirrors the web
 // client's retry contract but lives here because @pc/mcp can't import
-// apps/server. Retries on a transient connection error OR a 503 status.
+// apps/server. Retries on a transient connection error; a 503 is retried ONLY
+// when it carries a Retry-After header (explicit server backpressure on a
+// safe-to-retry-identical request). A bare 503 (no Retry-After) is returned
+// immediately to the caller — it is a deterministic refusal, not a transient
+// failure, and the endpoint may be non-idempotent.
 
 const TRANSIENT_CONN_CODES = new Set([
   'ECONNREFUSED',
@@ -41,11 +45,13 @@ function backoffMs(attempt: number, baseMs: number, maxMs: number, jitter: () =>
 
 /**
  * Run `attempt`, retrying when it throws a transient connection error or
- * resolves with a 503. A non-503 response (even 4xx/5xx) returns immediately —
- * the caller still inspects status. The last transient throw propagates after
- * the attempt budget is spent.
+ * resolves with a 503 that carries a Retry-After header. A 503 without
+ * Retry-After (deterministic server refusal on a potentially non-idempotent
+ * endpoint) returns immediately — NOT retried. Any other non-2xx response also
+ * returns immediately. The last transient throw propagates after the attempt
+ * budget is spent.
  */
-export async function withConnRetry<T extends { status: number }>(
+export async function withConnRetry<T extends { status: number; retryAfter?: string | null }>(
   attempt: () => Promise<T>,
   options: ConnRetryOptions = {},
 ): Promise<T> {
@@ -60,7 +66,7 @@ export async function withConnRetry<T extends { status: number }>(
     const isLast = i === attempts - 1;
     try {
       const result = await attempt();
-      if (result.status === 503 && !isLast) {
+      if (result.status === 503 && result.retryAfter && !isLast) {
         await sleep(backoffMs(i, baseMs, maxMs, jitter));
         continue;
       }

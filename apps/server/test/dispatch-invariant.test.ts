@@ -217,7 +217,7 @@ test("dispatch-invariant (B2): same work item gets a fresh temp worktree branch 
   assert.notEqual(names[0], names[1], "separate dispatches must not reuse a work-item-keyed branch");
 });
 
-test("dispatch-invariant (B): isolation:worktree without worktreeService returns 503", async () => {
+test("dispatch-invariant (B): isolation:worktree without worktreeService returns 409", async () => {
   const project = createProject({
     slug: "inv-b2-" + Date.now(),
     name: "Invariant B2",
@@ -253,10 +253,65 @@ test("dispatch-invariant (B): isolation:worktree without worktreeService returns
     },
   );
 
-  assert.equal(res.status, 503, "missing worktreeService must return 503");
+  assert.equal(res.status, 409, "missing worktreeService must return 409 (non-retryable Conflict)");
   const body = await json<{ ok: boolean; cause: string }>(res);
   assert.equal(body.ok, false);
   assert.equal(body.cause, "worktree-provision-failed");
+});
+
+test("dispatch-invariant (H, pc-pty-chat-448): ensureWorktree throw returns 409 (not 503) and creates exactly one AgentRun row", async () => {
+  // Verifies that the deterministic provisioning failure (e.g. MAINLINE GUARD)
+  // returns 409 Conflict — a non-idempotent endpoint must never invite a
+  // transport retry on a deterministic failure.
+  const project = createProject({
+    slug: "inv-h-" + Date.now(),
+    name: "Invariant H",
+    stages,
+    folderPath: join(tmpDir, "inv-h"),
+  });
+  const wi = createWorkItem({ projectId: project.id as ULID, stageId: "todo", title: "H" });
+
+  const sessionId = "sess-inv-h-" + Date.now();
+
+  const app = new (await import("hono")).Hono();
+  const { registerAgentRunRoutes } = await import("../src/features/agent-runs/routes.ts");
+  registerAgentRunRoutes(app, {
+    broadcastTo: () => {},
+    getHostConnection: () => null,
+    dispatchFreshAgent: async () => ({ ok: false, cause: "spawn-error" as const, error: "unreachable" }),
+    recordAgentInvoke: () => {},
+    checkInvokeDepth: () => ({ ok: true as const, childDepth: 1 }),
+    worktreeServiceFor: (_projectId) => ({
+      plannedWorktreePath: (name: string) => join(tmpDir, "worktrees", name),
+      ensureWorktree: async (_name: string) => {
+        throw new Error("MAINLINE GUARD: main branch is dirty");
+      },
+    }),
+  });
+
+  const res = await app.request(
+    "/api/projects/" + project.id + "/agents/code-writer/invoke",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: "fix the bug",
+        dispatcherSessionId: sessionId,
+        workItemId: wi.id,
+        expectedOutput: { kind: "repo" },
+      }),
+    },
+  );
+
+  assert.equal(res.status, 409, "ensureWorktree failure must return 409, not 503");
+  const body = await json<{ ok: boolean; cause: string; error: string }>(res);
+  assert.equal(body.ok, false);
+  assert.equal(body.cause, "worktree-provision-failed");
+
+  const runs = listAgentRunsForSession(project.id as ULID, sessionId, { limit: 10 });
+  assert.equal(runs.length, 1, "exactly one AgentRun row must be created (the pre-inserted row marked terminal)");
+  assert.equal(runs[0]!.status, "failed");
+  assert.equal(runs[0]!.failureCause, "worktree-provision-failed");
 });
 
 test("dispatch-invariant (C): isolation:worktree from pod DEFAULT (no inline spec) provisions worktree", async () => {

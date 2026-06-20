@@ -26,17 +26,32 @@ test('withConnRetry retries ECONNREFUSED then resolves', async () => {
   assert.equal(calls, 3);
 });
 
-test('withConnRetry retries a 503 then resolves', async () => {
+test('withConnRetry retries a 503 with Retry-After then resolves', async () => {
   let calls = 0;
   const result = await withConnRetry(
     async () => {
       calls += 1;
-      return calls < 2 ? { status: 503, body: '' } : { status: 200, body: 'ok' };
+      return calls < 2
+        ? { status: 503, body: '', retryAfter: '1' }
+        : { status: 200, body: 'ok', retryAfter: null };
     },
     { attempts: 5, sleep: noSleep },
   );
   assert.equal(result.status, 200);
   assert.equal(calls, 2);
+});
+
+test('withConnRetry returns a bare 503 (no Retry-After) without retrying', async () => {
+  let calls = 0;
+  const result = await withConnRetry(
+    async () => {
+      calls += 1;
+      return { status: 503, body: 'conflict', retryAfter: null };
+    },
+    { attempts: 5, sleep: noSleep },
+  );
+  assert.equal(result.status, 503);
+  assert.equal(calls, 1, 'bare 503 must not be retried');
 });
 
 test('withConnRetry returns a non-503 error response without retrying', async () => {

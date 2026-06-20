@@ -20,6 +20,7 @@ const {
   markAgentRunTerminal,
   newId,
   runMigrations,
+  updateAgentRunStatus,
 } = await import('@pc/db');
 const { ContractService } = await import('@pc/app-services');
 const { applyHostTerminalSnapshot, reconcileAgentRunsAgainstHost } = await import(
@@ -474,9 +475,12 @@ test('S3 replay skips a pre-spawn host failure (sync receipt already delivered)'
   assert.equal(r.replayed, 0, 'pre-spawn host failure must not be replayed');
   assert.equal(seen.size, 0, 'no envelope enqueued for the sync-reported failure');
 
-  // A spawn-reached failure with the same cause family IS still replayed —
-  // the suppression is keyed on spawnedAt null, not the cause alone.
+  // A spawn-reached failure IS still replayed — the suppression is keyed on
+  // spawnedAt===null. A run that actually spawned (spawnedAt!==null) must not
+  // be silently swallowed even if its tail notifier threw.
   const spawned = seedRun(`htg-presp2-${Date.now()}`);
+  // Advance through spawning so spawnedAt is stamped — this is the key distinction.
+  updateAgentRunStatus({ id: spawned.runId, status: 'running', spawnedAt: Date.now() });
   markAgentRunTerminal({
     id: spawned.runId,
     status: 'failed',
