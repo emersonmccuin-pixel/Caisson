@@ -155,6 +155,26 @@ test('echo-ack: multi-line body echoed as a Pasted-text-ref placeholder → ok +
   assert.equal(deps.writes[1], '\r', 'submits so CC expands the ref to full content');
 });
 
+// pc-pty-chat-455 — Windows ConPTY repaints the "[Pasted text #N]" placeholder
+// with cursor-move escapes that SKIP unchanged cells. collapseAnsiToWhitespace
+// turns the cursor-forward into whitespace and the strip deletes the skipped
+// characters, so "Pasted text #1" is captured as `Pasted \x1b[2Cxt\x1b[1C#1`
+// and compacts to "pastedxt#1" (the "te" is gone), NOT "pastedtext#1". The old
+// literal `includes('pastedtext#')` check missed → echo-timeout → spawn-failed
+// (confirmed on two live runs). The detector must match the mangled form.
+test('echo-ack: ConPTY-mangled Pasted-text placeholder (text→xt) still matches → ok', async () => {
+  const deps = makeDeps();
+  const body =
+    'Investigate the codebase and produce a long report. '.repeat(30); // > 800 chars
+  // EXACT byte shape captured from the failed runs: cursor-right over "te".
+  setTimeout(() => {
+    deps.buffer.value += '\x1b[15;3H> [Pasted \x1b[2Cxt\x1b[1C#1 +24 lines]';
+  }, 10);
+  const result = await sendBracketedPaste(deps, body, 1000);
+  assert.equal(result, 'ok', 'mangled placeholder must count as a landed paste');
+  assert.equal(deps.writes[1], '\r', 'submits so CC expands the ref to full content');
+});
+
 test('echo-ack: empty body returns ok immediately and still sends Enter', async () => {
   const deps = makeDeps();
   // Empty body → probe is empty → match is trivially true → Enter sent.
