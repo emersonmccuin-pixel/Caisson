@@ -1,6 +1,6 @@
 {
   "name": "@pc/desktop",
-  "version": "0.7.1-beta.17",
+  "version": "0.7.1-beta.18",
   "private": true,
   "description": "Electron shell for Caisson desktop distribution.",
   "main": "dist/main.js",
