@@ -90,6 +90,11 @@ export interface PodMcpServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /** Working directory for the stdio server process. At emit time
+   *  (`wrapStdioCwd`) this is transformed into a shell cd-wrapper rather than
+   *  emitted as a bare `cwd` field — Claude Code silently ignores `cwd` on
+   *  stdio entries in mcp.json (verified beta-15, 2026-06-20). */
+  cwd?: string;
   type?: string;
   url?: string;
   headers?: Record<string, string>;
@@ -120,6 +125,10 @@ export interface McpServerTransport {
   args?: string[];
   /** Env vars; values may be plain strings or vault refs. */
   env?: Record<string, TransportValue>;
+  /** Working directory for the stdio server process. Stdio-only; rejected by
+   *  `parseMcpServerTransport` when paired with `url`. At emit time
+   *  (`wrapStdioCwd`) this is transformed into a shell cd-wrapper. */
+  cwd?: string;
   type?: string;
   url?: string;
   /** HTTP request headers; values may be plain strings or vault refs. */

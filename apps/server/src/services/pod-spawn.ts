@@ -205,6 +205,53 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
   };
 }
 
+// ── Stdio cwd wrapper ─────────────────────────────────────────────────────────
+
+/** Quote a single shell argument — wraps in `"..."` when the arg contains a
+ *  space or double-quote, escaping internal `"` with `\"`. Safe for both
+ *  `cmd /c` (Windows) and `sh -c` (Unix) contexts. */
+function quoteShellArg(arg: string): string {
+  return /[ "]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg;
+}
+
+/** Transform a stdio transport that has a `cwd` field into an equivalent
+ *  shell cd-wrapper, because Claude Code silently ignores a bare `cwd` field
+ *  on stdio entries in mcp.json (verified beta-15, 2026-06-20).
+ *
+ *  - Windows: `command: "cmd"`, `args: ["/c", "cd /d \"<cwd>\" && <cmd> <args...>"]`
+ *  - Unix:    `command: "sh"`,  `args: ["-c", "cd \"<cwd>\" && <cmd> <args...>"]`
+ *
+ *  The `cwd` key is consumed and NOT emitted — it is encoded into the wrapper
+ *  command string instead. `env` and `type` are preserved on the output entry.
+ *  A stdio entry WITHOUT `cwd` is returned unchanged (no wrapper added).
+ *  An HTTP entry (has `url`, no `command`) is returned unchanged.
+ *
+ *  `platform` defaults to `process.platform`; pass explicitly in tests to
+ *  drive the Windows vs Unix branch deterministically. */
+export function wrapStdioCwd(
+  transport: PodMcpServerConfig,
+  platform: NodeJS.Platform = process.platform,
+): PodMcpServerConfig {
+  if (!transport.cwd || !transport.command) return transport;
+
+  const { cwd, command, args = [], type, env } = transport;
+  const quotedCwd = `"${cwd.replace(/"/g, '\\"')}"`;
+  const cmdParts = [command, ...args].map(quoteShellArg);
+
+  const out: PodMcpServerConfig = {};
+  if (type !== undefined) out.type = type;
+  if (env !== undefined) out.env = env;
+
+  if (platform === 'win32') {
+    out.command = 'cmd';
+    out.args = ['/c', `cd /d ${quotedCwd} && ${cmdParts.join(' ')}`];
+  } else {
+    out.command = 'sh';
+    out.args = ['-c', `cd ${quotedCwd} && ${cmdParts.join(' ')}`];
+  }
+  return out;
+}
+
 // ── Registry MCP resolution ────────────────────────────────────────────────────
 
 /** Load the registry-based MCP servers attached to `agentId` and return the
@@ -255,7 +302,9 @@ export function buildRegistryMcpConfig(
       // PodMcpServerConfig — safe after the Slice 2 migration runs (no plain
       // tokens remain in the DB; SecretRefs are opaque to the spawn path until
       // injection is wired in Slice 7).
-      servers[row.name] = row.transport as unknown as PodMcpServerConfig;
+      // wrapStdioCwd: if the stored transport has a `cwd`, transform it into a
+      // shell cd-wrapper (CC ignores a bare cwd field on stdio mcp.json entries).
+      servers[row.name] = wrapStdioCwd(row.transport as unknown as PodMcpServerConfig);
       catalog[row.name] =
         att.enabledTools === '*' ? (row.discoveredTools ?? []) : att.enabledTools;
     }
@@ -268,7 +317,7 @@ export function buildRegistryMcpConfig(
       for (const row of projectServers) {
         // Attachment wins — skip if already present from the attachment loop.
         if (row.name in servers) continue;
-        servers[row.name] = row.transport as unknown as PodMcpServerConfig;
+        servers[row.name] = wrapStdioCwd(row.transport as unknown as PodMcpServerConfig);
         catalog[row.name] = row.discoveredTools ?? [];
       }
     }
