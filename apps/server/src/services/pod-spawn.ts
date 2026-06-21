@@ -232,27 +232,66 @@ function posixQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Transform a stdio transport that has a `cwd` field into an equivalent
- *  shell cd-wrapper, because Claude Code silently ignores a bare `cwd` field
- *  on stdio entries in mcp.json (verified beta-15, 2026-06-20).
+/** Node package-runner shims that ship ONLY as a Windows `.cmd` batch file
+ *  (no sibling `.exe`). Node's `child_process.spawn` with `shell:false` — exactly
+ *  how Claude Code launches a stdio MCP server — CANNOT execute a `.cmd`
+ *  directly: it throws ENOENT. So a server configured with `command: "npx"`
+ *  probes fine (the MCP SDK applies its own Windows `cmd /c` handling) yet fails
+ *  to start under Claude, surfacing as "No such tool available" + a `/doctor`
+ *  MCP setup warning (live-confirmed pc-pty-chat-454, Life Planning App). These
+ *  must be wrapped as `cmd /c <shim> ...` so CreateProcess launches cmd.exe,
+ *  which then resolves the `.cmd`. */
+const WIN_CMD_SHIMS = new Set([
+  'npx', 'npm', 'pnpm', 'pnpx', 'yarn', 'yarnpkg', 'bun', 'bunx', 'tsx',
+  'corepack', 'node-gyp',
+]);
+
+/** True when, on Windows, `command` must be launched through `cmd /c` rather
+ *  than spawned directly. Covers explicit `.cmd`/`.bat` files and the bare
+ *  Node-runner shim names above. A direct executable (`node`, an absolute
+ *  `*.exe` path like the cia-next python.exe) returns false — left untouched. */
+function winCommandNeedsCmd(command: string): boolean {
+  const lower = command.toLowerCase();
+  if (lower.endsWith('.cmd') || lower.endsWith('.bat')) return true;
+  const base = lower.replace(/\\/g, '/').split('/').pop() ?? lower;
+  return WIN_CMD_SHIMS.has(base);
+}
+
+/** Normalize a stdio transport so the command Claude actually spawns succeeds.
+ *  Two transforms, applied together:
  *
- *  - Windows: `command: "cmd"`, `args: ["/c","cd","/d","<cwd>","&&","<cmd>",...args]`
- *    (separate argv tokens — node quotes each for CreateProcess; an inline
- *    quoted string breaks on spaced paths under cmd /c quote-stripping)
- *  - Unix:    `command: "sh"`,  `args: ["-c", "cd '<cwd>' && '<cmd>' '<args...>'"]`
+ *  1. `cwd` wrapper — Claude Code silently ignores a bare `cwd` field on stdio
+ *     entries in mcp.json (verified beta-15, 2026-06-20), so it is encoded into
+ *     a shell `cd` wrapper instead and the `cwd` key is consumed.
+ *  2. Windows `.cmd`-shim wrapper — a command that is a Windows batch shim
+ *     (npx/npm/pnpm/yarn/tsx/… or any `*.cmd`/`*.bat`) can't be spawned
+ *     directly (ENOENT); it is routed through `cmd /c`. Applies even with NO
+ *     `cwd` (the bug `wrapStdioCwd`'s old cwd-only guard left unwrapped).
  *
- *  The `cwd` key is consumed and NOT emitted — it is encoded into the wrapper
- *  command string instead. `env` and `type` are preserved on the output entry.
- *  A stdio entry WITHOUT `cwd` is returned unchanged (no wrapper added).
- *  An HTTP entry (has `url`, no `command`) is returned unchanged.
+ *  - Windows: `command: "cmd"`, args either
+ *      `["/c","cd","/d","<cwd>","&&","<cmd>",...args]`  (cwd present) or
+ *      `["/c","<cmd>",...args]`                         (cwd absent, shim only).
+ *    SEPARATE argv tokens — node quotes each for CreateProcess and cmd.exe
+ *    reconstructs them; an inline quoted string breaks on spaced paths under
+ *    cmd /c quote-stripping (live-verified, pc-pty-chat-452). `cd /d` handles
+ *    drive changes.
+ *  - Unix:    `command: "sh"`, `args: ["-c", "cd '<cwd>' && '<cmd>' '<args...>'"]`.
+ *    Unix has no `.cmd` problem, so the shim wrap is win32-only.
  *
- *  `platform` defaults to `process.platform`; pass explicitly in tests to
- *  drive the Windows vs Unix branch deterministically. */
+ *  `env` and `type` are preserved. A stdio entry needing neither transform, and
+ *  an HTTP entry (has `url`, no `command`), are returned unchanged.
+ *
+ *  `platform` defaults to `process.platform`; pass explicitly in tests to drive
+ *  the Windows vs Unix branch deterministically. */
 export function wrapStdioCwd(
   transport: PodMcpServerConfig,
   platform: NodeJS.Platform = process.platform,
 ): PodMcpServerConfig {
-  if (!transport.cwd || !transport.command) return transport;
+  if (!transport.command) return transport;
+
+  const hasCwd = typeof transport.cwd === 'string' && transport.cwd.length > 0;
+  const needsWinShim = platform === 'win32' && winCommandNeedsCmd(transport.command);
+  if (!hasCwd && !needsWinShim) return transport;
 
   const { cwd, command, args = [], type, env } = transport;
 
@@ -266,12 +305,15 @@ export function wrapStdioCwd(
     // inline `cd /d "<path with spaces>" && ...` string breaks under cmd /c
     // quote-stripping (live-verified, pc-pty-chat-452). `cd /d` handles drives.
     out.command = 'cmd';
-    out.args = ['/c', 'cd', '/d', cwd, '&&', command, ...args];
+    out.args = hasCwd
+      ? ['/c', 'cd', '/d', cwd as string, '&&', command, ...args]
+      : ['/c', command, ...args];
   } else {
     // sh -c takes ONE command string; POSIX single-quote every field so spaces
-    // and shell-special chars are inert.
+    // and shell-special chars are inert. Reached only when hasCwd (needsWinShim
+    // is win32-only).
     out.command = 'sh';
-    out.args = ['-c', `cd ${posixQuote(cwd)} && ${[command, ...args].map(posixQuote).join(' ')}`];
+    out.args = ['-c', `cd ${posixQuote(cwd as string)} && ${[command, ...args].map(posixQuote).join(' ')}`];
   }
   return out;
 }

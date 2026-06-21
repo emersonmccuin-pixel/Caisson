@@ -93,6 +93,72 @@ test('wrapStdioCwd — Unix uses plain cd (no /d flag)', () => {
   assert.ok(!result.args?.[1]?.includes('cd /d'), 'Unix must NOT use cd /d');
 });
 
+// ── Windows: .cmd-shim wrapper WITHOUT cwd (pc-pty-chat-454) ───────────────────
+//
+// `npx`/`npm`/`pnpm`/... are Windows .cmd batch shims with no sibling .exe.
+// Node's spawn (shell:false) — exactly how Claude launches a stdio MCP server —
+// ENOENTs on them. They must be routed through `cmd /c` even with no cwd.
+
+test('wrapStdioCwd — Windows: bare npx (no cwd) is wrapped through cmd /c', () => {
+  const result = wrapStdioCwd(
+    { command: 'npx', args: ['tsx', 'E:/Life Planning App/packages/mcp-server/src/index.ts'] },
+    'win32',
+  );
+  assert.equal(result.command, 'cmd');
+  assert.deepEqual(result.args, [
+    '/c', 'npx', 'tsx', 'E:/Life Planning App/packages/mcp-server/src/index.ts',
+  ]);
+  assert.equal(result.cwd, undefined);
+});
+
+test('wrapStdioCwd — Windows: npm / pnpm / yarn / tsx shims (no cwd) are wrapped', () => {
+  for (const shim of ['npm', 'pnpm', 'yarn', 'tsx', 'bunx']) {
+    const result = wrapStdioCwd({ command: shim, args: ['x'] }, 'win32');
+    assert.equal(result.command, 'cmd', `${shim} routed through cmd`);
+    assert.deepEqual(result.args, ['/c', shim, 'x']);
+  }
+});
+
+test('wrapStdioCwd — Windows: explicit *.cmd / *.bat (no cwd) is wrapped', () => {
+  const cmd = wrapStdioCwd({ command: 'my-server.cmd', args: ['--port', '1'] }, 'win32');
+  assert.equal(cmd.command, 'cmd');
+  assert.deepEqual(cmd.args, ['/c', 'my-server.cmd', '--port', '1']);
+  const bat = wrapStdioCwd({ command: 'run.BAT' }, 'win32');
+  assert.equal(bat.command, 'cmd');
+  assert.deepEqual(bat.args, ['/c', 'run.BAT']);
+});
+
+test('wrapStdioCwd — Windows: env + type preserved on the no-cwd shim wrap', () => {
+  const result = wrapStdioCwd(
+    { command: 'npx', args: ['tsx'], env: { TOKEN: 'abc' }, type: 'stdio' },
+    'win32',
+  );
+  assert.deepEqual(result.env, { TOKEN: 'abc' });
+  assert.equal(result.type, 'stdio');
+});
+
+// ── no-regression: direct executables WITHOUT cwd stay untouched ──────────────
+
+test('wrapStdioCwd — Windows: bare node (no cwd) is NOT wrapped (direct .exe)', () => {
+  const transport = { command: 'node', args: ['server.js'] };
+  assert.deepEqual(wrapStdioCwd(transport, 'win32'), transport);
+});
+
+test('wrapStdioCwd — Windows: absolute *.exe path (no cwd) is NOT wrapped (cia-next case)', () => {
+  const transport = {
+    command: 'C:\\Users\\me\\AppData\\Local\\Programs\\Python\\Python313\\python.exe',
+    args: ['E:\\proj\\server.py'],
+    env: { KEY: 'v' },
+  };
+  assert.deepEqual(wrapStdioCwd(transport, 'win32'), transport);
+});
+
+test('wrapStdioCwd — Unix: bare npx (no cwd) is NOT wrapped (no .cmd problem on Unix)', () => {
+  const transport = { command: 'npx', args: ['tsx', 'x'] };
+  assert.deepEqual(wrapStdioCwd(transport, 'linux'), transport);
+  assert.deepEqual(wrapStdioCwd(transport, 'darwin'), transport);
+});
+
 // ── no-op cases ───────────────────────────────────────────────────────────────
 
 test('wrapStdioCwd — stdio WITHOUT cwd is returned unchanged', () => {
