@@ -207,19 +207,22 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
 
 // ── Stdio cwd wrapper ─────────────────────────────────────────────────────────
 
-/** Quote a single shell argument — wraps in `"..."` when the arg contains a
- *  space or double-quote, escaping internal `"` with `\"`. Safe for both
- *  `cmd /c` (Windows) and `sh -c` (Unix) contexts. */
-function quoteShellArg(arg: string): string {
-  return /[ "]/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg;
+/** POSIX single-quote a field for an `sh -c` command string: wrap in single
+ *  quotes (inert to word-splitting, globbing, and `$`/backtick expansion),
+ *  escaping any embedded single quote as the standard `'\''` sequence. Used by
+ *  the Unix branch only — the Windows branch passes raw argv tokens instead. */
+function posixQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 /** Transform a stdio transport that has a `cwd` field into an equivalent
  *  shell cd-wrapper, because Claude Code silently ignores a bare `cwd` field
  *  on stdio entries in mcp.json (verified beta-15, 2026-06-20).
  *
- *  - Windows: `command: "cmd"`, `args: ["/c", "cd /d \"<cwd>\" && <cmd> <args...>"]`
- *  - Unix:    `command: "sh"`,  `args: ["-c", "cd \"<cwd>\" && <cmd> <args...>"]`
+ *  - Windows: `command: "cmd"`, `args: ["/c","cd","/d","<cwd>","&&","<cmd>",...args]`
+ *    (separate argv tokens — node quotes each for CreateProcess; an inline
+ *    quoted string breaks on spaced paths under cmd /c quote-stripping)
+ *  - Unix:    `command: "sh"`,  `args: ["-c", "cd '<cwd>' && '<cmd>' '<args...>'"]`
  *
  *  The `cwd` key is consumed and NOT emitted — it is encoded into the wrapper
  *  command string instead. `env` and `type` are preserved on the output entry.
@@ -235,19 +238,23 @@ export function wrapStdioCwd(
   if (!transport.cwd || !transport.command) return transport;
 
   const { cwd, command, args = [], type, env } = transport;
-  const quotedCwd = `"${cwd.replace(/"/g, '\\"')}"`;
-  const cmdParts = [command, ...args].map(quoteShellArg);
 
   const out: PodMcpServerConfig = {};
   if (type !== undefined) out.type = type;
   if (env !== undefined) out.env = env;
 
   if (platform === 'win32') {
+    // SEPARATE argv tokens (NOT an inline-quoted single string). node quotes
+    // each spaced token for CreateProcess and cmd.exe reconstructs them; an
+    // inline `cd /d "<path with spaces>" && ...` string breaks under cmd /c
+    // quote-stripping (live-verified, pc-pty-chat-452). `cd /d` handles drives.
     out.command = 'cmd';
-    out.args = ['/c', `cd /d ${quotedCwd} && ${cmdParts.join(' ')}`];
+    out.args = ['/c', 'cd', '/d', cwd, '&&', command, ...args];
   } else {
+    // sh -c takes ONE command string; POSIX single-quote every field so spaces
+    // and shell-special chars are inert.
     out.command = 'sh';
-    out.args = ['-c', `cd ${quotedCwd} && ${cmdParts.join(' ')}`];
+    out.args = ['-c', `cd ${posixQuote(cwd)} && ${[command, ...args].map(posixQuote).join(' ')}`];
   }
   return out;
 }
