@@ -79,6 +79,16 @@ export interface MaterializePodOptions {
    *  Independent of whether a contract is present (both can arrive together).
    *  Empty/undefined → no chain section rendered. */
   contextChain?: string;
+  /** pc-pty-chat-454 — tool slugs granted into the `tools:` allowlist REGARDLESS
+   *  of the pod's stored tools_json. The orchestrator/chat spawn uses this to
+   *  auto-grant the project-scoped + attached registry MCP server tools it
+   *  connects to (mcp.json wires the connection; the `tools:` frontmatter is the
+   *  separate call-permission gate — without this the pod connects but is
+   *  forbidden from calling them, and the stock orchestrator's allowlist can't
+   *  even be hand-edited). Must be FULLY-QUALIFIED `mcp__<server>__<tool>` slugs.
+   *  Deduped against the expanded allowlist. Empty/undefined for worker agents,
+   *  which stay explicit-allowlist-only. */
+  extraGrantTools?: readonly string[];
 }
 
 export interface MaterializedPod {
@@ -157,9 +167,18 @@ function materializePodFiles(
   // otherwise yield an agent that can't fetch its source or submit its output.
   // Idempotent — duplicates from the wildcard expansion below are deduped by
   // `mergeRequiredAgentTools`.
-  const expandedTools = mergeRequiredAgentTools(
-    expandToolWildcards(bundle.agent.tools, catalog),
-  );
+  // pc-pty-chat-454 — start from the pod's own expanded allowlist, then fold in
+  // any auto-granted tools (orchestrator project-server grant). Deduped so a
+  // tool already present via tools_json isn't listed twice.
+  const baseTools = expandToolWildcards(bundle.agent.tools, catalog);
+  const combinedTools = [...baseTools];
+  const seenTools = new Set(baseTools);
+  for (const grant of opts.extraGrantTools ?? []) {
+    if (seenTools.has(grant)) continue;
+    seenTools.add(grant);
+    combinedTools.push(grant);
+  }
+  const expandedTools = mergeRequiredAgentTools(combinedTools);
   const variables = withMaterializerVariables(opts.variables, expandedTools);
 
   mkdirSync(dirname(agentMdPath), { recursive: true });

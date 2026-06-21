@@ -7,9 +7,9 @@
 
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const tmpDir = mkdtempSync(join(tmpdir(), 'pc-spawn-reg-merge-'));
 process.env.PC_DATA_DIR = tmpDir;
@@ -24,8 +24,12 @@ const {
   setMcpServerDiscovery,
   upsertMcpAttachment,
 } = await import('@pc/db');
-const { buildRegistryMcpConfig } = await import('../src/services/pod-spawn.ts');
+const { buildRegistryMcpConfig, preparePodSpawn } = await import('../src/services/pod-spawn.ts');
 const { expandToolWildcards } = await import('@pc/runtime');
+
+/** Repo templates dir (.claude/hooks + settings.template.json) the runtime
+ *  bundle reads. apps/server/test → repo root is three levels up. */
+const TEMPLATES_DIR = resolve(import.meta.dirname, '../../../templates');
 
 before(() => runMigrations());
 after(() => {
@@ -326,4 +330,150 @@ test('wildcard expansion uses registry catalog — mcp__server__* resolves to di
   const expanded = expandToolWildcards(agentTools, merged);
 
   assert.deepEqual([...expanded].sort(), [...tools].sort());
+});
+
+// ── pc-pty-chat-454: catalog tool-name normalization (bare → qualified) ───────
+//
+// The discovery probe stores BARE server-local tool names (tools/list → t.name,
+// e.g. "list_areas"), but the materializer's `tools:` allowlist matches the
+// fully-qualified `mcp__<server>__<tool>` slug. buildRegistryMcpConfig must
+// qualify them so the catalog is usable as an allowlist source.
+
+test('buildRegistryMcpConfig — bare discovered tool names are qualified to mcp__<server>__<tool>', () => {
+  const agent = makeAgent();
+  // BARE names, exactly as probeMcpServer stores them.
+  const bare = ['list_areas', 'create_thing', 'add_journal_entry'];
+  const server = makeRegistryServer(bare);
+  upsertMcpAttachment({ agentId: agent.id, mcpServerId: server.id, enabledTools: '*' });
+
+  const updated = getMcpServerRegistry(server.id)!;
+  const result = buildRegistryMcpConfig(agent.id);
+
+  assert.deepEqual(
+    [...result.catalog[updated.name]].sort(),
+    bare.map((t) => `mcp__${updated.name}__${t}`).sort(),
+    'catalog entries are fully-qualified slugs',
+  );
+});
+
+test('buildRegistryMcpConfig — already-qualified tool names are not double-prefixed', () => {
+  const agent = makeAgent();
+  const qualified = ['mcp__srv-x__a', 'mcp__srv-x__b'];
+  const server = makeRegistryServer(qualified);
+  upsertMcpAttachment({ agentId: agent.id, mcpServerId: server.id, enabledTools: '*' });
+
+  const updated = getMcpServerRegistry(server.id)!;
+  const result = buildRegistryMcpConfig(agent.id);
+
+  // Idempotent — qualified names pass through unchanged (no mcp__srv__mcp__ …).
+  assert.deepEqual([...result.catalog[updated.name]].sort(), [...qualified].sort());
+});
+
+// ── pc-pty-chat-454: orchestrator grant — project-server tools land in the
+//    rendered agent's `tools:` allowlist (end-to-end via preparePodSpawn) ─────
+//
+// THE core requirement: any project's orchestrator must be able to CALL the
+// MCP servers scoped to that project. This runs the real spawn-prep path with
+// includeProjectServers:true (the orchestrator flag) and inspects the agent .md
+// the host actually launches with.
+
+function readRenderedTools(pluginDir: string, agentName: string): string[] {
+  const md = readFileSync(resolve(pluginDir, 'agents', `${agentName}.md`), 'utf8');
+  // Frontmatter `tools:` is a comma-separated list on one line: tools: a, b, c
+  const m = md.match(/^tools:\s*(.+)$/m);
+  assert.ok(m, 'rendered agent .md has a tools: frontmatter line');
+  return m![1]
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+test('preparePodSpawn — includeProjectServers grants project-scoped server tools into the allowlist (no attachment, no tools_json edit)', () => {
+  const project = makeProject();
+  const agent = createAgent(
+    {
+      name: 'orch-grant-' + Date.now(),
+      scope: 'project',
+      projectId: project.id as import('@pc/domain').ULID,
+      prompt: 'I am the chat.',
+      tools: ['Read', 'mcp__pc-rig__pc_get_work_item'],
+    },
+    { actor: 'user', reason: 'test' },
+  );
+  // Project-scoped server, BARE discovered tools, NO attachment row at all.
+  const bare = ['list_areas', 'create_task', 'search_things'];
+  const server = makeProjectScopedServer(project.id, bare);
+  const updated = getMcpServerRegistry(server.id)!;
+
+  const scratchDir = mkdtempSync(join(tmpdir(), 'pc-orch-grant-'));
+  const prep = preparePodSpawn({
+    agentName: agent.name,
+    projectId: project.id as import('@pc/domain').ULID,
+    worktreeDir: scratchDir,
+    scratchDir,
+    templatesDir: TEMPLATES_DIR,
+    includeProjectServers: true,
+  });
+  assert.ok(prep, 'preparePodSpawn resolved the pod');
+
+  // 1. The server is wired into mcp.json (connects).
+  const mcp = JSON.parse(readFileSync(prep!.mcpConfigPath, 'utf8')) as {
+    mcpServers: Record<string, unknown>;
+  };
+  assert.ok(mcp.mcpServers[updated.name], 'project server present in mcp.json (connects)');
+
+  // 2. AND every one of its tools is in the rendered `tools:` allowlist
+  //    (callable) — fully-qualified, even though the pod's tools_json never
+  //    listed them and there is no attachment row.
+  const tools = readRenderedTools(prep!.pluginDir, agent.name);
+  for (const t of bare) {
+    assert.ok(
+      tools.includes(`mcp__${updated.name}__${t}`),
+      `allowlist grants mcp__${updated.name}__${t}`,
+    );
+  }
+  // The pod's own declared tools survive too.
+  assert.ok(tools.includes('mcp__pc-rig__pc_get_work_item'), 'declared pc-rig tool retained');
+
+  prep!.cleanup();
+  rmSync(scratchDir, { recursive: true, force: true });
+});
+
+test('preparePodSpawn — WITHOUT includeProjectServers (worker), project-server tools are NOT granted', () => {
+  const project = makeProject();
+  const agent = createAgent(
+    {
+      name: 'worker-nogrant-' + Date.now(),
+      scope: 'project',
+      projectId: project.id as import('@pc/domain').ULID,
+      prompt: 'I am a worker.',
+      tools: ['Read', 'mcp__pc-rig__pc_get_work_item'],
+    },
+    { actor: 'user', reason: 'test' },
+  );
+  const bare = ['list_areas', 'create_task'];
+  const server = makeProjectScopedServer(project.id, bare);
+  const updated = getMcpServerRegistry(server.id)!;
+
+  const scratchDir = mkdtempSync(join(tmpdir(), 'pc-worker-nogrant-'));
+  const prep = preparePodSpawn({
+    agentName: agent.name,
+    projectId: project.id as import('@pc/domain').ULID,
+    worktreeDir: scratchDir,
+    scratchDir,
+    templatesDir: TEMPLATES_DIR,
+    // no includeProjectServers — worker default
+  });
+  assert.ok(prep, 'preparePodSpawn resolved the pod');
+
+  const tools = readRenderedTools(prep!.pluginDir, agent.name);
+  for (const t of bare) {
+    assert.ok(
+      !tools.includes(`mcp__${updated.name}__${t}`),
+      `worker allowlist does NOT auto-grant mcp__${updated.name}__${t}`,
+    );
+  }
+
+  prep!.cleanup();
+  rmSync(scratchDir, { recursive: true, force: true });
 });

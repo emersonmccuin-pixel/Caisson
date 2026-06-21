@@ -174,6 +174,22 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
     includeProjectServers: input.includeProjectServers,
   });
 
+  // pc-pty-chat-454 — the orchestrator/chat spawn must be able to CALL the
+  // project-scoped (and explicitly attached) MCP servers it connects to, not
+  // just connect to them. The registry path wires mcp.json + the tool catalog,
+  // but the `tools:` allowlist is derived solely from the pod's stored
+  // tools_json — so an auto-included/attached server connects yet every tool is
+  // forbidden (and the stock orchestrator's tools_json can't be hand-edited).
+  // When includeProjectServers is set (orchestrator path ONLY), grant every
+  // resolved registry tool into the allowlist. The catalog now holds
+  // fully-qualified `mcp__<server>__<tool>` slugs (buildRegistryMcpConfig
+  // normalises them), which is exactly what the `tools:` frontmatter matches.
+  // Worker agents pass includeProjectServers=false and keep explicit-allowlist-
+  // only — no grant.
+  const extraGrantTools = input.includeProjectServers
+    ? Object.values(registry.catalog).flat()
+    : [];
+
   const materialised: MaterializedPluginPod = materializePodPlugin({
     bundle,
     worktreeDir: input.worktreeDir,
@@ -181,6 +197,7 @@ export function preparePodSpawn(input: PreparePodSpawnInput): PodSpawnPrep | nul
     baselineMcpServers: { ...runtimeFiles.baselineMcpServers, ...registry.servers },
     mcpToolCatalog: { 'pc-rig': PC_RIG_TOOL_NAMES, ...registry.catalog },
     workItem: input.workItem,
+    ...(extraGrantTools.length > 0 ? { extraGrantTools } : {}),
     ...(contextChain ? { contextChain } : {}),
     ...(Object.keys(variables).length > 0 ? { variables } : {}),
   });
@@ -261,6 +278,17 @@ export function wrapStdioCwd(
 
 // ── Registry MCP resolution ────────────────────────────────────────────────────
 
+/** Fully-qualify an MCP tool name to the `mcp__<server>__<tool>` slug CC's
+ *  `tools:` allowlist matches on (exact-name, no wildcards). The discovery probe
+ *  stores BARE server-local names (`tools/list` → `t.name`, e.g. `list_areas`),
+ *  but the materializer's catalog + the frontmatter allowlist both require the
+ *  qualified form — so a bare name must be prefixed. Idempotent: a name already
+ *  carrying an `mcp__` prefix (explicit `enabledTools` selections are stored
+ *  qualified) is returned unchanged so it's never double-prefixed. */
+function qualifyMcpToolName(serverName: string, tool: string): string {
+  return tool.startsWith('mcp__') ? tool : `mcp__${serverName}__${tool}`;
+}
+
 /** Load the registry-based MCP servers attached to `agentId` and return the
  *  extra `servers` (to merge into `baselineMcpServers`) and `catalog` (to
  *  merge into `mcpToolCatalog`) entries they contribute.
@@ -312,8 +340,8 @@ export function buildRegistryMcpConfig(
       // wrapStdioCwd: if the stored transport has a `cwd`, transform it into a
       // shell cd-wrapper (CC ignores a bare cwd field on stdio mcp.json entries).
       servers[row.name] = wrapStdioCwd(row.transport as unknown as PodMcpServerConfig);
-      catalog[row.name] =
-        att.enabledTools === '*' ? (row.discoveredTools ?? []) : att.enabledTools;
+      const selected = att.enabledTools === '*' ? (row.discoveredTools ?? []) : att.enabledTools;
+      catalog[row.name] = selected.map((t) => qualifyMcpToolName(row.name, t));
     }
     // pc-pty-chat-451 — auto-include project-scoped servers for the orchestrator.
     // Project-registered servers that are NOT explicitly attached are merged in
@@ -325,7 +353,7 @@ export function buildRegistryMcpConfig(
         // Attachment wins — skip if already present from the attachment loop.
         if (row.name in servers) continue;
         servers[row.name] = wrapStdioCwd(row.transport as unknown as PodMcpServerConfig);
-        catalog[row.name] = row.discoveredTools ?? [];
+        catalog[row.name] = (row.discoveredTools ?? []).map((t) => qualifyMcpToolName(row.name, t));
       }
     }
   } catch {
