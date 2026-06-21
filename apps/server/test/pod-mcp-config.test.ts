@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parsePodMcpServerConfig } from '../src/services/pod-mcp-config.ts';
+import { parsePodMcpServerConfig, parseMcpServerTransport } from '../src/services/pod-mcp-config.ts';
 
 // ── parsePodMcpServerConfig: valid shapes accepted ──────────────────────────
 
@@ -77,5 +77,64 @@ test('rejects wrong types for command / args / env / url', () => {
     /env\.A must be a string/,
   );
   assert.throws(() => parsePodMcpServerConfig({ url: 5 }), /url must be a string/);
+});
+
+// ── parsePodMcpServerConfig: cwd (pc-pty-chat-452) ──────────────────────────
+
+test('parsePodMcpServerConfig accepts cwd on a stdio entry', () => {
+  const cfg = parsePodMcpServerConfig({
+    command: 'npx',
+    args: ['tsx', 'src/index.ts'],
+    cwd: 'E:\\Claude Code Projects\\Personal\\Life Planning App\\packages\\mcp-server',
+  });
+  assert.equal(cfg.cwd, 'E:\\Claude Code Projects\\Personal\\Life Planning App\\packages\\mcp-server');
+  assert.equal(cfg.command, 'npx');
+});
+
+test('parsePodMcpServerConfig rejects cwd paired with url (http entry)', () => {
+  assert.throws(
+    () => parsePodMcpServerConfig({ url: 'https://x.test/mcp', cwd: '/some/path' }),
+    /mcp\.cwd is only valid with command/,
+  );
+});
+
+test('parsePodMcpServerConfig rejects empty cwd', () => {
+  assert.throws(
+    () => parsePodMcpServerConfig({ command: 'npx', cwd: '   ' }),
+    /mcp\.cwd must not be empty/,
+  );
+});
+
+test('parsePodMcpServerConfig rejects non-string cwd', () => {
+  assert.throws(
+    () => parsePodMcpServerConfig({ command: 'npx', cwd: 42 }),
+    /mcp\.cwd must be a string/,
+  );
+});
+
+// ── parseMcpServerTransport: cwd (pc-pty-chat-452) ──────────────────────────
+
+test('parseMcpServerTransport accepts cwd on a stdio entry', () => {
+  const t = parseMcpServerTransport({
+    command: 'npx',
+    args: ['tsx', 'src/index.ts'],
+    cwd: '/home/user/my project/mcp-server',
+  });
+  assert.equal(t.cwd, '/home/user/my project/mcp-server');
+  assert.equal(t.command, 'npx');
+});
+
+test('parseMcpServerTransport rejects cwd paired with url (http entry)', () => {
+  assert.throws(
+    () => parseMcpServerTransport({ url: 'https://x.test/mcp', cwd: '/some/path' }),
+    /mcp\.cwd is only valid with command/,
+  );
+});
+
+test('parseMcpServerTransport rejects empty cwd', () => {
+  assert.throws(
+    () => parseMcpServerTransport({ command: 'npx', cwd: '' }),
+    /mcp\.cwd must not be empty/,
+  );
 });
 
