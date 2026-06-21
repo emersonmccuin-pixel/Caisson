@@ -15,7 +15,7 @@ import {
 } from './live-events.ts';
 import { parseErr, parseOk, type ParseResult, type ULID } from './shared.ts';
 
-export const WORK_ITEM_TYPES = ['task', 'bug', 'feature', 'spike'] as const;
+export const WORK_ITEM_TYPES = ['task', 'bug', 'feature', 'spike', 'investigation'] as const;
 export type WorkItemType = (typeof WORK_ITEM_TYPES)[number];
 
 export type WorkItemStatus =
@@ -65,7 +65,9 @@ export type WorkItemMutationReason =
   | 'verified'
   | 'approved'
   | 'rejected'
-  | 'auto-advanced';
+  | 'auto-advanced'
+  | 'checklist-set'
+  | 'checklist-ticked';
 
 export interface WorkItemChangedLivePayload {
   reason: WorkItemMutationReason;
@@ -261,7 +263,9 @@ export function isWorkItemMutationReason(value: unknown): value is WorkItemMutat
     value === 'verified' ||
     value === 'approved' ||
     value === 'rejected' ||
-    value === 'auto-advanced'
+    value === 'auto-advanced' ||
+    value === 'checklist-set' ||
+    value === 'checklist-ticked'
   );
 }
 

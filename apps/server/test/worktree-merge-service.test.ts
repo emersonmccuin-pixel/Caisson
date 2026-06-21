@@ -46,7 +46,7 @@ after(() => {
 
 // ── mergeBranchIntoIntegration — isolation ───────────────────────────────────
 
-test('mergeBranchIntoIntegration: delegates to dep with the merge worktree path (NOT workspaceDir)', async () => {
+test('mergeBranchIntoIntegration: delegates to dep with the per-landing merge worktree path (NOT workspaceDir)', async () => {
   const calls: Array<{ ws: string; branch: string }> = [];
 
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
@@ -58,8 +58,11 @@ test('mergeBranchIntoIntegration: delegates to dep with the merge worktree path 
 
   await svc.mergeBranchIntoIntegration('wf-TESTABC');
 
+  // D1d: per-landing merge worktree path (__merge-<branch>), not shared __dev-merge.
+  const expectedPath = resolve(FAKE_BASE, '__merge-wf-TESTABC');
   assert.equal(calls.length, 1, 'dep called exactly once');
-  assert.equal(calls[0]!.ws, MERGE_WT_PATH, 'passes merge worktree path, not workspaceDir');
+  assert.equal(calls[0]!.ws, expectedPath, 'passes per-landing merge worktree path');
+  assert.notEqual(calls[0]!.ws, MERGE_WT_PATH, 'must NOT use the shared __dev-merge worktree');
   assert.notEqual(calls[0]!.ws, FAKE_WORKSPACE, 'must NOT pass the user main working tree');
   assert.equal(calls[0]!.branch, 'wf-TESTABC', 'passes branch name');
 });
@@ -160,9 +163,13 @@ test('non-dev integration branch: guard accepts the configured branch, rejects d
 });
 
 // ── pushIntegration — isolation ──────────────────────────────────────────────
+// Post-pc-pty-chat-443 Fix C: pushIntegration always requires a branch arg;
+// the old no-branch shared __dev-merge path has been removed.
 
-test('pushIntegration: delegates to pushBranch dep with the merge worktree path (NOT workspaceDir)', async () => {
+test('pushIntegration: delegates to pushBranch dep with the per-landing merge worktree path (NOT workspaceDir)', async () => {
   const calls: Array<{ ws: string; ref: string }> = [];
+  const LANDING_BRANCH = 'agent-push-test';
+  const PER_LANDING_PATH = resolve(FAKE_BASE, `__merge-${LANDING_BRANCH}`);
 
   // When getWorktreeStatus returns branch:'dev', pushIntegration should use
   // 'dev' as the refspec (branch-tracking worktree mode).
@@ -173,16 +180,19 @@ test('pushIntegration: delegates to pushBranch dep with the merge worktree path 
     pushBranch: async (ws, ref) => { calls.push({ ws, ref }); },
   });
 
-  await svc.pushIntegration();
+  await svc.pushIntegration(LANDING_BRANCH);
 
   assert.equal(calls.length, 1, 'dep called exactly once');
-  assert.equal(calls[0]!.ws, MERGE_WT_PATH, 'passes merge worktree path, not workspaceDir');
+  assert.equal(calls[0]!.ws, PER_LANDING_PATH, 'passes per-landing merge worktree path');
+  assert.notEqual(calls[0]!.ws, MERGE_WT_PATH, 'must NOT use the shared __dev-merge path');
   assert.notEqual(calls[0]!.ws, FAKE_WORKSPACE, 'must NOT pass the user main working tree');
   assert.equal(calls[0]!.ref, 'dev', 'branch-tracking mode uses the branch refspec');
 });
 
 test('pushIntegration: detached HEAD mode uses HEAD:<integration> refspec', async () => {
   const calls: Array<{ ws: string; ref: string }> = [];
+  const LANDING_BRANCH = 'agent-detached-test';
+  const PER_LANDING_PATH = resolve(FAKE_BASE, `__merge-${LANDING_BRANCH}`);
 
   // When getWorktreeStatus returns branch:null (detached HEAD — our standard
   // merge worktree mode), pushIntegration must use 'HEAD:<integration>' to
@@ -195,10 +205,11 @@ test('pushIntegration: detached HEAD mode uses HEAD:<integration> refspec', asyn
     pushBranch: async (ws, ref) => { calls.push({ ws, ref }); },
   });
 
-  await svc.pushIntegration();
+  await svc.pushIntegration(LANDING_BRANCH);
 
   assert.equal(calls.length, 1, 'dep called exactly once');
-  assert.equal(calls[0]!.ws, MERGE_WT_PATH, 'passes merge worktree path');
+  assert.equal(calls[0]!.ws, PER_LANDING_PATH, 'passes per-landing merge worktree path');
+  assert.notEqual(calls[0]!.ws, MERGE_WT_PATH, 'must NOT use the shared __dev-merge path');
   assert.equal(calls[0]!.ref, 'HEAD:trunk', 'detached mode uses HEAD:<integration> refspec');
 });
 
@@ -210,12 +221,12 @@ test('pushIntegration: propagates errors from the dep', async () => {
     pushBranch: async () => { throw new Error('push rejected'); },
   });
 
-  await assert.rejects(() => svc.pushIntegration(), /push rejected/);
+  await assert.rejects(() => svc.pushIntegration('agent-err-test'), /push rejected/);
 });
 
 // ── mergeState — isolation ────────────────────────────────────────────────────
 
-test('mergeState: delegates to gitMergeState dep with the merge worktree path + integration branch', async () => {
+test('mergeState: delegates to gitMergeState dep with the per-landing merge worktree path + integration branch', async () => {
   const fakeState: GitMergeState = { alreadyMerged: true, mergeInProgress: false, pushed: false };
   const calls: Array<{ ws: string; branch: string; integration: string }> = [];
 
@@ -230,8 +241,11 @@ test('mergeState: delegates to gitMergeState dep with the merge worktree path + 
 
   const result = await svc.mergeState('wf-DONE');
 
+  // D1d: per-landing merge worktree path (__merge-<branch>), not shared __dev-merge.
+  const expectedPath = resolve(FAKE_BASE, '__merge-wf-DONE');
   assert.equal(calls.length, 1, 'dep called exactly once');
-  assert.equal(calls[0]!.ws, MERGE_WT_PATH, 'passes merge worktree path, not workspaceDir');
+  assert.equal(calls[0]!.ws, expectedPath, 'passes per-landing merge worktree path');
+  assert.notEqual(calls[0]!.ws, MERGE_WT_PATH, 'must NOT use the shared __dev-merge worktree');
   assert.notEqual(calls[0]!.ws, FAKE_WORKSPACE, 'must NOT pass the user main working tree');
   assert.equal(calls[0]!.branch, 'wf-DONE', 'passes branch name');
   assert.equal(calls[0]!.integration, 'dev', 'passes the resolved integration branch');
@@ -249,4 +263,168 @@ test('mergeState: returns all-false state for an unmapped branch', async () => {
   assert.equal(state.alreadyMerged, false);
   assert.equal(state.mergeInProgress, false);
   assert.equal(state.pushed, false);
+});
+
+// ── create: mainline-only dispatch base ──────────────────────────────────────
+
+test('create: forks from the integration tip (resolveIntegrationTip) and returns base receipt', async () => {
+  const FAKE_TIP = 'aabbccddee1122334455667788990011aabbccdd';
+  const createCalls: Array<{ ws: string; path: string; name: string; startPoint: string | undefined }> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: async () => [
+      { path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' },
+    ],
+    pruneWorktrees: async () => {},
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
+    // D1a: create() uses resolveIntegrationTip, not resolveLocalBranchHead.
+    resolveIntegrationTip: async () => FAKE_TIP,
+    createWorktree: async (ws, path, name, startPoint) => {
+      createCalls.push({ ws, path, name, startPoint });
+      return { path, branch: name, head: FAKE_TIP };
+    },
+    installRunner: async () => {},
+  });
+
+  const entry = await svc.create('agent-TEST');
+
+  assert.equal(createCalls.length, 1, 'createWorktree dep called exactly once');
+  assert.equal(createCalls[0]!.startPoint, FAKE_TIP, 'integration tip passed as startPoint');
+  assert.equal(createCalls[0]!.ws, FAKE_WORKSPACE, 'workspaceDir passed correctly');
+  assert.equal(entry.baseBranch, 'dev');
+  assert.equal(entry.baseSha, FAKE_TIP);
+});
+
+test('create: refuses when the main checkout is not on the canonical branch', async () => {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' }],
+    pruneWorktrees: async () => {},
+    getWorktreeStatus: async () => ({ branch: 'feature/x', clean: true }),
+    resolveIntegrationTip: async () => 'abc123',
+    createWorktree: async () => { throw new Error('should not create'); },
+    installRunner: async () => {},
+  });
+
+  await assert.rejects(
+    () => svc.create('agent-FEATURE'),
+    /MAINLINE GUARD.*"dev".*"feature\/x"/s,
+  );
+});
+
+test('create: refuses dirty canonical checkout before creating worktree', async () => {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' }],
+    pruneWorktrees: async () => {},
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: false }),
+    resolveIntegrationTip: async () => 'abc123',
+    createWorktree: async () => { throw new Error('should not create'); },
+    installRunner: async () => {},
+  });
+
+  await assert.rejects(
+    () => svc.create('agent-DIRTY'),
+    /MAINLINE GUARD.*clean "dev"/,
+  );
+});
+
+test('create: refuses when integration tip cannot be resolved (empty/unborn repo)', async () => {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'trunk', {
+    listWorktrees: async () => [{ path: FAKE_WORKSPACE, branch: 'trunk', head: 'abc' }],
+    pruneWorktrees: async () => {},
+    getWorktreeStatus: async () => ({ branch: 'trunk', clean: true }),
+    resolveIntegrationTip: async () => null,
+    createWorktree: async () => { throw new Error('should not create'); },
+    installRunner: async () => {},
+  });
+
+  await assert.rejects(
+    () => svc.create('agent-NOHEAD'),
+    /MAINLINE GUARD.*integration branch "trunk" has no resolvable tip/,
+  );
+});
+
+// ── tryAdvanceLocalIntegration (pc-pty-chat-417) ─────────────────────────────
+
+test('tryAdvanceLocalIntegration: advances local ref when main checkout is NOT on integration branch', async () => {
+  const MERGE_HEAD_SHA = '1234567890abcdef1234567890abcdef12345678';
+  const updateRefCalls: Array<{ ws: string; branch: string; sha: string }> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: noOpList,
+    // Main checkout is on 'feature', NOT 'dev' — guard must pass.
+    getWorktreeStatus: async () => ({ branch: 'feature', clean: true }),
+    resolveIntegrationTip: async () => MERGE_HEAD_SHA,
+    updateRef: async (ws, branch, sha) => { updateRefCalls.push({ ws, branch, sha }); },
+  });
+
+  await svc.tryAdvanceLocalIntegration();
+
+  assert.equal(updateRefCalls.length, 1, 'updateRef called exactly once');
+  assert.equal(updateRefCalls[0]!.ws, FAKE_WORKSPACE, 'workspaceDir passed');
+  assert.equal(updateRefCalls[0]!.branch, 'dev', 'integration branch passed');
+  assert.equal(updateRefCalls[0]!.sha, MERGE_HEAD_SHA, 'merge-head SHA passed');
+});
+
+test('tryAdvanceLocalIntegration: fast-forwards worktree when main checkout IS on integration branch', async () => {
+  const ffCalls: Array<{ ws: string; sha: string }> = [];
+  const updateRefCalls: Array<unknown> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: noOpList,
+    // Main checkout IS on 'dev' — update the worktree/index coherently.
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
+    resolveIntegrationTip: async () => 'deadbeef1234',
+    updateRef: async (...args) => { updateRefCalls.push(args); },
+    fastForwardWorktree: async (ws, sha) => { ffCalls.push({ ws, sha }); },
+  });
+
+  await svc.tryAdvanceLocalIntegration();
+
+  assert.equal(updateRefCalls.length, 0, 'updateRef must NOT be called for a checked-out branch');
+  assert.deepEqual(ffCalls, [{ ws: FAKE_WORKSPACE, sha: 'deadbeef1234' }]);
+});
+
+test('tryAdvanceLocalIntegration: skips fast-forward when checked-out integration branch is dirty', async () => {
+  const ffCalls: Array<unknown> = [];
+  const updateRefCalls: Array<unknown> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: noOpList,
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: false }),
+    resolveIntegrationTip: async () => 'deadbeef1234',
+    updateRef: async (...args) => { updateRefCalls.push(args); },
+    fastForwardWorktree: async (...args) => { ffCalls.push(args); },
+  });
+
+  await svc.tryAdvanceLocalIntegration();
+
+  assert.equal(ffCalls.length, 0, 'dirty main checkout must not be fast-forwarded');
+  assert.equal(updateRefCalls.length, 0, 'checked-out integration branch must not use updateRef');
+});
+
+test('tryAdvanceLocalIntegration: no-op when resolveIntegrationTip returns null', async () => {
+  const updateRefCalls: Array<unknown> = [];
+
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: noOpList,
+    getWorktreeStatus: async () => ({ branch: 'other', clean: true }),
+    resolveIntegrationTip: async () => null, // fresh repo
+    updateRef: async (...args) => { updateRefCalls.push(args); },
+  });
+
+  await svc.tryAdvanceLocalIntegration();
+
+  assert.equal(updateRefCalls.length, 0, 'no updateRef when tip is null');
+});
+
+test('tryAdvanceLocalIntegration: never throws even when updateRef fails', async () => {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    listWorktrees: noOpList,
+    getWorktreeStatus: async () => ({ branch: 'other', clean: true }),
+    resolveIntegrationTip: async () => 'abc123',
+    updateRef: async () => { throw new Error('update-ref failed (simulated)'); },
+  });
+
+  // Must not throw even though the dep throws.
+  await assert.doesNotReject(() => svc.tryAdvanceLocalIntegration());
 });

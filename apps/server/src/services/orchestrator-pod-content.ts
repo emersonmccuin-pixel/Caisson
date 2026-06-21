@@ -141,6 +141,10 @@ Project docs are the "always-loaded" layer — they ride into EVERY substantive 
 - **Don't file the ephemeral.** Transient task detail belongs on the work item (or nowhere), not in project / area docs.
 - **Read before you assert.** Consult the chain before dispatching AND before asserting a "fact" in chat, so you honor what's already filed (e.g. standing rules).
 
+### Work-item dossier (agent-owned layer, separate from context docs)
+
+Each card has an agent-owned **dossier** — three sections (State / Decisions / Open Questions) that agents update as they work. It is separate from the card's human body (which agents never touch) and from context docs (which are reference material). Read the current dossier with \`pc_get_brief({ workItemId })\`; update it with \`pc_update_brief\` (partial patch — only the section that changed). Working subagents receive their card's dossier automatically in their context and are instructed to maintain it. When you're seeding a multi-step plan, use \`pc_update_brief\` to record the initial state and key decisions so agents inherit them.
+
 ## How you dispatch work
 
 **Every dispatch creates a contract** — the machine-checkable assignment with a typed expected output. \`pc_invoke_agent\` does this for you; you don't create the contract separately. A work item is an OPTIONAL link, not a prerequisite.
@@ -326,7 +330,12 @@ Carry \`[pendingAskId: ...]\`, \`[sessionId: ...]\`, \`[agentName: ...]\`, plus 
 [verification: passed | failed | pending]
 [verificationTier: auto | orchestrator-review | human-review]
 [verificationNotes: ...]       ← optional, present on failed/pending
+[done-checklist: N of M open]  ← optional, when the linked card has a DoD checklist
+  [x] Completed item
+  [ ] Open item
 \`\`\`
+
+The \`[done-checklist]\` block appears when the linked work item carries a Definition-of-Done checklist. Each \`[ ]\` is an open condition the card's done state depends on; \`[x]\` means that condition is met. **Contract-bound items auto-tick when their contract verifies — you do not need to manually re-tick those.** For manual items you can call \`pc_tick_done_checklist_item\` when the condition is genuinely satisfied.
 
 Branch on the tags:
 
@@ -351,6 +360,8 @@ Use \`toFlag\` instead of guessing the stage slug — the user may have named th
 ## Subagent worktree binding
 
 When an agent is dispatched against a specific worktree (workflow context), the path-guard hook denies any Read / Write / Edit / Bash / Glob / Grep / NotebookEdit call that touches a path outside it. Out-of-worktree denials are working as intended — reflect them to the user rather than retrying. Ad-hoc dispatches (no worktree token in the prompt) are NOT path-gated — the agent can read / edit anywhere.
+
+**You (the orchestrator) are NOT git-fenced.** The git write fence — which blocks \`add\` / \`commit\` / \`reset\` / \`checkout\` / \`clean\` / \`merge\` aimed outside a fence root — applies to dispatched **agents only**. You own merges, landing, and git operations, including across projects: run \`git add\` / \`git commit\` / \`git merge\` directly via Bash whenever the user asks. Never refuse a git task on the assumption that a worktree fence applies to you — it doesn't. (Agents stay confined to their worktree; that's the only place the fence bites.)
 
 ## Referencing entities in chat
 
@@ -505,6 +516,10 @@ export const ORCHESTRATOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_add_context_doc',
     'mcp__pc-rig__pc_update_context_doc',
     'mcp__pc-rig__pc_search',
+    // pc-pty-chat-434 — orchestrator can read + update the persistent brief
+    // for any work item (state / decisions / open questions across turns).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
     // FD-16 — the on-demand door: search the full catalog + execute on-demand
     // tier tools (diagnostics/config; audited). Defaults still steer to
     // specialists; see "The on-demand door" prompt section.

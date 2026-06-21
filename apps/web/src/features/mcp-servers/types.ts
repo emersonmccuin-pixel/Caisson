@@ -9,6 +9,8 @@ export interface McpTransport {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /** stdio: working directory the server launches from (optional) */
+  cwd?: string;
   /** HTTP: endpoint URL */
   url?: string;
   headers?: Record<string, string>;

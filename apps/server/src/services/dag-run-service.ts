@@ -244,6 +244,8 @@ interface RunHandle {
   id: ULID;
   workItemId: ULID | null;
   worktreePath: string | null;
+  worktreeBaseBranch: string | null;
+  worktreeBaseSha: string | null;
 }
 
 /** Build the live DagExecutorDeps for one run. */
@@ -390,6 +392,8 @@ export function makeExecutorDeps(
       {
         projectId: opts.projectId,
         worktreeDir,
+        worktreeBaseBranch: run.worktreeBaseBranch,
+        worktreeBaseSha: run.worktreeBaseSha,
         agentName: node.agent,
         input: initialInput,
         dispatcherSessionId: pcSessionId,
@@ -845,9 +849,13 @@ export async function fireDagWorkflow(
   }
 
   let worktreePath: string | null = null;
+  let worktreeBaseBranch: string | null = null;
+  let worktreeBaseSha: string | null = null;
   if (workflow.worktree !== 'none') {
-    const wt = await opts.worktrees.ensureWorktree(`wf-${rootWiId.slice(-8)}`);
+    const wt = await opts.worktrees.ensureWorktree(`wf-${randomUUID().slice(0, 8)}`);
     worktreePath = wt.path;
+    worktreeBaseBranch = wt.baseBranch ?? null;
+    worktreeBaseSha = wt.baseSha ?? null;
   }
 
   const run = workflowRunsV2Repo.createRun({
@@ -857,6 +865,8 @@ export async function fireDagWorkflow(
     workflowYamlSnapshot: JSON.stringify(workflow),
     workItemId: rootWiId,
     worktreePath,
+    worktreeBaseBranch,
+    worktreeBaseSha,
     status: 'running',
   });
   workflowRunsV2Repo.markStarted(run.id);
@@ -874,7 +884,7 @@ export async function fireDagWorkflow(
   });
 
   const deps = makeExecutorDeps(
-    { id: run.id, workItemId: rootWiId, worktreePath },
+    { id: run.id, workItemId: rootWiId, worktreePath, worktreeBaseBranch, worktreeBaseSha },
     workflow,
     opts
   );
@@ -925,7 +935,13 @@ export async function applyV2ReviewDecision(
 
     const workflow = JSON.parse(run.workflowYamlSnapshot) as WorkflowV2.Workflow;
     const deps = makeExecutorDeps(
-      { id: run.id, workItemId: run.workItemId, worktreePath: run.worktreePath },
+      {
+        id: run.id,
+        workItemId: run.workItemId,
+        worktreePath: run.worktreePath,
+        worktreeBaseBranch: run.worktreeBaseBranch,
+        worktreeBaseSha: run.worktreeBaseSha,
+      },
       workflow,
       opts,
     );
@@ -1074,7 +1090,13 @@ export async function resumeFailedDagRun(
   });
 
   const deps = makeExecutorDeps(
-    { id: run.id, workItemId: run.workItemId, worktreePath: run.worktreePath },
+    {
+      id: run.id,
+      workItemId: run.workItemId,
+      worktreePath: run.worktreePath,
+      worktreeBaseBranch: run.worktreeBaseBranch,
+      worktreeBaseSha: run.worktreeBaseSha,
+    },
     currentDefinition,
     opts,
   );

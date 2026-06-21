@@ -23,6 +23,8 @@ function makeRow(over: Partial<WorkflowRunV2Record> = {}): WorkflowRunV2Record {
     status: 'running',
     workflowYamlSnapshot: JSON.stringify({ id: 'deploy', name: 'Deploy', nodes: [] }),
     worktreePath: null,
+    worktreeBaseBranch: null,
+    worktreeBaseSha: null,
     dagState: { nodes: {} },
     triggerContext: {},
     metadata: {},

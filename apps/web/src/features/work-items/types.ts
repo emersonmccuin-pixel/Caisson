@@ -38,7 +38,7 @@ export interface InitiativeNote {
   deletedAt: number | null;
 }
 
-export const WORK_ITEM_TYPES = ['task', 'bug', 'feature', 'spike'] as const;
+export const WORK_ITEM_TYPES = ['task', 'bug', 'feature', 'spike', 'investigation'] as const;
 export type WorkItemType = (typeof WORK_ITEM_TYPES)[number];
 
 export interface WorkItemHistoryEntry {
@@ -128,6 +128,21 @@ export interface FieldSchemaInput {
   required: boolean;
   description?: string;
   order: number;
+}
+
+/** pc-pty-chat-434 — agent dossier row as returned by
+ *  GET /api/projects/:projectId/work-items/:wiId/dossier.
+ *  `createdAt`/`updatedAt` are null when `fresh=true` (no DB row exists yet). */
+export interface DossierRow {
+  workItemId: ULID;
+  state: string;
+  decisions: string;
+  openQuestions: string;
+  updatedByRunId: ULID | null;
+  updatedByAgent: string | null;
+  version: number;
+  createdAt: number | null;
+  updatedAt: number | null;
 }
 
 export interface Attachment {

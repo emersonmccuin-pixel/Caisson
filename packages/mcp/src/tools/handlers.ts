@@ -15,10 +15,13 @@ import { PC_RIG_TOOL_REGISTRY } from '@pc/domain/tool-registry';
 import type { ToolContext, ToolResult } from './context.ts';
 import { handleAgentRunTool } from './agent-runs.ts';
 import { handleAgentTool } from './agents.ts';
+import { handleBoardHealthTool } from './board-health.ts';
 import { handleContextDocTool } from './context-docs.ts';
 import { handleMetaTool } from './meta.ts';
+import { handleNextActionTool } from './next-action.ts';
 import { handleProjectConfigTool } from './project-config.ts';
 import { handleWorkItemTool } from './work-items.ts';
+import { handleWorkItemDossierTool } from './work-item-dossiers.ts';
 import { handleWorkflowTool } from './workflows.ts';
 
 export type PcRigHandler = (
@@ -36,6 +39,12 @@ export async function dispatchPcRigTool(
 ): Promise<ToolResult> {
   const workItemResult = await handleWorkItemTool(name, args, ctx);
   if (workItemResult) return workItemResult;
+  const dossierResult = await handleWorkItemDossierTool(name, args, ctx);
+  if (dossierResult) return dossierResult;
+  const nextActionResult = await handleNextActionTool(name, args, ctx);
+  if (nextActionResult) return nextActionResult;
+  const boardHealthResult = await handleBoardHealthTool(name, args, ctx);
+  if (boardHealthResult) return boardHealthResult;
   const agentResult = await handleAgentTool(name, args, ctx);
   if (agentResult) return agentResult;
   const contextDocResult = await handleContextDocTool(name, args, ctx);

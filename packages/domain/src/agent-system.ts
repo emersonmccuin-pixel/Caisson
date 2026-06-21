@@ -148,6 +148,9 @@ export interface AgentRunRow {
    *  cwd). NULL for rows created before this column was added — callers fall back
    *  to `project.folderPath` when null. */
   worktreeDir: string | null;
+  /** Repo dispatch provenance. NULL for non-repo and legacy rows. */
+  worktreeBaseBranch: string | null;
+  worktreeBaseSha: string | null;
 }
 
 /** Pending-ask kind. ☠ M7 (FD-6, 2026-06-04) — `'user'` deleted with

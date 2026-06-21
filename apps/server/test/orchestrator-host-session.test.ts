@@ -373,7 +373,10 @@ test('adopts a still-live host run after an API restart (no double spawn)', asyn
 
 test('host respawn → FD-18 spawning + re-dispatch with --resume past the replay cursor', async () => {
   const port = new FakeHostPort();
-  const { session } = makeSession(port);
+  // pc-pty-chat-450: requireMcpHandshake is now passed through to recovery
+  // re-dispatches (no longer forced false on resume). Set it explicitly so we
+  // can assert the pass-through rather than a hardcoded false.
+  const { session } = makeSession(port, { requireMcpHandshake: true });
   const states: string[] = [];
   session.on('state', (s: string) => states.push(s));
   session.start();
@@ -407,7 +410,9 @@ test('host respawn → FD-18 spawning + re-dispatch with --resume past the repla
   assert.equal(recovery.mode, 'resume');
   assert.equal(recovery.ccSessionId, 'cc-uuid-1');
   assert.ok((recovery.jsonlStartLine ?? 0) >= 42, 'resume must skip persisted lines');
-  assert.equal(recovery.requireMcpHandshake, false);
+  // pc-pty-chat-450: recovery re-dispatch passes through the caller's value,
+  // not a hardcoded false — CLI 2.1.183 confirmed --resume honours mcp-config.
+  assert.equal(recovery.requireMcpHandshake, true, 'recovery passes through caller requireMcpHandshake');
   assert.ok(states.includes('spawning'), 'FD-18 loading state must broadcast');
   session.kill();
 });

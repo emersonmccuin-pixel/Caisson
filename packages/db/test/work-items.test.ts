@@ -22,12 +22,15 @@ const {
   createArea,
   createProject,
   createWorkItem,
+  getWorkItem,
   getRawDb,
   listWorkItems,
   patchWorkItem,
   runMigrations,
   searchWorkItems,
+  setDoneChecklist,
   softDeleteWorkItem,
+  tickDoneChecklistItem,
   toSlimWorkItem,
   updateWorkItemStatus,
 } = await import('../src/index.ts');
@@ -243,4 +246,185 @@ test('migration 0050 backfill: item created before any FTS triggers is searchabl
   const wi = createWorkItem({ projectId: p.id, stageId: 'todo', title: 'BackfillFtsTerm254', body: 'backfill' });
   const results = searchWorkItems({ projectId: p.id, query: 'BackfillFtsTerm254' });
   assert.ok(results.some((r) => r.id === wi.id), 'post-migration inserts must be indexed');
+});
+
+// ── done_checklist column round-trip (Slice A — pc-pty-chat-419) ─────────────
+
+test('done_checklist: column exists on work_items after migration 0063', () => {
+  const raw = getRawDb();
+  const cols = raw.pragma('table_info("work_items")') as { name: string }[];
+  assert.ok(cols.some((c) => c.name === 'done_checklist'), 'done_checklist column must exist');
+});
+
+test('done_checklist: createWorkItem → getWorkItem round-trips a non-empty checklist', () => {
+  const p = seedProject('p-checklist');
+  const items = [
+    { id: 'item-1', label: 'Tests green', done: true, kind: 'manual' as const },
+    { id: 'item-2', label: 'Reviewed', done: false, kind: 'contract' as const, contractId: 'cid-abc' },
+    { id: 'item-3', label: 'Machine check', done: false, kind: 'machine' as const },
+  ];
+  const created = createWorkItem({
+    projectId: p.id,
+    stageId: 'todo',
+    title: 'Checklist round-trip',
+    doneChecklist: items,
+  });
+
+  // toDomain returns the checklist immediately.
+  assert.deepEqual(created.doneChecklist, items);
+
+  // getWorkItem reads it back from the DB via JSON column.
+  const fetched = getWorkItem(created.id);
+  assert.ok(fetched !== null, 'work item should be found');
+  assert.deepEqual(fetched!.doneChecklist, items, 'checklist must survive a DB round-trip');
+});
+
+test('done_checklist: createWorkItem with no checklist → null on round-trip', () => {
+  const p = seedProject('p-checklist-null');
+  const created = createWorkItem({ projectId: p.id, stageId: 'todo', title: 'No checklist' });
+  assert.equal(created.doneChecklist, null, 'doneChecklist should be null when not set');
+
+  const fetched = getWorkItem(created.id);
+  assert.ok(fetched !== null);
+  assert.equal(fetched!.doneChecklist, null, 'doneChecklist should remain null after DB round-trip');
+});
+
+// ── Slice B — setDoneChecklist + tickDoneChecklistItem (pc-pty-chat-421) ────────
+
+test('setDoneChecklist: replaces the checklist array, bumps version, appends history', () => {
+  const p = seedProject('p-set-checklist');
+  const wi = createWorkItem({ projectId: p.id, stageId: 'todo', title: 'Set checklist test' });
+  assert.equal(wi.doneChecklist, null);
+
+  const items = [
+    { id: 'a', label: 'Step A', done: false, kind: 'manual' as const },
+    { id: 'b', label: 'Step B', done: true, kind: 'manual' as const },
+  ];
+  const updated = setDoneChecklist(wi.id, items);
+  assert.ok(updated !== null, 'setDoneChecklist should return updated WorkItem');
+  assert.deepEqual(updated!.doneChecklist, items);
+  assert.equal(updated!.version, wi.version + 1, 'version must be bumped');
+  assert.equal(updated!.history.length, 1, 'one history entry appended');
+  assert.equal(updated!.history[0].kind, 'update');
+  assert.ok(updated!.history[0].note?.startsWith('done-checklist set'), 'history note describes the change');
+
+  // Round-trip through DB
+  const fetched = getWorkItem(wi.id);
+  assert.deepEqual(fetched!.doneChecklist, items, 'setDoneChecklist must persist to DB');
+});
+
+test('setDoneChecklist: replaces an existing checklist with a new one', () => {
+  const p = seedProject('p-set-checklist-replace');
+  const initial = [{ id: 'x', label: 'Old item', done: false, kind: 'manual' as const }];
+  const wi = createWorkItem({ projectId: p.id, stageId: 'todo', title: 'Replace checklist', doneChecklist: initial });
+
+  const newItems = [
+    { id: 'y', label: 'New item 1', done: false, kind: 'manual' as const },
+    { id: 'z', label: 'New item 2', done: true, kind: 'contract' as const, contractId: 'c-001' },
+  ];
+  const updated = setDoneChecklist(wi.id, newItems);
+  assert.ok(updated !== null);
+  assert.deepEqual(updated!.doneChecklist, newItems, 'setDoneChecklist must replace (not merge) the array');
+  assert.ok(!updated!.doneChecklist!.some(i => i.id === 'x'), 'old items must be gone');
+});
+
+test('setDoneChecklist: returns null for unknown work item', () => {
+  const result = setDoneChecklist('01UNKNOWNWORKITEMULID0000000' as never, []);
+  assert.equal(result, null);
+});
+
+test('tickDoneChecklistItem: flips one item, leaves others intact, bumps version, appends history', () => {
+  const p = seedProject('p-tick-checklist');
+  const items = [
+    { id: 'a', label: 'Alpha', done: false, kind: 'manual' as const },
+    { id: 'b', label: 'Beta', done: false, kind: 'manual' as const },
+    { id: 'c', label: 'Gamma', done: true, kind: 'manual' as const },
+  ];
+  const wi = createWorkItem({ projectId: p.id, stageId: 'todo', title: 'Tick test', doneChecklist: items });
+
+  const updated = tickDoneChecklistItem(wi.id, 'a', true);
+  assert.ok(updated !== null, 'tickDoneChecklistItem should return updated WorkItem');
+  assert.equal(updated!.doneChecklist![0].done, true, 'item a must be ticked');
+  assert.equal(updated!.doneChecklist![1].done, false, 'item b must be unchanged');
+  assert.equal(updated!.doneChecklist![2].done, true, 'item c must be unchanged');
+  assert.equal(updated!.version, wi.version + 1, 'version must be bumped');
+  assert.equal(updated!.history.length, 1, 'one history entry appended');
+  assert.equal(updated!.history[0].kind, 'update');
+  assert.ok(updated!.history[0].note?.includes('Alpha'), 'history note names the item');
+
+  // Round-trip: verify DB persisted the tick
+  const fetched = getWorkItem(wi.id);
+  assert.equal(fetched!.doneChecklist![0].done, true, 'DB must persist the ticked state');
+  assert.equal(fetched!.doneChecklist![1].done, false, 'DB must keep untouched items intact');
+});
+
+test('tickDoneChecklistItem: un-ticking works (done=false)', () => {
+  const p = seedProject('p-tick-untick');
+  const items = [{ id: 'x', label: 'Done item', done: true, kind: 'manual' as const }];
+  const wi = createWorkItem({ projectId: p.id, stageId: 'todo', title: 'Untick test', doneChecklist: items });
+
+  const updated = tickDoneChecklistItem(wi.id, 'x', false);
+  assert.ok(updated !== null);
+  assert.equal(updated!.doneChecklist![0].done, false, 'item must be un-ticked');
+  assert.ok(updated!.history[0].note?.includes('open'), 'history note says open');
+});
+
+test('tickDoneChecklistItem: no-op if itemId not in checklist (returns null, no DB write)', () => {
+  const p = seedProject('p-tick-noop');
+  const items = [{ id: 'real', label: 'Real item', done: false, kind: 'manual' as const }];
+  const wi = createWorkItem({ projectId: p.id, stageId: 'todo', title: 'No-op tick', doneChecklist: items });
+
+  const result = tickDoneChecklistItem(wi.id, 'nonexistent-id', true);
+  assert.equal(result, null, 'should return null for unknown itemId');
+
+  // Verify the work item is completely unchanged
+  const fetched = getWorkItem(wi.id);
+  assert.equal(fetched!.version, wi.version, 'version must NOT be bumped on no-op');
+  assert.equal(fetched!.history.length, 0, 'history must NOT have entries for a no-op');
+});
+
+test('tickDoneChecklistItem: returns null for unknown work item', () => {
+  const result = tickDoneChecklistItem('01UNKNOWNWORKITEMULID0000000' as never, 'any', true);
+  assert.equal(result, null);
+});
+
+// ── Concurrency test (Risk #1 fix) ────────────────────────────────────────────
+// Two sequential ticks on DIFFERENT items must BOTH persist.
+// In synchronous SQLite (better-sqlite3), each tickDoneChecklistItem call
+// completes before the next begins. The second call reads the state written by
+// the first — so both ticks survive only if tickDoneChecklistItem does a
+// read-modify-write on the CURRENT DB state, not the state it captured before
+// the first write. This is the concrete proof of the targeted single-column
+// write design.
+
+test('tickDoneChecklistItem: two ticks on different items both persist (concurrency proof)', () => {
+  const p = seedProject('p-tick-concurrent');
+  const items = [
+    { id: 'i1', label: 'Item 1', done: false, kind: 'manual' as const },
+    { id: 'i2', label: 'Item 2', done: false, kind: 'manual' as const },
+    { id: 'i3', label: 'Item 3', done: false, kind: 'manual' as const },
+  ];
+  const wi = createWorkItem({ projectId: p.id, stageId: 'todo', title: 'Concurrent ticks', doneChecklist: items });
+
+  // First tick: item i1
+  const after1 = tickDoneChecklistItem(wi.id, 'i1', true);
+  assert.ok(after1 !== null);
+  assert.equal(after1!.doneChecklist![0].done, true);
+  assert.equal(after1!.doneChecklist![1].done, false);
+  assert.equal(after1!.doneChecklist![2].done, false);
+
+  // Second tick: item i2 — must read the post-first-tick state from DB
+  const after2 = tickDoneChecklistItem(wi.id, 'i2', true);
+  assert.ok(after2 !== null);
+  assert.equal(after2!.doneChecklist![0].done, true, 'i1 must still be ticked after second write');
+  assert.equal(after2!.doneChecklist![1].done, true, 'i2 must now be ticked');
+  assert.equal(after2!.doneChecklist![2].done, false, 'i3 must remain untouched');
+
+  // Final DB state confirms both persisted
+  const fetched = getWorkItem(wi.id);
+  assert.equal(fetched!.doneChecklist![0].done, true, 'i1 persists in DB');
+  assert.equal(fetched!.doneChecklist![1].done, true, 'i2 persists in DB');
+  assert.equal(fetched!.doneChecklist![2].done, false, 'i3 unchanged in DB');
+  assert.equal(fetched!.version, wi.version + 2, 'version bumped twice (once per tick)');
+  assert.equal(fetched!.history.length, 2, 'two history entries (one per tick)');
 });

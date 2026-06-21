@@ -419,6 +419,19 @@ function ServerForm({ mode, draft, onDraftChange, onSave, onCancel }: ServerForm
               className="w-full border border-border bg-background px-2 py-1 font-mono text-xs text-foreground placeholder:text-muted-foreground/60"
             />
           </FormRow>
+
+          <FormRow
+            label="Working directory (cwd)"
+            help="Absolute path the server launches from — needed for servers that resolve relative paths / .env from their package dir."
+          >
+            <input
+              type="text"
+              value={draft.cwd}
+              onChange={(e) => set({ cwd: e.target.value })}
+              placeholder="/home/user/my-mcp-server"
+              className="w-full border border-border bg-background px-2 py-1 font-mono text-sm text-foreground placeholder:text-muted-foreground/60"
+            />
+          </FormRow>
         </>
       )}
 
@@ -491,6 +504,7 @@ interface ServerDraft {
   command: string;
   args: string;
   env: string;
+  cwd: string;
   // http fields
   url: string;
 }
@@ -509,6 +523,7 @@ function emptyDraft(): ServerDraft {
     command: '',
     args: '',
     env: '',
+    cwd: '',
     url: '',
   };
 }
@@ -524,6 +539,7 @@ function draftFromServer(s: McpServer): ServerDraft {
     env: Object.entries(s.transport.env ?? {})
       .map(([k, v]) => `${k}=${v}`)
       .join('\n'),
+    cwd: s.transport.cwd ?? '',
     url: s.transport.url ?? '',
   };
 }
@@ -539,10 +555,12 @@ function draftToInput(draft: ServerDraft): CreateMcpServerInput {
       const eq = trimmed.indexOf('=');
       if (eq > 0) envObj[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
     }
+    const cwdTrimmed = draft.cwd.trim();
     transport = {
       command: draft.command.trim(),
       ...(argsArr ? { args: argsArr } : {}),
       ...(Object.keys(envObj).length ? { env: envObj } : {}),
+      ...(cwdTrimmed ? { cwd: cwdTrimmed } : {}),
     };
   } else {
     transport = { url: draft.url.trim() };

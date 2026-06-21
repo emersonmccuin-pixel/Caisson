@@ -64,21 +64,52 @@ function assertIntegrationBranch(name: string): void {
 
 /**
  * Create a worktree at `wtPath` on a fresh branch named `branchName`.
- * Caller owns the path; this primitive only runs `git worktree add wtPath -b branchName`.
+ * Caller owns the path; this primitive runs `git worktree add wtPath -b branchName [startPoint]`.
+ *
+ * `startPoint` is the commit-ish to fork from instead of the main checkout's
+ * current HEAD. Repo dispatch callers should pass the current local canonical
+ * branch HEAD after checking the main worktree is on that branch and clean.
  */
 export async function createWorktree(
   workspaceDir: string,
   wtPath: string,
   branchName: string,
+  startPoint?: string,
 ): Promise<WorktreeEntry> {
   assertBranchName(branchName);
   const wsAbs = resolve(workspaceDir);
   const wtAbs = resolve(wtPath);
-  await exec('git', ['worktree', 'add', wtAbs, '-b', branchName], { cwd: wsAbs });
+  const args = ['worktree', 'add', wtAbs, '-b', branchName];
+  if (startPoint) args.push(startPoint);
+  await exec('git', args, { cwd: wsAbs });
   const all = await listWorktrees(wsAbs);
   const entry = all.find((w) => normalize(w.path) === normalize(wtAbs));
   if (!entry) throw new Error(`worktree created but not found in list: ${wtAbs}`);
   return entry;
+}
+
+/**
+ * Resolve the LOCAL integration branch's current HEAD. This intentionally does
+ * not inspect origin or the merge worktree: dispatch provenance must be the
+ * exact branch the orchestrator is actively building from, not a cached or
+ * guessed external tip.
+ */
+export async function resolveLocalBranchHead(
+  workspaceDir: string,
+  branch: string,
+): Promise<string | null> {
+  assertIntegrationBranch(branch);
+  try {
+    const { stdout } = await exec(
+      'git',
+      ['rev-parse', '--verify', `refs/heads/${branch}`],
+      { cwd: resolve(workspaceDir) },
+    );
+    const sha = stdout.trim();
+    return sha || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function listWorktrees(workspaceDir: string): Promise<WorktreeEntry[]> {
@@ -136,6 +167,21 @@ export async function branchMergedInto(
   for (const target of targets) {
     try {
       await exec('git', ['merge-base', '--is-ancestor', branch, target], { cwd });
+      // D1b (pc-pty-chat-440): is-ancestor succeeds for a branch forked at
+      // the integration tip (0 commits of its own) because the tip IS a
+      // degenerate ancestor of itself. Guard: if branch tip == target tip,
+      // the branch is a fresh fork with no landed commits of its own — skip.
+      const [branchSha, targetSha] = await Promise.all([
+        exec('git', ['rev-parse', '--verify', branch], { cwd }).then(
+          (r) => r.stdout.trim() || null,
+          () => null as string | null,
+        ),
+        exec('git', ['rev-parse', '--verify', target], { cwd }).then(
+          (r) => r.stdout.trim() || null,
+          () => null as string | null,
+        ),
+      ]);
+      if (branchSha && targetSha && branchSha === targetSha) continue; // fresh branch
       return true;
     } catch {
       /* not an ancestor of this target (or ref missing) — try the next */
@@ -145,9 +191,11 @@ export async function branchMergedInto(
     try {
       const { stdout } = await exec('git', ['cherry', target, branch], { cwd });
       const lines = stdout.split(/\r?\n/).filter((l) => l.trim() !== '');
-      // Zero lines = nothing ahead of the merge-base (ancestry would normally
-      // have caught this); all '-' = every commit has an upstream equivalent.
-      if (lines.every((l) => l.startsWith('-'))) return true;
+      // D1b: require lines.length > 0 — an empty cherry output means the
+      // branch is a fresh fork with no commits of its own. Vacuous truth on
+      // lines.every([]) was returning true before, marking fresh branches as
+      // merged. Any `+` line = not landed; all `-` = patch-equivalent → landed.
+      if (lines.length > 0 && lines.every((l) => l.startsWith('-'))) return true;
     } catch {
       /* target ref missing — try the next */
     }
@@ -319,6 +367,159 @@ export async function mergeBranchIntoHead(
 export async function pushBranch(workspaceDir: string, ref: string): Promise<void> {
   // No assertBranchName here — `ref` may be a refspec like 'HEAD:dev'.
   await exec('git', ['push', 'origin', ref], { cwd: resolve(workspaceDir) });
+}
+
+/**
+ * Resolve the most-advanced integration tip known to this repo — the latest
+ * commit that any prior landing has produced. Checks these sources in order,
+ * returning the most-advanced SHA (the one that has all others as ancestors):
+ *
+ *  1. The engine merge worktree HEAD at `mergeWtPath` — carries the freshest
+ *     merge commit even before a push completes. This is the **only** durable
+ *     home for landed work in local-only repos with no remote.
+ *  2. `origin/<integrationBranch>` — the post-push state for repos with a
+ *     remote.
+ *  3. Local `<integrationBranch>` — may be permanently stale: the engine never
+ *     advances this pointer directly (pc-pty-chat-417).
+ *
+ * Returns null when nothing is resolvable (fresh empty repo, unborn HEAD).
+ * Never throws — all source lookups are individually caught.
+ *
+ * Primary consumer: `WorktreeService.create()`, which passes the result as
+ * the `startPoint` of `createWorktree` so every new run worktree forks from
+ * the latest landed state, not the stale main checkout HEAD.
+ */
+export async function resolveIntegrationTip(
+  workspaceDir: string,
+  integrationBranch: string,
+  mergeWtPath?: string,
+): Promise<string | null> {
+  assertIntegrationBranch(integrationBranch);
+  const cwd = resolve(workspaceDir);
+  const candidates: string[] = [];
+
+  // Track the merge-wt SHA separately so the diverged fallback can drop it.
+  let mergeWtSha: string | null = null;
+
+  // 1. Merge worktree HEAD (freshest; only source in local-only repos).
+  if (mergeWtPath) {
+    try {
+      const sha = (
+        await exec('git', ['rev-parse', 'HEAD'], { cwd: resolve(mergeWtPath) })
+      ).stdout.trim();
+      if (sha) { candidates.push(sha); mergeWtSha = sha; }
+    } catch {
+      /* merge worktree absent or not yet created — not an error */
+    }
+  }
+
+  // 2. origin/<integration> (reflects all pushed landings).
+  try {
+    const sha = (
+      await exec('git', ['rev-parse', `origin/${integrationBranch}`], { cwd })
+    ).stdout.trim();
+    if (sha) candidates.push(sha);
+  } catch {
+    /* no remote configured */
+  }
+
+  // 3. Local integration branch (stale — treated as lowest priority).
+  try {
+    const sha = (await exec('git', ['rev-parse', integrationBranch], { cwd })).stdout.trim();
+    if (sha) candidates.push(sha);
+  } catch {
+    /* branch doesn't exist yet */
+  }
+
+  // Deduplicate while preserving priority order (first = highest priority).
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const s of candidates) {
+    if (!seen.has(s)) {
+      seen.add(s);
+      unique.push(s);
+    }
+  }
+  if (unique.length === 0) return null;
+  if (unique.length === 1) return unique[0]!;
+
+  // Find the most-advanced: the SHA that has every other candidate as an
+  // ancestor (i.e. it is reachable from / contains all of them).
+  // Legitimate local-only case: when the merge-wt HEAD is genuinely ahead
+  // (has origin as an ancestor), the loop returns it here — correct.
+  for (const sha of unique) {
+    let allAncestors = true;
+    for (const other of unique) {
+      if (other === sha) continue;
+      try {
+        await exec('git', ['merge-base', '--is-ancestor', other, sha], { cwd });
+      } catch {
+        allAncestors = false;
+        break;
+      }
+    }
+    if (allAncestors) return sha;
+  }
+
+  // Diverged fallback — no candidate dominates. A merge-wt HEAD that is
+  // DIVERGED from origin/<integration> is the worst candidate (frozen orphan),
+  // not the best. Drop it and re-run the most-advanced check on the real
+  // candidates (origin + local). Never return a stale merge-wt as the fork
+  // point; prefer origin/<integration> over a diverged __dev-merge HEAD.
+  // A diverged merge-wt HEAD is a frozen orphan — it must never be used as a fork point for new run worktrees (pc-pty-chat-443).
+  if (mergeWtSha) {
+    const withoutMergeWt = unique.filter((sha) => sha !== mergeWtSha);
+    if (withoutMergeWt.length === 0) {
+      // Merge-wt was the only resolvable source (no remote, no local).
+      // Local-only but diverged — shouldn't happen in practice; return null
+      // rather than a stale fork point.
+      return null;
+    }
+    if (withoutMergeWt.length === 1) return withoutMergeWt[0]!;
+    // Re-run most-advanced on the remaining real candidates.
+    for (const sha of withoutMergeWt) {
+      let allAncestors = true;
+      for (const other of withoutMergeWt) {
+        if (other === sha) continue;
+        try {
+          await exec('git', ['merge-base', '--is-ancestor', other, sha], { cwd });
+        } catch {
+          allAncestors = false;
+          break;
+        }
+      }
+      if (allAncestors) return sha;
+    }
+    // Still diverged among real candidates — return origin-priority first.
+    return withoutMergeWt[0]!;
+  }
+
+  // No mergeWtPath supplied: return the first/highest-priority diverged candidate.
+  return unique[0]!;
+}
+
+/**
+ * Advance local branch `branch` to `sha` via `git update-ref`. Bypasses the
+ * "branch is checked out in another worktree" constraint — the ref pointer is
+ * moved directly without touching any working tree or index.
+ *
+ * ⚠ CALLER CONTRACT: never call this when `branch` is checked out in the main
+ * worktree (`workspaceDir`). Moving a checked-out branch pointer without
+ * updating the index produces a phantom-staged-changes state in `git status`.
+ * The guard lives in `WorktreeService.tryAdvanceLocalIntegration`.
+ */
+export async function updateRef(workspaceDir: string, branch: string, sha: string): Promise<void> {
+  assertIntegrationBranch(branch);
+  await exec('git', ['update-ref', `refs/heads/${branch}`, sha], { cwd: resolve(workspaceDir) });
+}
+
+/**
+ * Fast-forward the checked-out worktree to `targetSha`. Used only when the
+ * main checkout is already on the canonical branch; unlike update-ref, this
+ * updates the working tree and index together.
+ */
+export async function fastForwardWorktree(workspaceDir: string, targetSha: string): Promise<void> {
+  await exec('git', ['merge', '--ff-only', targetSha], { cwd: resolve(workspaceDir) });
 }
 
 /**

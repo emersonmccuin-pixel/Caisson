@@ -72,10 +72,19 @@ function echoMatched(body: string, tail: string): boolean {
   // would always echo-timeout and the turn would be lost. The placeholder
   // appearing in the post-send tail IS proof the paste landed; on Enter, CC
   // expands the ref back to the full content (history.ts expandPastedTextRefs),
-  // so submitting is correct. "Pasted text #" is CC's stable, distinctive
-  // marker; the tail is anchored AFTER our paste write so this is our own
-  // placeholder, not a stale one.
-  if (compactTail.includes('pastedtext#')) return true;
+  // so submitting is correct. The tail is anchored AFTER our paste write so this
+  // is our own placeholder, not a stale one.
+  //
+  // pc-pty-chat-455 — the marker MUST be matched mangling-tolerantly. Windows
+  // ConPTY repaints the placeholder with cursor-move escapes that SKIP unchanged
+  // cells; collapseAnsiToWhitespace turns the cursor-forward into whitespace and
+  // the strip above then deletes the skipped characters, so "Pasted text #1" is
+  // captured as `Pasted \x1b[2Cxt\x1b[1C#1` → compacts to "pastedxt#1", NOT
+  // "pastedtext#1". The old `includes('pastedtext#')` check therefore missed and
+  // the dispatch echo-timed-out → send-failed → spawn-failed (confirmed on two
+  // live runs, both `pastedxt#1+…`). Match the distinctive, mangling-proof
+  // signature instead: "pasted" followed within a few chars by "#<digit>".
+  if (/pasted.{0,8}#\d/.test(compactTail)) return true;
 
   const probe = normalizedBody.slice(0, ECHO_PROBE_LEN);
   if (probe.length === 0 || normalizedTail.includes(probe)) return true;

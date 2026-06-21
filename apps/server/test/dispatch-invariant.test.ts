@@ -26,7 +26,7 @@ import { Hono } from "hono";
 const tmpDir = mkdtempSync(join(tmpdir(), "pc-dispatch-invariant-"));
 process.env.PC_DATA_DIR = tmpDir;
 
-const { closeDb, createAgent, createProject, listAgentRunsForSession, runMigrations, newId } = await import("@pc/db");
+const { closeDb, createAgent, createProject, createWorkItem, listAgentRunsForSession, runMigrations, newId } = await import("@pc/db");
 const { dispatchFreshAgent } = await import("../src/services/agent-run-factory.ts");
 const { registerAgentRunRoutes } = await import("../src/features/agent-runs/routes.ts");
 import type { AgentRunRouteDeps } from "../src/features/agent-runs/routes.ts";
@@ -112,6 +112,7 @@ test("dispatch-invariant (B): isolation:worktree passes provisioned path not pro
     stages,
     folderPath: projectFolderPath,
   });
+  const wi = createWorkItem({ projectId: project.id as ULID, stageId: "todo", title: "B" });
 
   const WORKTREE_PATH = join(tmpDir, "worktrees", "inv-b", "agent-test");
   const capturedWorktreeDir = { value: "" };
@@ -140,6 +141,7 @@ test("dispatch-invariant (B): isolation:worktree passes provisioned path not pro
       body: JSON.stringify({
         input: "fix the bug",
         dispatcherSessionId: "orch-session-2",
+        workItemId: wi.id,
         expectedOutput: { kind: "repo", isolation: "worktree" },
       }),
     },
@@ -160,13 +162,69 @@ test("dispatch-invariant (B): isolation:worktree passes provisioned path not pro
   );
 });
 
-test("dispatch-invariant (B): isolation:worktree without worktreeService returns 503", async () => {
+test("dispatch-invariant (B2): same work item gets a fresh temp worktree branch each dispatch", async () => {
+  const project = createProject({
+    slug: "inv-b2-unique-" + Date.now(),
+    name: "Invariant B2 Unique",
+    stages,
+    folderPath: join(tmpDir, "inv-b2-unique"),
+  });
+  const wi = createWorkItem({
+    projectId: project.id as ULID,
+    stageId: "todo",
+    title: "Build this",
+  });
+  const names: string[] = [];
+
+  const app = mkApp({
+    dispatchResult: {
+      ok: true,
+      agentRunId: newId() as ULID,
+      ccSessionId: "cc-inv-b2",
+      podName: "code-writer",
+      initialState: "queued",
+      startedAt: Date.now(),
+      done: new Promise<never>(() => {}),
+    },
+    worktreeServiceFor: () => ({
+      ensureWorktree: async (name: string) => {
+        names.push(name);
+        return { path: join(tmpDir, "worktrees", name), baseBranch: "main", baseSha: "base" };
+      },
+    }),
+  });
+
+  for (let i = 0; i < 2; i += 1) {
+    const res = await app.request(
+      "/api/projects/" + project.id + "/agents/code-writer/invoke",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: "fix the bug",
+          dispatcherSessionId: "orch-session-b2",
+          workItemId: wi.id,
+          expectedOutput: { kind: "repo" },
+        }),
+      },
+    );
+    assert.equal(res.status, 200);
+  }
+
+  assert.equal(names.length, 2);
+  assert.match(names[0]!, /^agent-/);
+  assert.match(names[1]!, /^agent-/);
+  assert.notEqual(names[0], names[1], "separate dispatches must not reuse a work-item-keyed branch");
+});
+
+test("dispatch-invariant (B): isolation:worktree without worktreeService returns 409", async () => {
   const project = createProject({
     slug: "inv-b2-" + Date.now(),
     name: "Invariant B2",
     stages,
     folderPath: join(tmpDir, "inv-b2"),
   });
+  const wi = createWorkItem({ projectId: project.id as ULID, stageId: "todo", title: "B2" });
 
   const app = mkApp({
     dispatchResult: {
@@ -189,21 +247,78 @@ test("dispatch-invariant (B): isolation:worktree without worktreeService returns
       body: JSON.stringify({
         input: "fix the bug",
         dispatcherSessionId: "orch-session-3",
+        workItemId: wi.id,
         expectedOutput: { kind: "repo", isolation: "worktree" },
       }),
     },
   );
 
-  assert.equal(res.status, 503, "missing worktreeService must return 503");
+  assert.equal(res.status, 409, "missing worktreeService must return 409 (non-retryable Conflict)");
   const body = await json<{ ok: boolean; cause: string }>(res);
   assert.equal(body.ok, false);
   assert.equal(body.cause, "worktree-provision-failed");
+});
+
+test("dispatch-invariant (H, pc-pty-chat-448): ensureWorktree throw returns 409 (not 503) and creates exactly one AgentRun row", async () => {
+  // Verifies that the deterministic provisioning failure (e.g. MAINLINE GUARD)
+  // returns 409 Conflict — a non-idempotent endpoint must never invite a
+  // transport retry on a deterministic failure.
+  const project = createProject({
+    slug: "inv-h-" + Date.now(),
+    name: "Invariant H",
+    stages,
+    folderPath: join(tmpDir, "inv-h"),
+  });
+  const wi = createWorkItem({ projectId: project.id as ULID, stageId: "todo", title: "H" });
+
+  const sessionId = "sess-inv-h-" + Date.now();
+
+  const app = new (await import("hono")).Hono();
+  const { registerAgentRunRoutes } = await import("../src/features/agent-runs/routes.ts");
+  registerAgentRunRoutes(app, {
+    broadcastTo: () => {},
+    getHostConnection: () => null,
+    dispatchFreshAgent: async () => ({ ok: false, cause: "spawn-error" as const, error: "unreachable" }),
+    recordAgentInvoke: () => {},
+    checkInvokeDepth: () => ({ ok: true as const, childDepth: 1 }),
+    worktreeServiceFor: (_projectId) => ({
+      plannedWorktreePath: (name: string) => join(tmpDir, "worktrees", name),
+      ensureWorktree: async (_name: string) => {
+        throw new Error("MAINLINE GUARD: main branch is dirty");
+      },
+    }),
+  });
+
+  const res = await app.request(
+    "/api/projects/" + project.id + "/agents/code-writer/invoke",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: "fix the bug",
+        dispatcherSessionId: sessionId,
+        workItemId: wi.id,
+        expectedOutput: { kind: "repo" },
+      }),
+    },
+  );
+
+  assert.equal(res.status, 409, "ensureWorktree failure must return 409, not 503");
+  const body = await json<{ ok: boolean; cause: string; error: string }>(res);
+  assert.equal(body.ok, false);
+  assert.equal(body.cause, "worktree-provision-failed");
+
+  const runs = listAgentRunsForSession(project.id as ULID, sessionId, { limit: 10 });
+  assert.equal(runs.length, 1, "exactly one AgentRun row must be created (the pre-inserted row marked terminal)");
+  assert.equal(runs[0]!.status, "failed");
+  assert.equal(runs[0]!.failureCause, "worktree-provision-failed");
 });
 
 test("dispatch-invariant (C): isolation:worktree from pod DEFAULT (no inline spec) provisions worktree", async () => {
   // This is the hole pc-pty-chat-353 closes: when the CALLER omits
   // `expectedOutput` entirely but the pod's default declares
   // `isolation: "worktree"`, the route must still provision a worktree.
+  // A workItemId is required (repo-kind needs a WI home — pc-pty-chat-445 Fix 1).
   const projectFolderPath = join(tmpDir, "inv-c2-main-repo");
   const project = createProject({
     slug: "inv-c2-" + Date.now(),
@@ -211,6 +326,7 @@ test("dispatch-invariant (C): isolation:worktree from pod DEFAULT (no inline spe
     stages,
     folderPath: projectFolderPath,
   });
+  const wi = createWorkItem({ projectId: project.id as ULID, stageId: "todo", title: "C2" });
 
   const WORKTREE_PATH = join(tmpDir, "worktrees", "inv-c2", "agent-test");
   const capturedWorktreeDir = { value: "" };
@@ -244,6 +360,7 @@ test("dispatch-invariant (C): isolation:worktree from pod DEFAULT (no inline spe
       body: JSON.stringify({
         input: "fix the bug",
         dispatcherSessionId: "orch-session-c2",
+        workItemId: wi.id,
         // NO inline expectedOutput — isolation must come from the pod default.
       }),
     },
@@ -318,6 +435,7 @@ test("dispatch-invariant (D): contract-required creates NO AgentRun row and NO t
 test("dispatch-invariant (E1, pc-pty-chat-415 R3): repo kind with NO isolation field still provisions a worktree", async () => {
   // in_place is deleted — isolation derives from the KIND. A bare
   // `{ kind: "repo" }` spec must route through worktree provisioning.
+  // A workItemId is required (repo-kind needs a WI home — pc-pty-chat-445 Fix 1).
   const projectFolderPath = join(tmpDir, "inv-e1-main-repo");
   const project = createProject({
     slug: "inv-e1-" + Date.now(),
@@ -325,6 +443,7 @@ test("dispatch-invariant (E1, pc-pty-chat-415 R3): repo kind with NO isolation f
     stages,
     folderPath: projectFolderPath,
   });
+  const wi = createWorkItem({ projectId: project.id as ULID, stageId: "todo", title: "E1" });
 
   const WORKTREE_PATH = join(tmpDir, "worktrees", "inv-e1", "agent-test");
   const capturedWorktreeDir = { value: "" };
@@ -352,6 +471,7 @@ test("dispatch-invariant (E1, pc-pty-chat-415 R3): repo kind with NO isolation f
       body: JSON.stringify({
         input: "fix the bug",
         dispatcherSessionId: "orch-session-4",
+        workItemId: wi.id,
         expectedOutput: { kind: "repo" },
       }),
     },
@@ -409,4 +529,169 @@ test("dispatch-invariant (E2, pc-pty-chat-415 R3): factory refuses a repo-kind d
   );
   const runs = listAgentRunsForSession(project.id as ULID, sessionId, { limit: 10 });
   assert.equal(runs.length, 0, "isolation refusal must not insert an agent_runs row");
+});
+
+// ── (G) pc-pty-chat-445 (Fix 1): work-item-required gate fires BEFORE side effects ──
+
+test("dispatch-invariant (G1, pc-pty-chat-445): repo-kind with no workItemId → 422 with zero side effects", async () => {
+  // Verify that the early precondition fires BEFORE insertAgentRunRow,
+  // ensureWorktree, or dispatchFreshAgent — an orphaned run must not be created.
+  const project = createProject({
+    slug: "inv-g1-" + Date.now(),
+    name: "Invariant G1",
+    stages,
+    folderPath: join(tmpDir, "inv-g1"),
+  });
+
+  let ensureWorktreeCalls = 0;
+  let dispatchCalls = 0;
+  const sessionId = "sess-inv-g1-" + Date.now();
+
+  const app = new (await import("hono")).Hono();
+  const { registerAgentRunRoutes } = await import("../src/features/agent-runs/routes.ts");
+  registerAgentRunRoutes(app, {
+    broadcastTo: () => {},
+    getHostConnection: () => null,
+    dispatchFreshAgent: async () => {
+      dispatchCalls += 1;
+      return { ok: false, cause: "spawn-error" as const, error: "should not be reached" };
+    },
+    recordAgentInvoke: () => {},
+    checkInvokeDepth: () => ({ ok: true as const, childDepth: 1 }),
+    worktreeServiceFor: () => ({
+      ensureWorktree: async (_name: string) => {
+        ensureWorktreeCalls += 1;
+        return { path: join(tmpDir, "worktrees", _name) };
+      },
+    }),
+  });
+
+  const res = await app.request(
+    "/api/projects/" + project.id + "/agents/code-writer/invoke",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: "fix the bug",
+        dispatcherSessionId: sessionId,
+        expectedOutput: { kind: "repo" }, // repo-kind, no workItemId
+      }),
+    },
+  );
+
+  assert.equal(res.status, 422, "repo-kind without workItemId must be 422");
+  const body = await json<{ ok: boolean; cause: string }>(res);
+  assert.equal(body.ok, false);
+  assert.equal(body.cause, "work-item-required");
+  assert.equal(ensureWorktreeCalls, 0, "ensureWorktree must NOT be called before the 422");
+  assert.equal(dispatchCalls, 0, "dispatchFreshAgent must NOT be called before the 422");
+  const runs = listAgentRunsForSession(project.id as ULID, sessionId, { limit: 10 });
+  assert.equal(runs.length, 0, "no agent_runs row must be created for an early 422");
+});
+
+test("dispatch-invariant (G2, pc-pty-chat-445): repo-kind WITH workItemId passes the gate and provisions as before", async () => {
+  const project = createProject({
+    slug: "inv-g2-" + Date.now(),
+    name: "Invariant G2",
+    stages,
+    folderPath: join(tmpDir, "inv-g2"),
+  });
+  const wi = createWorkItem({
+    projectId: project.id as ULID,
+    stageId: "todo",
+    title: "G2 work",
+  });
+
+  const WORKTREE_PATH = join(tmpDir, "worktrees", "inv-g2", "agent-test");
+  let ensureWorktreeCalls = 0;
+
+  const app = mkApp({
+    dispatchResult: {
+      ok: true,
+      agentRunId: newId() as ULID,
+      ccSessionId: "cc-inv-g2",
+      podName: "code-writer",
+      initialState: "queued",
+      startedAt: Date.now(),
+      done: new Promise<never>(() => {}),
+    },
+    worktreeServiceFor: () => ({
+      ensureWorktree: async (_name: string) => {
+        ensureWorktreeCalls += 1;
+        return { path: WORKTREE_PATH };
+      },
+    }),
+  });
+
+  const res = await app.request(
+    "/api/projects/" + project.id + "/agents/code-writer/invoke",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: "fix the bug",
+        dispatcherSessionId: "orch-session-g2",
+        workItemId: wi.id,
+        expectedOutput: { kind: "repo" },
+      }),
+    },
+  );
+
+  assert.equal(res.status, 200, "repo-kind with workItemId must succeed");
+  const body = await json<{ ok: boolean }>(res);
+  assert.equal(body.ok, true);
+  assert.equal(ensureWorktreeCalls, 1, "ensureWorktree must be called for the happy path");
+});
+
+// ── (F) pc-pty-chat-439: non-repo dispatch uses scratch dir, not project root ──
+
+test("dispatch-invariant (F, pc-pty-chat-439): non-repo dispatch cwd is scratch dir, not project.folderPath", async () => {
+  const projectFolderPath = join(tmpDir, "inv-f-main-repo");
+  const project = createProject({
+    slug: "inv-f-" + Date.now(),
+    name: "Invariant F",
+    stages,
+    folderPath: projectFolderPath,
+  });
+
+  const capturedWorktreeDir = { value: "" };
+
+  const app = mkApp({
+    dispatchResult: {
+      ok: true,
+      agentRunId: newId() as ULID,
+      ccSessionId: "cc-inv-f",
+      podName: "researcher",
+      initialState: "queued",
+      startedAt: Date.now(),
+      done: new Promise<never>(() => {}),
+    },
+    capturedWorktreeDir,
+  });
+
+  const res = await app.request(
+    "/api/projects/" + project.id + "/agents/researcher/invoke",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: "investigate something",
+        dispatcherSessionId: "orch-session-f",
+        expectedOutput: { kind: "answer" }, // non-repo: must get scratch dir
+      }),
+    },
+  );
+
+  assert.equal(res.status, 200, "non-repo dispatch should succeed");
+  const body = await json<{ ok: boolean }>(res);
+  assert.equal(body.ok, true);
+  assert.notEqual(
+    capturedWorktreeDir.value,
+    projectFolderPath,
+    "non-repo dispatch must not run in the live project folder",
+  );
+  assert.ok(
+    capturedWorktreeDir.value.startsWith(join(tmpDir, "scratch")),
+    `worktreeDir (${capturedWorktreeDir.value}) must be under PC_DATA_DIR/scratch`,
+  );
 });

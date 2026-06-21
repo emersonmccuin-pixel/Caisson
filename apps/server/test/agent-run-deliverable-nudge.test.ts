@@ -40,6 +40,9 @@ function row(patch: Partial<AgentRunRow> = {}): AgentRunRow {
     contractId: 'ct-1' as ULID,
     completedAt: null,
     rev: 0,
+    worktreeDir: null,
+    worktreeBaseBranch: null,
+    worktreeBaseSha: null,
     ...patch,
   };
 }

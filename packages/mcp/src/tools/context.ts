@@ -5,6 +5,10 @@ import { withConnRetry } from './retry.ts';
 export interface ServerResponse {
   status: number;
   body: string;
+  /** Populated from the `retry-after` response header when present. A 503 that
+   *  carries this field is explicit server backpressure on a safe-to-retry-identical
+   *  request; the retry transport gates on its presence. Absent = not set. */
+  retryAfter?: string | null;
 }
 
 export interface ToolContent {
@@ -16,6 +20,26 @@ export interface ToolResult {
   [key: string]: unknown;
   content: ToolContent[];
   isError?: true;
+  /**
+   * CONVENTION — A1 (next_valid_actions): optional list of tool names the
+   * caller should consider invoking next, derived from the current state.
+   *
+   * Populate on:
+   *   • ERROR returns — tools that help recover from or diagnose the failure.
+   *     Do NOT repeat the tool that just errored (loop-prevention).
+   *   • HIGH-VALUE SUCCESS returns — the most likely follow-on operations
+   *     given what the tool just did (e.g. after creating a work item →
+   *     invoke an agent or move it; after a dispatch → inspect the run).
+   *
+   * Rules for follow-up tool authors:
+   *   • Keep the list short (2–4 names); prefer the most actionable.
+   *   • Derive from actual state where possible (e.g. omit pc_invoke_agent
+   *     when PC_PROJECT_ID is unset); fall back to a static best-guess.
+   *   • Do NOT attempt exhaustive coverage — omit entirely rather than add
+   *     noise. Only populate when it materially helps the caller decide.
+   *   • Field is OPTIONAL. Callers must treat its absence as "no hint".
+   */
+  next_valid_actions?: string[];
 }
 
 export interface ToolContext {
@@ -84,7 +108,11 @@ function httpWithBodyOnce(
         const chunks: Buffer[] = [];
         r.on('data', (c) => chunks.push(c as Buffer));
         r.on('end', () =>
-          res({ status: r.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf-8') }),
+          res({
+            status: r.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf-8'),
+            retryAfter: (r.headers['retry-after'] as string | undefined) ?? null,
+          }),
         );
       },
     );
@@ -106,7 +134,11 @@ function httpWithoutBodyOnce(
         const chunks: Buffer[] = [];
         r.on('data', (c) => chunks.push(c as Buffer));
         r.on('end', () =>
-          res({ status: r.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf-8') }),
+          res({
+            status: r.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf-8'),
+            retryAfter: (r.headers['retry-after'] as string | undefined) ?? null,
+          }),
         );
       },
     );

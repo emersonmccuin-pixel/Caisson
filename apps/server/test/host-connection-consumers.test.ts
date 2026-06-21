@@ -120,8 +120,13 @@ function row(id: string, patch: Partial<AgentRunRow> = {}): AgentRunRow {
     readyAt: 1_700_000_000_200,
     pid: null,
     lastActivityAt: null,
+    deliveredAt: null,
     completedAt: null,
     rev: 0,
+    contractId: null,
+    worktreeDir: null,
+    worktreeBaseBranch: null,
+    worktreeBaseSha: null,
     ...patch,
   };
 }
@@ -184,7 +189,7 @@ test('reconcile sweep self-heals after a host port change (refreshRuns re-discov
   // The sweep reconciles non-terminal rows against the freshly pulled snapshots.
   let currentRow = row('sweep-run', { status: 'running' });
   let terminalApplied = 0;
-  const res = reconcileAgentRunsAgainstHost({
+  const res = await reconcileAgentRunsAgainstHost({
     hostClient: conn,
     listNonTerminalRuns: () => [currentRow],
     getAgentRun: () => currentRow,

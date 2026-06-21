@@ -79,7 +79,13 @@ test('notifyRunFailed carries the failure INCIDENT (run_resumed count at failure
 
   const incidents: number[] = [];
   const deps = makeExecutorDeps(
-    { id: run.id as ULID, workItemId: null, worktreePath: null },
+    {
+      id: run.id as ULID,
+      workItemId: null,
+      worktreePath: null,
+      worktreeBaseBranch: null,
+      worktreeBaseSha: null,
+    },
     WF,
     makeOpts(projectId, { deliverRunFailed: (input) => incidents.push(input.incident) }),
   );

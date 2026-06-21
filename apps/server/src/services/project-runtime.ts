@@ -496,6 +496,11 @@ export class ProjectRuntime {
         serverPort: this.opts.serverPort,
         projectSlug: this.project.slug,
         projectName: this.project.name,
+        // pc-pty-chat-451 — project-registered MCP servers auto-include.
+        // Orchestrator/chat spawns get all project-scoped servers without
+        // needing an explicit attachment row. Worker agents dispatched via
+        // agent-run-factory do NOT set this flag — they keep explicit-attach-only.
+        includeProjectServers: true,
       });
       if (!prep) {
         // Boot-time seed (16a.2) always inserts the row; a null here
@@ -548,7 +553,11 @@ export class ProjectRuntime {
         transcriptPath: resolve(sessionDir, 'transcript.log'),
         model: 'opus',
         requireReadySignal: true,
-        requireMcpHandshake: !session.resume,
+        // pc-pty-chat-450: CLI 2.1.183 live-confirms --resume --mcp-config
+        // --strict-mcp-config loads fresh servers. Wait for the pc-rig
+        // handshake on both fresh and resume so attached servers are connected
+        // before the first user turn. The host's 60s ready-timeout fail-opens.
+        requireMcpHandshake: true,
         remoteControl,
         cols: this.orchestratorCols,
         rows: this.orchestratorRows,
@@ -745,6 +754,19 @@ export class ProjectRuntime {
     // Restart only when the EDITED pod is the one driving this runtime's chat
     // (Command restarts on command-planner edits; others on orchestrator edits).
     if (podName !== this.orchestratorPodName()) return false;
+    if (!this.pty) return false;
+    if (this.pty.getState() === 'exited') return false;
+    try { this.pty.kill(); } catch { /* best-effort */ }
+    this.pty = null;
+    return true;
+  }
+
+  /** pc-pty-chat-451 — restart the orchestrator when a project-scoped MCP server
+   *  is registered or deleted. Does NOT need a pod name — MCP server changes
+   *  always affect this project's orchestrator. The next `ensurePty()` call
+   *  re-spawns with `--resume` and picks up the updated project server set.
+   *  Returns true if a live PTY was killed; false if nothing was running. */
+  restartOrchestratorForMcpChange(): boolean {
     if (!this.pty) return false;
     if (this.pty.getState() === 'exited') return false;
     try { this.pty.kill(); } catch { /* best-effort */ }

@@ -56,6 +56,7 @@ export {
   applyRunOutcome,
   countWorkItemsInStage,
   createWorkItem,
+  getBoardHealth,
   getWorkItem,
   getWorkItemByCallsign,
   getWorkItemByCallsignGlobal,
@@ -69,14 +70,18 @@ export {
   reassignStage,
   restoreWorkItem,
   searchWorkItems,
+  setDoneChecklist,
   setWorkItemFocus,
   softDeleteWorkItem,
+  tickDoneChecklistItem,
   toSlimWorkItem,
   updateWorkItemFields,
   updateWorkItemStatus,
   WorkItemVersionConflictError,
 } from './repos/work-items.ts';
 export type {
+  BoardHealthItem,
+  BoardHealthResult,
   CreateWorkItemInput,
   ListWorkItemsOptions,
   PatchWorkItemInput,
@@ -470,3 +475,14 @@ export type {
   MailboxRecipientRow,
   WriteAuditInput,
 } from './repos/mailbox.ts';
+
+// pc-pty-chat-434 — agent dossier repo (Track B).
+export {
+  getDossier,
+  upsertDossier,
+  DossierVersionConflictError,
+} from './repos/work-item-dossiers.ts';
+export type {
+  DossierRow,
+  UpsertDossierInput,
+} from './repos/work-item-dossiers.ts';

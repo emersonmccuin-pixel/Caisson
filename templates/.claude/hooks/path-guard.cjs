@@ -16,11 +16,15 @@
 //                   MAIN repo):
 //                   1. WORKTREE CONFINEMENT (workflow agents + bound subagents):
 //                      every tool call must stay inside the bound worktree.
-//                   2. GIT WRITE FENCE (EVERY PC session, orchestrator included):
-//                      a git command that WRITES (anything beyond status/log/
-//                      diff/show/…) aimed at a directory outside the session's
-//                      fence root is denied. Fence root = the bound worktree,
-//                      else the session cwd (the orchestrator's project folder).
+//                   2. GIT WRITE FENCE (AGENT SESSIONS ONLY — the orchestrator
+//                      is exempt): for a dispatched agent, a git command that
+//                      WRITES (anything beyond status/log/diff/show/…) aimed at
+//                      a directory outside its fence root is denied. Fence root
+//                      = the bound worktree, else the agent's session cwd. The
+//                      ORCHESTRATOR is trusted to run git anywhere — it owns
+//                      merges, landing, and cross-project work, so the fence
+//                      never applies to it (detected by the absence of the
+//                      agent-only env markers PC_AGENT_RUN_ID / PC_WORKFLOW_*).
 //
 // ⚠ CC ≥2.1 reports `agent_type` for the MAIN thread of --agent sessions, so
 // payload.agent_type does NOT mean "inside a Task() subagent". Caught live
@@ -254,11 +258,19 @@ function enforce() {
   const tool = payload.tool_name || '';
   const inp = payload.tool_input || {};
 
-  // ── GIT WRITE FENCE — every PC session (orchestrator included). Fence root
-  // = the bound worktree when one exists, else the session cwd (the
-  // orchestrator runs in its project folder). Outer/dev sessions (no
-  // PC_PROJECT_ID) are exempt.
-  if (tool === 'Bash' && process.env.PC_PROJECT_ID) {
+  // ── GIT WRITE FENCE — AGENT SESSIONS ONLY. The orchestrator owns merges,
+  // landing, and cross-project git work, so it is NEVER git-fenced; only
+  // dispatched agents are. An agent session is identified by a bound worktree
+  // (wt) or the agent-only env markers set at spawn (PC_AGENT_RUN_ID by the
+  // agent-run factory, PC_WORKFLOW_WORKTREE / PC_WORKFLOW_RUN_ID by the
+  // workflow runtime). The orchestrator carries none of these. Fence root =
+  // the bound worktree when one exists, else the agent's session cwd.
+  // Outer/dev sessions (no PC_PROJECT_ID) are exempt.
+  const isAgentSession = !!wt
+    || !!process.env.PC_AGENT_RUN_ID
+    || !!process.env.PC_WORKFLOW_WORKTREE
+    || !!process.env.PC_WORKFLOW_RUN_ID;
+  if (tool === 'Bash' && process.env.PC_PROJECT_ID && isAgentSession) {
     const fence = wt || (payload.cwd ? resolve(payload.cwd) : null);
     if (fence) {
       const v = gitWriteFenceViolation(String(inp.command || ''), fence, payload.cwd);

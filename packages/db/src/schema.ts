@@ -5,6 +5,7 @@ import type {
   AgentModel,
   CredentialAuthState,
   CredentialKind,
+  DoneChecklistItem,
   ExpectedOutput,
   FieldSchemaType,
   GlobalSettings,
@@ -111,6 +112,7 @@ export const liveOutbox = sqliteTable(
         | 'contract'
         | 'host-health'
         | 'context-doc'
+        | 'work-item-dossier'
       >(),
     entityId: text('entity_id').$type<ULID | null>(),
     version: integer('version'),
@@ -177,6 +179,8 @@ export const workItems = sqliteTable(
     /** Command focus — epoch-ms when the planner starred this item; NULL = not
      *  in focus. */
     focusedAt: integer('focused_at'),
+    /** Per-card Definition-of-Done checklist. NULL when no checklist set. */
+    doneChecklist: text('done_checklist', { mode: 'json' }).$type<DoneChecklistItem[] | null>(),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
     deletedAt: integer('deleted_at'),
@@ -346,6 +350,9 @@ export const workflowRunsV2 = sqliteTable(
     /** Frozen YAML at dispatch — immune to live edits mid-run. */
     workflowYamlSnapshot: text('workflow_yaml_snapshot').notNull(),
     worktreePath: text('worktree_path'),
+    /** Repo dispatch provenance for workflow-owned worktrees. */
+    worktreeBaseBranch: text('worktree_base_branch'),
+    worktreeBaseSha: text('worktree_base_sha'),
     /** DAG execution state: per-node records + per-reject-edge iteration counts. */
     dagState: text('dag_state', { mode: 'json' })
       .notNull()
@@ -755,6 +762,9 @@ export {
   pendingAsks,
   // ☠ M4a: agentInbox + agentDeliveryAudit deleted (migration 0041 archive).
 } from './schema-agent-system.ts';
+
+// pc-pty-chat-434 — agent dossier table (Track B).
+export { workItemDossiers } from './schema-dossier.ts';
 
 /**
  * pc-pty-chat-359 P1 — MCP Server Registry. One row per registered server,

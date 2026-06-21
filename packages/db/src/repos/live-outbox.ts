@@ -24,7 +24,8 @@ export type LiveOutboxEntity =
   | 'area'
   | 'contract'
   | 'host-health'
-  | 'context-doc';
+  | 'context-doc'
+  | 'work-item-dossier';
 
 export interface InsertLiveEventDraft<TPayload = unknown> {
   id?: ULID;

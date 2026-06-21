@@ -4,6 +4,7 @@ import {
   type AgentInboxEventKind,
   type AgentRunFailureCause,
   type AgentRunRow,
+  type DoneChecklistItem,
   type Project,
   type ULID,
 } from '@pc/domain';
@@ -31,6 +32,7 @@ import {
 import {
   buildAgentCompletedBody,
   buildAgentFailedBody,
+  type DoneChecklistBlock,
   type VerificationBlock,
 } from './agent-event-header.ts';
 import type { ActiveRunRegistry } from './agent-active-runs.ts';
@@ -395,9 +397,12 @@ async function finishTerminalEffects(args: {
           contractId,
           workItemId,
           terminalStatus: input.status,
+          failureCause,
           failureReason,
           projectFolderPath: project.folderPath,
           worktreeDir: input.worktreeDir,
+          worktreeBaseBranch: row.worktreeBaseBranch,
+          worktreeBaseSha: row.worktreeBaseSha,
           // Slice 014a — carry the run + session so the tool-call loader can read
           // the producing run's transcript (powers `tool_called`).
           runId: input.runId,
@@ -567,6 +572,12 @@ async function finishTerminalEffects(args: {
   // async tail keeps ONLY verification + the Channel terminal envelope.
   const slug = input.slug ?? project?.slug ?? null;
   if (deps.mailboxEnqueue && slug) {
+    // Slice D — look up the parent WI's done-checklist for the envelope. Sync DB
+    // read is safe here (finishTerminalEffects is already async). Null when the WI
+    // has no checklist or isn't found (block omitted — acceptable degradation).
+    const doneChecklist = row.parentWorkItemId
+      ? (getWorkItem(row.parentWorkItemId)?.doneChecklist ?? null)
+      : null;
     emitTerminalEnvelope({
       mailboxEnqueue: deps.mailboxEnqueue,
       projectId: input.projectId,
@@ -581,6 +592,7 @@ async function finishTerminalEffects(args: {
       note: incidentalNote,
       failureCause,
       verification,
+      doneChecklist,
     });
     // Issue 3 (near-term) — signal the mailbox worker to drain immediately so
     // the terminal envelope reaches the orchestrator within ms, not at the next
@@ -609,11 +621,23 @@ interface EmitTerminalArgs {
   note?: string | null;
   failureCause: AgentRunFailureCause | null;
   verification: VerificationBlock | null;
+  /** Slice D — pre-fetched done-checklist for the parent work item. Pass null
+   *  to suppress the block (replay path, WI not found, no checklist set). */
+  doneChecklist: DoneChecklistItem[] | null;
 }
 
 function emitTerminalEnvelope(args: EmitTerminalArgs): void {
   const kind: AgentInboxEventKind =
     args.terminalStatus === 'completed' ? 'agent-completed' : 'agent-failed';
+  // Slice D — map DoneChecklistItem[] → the render shape the header builders
+  // expect. null when the block must be suppressed (replay path or no checklist).
+  const doneChecklistBlock: DoneChecklistBlock | null = args.doneChecklist
+    ? {
+        total: args.doneChecklist.length,
+        open: args.doneChecklist.filter((i) => !i.done).length,
+        items: args.doneChecklist.map((i) => ({ label: i.label, done: i.done })),
+      }
+    : null;
   const body =
     args.terminalStatus === 'completed'
       ? buildAgentCompletedBody({
@@ -624,6 +648,7 @@ function emitTerminalEnvelope(args: EmitTerminalArgs): void {
           result: args.result,
           note: args.note,
           verification: args.verification,
+          doneChecklist: doneChecklistBlock,
         })
       : buildAgentFailedBody({
           runId: args.runId,
@@ -633,6 +658,7 @@ function emitTerminalEnvelope(args: EmitTerminalArgs): void {
           reason: describeAgentRunFailure(args.failureCause) ?? args.terminalStatus,
           cause: agentFailureCauseToPayload(args.failureCause, args.terminalStatus),
           verification: args.verification,
+          doneChecklist: doneChecklistBlock,
         });
   deliverAgentEnvelope(
     {
@@ -707,19 +733,19 @@ export async function replayMissingTerminalEnvelopes(
   let replayed = 0;
   for (const row of rows) {
     const status = row.status as TerminalStatus;
-    // Spawn-flakiness fix (2026-06-10) — a dispatch that failed BEFORE any
-    // spawn on a host start receipt already returned that failure
-    // SYNCHRONOUSLY to its dispatcher (the pc_invoke_agent tool result / the
-    // workflow settlement). Replaying an agent-failed envelope for it minutes
-    // later re-pages the orchestrator about a failure it has typically already
-    // retried — pure noise. The sync receipt is the notification; skip.
-    if (
-      status === 'failed' &&
-      row.spawnedAt === null &&
-      (row.failureCause === 'host-unavailable' ||
-        row.failureCause === 'host-rejected' ||
-        row.failureCause === 'host-protocol-error')
-    ) {
+    // Pre-spawn synchronous failure invariant (pc-pty-chat-448) — a run that
+    // failed with spawnedAt===null NEVER spawned; its failure was determined
+    // during the synchronous dispatch request and returned to the caller as the
+    // tool result / workflow settlement.  The caller already has the failure
+    // signal, so replaying an agent-failed envelope minutes later is pure noise.
+    //
+    // This generalises the former host-* cause deny-list to ALL pre-spawn
+    // failures (worktree-provision-failed, spawn-error, host-unavailable,
+    // host-rejected, host-protocol-error, etc.).  Every other finalize path
+    // (cancel, reconcile, boot-sweep) already writes the idempotency key via
+    // applyAgentRunTerminalEffects, so the hasKey check below protects them
+    // regardless of this skip.
+    if (status === 'failed' && row.spawnedAt === null) {
       continue;
     }
     const kind: AgentInboxEventKind =
@@ -748,6 +774,10 @@ export async function replayMissingTerminalEnvelopes(
         result: row.result ?? '',
         failureCause: row.failureCause,
         verification,
+        // Slice D (Gotcha #3) — replay path must NOT look up current checklist
+        // state (that would render state at replay time, not terminal time —
+        // misleading). Block is always omitted on replay.
+        doneChecklist: null,
       });
       replayed += 1;
     } catch (err) {

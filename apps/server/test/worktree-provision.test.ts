@@ -6,7 +6,7 @@
 // package-manager processes.
 //
 // A fourth test confirms that an *already-attached* worktree (the match
-// branch of ensureWorktree) does NOT trigger a redundant reinstall.
+// branch of ensureWorktree) is also dependency-checked before reuse.
 //
 // The detection tests pin the lockfile → install-command mapping and the
 // no-lockfile no-op (polyglot / non-Node repos must not fail provisioning).
@@ -24,7 +24,7 @@ const tmpDir = mkdtempSync(join(tmpdir(), 'pc-worktree-provision-'));
 process.env['PC_DATA_DIR'] = tmpDir;
 
 const { closeDb, runMigrations } = await import('@pc/db');
-const { WorktreeService, detectInstallCommand, defaultInstallRunner } = await import(
+const { WorktreeService, detectInstallCommand, detectInstallSteps, defaultInstallRunner } = await import(
   '../src/services/worktree.ts'
 );
 
@@ -54,6 +54,8 @@ test('provision/create: installRunner is called with the new worktree path', asy
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'dev', {
     createWorktree: async (_ws, _path, name) => fakeEntry(name),
     listWorktrees: mainOnly,
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
+    resolveIntegrationTip: async () => 'abc1234',
     installRunner: async (cwd) => { installed.push(cwd); },
   });
 
@@ -67,6 +69,8 @@ test('provision/create: install failure propagates — caller never gets a half-
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'dev', {
     createWorktree: async (_ws, _path, name) => fakeEntry(name),
     listWorktrees: mainOnly,
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
+    resolveIntegrationTip: async () => 'abc1234',
     installRunner: async () => {
       throw new Error('pnpm install --frozen-lockfile failed (exit 1) in /some/path:\nERR_LOCKFILE');
     },
@@ -89,6 +93,8 @@ test('provision/attach: installRunner is called when branch already exists (orph
     pruneWorktrees: async () => {},
     // No match in the initial list → triggers create() attempt.
     listWorktrees: mainOnly,
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
+    resolveIntegrationTip: async () => 'abc1234',
     // Simulate "branch already exists" to force the attach branch.
     createWorktree: async () => { throw new Error('fatal: already exists'); },
     attachWorktree: async (_ws, _path, n) => fakeEntry(n),
@@ -106,6 +112,8 @@ test('provision/attach: install failure propagates — orphan recovery does not 
   const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, async () => 'dev', {
     pruneWorktrees: async () => {},
     listWorktrees: mainOnly,
+    getWorktreeStatus: async () => ({ branch: 'dev', clean: true }),
+    resolveIntegrationTip: async () => 'abc1234',
     createWorktree: async () => { throw new Error('fatal: already exists'); },
     attachWorktree: async (_ws, _path, n) => fakeEntry(n),
     installRunner: async () => {
@@ -122,7 +130,7 @@ test('provision/attach: install failure propagates — orphan recovery does not 
 
 // ── ensureWorktree() match (already-attached) path ───────────────────────────
 
-test('provision/match: installRunner is NOT called for an already-attached worktree', async () => {
+test('provision/match: installRunner is called for an already-attached worktree', async () => {
   const installed: string[] = [];
   const name = 'agent-existing';
   const existingEntry = fakeEntry(name);
@@ -134,13 +142,15 @@ test('provision/match: installRunner is NOT called for an already-attached workt
       { path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' },
       existingEntry,
     ],
+    resolveIntegrationTip: async () => 'abc1234',
     installRunner: async (cwd) => { installed.push(cwd); },
   });
 
   const entry = await svc.ensureWorktree(name);
 
   assert.equal(entry.path, existingEntry.path, 'returns the existing entry');
-  assert.equal(installed.length, 0, 'installRunner must NOT be called for an already-attached worktree');
+  assert.equal(installed.length, 1, 'installRunner must run before reusing an already-attached worktree');
+  assert.equal(installed[0], existingEntry.path);
 });
 
 // ── lockfile detection (the AHEAD bug: non-pnpm / polyglot repos) ─────────────
@@ -175,6 +185,17 @@ test('detect: no lockfile → null (even with a root package.json)', () => {
 test('detect: non-Node repo (no manifest at all) → null', () => {
   const dir = lockfileDir('polyglot', ['Gemfile']);
   assert.equal(detectInstallCommand(dir), null);
+});
+
+test('detect: nested package-lock app produces nested npm ci step when root has no lockfile', () => {
+  const root = lockfileDir('nested-root', ['package.json']);
+  const appDir = join(root, 'apps', 'cia-fe');
+  mkdirSync(appDir, { recursive: true });
+  writeFileSync(join(appDir, 'package.json'), '{}');
+  writeFileSync(join(appDir, 'package-lock.json'), '{}');
+
+  assert.equal(detectInstallCommand(root), null);
+  assert.deepEqual(detectInstallSteps(root), [{ cwd: appDir, command: 'npm ci' }]);
 });
 
 test('default runner: no lockfile → resolves without spawning anything', async () => {

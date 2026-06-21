@@ -98,6 +98,10 @@ export const agentRuns = sqliteTable(
      *  NULL for rows predating this column; callers fall back to
      *  `project.folderPath`. */
     worktreeDir: text('worktree_dir'),
+    /** Repo dispatch provenance: canonical branch and commit SHA the isolated
+     *  worktree branch forked from. NULL for non-repo/legacy rows. */
+    worktreeBaseBranch: text('worktree_base_branch'),
+    worktreeBaseSha: text('worktree_base_sha'),
   },
   (t) => [
     index('agent_runs_session_queued_idx').on(t.dispatcherSessionId, t.queuedAt),
@@ -151,6 +155,10 @@ export const agentContracts = sqliteTable(
     deliverable: text('deliverable', { mode: 'json' }).$type<Deliverable>(),
     /** Isolation axis for repo/file producers. */
     worktreePath: text('worktree_path'),
+    /** Repo dispatch provenance copied from the producing run so reviewers and
+     *  the verifier can see the exact base without git forensics. */
+    worktreeBaseBranch: text('worktree_base_branch'),
+    worktreeBaseSha: text('worktree_base_sha'),
     /** pc-pty-chat-415 (R5) — accept ⇒ land. Null = not applicable (non-repo,
      *  workflow-owned, pre-415). See ContractLandingStatus in @pc/domain. */
     landingStatus: text('landing_status').$type<ContractLandingStatus | null>(),

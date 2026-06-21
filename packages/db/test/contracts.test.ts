@@ -48,7 +48,8 @@ test('0038 creates agent_contracts table with every schema.ts column', () => {
     'id', 'project_id', 'work_item_id', 'agent_run_id',
     'pod_name', 'expected_output', 'acceptance_criteria', 'verification_tier',
     'verification_status', 'verification_notes', 'report', 'deliverable',
-    'worktree_path', 'status', 'version', 'created_at', 'updated_at',
+    'worktree_path', 'worktree_base_branch', 'worktree_base_sha',
+    'status', 'version', 'created_at', 'updated_at',
   ]) {
     assert.ok(cols.includes(col), `agent_contracts.${col} should exist`);
   }
@@ -60,6 +61,8 @@ test('0038 creates agent_contracts table with every schema.ts column', () => {
     (c) => c.name,
   );
   assert.ok(runCols.includes('contract_id'), 'agent_runs.contract_id should exist');
+  assert.ok(runCols.includes('worktree_base_branch'), 'agent_runs.worktree_base_branch should exist');
+  assert.ok(runCols.includes('worktree_base_sha'), 'agent_runs.worktree_base_sha should exist');
 });
 
 test('assertSchemaIntact does not throw after a fresh migrate', () => {

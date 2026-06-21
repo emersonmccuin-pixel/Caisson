@@ -81,7 +81,13 @@ function mkResolver(project: Project, rootWorkItemId: ULID | null, state: Workfl
     broadcast: () => {},
   } as unknown as DagRunServiceOptions;
   const deps = makeExecutorDeps(
-    { id: newId() as ULID, workItemId: rootWorkItemId, worktreePath: null },
+    {
+      id: newId() as ULID,
+      workItemId: rootWorkItemId,
+      worktreePath: null,
+      worktreeBaseBranch: null,
+      worktreeBaseSha: null,
+    },
     { name: 'm5-guard', nodes: [] } as unknown as WorkflowV2.Workflow,
     opts,
   );

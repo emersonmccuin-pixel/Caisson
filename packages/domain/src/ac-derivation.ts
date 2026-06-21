@@ -110,6 +110,12 @@ function deriveProseV2(
   return preds;
 }
 
+/** Bare check names that map to `pnpm <name>`. A bare string matching this set
+ *  is treated as a preset so it runs as `pnpm <name>` rather than the literal
+ *  command name. Full commands (containing spaces or pnpm flags) pass through
+ *  unchanged. Fixes D3 (pc-pty-chat-440): "typecheck" → `pnpm typecheck`. */
+const KNOWN_PRESET_NAMES = new Set(['build', 'test', 'lint', 'typecheck']);
+
 function deriveRepoV2(
   spec: Extract<ExpectedOutputV2, { kind: 'repo' }>,
 ): AcceptancePredicateV2[] {
@@ -122,14 +128,18 @@ function deriveRepoV2(
     preds.push({ kind: 'git_diff_nonempty', cwd });
   }
   for (const rawCheck of spec.checks ?? []) {
-    // Normalize plain-string checks (e.g. "pnpm typecheck") to the object form
-    // { command: string }. At runtime, callers may pass strings even though the
-    // type declares RepoCheck[]; accepting them avoids a 500 on
-    // guessable-but-wrong input (pc-pty-chat-279).
-    const check: RepoCheck =
-      typeof (rawCheck as unknown) === 'string'
-        ? { command: rawCheck as unknown as string }
-        : (rawCheck as RepoCheck);
+    if (typeof rawCheck === 'string') {
+      // Bare string: coerce known preset names (build/test/lint/typecheck) to
+      // `pnpm <name>`. Full commands (containing spaces, flags, etc.) stay
+      // as-is. This fixes D3 (pc-pty-chat-440) where "typecheck" ran as the
+      // literal command `typecheck` instead of `pnpm typecheck`, and pc-pty-chat-279
+      // which needed any bare string to not throw "'preset' in <string>".
+      const command = KNOWN_PRESET_NAMES.has(rawCheck) ? `pnpm ${rawCheck}` : rawCheck;
+      preds.push({ kind: 'bash_exit_zero', command, cwd, timeout_ms: REPO_CHECK_DEFAULT_TIMEOUT_MS });
+      continue;
+    }
+    // Object form (RepoCheck): handle preset vs command as before.
+    const check = rawCheck as RepoCheck;
     if ('preset' in check) {
       preds.push({
         kind: 'bash_exit_zero',

@@ -33,6 +33,7 @@ import {
   listContractsPendingLanding,
   listNonTerminalAgentRuns,
   listProjects,
+  listWorkItems,
   newId,
   pruneLiveOutbox,
   runMigrations,
@@ -74,7 +75,10 @@ import { ProjectRegistry } from './services/project-registry.ts';
 import type { ProjectRuntime } from './services/project-runtime.ts';
 import { ProjectScaffold } from './services/project-scaffold.ts';
 import { registerFileRoutes } from './features/files/routes.ts';
-import { resolveClaudeBinary, setBundledClaudeExe } from '@pc/runtime';
+import {
+  resolveClaudeBinary,
+  setBundledClaudeExe,
+} from '@pc/runtime';
 import {
   applyClaudeRuntimeSettings,
   readSettings,
@@ -118,6 +122,10 @@ import {
   STALE_ASK_SWEEP_MS,
   sweepStalePendingAsks,
 } from './services/pending-ask-watchdog.ts';
+import {
+  sweepWorkItemStallWarn,
+  resolveWorkItemStallSweepMs,
+} from './services/work-item-stall-warn.ts';
 import { registerPodRoutes } from './routes/pod-routes.ts';
 import { registerWorkflowRoutes } from './routes/workflow-routes.ts';
 import { registerMcpServerRoutes } from './features/mcp-servers/routes.ts';
@@ -135,6 +143,12 @@ import { migrateStoredWorkflowDefsToV3 } from './services/workflow-def-migrate-v
 import { cancelWorkflowRunCascade } from './services/workflow-run-cancel.ts';
 import { createAgentRunReconciler } from './services/agent-run-reconciler.ts';
 import { getActiveRunRegistry } from './services/agent-active-runs.ts';
+import { reHomeRunOnCurrentHost } from './services/agent-run-rehome.ts';
+import {
+  collectOpenChecklistCards,
+  formatSweepBlock,
+  sweepClientMessageId,
+} from './services/session-open-checklist-sweep.ts';
 
 // PUBLIC / TEMPLATES / the scaffold trunk path all derive from ROOT, so they
 // relocate with it (PC_ROOT in packaged builds). server-root.ts is the ONE
@@ -341,6 +355,7 @@ const {
   maybeSetSessionTitle,
   maybeApplyAiTitle,
   maybePersistPostTurnSummary,
+  enqueueSessionOpenSweep: enqueueSessionOpenSweepForProject,
 });
 
 const projectScaffold = new ProjectScaffold({
@@ -572,6 +587,9 @@ const agentRunReconciler = createAgentRunReconciler({
       console.warn('[mailbox] immediate drain failed:', (err as Error).message);
     }
   },
+  // pc-pty-chat-437 Fix E — re-home queued/spawning runs onto the current live
+  // host when the original host was replaced between enqueue and spawn.
+  reHomeQueuedRun: (row) => reHomeRunOnCurrentHost(row, hostConnection),
 });
 try {
   await agentRunReconciler.boot();
@@ -808,6 +826,29 @@ registerMailboxRoutes(app, {
   // Mailbox-message delivery rides the relay (015b); no fanout deps.
 });
 
+// Slice F — session-open checklist sweep. Hoisted (function declaration) so it
+// can be referenced in the createRuntimeHostPtyController deps above; the body
+// runs at ready-time (long after server init) so mailboxSendService is initialised.
+function enqueueSessionOpenSweepForProject(projectId: ULID): void {
+  const session = getActiveOrchestratorSession(projectId);
+  if (!session) return;
+  try {
+    const items = listWorkItems(projectId, { open: true });
+    const cards = collectOpenChecklistCards(items);
+    const text = formatSweepBlock(cards);
+    if (!text) return; // no open checklist cards — nothing to inject
+    mailboxSendService.enqueueRuntimeTurn({
+      projectId,
+      sessionId: session.id as ULID,
+      clientMessageId: sweepClientMessageId(session.id),
+      text,
+      source: 'mailbox',
+    });
+  } catch (err) {
+    console.warn('[session-open-sweep] enqueue failed:', (err as Error).message);
+  }
+}
+
 // Workflow-review delivery. Hoisted so the ProjectRegistry built at boot can
 // reference it; the body runs at workflow-fire time so the const bindings above
 // are initialised by then. Enqueues the review prompt as a durable mailbox
@@ -999,6 +1040,29 @@ const staleAskSweep = setInterval(() => {
   }
 }, STALE_ASK_SWEEP_MS);
 if (typeof staleAskSweep.unref === 'function') staleAskSweep.unref();
+
+// pc-pty-chat-433 — A3: proactive work-item stall sweep. For each project,
+// pushes ONE consolidated orchestrator-turn mailbox message when open items
+// have had no activity for PC_WORK_ITEM_STALL_IDLE_DAYS (default 7). Debounced
+// per-item per stall episode via `workItemNotifiedItems` (caller-owned state).
+// Shares the stall query with A2 — both call getBoardHealth (@pc/db) directly.
+const workItemNotifiedItems = new Map<string, Set<string>>();
+const workItemStallSweep = setInterval(() => {
+  try {
+    const result = sweepWorkItemStallWarn({
+      notifiedItems: workItemNotifiedItems,
+      mailboxEnqueue: enqueueMailboxAndFanout,
+    });
+    if (result.notified > 0) {
+      console.log(
+        `[board-health] stall-sweep: checked=${result.checked}, notified=${result.notified}, newStalled=${result.newStalled}`,
+      );
+    }
+  } catch (err) {
+    console.warn('[board-health] stall sweep failed:', (err as Error).message);
+  }
+}, resolveWorkItemStallSweepMs());
+if (typeof workItemStallSweep.unref === 'function') workItemStallSweep.unref();
 
 // Slice 015a — universal post-commit relay drain. Gateways write the outbox row
 // in-txn; this short-interval drain fans the committed rows to subscribers
@@ -1256,7 +1320,28 @@ registerWorkflowRoutes(app, {
   },
 });
 
-registerMcpServerRoutes(app, { resolveProject, probe: probeMcpServer });
+registerMcpServerRoutes(app, {
+  resolveProject,
+  probe: probeMcpServer,
+  // pc-pty-chat-451 — kill + re-ensure the orchestrator so it immediately
+  // picks up any project-scoped server that was just registered or deleted.
+  // Mirrors the onPodChanged → restartIfOrchestratorPod + ensureOrchestratorPty
+  // pattern; history is preserved via --resume.
+  restartProjectOrchestrator: (projectId) => {
+    const runtime = resolveProject(projectId);
+    if (!runtime) return;
+    const restarted = runtime.restartOrchestratorForMcpChange();
+    if (restarted) {
+      try {
+        ensureOrchestratorPty(runtime.project.id, runtime);
+      } catch (err) {
+        console.error(
+          `[pc] orchestrator restart-on-mcp-change failed for ${projectId}: ${(err as Error).message}`,
+        );
+      }
+    }
+  },
+});
 
 registerPodRoutes(app, {
   resetStockPodToDefault: (name, reason) => {
@@ -1463,6 +1548,7 @@ function gracefulShutdown(): void {
   agentRunReconciler.stop();
   clearInterval(mailboxWorkerSweep);
   clearInterval(staleAskSweep);
+  clearInterval(workItemStallSweep);
   clearInterval(liveRelayDrainSweep);
   clearInterval(liveOutboxPruneSweep);
   // Send clean close frames (1001 "going away") to every live WS client so

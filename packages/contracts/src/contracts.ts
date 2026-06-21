@@ -130,6 +130,8 @@ export type Deliverable =
       kind: 'repo';
       branch?: string;
       commit?: string;
+      baseBranch?: string;
+      baseCommit?: string;
       diffStat?: { files: number; insertions: number; deletions: number };
       prUrl?: string;
     }
@@ -207,6 +209,10 @@ export interface Contract {
   deliverable: Deliverable | null;
   /** Isolation axis for repo/file producers. */
   worktreePath: string | null;
+  /** Repo dispatch provenance: canonical branch and commit SHA the worktree
+   *  branch forked from. Null for non-repo and legacy rows. */
+  worktreeBaseBranch: string | null;
+  worktreeBaseSha: string | null;
   /** pc-pty-chat-415 (R5/R12) — accept ⇒ land. Null = not applicable
    *  (non-repo, workflow-owned, pre-415). The receipts outlive the worktree;
    *  'abandoned' preserves the branch + records its tip before reclaim. */
@@ -319,6 +325,8 @@ export function isContract(value: unknown): value is Contract {
     (value.report === null || typeof value.report === 'string') &&
     (value.deliverable === null || isRecord(value.deliverable)) &&
     (value.worktreePath === null || typeof value.worktreePath === 'string') &&
+    (value.worktreeBaseBranch === null || typeof value.worktreeBaseBranch === 'string') &&
+    (value.worktreeBaseSha === null || typeof value.worktreeBaseSha === 'string') &&
     isContractStatus(value.status) &&
     typeof value.version === 'number' &&
     typeof value.createdAt === 'number' &&

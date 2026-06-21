@@ -343,6 +343,67 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     }
   },
   {
+    "name": "pc_set_done_checklist",
+    "family": "work-item",
+    "label": "Set done checklist",
+    "description": "Author or replace the Definition-of-Done checklist for a work item. Replaces the entire checklist array with the supplied items. Each item: { id (stable slug you mint, e.g. 'tests-green'), label, done, kind: 'manual'|'contract'|'machine' }. `id` accepts ULID or callsign.",
+    "catalogDescription": "Author or replace a card's done-checklist.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workItemId": {
+          "type": "string",
+          "description": "work item id (ULID or callsign like pc-2.1)"
+        },
+        "items": {
+          "type": "array",
+          "description": "checklist items to set (replaces current list)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "description": "stable item id (e.g. 'tests-green')" },
+              "label": { "type": "string", "description": "human-readable label" },
+              "done": { "type": "boolean", "description": "initial tick state" },
+              "kind": {
+                "type": "string",
+                "enum": ["manual", "contract", "machine"],
+                "description": "'manual' = orchestrator/human ticks; 'contract' = auto-ticks on contract PASS (Slice E); 'machine' = predicate re-evaluated on demand (deferred)"
+              },
+              "contractId": { "type": "string", "description": "bound contract id for kind='contract' items (Slice E)" }
+            },
+            "required": ["id", "label", "done", "kind"]
+          }
+        }
+      },
+      "required": ["workItemId", "items"]
+    }
+  },
+  {
+    "name": "pc_tick_done_checklist_item",
+    "family": "work-item",
+    "label": "Tick done checklist item",
+    "description": "Flip one done-checklist item's tick state on a work item. Safe targeted write — only the `done_checklist` column is updated; no other field is touched. No-ops cleanly if `itemId` doesn't match any item. `workItemId` accepts ULID or callsign.",
+    "catalogDescription": "Flip one box on a card's done-checklist.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workItemId": {
+          "type": "string",
+          "description": "work item id (ULID or callsign like pc-2.1)"
+        },
+        "itemId": {
+          "type": "string",
+          "description": "stable item id matching the DoneChecklistItem.id you set via pc_set_done_checklist"
+        },
+        "done": {
+          "type": "boolean",
+          "description": "true to tick (default); false to un-tick"
+        }
+      },
+      "required": ["workItemId", "itemId"]
+    }
+  },
+  {
     "name": "pc_create_agent",
     "family": "agent",
     "label": "Create an agent pod",
@@ -952,6 +1013,22 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "inputSchema": {
       "type": "object",
       "properties": {}
+    }
+  },
+  {
+    "name": "pc_board_health",
+    "family": "project",
+    "label": "Board health / stall report",
+    "description": "Surface stalled work items — open items in a non-terminal stage with no agent-run, contract, or field activity for N days (default 7). Returns: `stalledItems` (id, callsign, title, stageId, ageInStageDays, lastActivityAt) sorted oldest-first, plus `rollup` counts (totalOpen, totalStalled). Use as a periodic PM check-in: call it before a planning session to spot forgotten work that needs attention or reassignment. `idle_days` is optional (default 7). Read-only; no writes.",
+    "catalogDescription": "Find open cards with no activity for N days (default 7) — the board health / stall signal.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idle_days": {
+          "type": "number",
+          "description": "how many days of inactivity before an item is considered stalled (default 7)"
+        }
+      }
     }
   },
   {
@@ -1634,7 +1711,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
     "name": "pc_submit_deliverable",
     "family": "agent-run",
     "label": "Submit your deliverable",
-    "description": "Submit the typed deliverable for YOUR contract — the authoritative output your dispatch is verified against. Call this ONCE, as your final action, before you end your turn; it REPLACES the old \"end your turn and we scrape your transcript / work-item body\" model. The `kind` MUST match your contract's expected output: `answer` → { text } (a direct answer / report); `prose` → { text } or { attachmentId } or { ref } (a written document); `payload` → { data } (structured JSON matching your schema); `repo` → { branch?, commit?, diffStat?, prUrl? } (code you wrote); `external` → { system, handle, idempotencyKey, url? } (an external side-effect you performed, e.g. an email sent); `binary` → { attachmentId, mime, bytes }; `action` → { tool, count } (a tool you were required to call). Optional `report` is free-text to the orchestrator that accompanies the deliverable. Requires PC_AGENT_RUN_ID (set on every dispatched agent). Returns { ok, contractId, status: 'submitted' }.",
+    "description": "Submit the typed deliverable for YOUR contract — the authoritative output your dispatch is verified against. Call this ONCE, as your final action, before you end your turn; it REPLACES the old \"end your turn and we scrape your transcript / work-item body\" model. The `kind` MUST match your contract's expected output: `answer` → { text } (a direct answer / report); `prose` → { text } or { attachmentId } or { ref } (a written document); `payload` → { data } (structured JSON matching your schema); `repo` → { branch?, commit?, diffStat?, prUrl? } (code you wrote; server overwrites branch/commit from git and stamps baseBranch/baseCommit from the dispatch receipt); `external` → { system, handle, idempotencyKey, url? } (an external side-effect you performed, e.g. an email sent); `binary` → { attachmentId, mime, bytes }; `action` → { tool, count } (a tool you were required to call). Optional `report` is free-text to the orchestrator that accompanies the deliverable. Requires PC_AGENT_RUN_ID (set on every dispatched agent). Returns { ok, contractId, status: 'submitted' }.",
     "catalogDescription": "Submit the typed deliverable for your contract (the verified output source).",
     "inputSchema": {
       "type": "object",
@@ -1654,7 +1731,7 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         },
         "deliverable": {
           "type": "object",
-          "description": "the typed deliverable payload (shape depends on kind). The server merges `kind` in, so you may omit it here. answer:{text}; prose:{text|attachmentId|ref}; payload:{data}; repo:{branch?,commit?,diffStat?,prUrl?}; external:{system,handle,idempotencyKey,url?}; binary:{attachmentId,mime,bytes}; action:{tool,count}.",
+          "description": "the typed deliverable payload (shape depends on kind). The server merges `kind` in, so you may omit it here. answer:{text}; prose:{text|attachmentId|ref}; payload:{data}; repo:{branch?,commit?,diffStat?,prUrl?} with branch/commit/baseBranch/baseCommit stamped by the server; external:{system,handle,idempotencyKey,url?}; binary:{attachmentId,mime,bytes}; action:{tool,count}.",
           "additionalProperties": true
         },
         "report": {
@@ -1941,6 +2018,98 @@ export const PC_RIG_TOOL_REGISTRY: readonly PcRigToolDef[] = [
         "attachmentId"
       ]
     }
+  },
+  {
+    "name": "pc_next_action",
+    "family": "work-item",
+    "label": "Pick next item to work on",
+    "description": "Deterministically return THE single work item to work on next for a project. Priority order: (1) item with focusedAt set (Command-planner focus — picks most-recently focused); (2) oldest item in a non-terminal, non-intake stage (actively in-progress); (3) oldest non-terminal open item overall. Excludes done/cancelled/archived items. Returns { ok, item: { id, callsign, title, stageId, status }, reason, legalNextStages, summary }. `reason` is one of: 'focused', 'oldest in-progress', 'oldest open'. `legalNextStages` is the ordered stage list minus the current stage (all reachable moves). When no open items exist, item is null with reason 'no open items'. Pass `targetProjectId` to read a different project.",
+    "catalogDescription": "Return the single next item to work on (focused → oldest in-progress → oldest open).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "targetProjectId": {
+          "type": "string",
+          "description": "optional: pick next action for a different project (ULID, slug, or display name). Default = this session's project (PC_PROJECT_ID)."
+        }
+      }
+    }
+  },
+  {
+    "name": "pc_get_brief",
+    "family": "work-item",
+    "label": "Read work-item dossier (brief)",
+    "description": "Read the persistent dossier for a work item — the running brief that accumulates state, decisions, and open questions across agent turns. Returns { ok, fresh, dossier: { workItemId, state, decisions, openQuestions, updatedByRunId, updatedByAgent, version, createdAt, updatedAt } }. `fresh: true` means no dossier has been written yet (dossier fields are empty defaults — no DB row was created). `work_item_id` accepts a ULID or callsign (e.g. `pc-2.1`).",
+    "catalogDescription": "Read the persistent brief (state / decisions / open questions) for a work item.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_id": {
+          "type": "string",
+          "description": "ULID or callsign of the work item whose dossier to read."
+        }
+      },
+      "required": ["work_item_id"]
+    }
+  },
+  {
+    "name": "pc_update_brief",
+    "family": "work-item",
+    "label": "Update work-item dossier (brief)",
+    "description": "Partial-patch the dossier for a work item. Only the sections you supply are updated; omit a field to leave it unchanged. Pass `expected_version` (the version number from a prior pc_get_brief call) to enable optimistic concurrency — the server will reject the write with a 409 if another agent wrote a newer version in the meantime. Omit `expected_version` for a blind overwrite. Returns { ok, dossier } with the updated row. On conflict: { ok: false, error, current } with the winning row so you can rebase. `work_item_id` accepts a ULID or callsign.",
+    "catalogDescription": "Partial-patch the brief (state / decisions / open questions) for a work item; version-safe.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_id": {
+          "type": "string",
+          "description": "ULID or callsign of the work item whose dossier to update."
+        },
+        "state": {
+          "type": "string",
+          "description": "Current state summary for the work item. Omit to leave unchanged."
+        },
+        "decisions": {
+          "type": "string",
+          "description": "Key decisions made so far. Omit to leave unchanged."
+        },
+        "open_questions": {
+          "type": "string",
+          "description": "Open questions or blockers. Omit to leave unchanged."
+        },
+        "expected_version": {
+          "type": "number",
+          "description": "Optimistic-concurrency guard. Pass the version from your last pc_get_brief call; the server rejects with 409 if the dossier was updated since then. Omit for a blind write."
+        }
+      },
+      "required": ["work_item_id"]
+    }
+  },
+  {
+    "name": "pc_synthesize_finding",
+    "family": "work-item",
+    "label": "Fold investigation finding into parent dossier",
+    "description": "Append this investigation's finding to its PARENT work item's dossier. Resolves the investigation item by ULID or callsign, finds its parent, reads the parent's current dossier, and appends the finding (with a timestamp + source-callsign attribution line) to the chosen section via the existing upsertDossier write path. Error if the investigation item has no parent. Use this as your final action when completing an `investigation`-type card — call it before or alongside pc_submit_deliverable so the synthesis lands in the parent's living brief rather than only on the contract.",
+    "catalogDescription": "Append an investigation's finding (dated + attributed) to its parent's dossier section.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_id": {
+          "type": "string",
+          "description": "ULID or callsign of the investigation work item whose finding to synthesize."
+        },
+        "target_section": {
+          "type": "string",
+          "enum": ["state", "decisions", "open_questions"],
+          "description": "Which section of the parent's dossier to append to: 'state' (current situation / findings), 'decisions' (concluded decisions), or 'open_questions' (outstanding blockers / questions)."
+        },
+        "finding": {
+          "type": "string",
+          "description": "The finding to append. Keep it concise (a few sentences or tight bullets). The tool prepends a timestamp + source attribution line automatically."
+        }
+      },
+      "required": ["work_item_id", "target_section", "finding"]
+    }
   }
 ];
 
@@ -1962,6 +2131,8 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_search_work_items: 'first-order',
   pc_update_work_item: 'first-order',
   pc_move_work_item: 'first-order',
+  pc_set_done_checklist: 'first-order',
+  pc_tick_done_checklist_item: 'first-order',
   pc_resolve_work_item: 'first-order',
   pc_log_bug: 'first-order',
   pc_capture_todo: 'first-order',
@@ -1978,6 +2149,7 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_list_stages: 'first-order',
   pc_list_projects: 'first-order',
   pc_list_waiting_on_you: 'first-order',
+  pc_board_health: 'first-order',
   pc_list_workflows: 'first-order',
   pc_list_field_schemas: 'first-order',
   pc_list_areas: 'first-order',
@@ -2042,6 +2214,13 @@ export const PC_RIG_TOOL_TIERS: Readonly<Record<string, PcRigToolTier>> = {
   pc_get_contract: 'worker',
   pc_list_attachments: 'worker',
   pc_get_attachment: 'worker',
+  // A4 — deterministic next-action picker (Command planner / orchestrator surface).
+  pc_next_action: 'first-order',
+  // pc-pty-chat-434 — agent dossier (Track B).
+  pc_get_brief: 'first-order',
+  pc_update_brief: 'first-order',
+  // pc-pty-chat-438 — investigation type + synthesis fold-up.
+  pc_synthesize_finding: 'worker',
 };
 
 /** Bare tool names in registry (= ListTools) order. */

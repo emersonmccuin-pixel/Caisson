@@ -29,6 +29,8 @@ function run(over: Partial<WorkflowRunDto> = {}): WorkflowRunDto {
     stageId: null,
     workItemId: null,
     worktreePath: null,
+    worktreeBaseBranch: null,
+    worktreeBaseSha: null,
     lastReason: null,
     createdAt: 1,
     startedAt: null,

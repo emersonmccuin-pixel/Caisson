@@ -48,14 +48,19 @@ export function parsePodMcpServerConfig(v: unknown): PodMcpServerConfig {
     }
     out.env = env;
   }
+  if (cfg.cwd !== undefined) {
+    if (typeof cfg.cwd !== 'string') throw new Error('mcp.cwd must be a string');
+    if (cfg.cwd.trim().length === 0) throw new Error('mcp.cwd must not be empty');
+    out.cwd = cfg.cwd;
+  }
   if (cfg.url !== undefined) {
     if (typeof cfg.url !== 'string') throw new Error('mcp.url must be a string');
     if (cfg.url.trim().length === 0) throw new Error('mcp.url must not be empty');
     out.url = cfg.url;
   }
   // Transport must be specified and unambiguous: a stdio entry uses `command`
-  // (+ optional args/env); an HTTP entry uses `url`. Reject entries that pick
-  // neither or both, and stdio-only fields paired with a `url`.
+  // (+ optional args/env/cwd); an HTTP entry uses `url`. Reject entries that
+  // pick neither or both, and stdio-only fields paired with a `url`.
   if (out.command === undefined && out.url === undefined) {
     throw new Error('mcp server config requires either command (stdio) or url (http)');
   }
@@ -64,6 +69,9 @@ export function parsePodMcpServerConfig(v: unknown): PodMcpServerConfig {
   }
   if (out.url !== undefined && (out.args !== undefined || out.env !== undefined)) {
     throw new Error('mcp.args / mcp.env are only valid with command (stdio), not url');
+  }
+  if (out.url !== undefined && out.cwd !== undefined) {
+    throw new Error('mcp.cwd is only valid with command (stdio), not url');
   }
   return out;
 }
@@ -112,6 +120,11 @@ export function parseMcpServerTransport(v: unknown): McpServerTransport {
     }
     out.env = env;
   }
+  if (cfg.cwd !== undefined) {
+    if (typeof cfg.cwd !== 'string') throw new Error('mcp.cwd must be a string');
+    if (cfg.cwd.trim().length === 0) throw new Error('mcp.cwd must not be empty');
+    out.cwd = cfg.cwd;
+  }
   if (cfg.headers !== undefined) {
     if (!cfg.headers || typeof cfg.headers !== 'object' || Array.isArray(cfg.headers)) {
       throw new Error('mcp.headers must be an object');
@@ -141,6 +154,9 @@ export function parseMcpServerTransport(v: unknown): McpServerTransport {
   }
   if (out.url !== undefined && (out.args !== undefined || out.env !== undefined)) {
     throw new Error('mcp.args / mcp.env are only valid with command (stdio), not url');
+  }
+  if (out.url !== undefined && out.cwd !== undefined) {
+    throw new Error('mcp.cwd is only valid with command (stdio), not url');
   }
   if (out.command !== undefined && out.headers !== undefined) {
     throw new Error('mcp.headers is only valid with url (http), not command');

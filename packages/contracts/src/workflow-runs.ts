@@ -68,6 +68,8 @@ export interface WorkflowRunDto {
   rev: number;
   workItemId: ULID | null;
   worktreePath: string | null;
+  worktreeBaseBranch: string | null;
+  worktreeBaseSha: string | null;
   lastReason: string | null;
   createdAt: number;
   startedAt: number | null;
@@ -274,6 +276,8 @@ export function isWorkflowRunDto(value: unknown): value is WorkflowRunDto {
     typeof value.rev === 'number' &&
     (value.workItemId === null || typeof value.workItemId === 'string') &&
     (value.worktreePath === null || typeof value.worktreePath === 'string') &&
+    (value.worktreeBaseBranch === null || typeof value.worktreeBaseBranch === 'string') &&
+    (value.worktreeBaseSha === null || typeof value.worktreeBaseSha === 'string') &&
     (value.lastReason === null || typeof value.lastReason === 'string') &&
     typeof value.createdAt === 'number' &&
     (value.startedAt === null || typeof value.startedAt === 'number') &&

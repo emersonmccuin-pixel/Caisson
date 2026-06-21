@@ -41,6 +41,7 @@ import {
   getWorkItem,
   listAttachmentsForWorkItem,
   listChildWorkItems,
+  tickDoneChecklistItem,
 } from '@pc/db';
 import type { Contract } from '@pc/contracts';
 import { ContractService, WorkItemMutationGateway } from '@pc/app-services';
@@ -61,6 +62,7 @@ import {
 } from '@pc/domain';
 
 import { autoAdvanceToDoneStage } from './auto-advance-done.ts';
+import { triggerChecklistAutoMoveIfComplete } from './checklist-auto-move.ts';
 import { workingTreeStatus } from './git-receipts.ts';
 
 /** FD-12 — the one write door (repo write + outbox receipt in one txn). */
@@ -72,6 +74,17 @@ const gateway = new WorkItemMutationGateway();
  *  their own 10-minute timeout_ms (pc-pty-chat-370) and never hit this. */
 const DEFAULT_BASH_TIMEOUT_MS = 30_000;
 
+/** pc-pty-chat-437 Fix D — causes that are pure infrastructure failures.
+ *  The agent never ran; the contract awaits re-dispatch rather than rejection. */
+const INFRA_FAILURE_CAUSES = new Set<string>([
+  'host-lost',
+  'host-unavailable',
+  'host-crashed',
+  'host-protocol-error',
+  'host-rejected',
+  'server-restart',
+]);
+
 export interface RunVerificationInput {
   /** The first-class contract this run produced (slice 019 — always present on
    *  a dispatched run). Null = no contract; verification is a no-op. */
@@ -80,6 +93,11 @@ export interface RunVerificationInput {
    *  accepted AND this is set, the WI-advance roll-up fires. */
   workItemId?: ULID | null;
   terminalStatus: 'completed' | 'failed' | 'cancelled';
+  /** pc-pty-chat-437 Fix D — the structured failure cause from the terminal
+   *  transition. Infrastructure causes (host-lost, host-unavailable, …) set
+   *  the contract to 'pending' instead of 'failed' so a re-dispatch can try
+   *  again. Agent causes (idle-timeout, …) and null/unknown still reject. */
+  failureCause?: import('@pc/domain').AgentRunFailureCause | null;
   /** Human-readable failure summary when `terminalStatus === 'failed'`. Used
    *  as the contract's verification notes. */
   failureReason: string | null;
@@ -89,6 +107,10 @@ export interface RunVerificationInput {
   /** Agent's worktree absolute path. Default `cwd` for `bash_exit_zero` +
    *  the resolution root for `files_exist` relative paths. */
   worktreeDir: string;
+  /** Repo dispatch provenance. When present, git_diff_nonempty compares
+   *  committed work against this exact SHA instead of guessing a base branch. */
+  worktreeBaseBranch?: string | null;
+  worktreeBaseSha?: string | null;
   /** Slice 014a — the producing run + its CC session. The tool-call loader
    *  reads the run's transcript via the session id; optional so legacy callers
    *  + tests can omit them (the loaders then yield empty evidence). */
@@ -162,10 +184,37 @@ export async function runVerificationOnTerminal(
   const workItemId = (contract.workItemId ?? input.workItemId ?? null) as ULID | null;
   const tier: VerificationTier = contract.verificationTier ?? 'auto';
 
-  // Agent died before reporting done. No predicate eval — the contract
-  // can't be satisfied if the agent never finished the deliverable the
-  // criteria check against.
+  // Agent run ended in failure. Split on the cause:
+  //
+  //   Infrastructure failure (host-lost, server-restart, …): the agent never
+  //   ran; the contract should NOT be rejected. Set to 'pending' so a
+  //   re-dispatch can fulfil the contract without minting a new one.
+  //
+  //   Agent failure (idle-timeout, unexpected-exit, …) or unknown/null: the
+  //   agent ran and failed (or the cause is unknown — preserve prior behavior).
+  //   Reject the contract immediately.
   if (input.terminalStatus === 'failed') {
+    const cause = input.failureCause ?? null;
+    if (cause && INFRA_FAILURE_CAUSES.has(cause)) {
+      // Infrastructure failure — agent never ran; contract awaits re-dispatch.
+      const notes =
+        `infrastructure failure (${cause}) — agent never ran; contract awaits re-dispatch`;
+      service.setVerification({
+        id: input.contractId,
+        verificationStatus: 'pending',
+        verificationNotes: notes,
+        verificationTier: tier,
+      });
+      return {
+        contractId: input.contractId,
+        workItemId,
+        verificationStatus: 'pending',
+        verificationTier: tier,
+        notes,
+        predicatesEvaluated: 0,
+      };
+    }
+    // Agent ran and failed (or cause unknown) — reject the contract as before.
     const notes = input.failureReason ?? 'agent run failed';
     service.setVerification({
       id: input.contractId,
@@ -285,7 +334,16 @@ export async function runVerificationOnTerminal(
     externalHandle: deliverable?.kind === 'external' ? deliverable.handle ?? null : undefined,
   };
 
-  const executors = (deps.executorsFor ?? createWorktreeExecutors)(input);
+  // D2 (pc-pty-chat-440): thread the sealed deliverable commit SHA so that
+  // hasGitDiff can anchor to the COMMITTED artifact (Deliverable.commit) vs
+  // the provisioning base, rather than the live worktree HEAD.
+  const deliverableCommit =
+    deliverable?.kind === 'repo'
+      ? ((deliverable as { kind: string; commit?: string }).commit ?? null)
+      : null;
+  const executors = deps.executorsFor
+    ? deps.executorsFor(input)
+    : createWorktreeExecutors({ ...input, deliverableCommit });
 
   // Flush barrier (Principle 2c / pc-pty-chat-374.5): for worktree dispatches
   // with side-effecting predicates (bash_exit_zero / files_exist), the agent's
@@ -452,6 +510,25 @@ function acceptContract(args: {
     }
     // else 'accept-only': contract is marked passed but the WI stays open
     // until its children all complete (cascade fires from those children).
+
+    // Slice E — auto-tick any kind:'contract' checklist item whose contractId
+    // matches this contract. After ticking, fire the Slice C auto-move path in
+    // case all boxes are now done. Idempotent with the contract roll-up above:
+    // if the WI already reached Done, `triggerChecklistAutoMoveIfComplete` no-ops.
+    const checklist = wiRow.doneChecklist;
+    if (checklist) {
+      const bound = checklist.filter(
+        (item) => item.kind === 'contract' && item.contractId === contractId,
+      );
+      if (bound.length > 0) {
+        for (const item of bound) {
+          tickDoneChecklistItem(workItemId, item.id, true);
+        }
+        if (input.project) {
+          triggerChecklistAutoMoveIfComplete(workItemId, input.project);
+        }
+      }
+    }
   }
   return {
     contractId,
@@ -469,8 +546,11 @@ function acceptContract(args: {
  * Each ancestor's completion is a separate gateway commit (each emits its own
  * `work-item.changed` live-event). Cascade continues until no more ancestors
  * qualify or a workflow root is reached.
+ *
+ * Exported for reuse by the checklist-completion trigger (Slice C) so both
+ * paths share the ONE cascade door.
  */
-function applyRollUpCascade(
+export function applyRollUpCascade(
   justCompletedId: ULID,
   _historyNote: string,
   project: Project | null,
@@ -525,6 +605,14 @@ export function createWorktreeExecutors(input: {
    *  base for worktree dispatches. Optional: project-less test paths fall
    *  back to the literal base list. */
   project?: Project | null;
+  worktreeBaseBranch?: string | null;
+  worktreeBaseSha?: string | null;
+  /** D2 (pc-pty-chat-440): the sealed deliverable commit SHA from the
+   *  contract's Deliverable.commit field. When provided together with
+   *  worktreeBaseSha, hasGitDiff uses `git rev-list --count baseSha..commitSha`
+   *  as the PRIMARY anchor — verifying the committed artifact rather than the
+   *  live worktree HEAD, which may be stale or destroyed after landing. */
+  deliverableCommit?: string | null;
 }): PredicateExecutors {
   const bashTimeoutMs = input.bashTimeoutMs ?? DEFAULT_BASH_TIMEOUT_MS;
   return {
@@ -612,17 +700,37 @@ export function createWorktreeExecutors(input: {
         });
       });
     },
-    async hasGitDiff(cwd) {
+    async hasGitDiff(cwd): Promise<boolean | null> {
       const cwdAbs = cwd === 'project' ? input.projectFolderPath : input.worktreeDir;
 
       if (cwd === 'worktree') {
+        // Primary: sealed deliverable commit SHA vs provisioning base SHA.
+        // This is the AUTHORITATIVE check — it verifies the committed artifact
+        // rather than the live worktree HEAD, which may be stale or destroyed
+        // after landing (D2, pc-pty-chat-440).
+        const commitSha = input.deliverableCommit ?? null;
+        const baseSha = input.worktreeBaseSha ?? null;
+        if (commitSha && baseSha) {
+          const count = await countCommitsRange(cwdAbs, baseSha, commitSha, bashTimeoutMs);
+          if (count !== null) return count > 0;
+        }
+
+        // Secondary: worktreeBaseSha → HEAD (base SHA known, no deliverable commit).
         // Worktree dispatches: assert COMMITTED changes vs the provisioning base.
-        // The project's configured integration branch is the authoritative base;
-        // the literal list is a fallback for project-less test paths. Try each
-        // in order; the first that resolves determines the result. A count > 0
-        // means committed changes exist — working-tree dirtiness is
-        // intentionally IGNORED so a clean commit does NOT false-fail the
-        // predicate (pc-pty-chat-207 / pc-pty-chat-281).
+        // Working-tree dirtiness is intentionally IGNORED so a clean commit does
+        // NOT false-fail the predicate (pc-pty-chat-207 / pc-pty-chat-281).
+        if (baseSha) {
+          const ancestor = await isAncestor(cwdAbs, baseSha, bashTimeoutMs);
+          if (ancestor === false) return false;
+          if (ancestor === true) {
+            const count = await countCommitsAhead(cwdAbs, baseSha, bashTimeoutMs);
+            return count !== null && count > 0;
+          }
+        }
+
+        // Tertiary: well-known base branch names. The project's configured
+        // integration branch is the authoritative base; the literal list is a
+        // fallback for project-less test paths.
         const configured = input.project?.settings.integrationBranch;
         const bases = [...new Set([configured, 'dev', 'main', 'master', 'trunk'])].filter(
           (b): b is string => typeof b === 'string' && b.length > 0,
@@ -631,14 +739,18 @@ export function createWorktreeExecutors(input: {
           const count = await countCommitsAhead(cwdAbs, base, bashTimeoutMs);
           if (count !== null) return count > 0;
         }
-        // No known base branch found (e.g., standalone test repo). Fall through
-        // to working-tree check as a last resort.
+
+        // All committed-diff git calls failed — the worktree may be destroyed
+        // or the git repo is otherwise unreachable. Return null (inconclusive)
+        // per verification-soundness Principle 1: reporting FALSE here would
+        // falsely imply "no work done" when the truth is unknown. The evaluator
+        // routes null → inconclusive → pending (human review), not 'failed'.
+        return null;
       }
 
-      // Project (in-place) dispatches, or worktree with no detectable base:
-      // fall back to checking working-tree dirtiness (original behavior).
-      // Note: for in-place, a clean committed diff still false-fails — fixing
-      // that requires storing the pre-dispatch HEAD at contract creation time.
+      // In-place dispatches (`cwd: 'project'`): no committed-diff anchor without
+      // a stored pre-dispatch HEAD (deferred). Fall back to working-tree dirtiness
+      // as before. Note: a clean committed diff still false-fails for in-place.
       return (await workingTreeStatus(cwdAbs, bashTimeoutMs)) === 'dirty';
     },
   };
@@ -698,6 +810,81 @@ function countCommitsAhead(cwd: string, base: string, timeoutMs: number): Promis
         const n = parseInt(out.trim(), 10);
         finish(isNaN(n) ? null : n);
       }
+    });
+  });
+}
+
+/**
+ * Count commits reachable from `to` but NOT reachable from `from`.
+ * Equivalent to `git rev-list --count <from>..<to>`.
+ *
+ * Used by `hasGitDiff` (D2, pc-pty-chat-440) to verify the sealed deliverable
+ * commit has work on top of the provisioning base SHA — the authoritative
+ * committed-diff check that doesn't depend on the live worktree HEAD.
+ * Returns null when either SHA is missing/unreachable or git exits non-zero.
+ */
+function countCommitsRange(
+  cwd: string,
+  from: string,
+  to: string,
+  timeoutMs: number,
+): Promise<number | null> {
+  return new Promise((resolve) => {
+    let out = '';
+    let settled = false;
+    const child = spawn('git', ['rev-list', '--count', `${from}..${to}`], { cwd });
+    const finish = (val: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(val);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* best-effort */
+      }
+      finish(null);
+    }, timeoutMs);
+    child.stdout?.on('data', (d) => {
+      out += String(d);
+    });
+    child.on('error', () => finish(null));
+    child.on('exit', (code) => {
+      if (code !== 0) {
+        finish(null);
+      } else {
+        const n = parseInt(out.trim(), 10);
+        finish(isNaN(n) ? null : n);
+      }
+    });
+  });
+}
+
+function isAncestor(cwd: string, base: string, timeoutMs: number): Promise<boolean | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const child = spawn('git', ['merge-base', '--is-ancestor', base, 'HEAD'], { cwd });
+    const finish = (val: boolean | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(val);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* best-effort */
+      }
+      finish(null);
+    }, timeoutMs);
+    child.on('error', () => finish(null));
+    child.on('exit', (code) => {
+      if (code === 0) finish(true);
+      else if (code === 1) finish(false);
+      else finish(null);
     });
   });
 }

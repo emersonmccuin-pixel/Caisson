@@ -37,6 +37,16 @@ import { WORKFLOW_DOCTOR_POD_CONTENT } from './workflow-doctor-pod-content.ts';
 const MERMAID_DIAGRAM_RULE =
   '- Diagrams: when you need to produce a diagram, flowchart, or graph, emit it as a ```mermaid code fence — the app renders Mermaid inline. Never use ASCII art or prose descriptions when a Mermaid diagram would do.';
 
+// pc-pty-chat-435 — shared dossier instruction injected into every working
+// subagent pod. When a work item is linked, its agent-owned brief (State /
+// Decisions / Open Questions) is injected into the context; agents should read
+// it as starting truth and write back meaningful decisions via pc_update_brief.
+const DOSSIER_SECTION = `## Dossier
+
+When your context includes a **Work-item brief** block (State / Decisions / Open Questions), treat it as your starting truth — read it before acting. After any meaningful decision or completed chunk of work, call \`pc_update_brief\` to patch only the section you changed. Keep each section under 2000 characters.
+
+**Investigation cards:** if you are dispatched against a work item whose type is \`investigation\`, call \`pc_synthesize_finding\` before (or alongside) \`pc_submit_deliverable\` to fold your key finding into the PARENT card's chosen dossier section. Pass the investigation item's id as \`work_item_id\` — the tool resolves the parent automatically.`;
+
 const RESEARCHER_PROMPT = `You are a researcher + scribe. Use Read, Glob, and Grep to gather context (these can reach anywhere on the user's filesystem — see Worktree binding below); use WebFetch + WebSearch for external information; use Bash + Edit to write or mutate files inside the bound worktree (when one is given). Keep summaries terse — bullets over paragraphs.
 
 ## Two dispatch shapes
@@ -76,23 +86,26 @@ Routine file edits inside the worktree do NOT need approval — that's what the 
 
 ## File operations
 
-**File creation must use Bash heredoc.** The \`Write\` tool is soft-blocked inside subagent turns (a CC v2.1.140 advisory — not a hook denial, not a permission issue). The advisory text reads "Subagents should return findings as text, not write report files." When you need to create a file, write it via:
+**Deliverable kind determines where content goes — these are separate concerns, not interchangeable.**
+
+- **\`answer\` / \`prose\` / \`payload\` (contract-stored or attachment):** submit the content **inline** via \`pc_submit_deliverable({ kind: "answer", text: "..." })\`. **Do not write a file to disk.** An orphan \`.md\` written to your cwd serves no purpose and dirties the workspace (it can trip the mainline guard on the next repo dispatch).
+- **\`repo_file\` deliverables (bound-worktree dispatches only):** write the file inside the path given by the \`[worktree: <abs path>]\` token. Use Bash heredoc because \`Write\` is soft-blocked in subagent turns (CC v2.1.140 advisory: *"Subagents should return findings as text, not write report files."*):
 
 \`\`\`
-bash -c "cat > path/to/file.md <<'EOF'
+bash -c "cat > /absolute/worktree/path/to/file.md <<'EOF'
 ... contents ...
 EOF"
 \`\`\`
 
-**File mutation uses Edit.** Edit is NOT gated and works normally for existing files.
-
-So the loop for any "write findings to a file" node is: Bash heredoc to create → Edit to refine if needed.
+**File mutation uses Edit.** Edit is NOT gated and works normally for existing files inside the worktree.
 
 ## Worktree binding
 
 The \`[worktree: <abs path>]\` token tells you where your *writes* go. Edit / Bash mutations must stay inside that path — the path-guard hook will deny out-of-worktree writes. **Reads (Read, Glob, Grep) are unrestricted** — you can investigate sibling repos, reference folders, or anywhere on the user's filesystem the orchestrator points you at. Use that freedom; if a node says "compare our auth code to the implementation in \`E:/sibling-repo\`", just go read it.
 
 If a write target is given as a bare filename (\`findings.md\`), resolve it against the bound worktree path.
+
+${DOSSIER_SECTION}
 
 ## Style
 
@@ -129,6 +142,8 @@ Final message structure:
 - One-line meta below: what choices you made (audience read, tone, length call).
 
 Submit the draft via \`pc_submit_deliverable\` (kind \`prose\` or \`answer\`, matching your contract) as your final action. For long drafts where your contract links an output work item, also attach the full text there and keep the chat reply scannable.
+
+${DOSSIER_SECTION}
 
 ## Style
 
@@ -174,6 +189,8 @@ Criteria gaps (if any):
 \`\`\`
 
 Submit the verdict via \`pc_submit_deliverable\` (kind \`payload\` for a structured verdict, or \`answer\`) as your final action. For long reviews where your contract links an output work item, also attach the full notes there; surface the verdict + the top 3-5 comments inline.
+
+${DOSSIER_SECTION}
 
 ## Style
 
@@ -224,6 +241,8 @@ Unknowns:
 \`\`\`
 
 Submit the plan via \`pc_submit_deliverable\` (kind \`answer\` addressing the steps + summary) as your final action. For long plans where your contract links an output work item, also attach the full plan there; surface a numbered outline inline.
+
+${DOSSIER_SECTION}
 
 ## Style
 
@@ -1174,6 +1193,8 @@ Submit the change via \`pc_submit_deliverable\` (kind \`repo\`) as your final ac
 
 If the project has a \`CLAUDE.md\` at root or in the touched subdirectory, read it before writing — project-specific conventions override these defaults.
 
+${DOSSIER_SECTION}
+
 ## Style
 
 - Terse. The diff or the path list speaks for itself.
@@ -1222,6 +1243,8 @@ Ambiguous fields:
 
 Submit the JSON via \`pc_submit_deliverable\` (kind \`payload\`) as your final action. For large extractions where your contract links an output work item, also attach the JSON there via \`pc_attach_to_work_item\`; surface a summary (counts, ambiguity flags) inline.
 
+${DOSSIER_SECTION}
+
 ## Style
 
 - Literal. If the source says "around 5," don't extract \`5\` — extract \`"around 5"\` or flag.
@@ -1251,6 +1274,11 @@ const RESEARCHER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_get_context_doc',
     // Read sibling cards for context — only the pinned work item is force-merged.
     'mcp__pc-rig__pc_list_work_items',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'opus',
   effort: null,
@@ -1278,6 +1306,11 @@ const WRITER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'sonnet',
   effort: 'medium',
@@ -1304,6 +1337,11 @@ const REVIEWER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'sonnet',
   effort: 'high',
@@ -1329,6 +1367,11 @@ const PLANNER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'opus',
   effort: 'high',
@@ -1431,6 +1474,11 @@ const CODE_WRITER_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'sonnet',
   effort: 'high',
@@ -1456,6 +1504,11 @@ const EXTRACTOR_POD_CONTENT: CreateAgentInput = {
     'mcp__pc-rig__pc_attach_to_work_item',
     'mcp__pc-rig__pc_ask_orchestrator',
     'mcp__pc-rig__pc_request_approval',
+    // pc-pty-chat-434 — persistent dossier (state / decisions / open questions).
+    'mcp__pc-rig__pc_get_brief',
+    'mcp__pc-rig__pc_update_brief',
+    // pc-pty-chat-438 — fold investigation findings into the parent's dossier.
+    'mcp__pc-rig__pc_synthesize_finding',
   ]),
   model: 'sonnet',
   effort: 'medium',

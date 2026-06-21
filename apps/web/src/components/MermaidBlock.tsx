@@ -19,6 +19,48 @@ async function loadMermaid() {
       startOnLoad: false,
       // App uses a single locked dark theme — match it.
       theme: 'dark',
+      // Pin every color explicitly so a diagram can NEVER come out as light
+      // text on a light fill. Mermaid's stock 'dark' theme still derives some
+      // node/label fills heuristically (esp. classDef, subgraphs, sequence
+      // actors, pie/gantt) and can land light-on-light. These overrides force
+      // light text (the app's cream foreground) over dark fills everywhere.
+      themeVariables: {
+        darkMode: true,
+        background: '#100c08',
+        // General text — always the light cream foreground.
+        textColor: '#f0e4c4',
+        // Node fills + their text.
+        mainBkg: '#1a1610',
+        primaryColor: '#1a1610',
+        primaryTextColor: '#f0e4c4',
+        primaryBorderColor: 'rgba(240, 208, 128, 0.55)',
+        secondaryColor: '#241d14',
+        secondaryTextColor: '#f0e4c4',
+        secondaryBorderColor: 'rgba(240, 208, 128, 0.45)',
+        tertiaryColor: '#2e261a',
+        tertiaryTextColor: '#f0e4c4',
+        tertiaryBorderColor: 'rgba(240, 208, 128, 0.35)',
+        // Edges + their labels.
+        lineColor: '#9a8e7a',
+        edgeLabelBackground: '#100c08',
+        // Cluster / subgraph boxes.
+        clusterBkg: '#140f0a',
+        clusterBorder: 'rgba(240, 208, 128, 0.35)',
+        // Notes (sequence/flow) — a slightly warm fill with light text.
+        noteBkgColor: '#241d14',
+        noteTextColor: '#f0e4c4',
+        noteBorderColor: 'rgba(240, 208, 128, 0.45)',
+        // Sequence-diagram actors + labels.
+        actorBkg: '#1a1610',
+        actorTextColor: '#f0e4c4',
+        actorBorder: 'rgba(240, 208, 128, 0.55)',
+        labelBoxBkgColor: '#1a1610',
+        labelTextColor: '#f0e4c4',
+        labelBoxBorderColor: 'rgba(240, 208, 128, 0.45)',
+        // Generic label background used across diagram types.
+        nodeTextColor: '#f0e4c4',
+        titleColor: '#f0e4c4',
+      },
       // antiscript strips script tags but avoids the sandboxed-iframe path
       // that can break in Electron's CSP environment.
       securityLevel: 'antiscript',
@@ -110,8 +152,13 @@ export function MermaidBlock({ code }: { code: string }) {
           {/* SVG comes from the mermaid library rendering the AI's diagram spec.
               dangerouslySetInnerHTML is safe here: mermaid's `antiscript`
               security level sanitises the output before we receive it. */}
+          {/* Solid dark backdrop so the diagram is never light-on-light,
+              regardless of what mermaid emits or what's behind the bubble. */}
           {/* eslint-disable-next-line react/no-danger */}
-          <div dangerouslySetInnerHTML={{ __html: diagram.svg }} />
+          <div
+            className="rounded bg-card p-2"
+            dangerouslySetInnerHTML={{ __html: diagram.svg }}
+          />
         </div>
         {lightboxOpen &&
           createPortal(
@@ -242,7 +289,10 @@ function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void })
             }}
           >
             {/* eslint-disable-next-line react/no-danger */}
-            <div dangerouslySetInnerHTML={{ __html: svg }} />
+            <div
+              className="rounded bg-card p-3"
+              dangerouslySetInnerHTML={{ __html: svg }}
+            />
           </div>
         </div>
       </div>

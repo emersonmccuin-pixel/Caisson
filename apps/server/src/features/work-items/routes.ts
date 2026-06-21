@@ -1,12 +1,17 @@
 import type { Hono } from 'hono';
-import type { Project, Stage, ULID, WorkItem, WorkItemStatus, WorkItemType } from '@pc/domain';
+import type { DoneChecklistItem, Project, Stage, ULID, WorkItem, WorkItemStatus, WorkItemType } from '@pc/domain';
 import { isWorkItemType } from '@pc/domain';
 import { ContractService } from '@pc/app-services';
 import {
   countWorkItemsInStage,
+  DossierVersionConflictError,
+  getBoardHealth,
+  getDb,
+  getDossier,
   getProjectById,
   getWorkItem as dbGetWorkItem,
   getWorkItemByCallsignGlobal,
+  insertLiveEvent,
   listChildWorkItems,
   listFocusedWorkItems as dbListFocusedWorkItems,
   listContractsForWorkItem,
@@ -14,10 +19,13 @@ import {
   reassignStage,
   resolveAgentForDispatch,
   searchWorkItems as dbSearchWorkItems,
+  setDoneChecklist as dbSetDoneChecklist,
+  tickDoneChecklistItem as dbTickDoneChecklistItem,
   toSlimWorkItem,
   updateProjectStages,
   updateWorkItemFields as dbUpdateWorkItemFields,
   updateWorkItemStatus,
+  upsertDossier,
 } from '@pc/db';
 import type { ListWorkItemsOptions, WorkItemAreaFilter } from '@pc/db';
 
@@ -50,6 +58,7 @@ import {
 } from '../../services/work-item.ts';
 import { announceStageList } from '../../services/stage-writer.ts';
 import { WorkItemMutationGateway } from '@pc/app-services';
+import { triggerChecklistAutoMoveIfComplete } from '../../services/checklist-auto-move.ts';
 
 /** FD-12 — the one write door (repo write + outbox receipt in one txn). */
 const workItemGateway = new WorkItemMutationGateway();
@@ -144,6 +153,26 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
         ...(openParam === '1' ? { open: true } : {}),
       });
       return c.json({ ok: true, results });
+    } catch (err) {
+      return c.json({ ok: false, error: (err as Error).message }, 500);
+    }
+  });
+
+  // ── Board health (pc-pty-chat-431) — stalled open items + rollup counts.
+  // MUST be registered BEFORE /api/projects/:projectId/work-items so the literal
+  // segment doesn't collide with the /:wiId param route further down.
+  app.get('/api/projects/:projectId/board-health', (c) => {
+    const id = c.req.param('projectId');
+    const runtime = deps.resolveProject(id);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+
+    const idleDaysRaw = Number(c.req.query('idle_days') ?? 7);
+    const idleDays =
+      Number.isFinite(idleDaysRaw) && idleDaysRaw > 0 ? Math.floor(idleDaysRaw) : 7;
+
+    try {
+      const result = getBoardHealth(runtime.project.id, idleDays);
+      return c.json({ ok: true, idleDays, ...result });
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 500);
     }
@@ -253,6 +282,17 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       }
       resolvedStage = match.id;
     }
+    // Slice C — soft gate: moving to Done with open checklist items is ALLOWED
+    // but we return a warning so the orchestrator can surface the open state.
+    let openChecklistWarning: string | undefined;
+    const destStage = runtime.project.stages.find((s) => s.id === resolvedStage);
+    if (destStage?.isDone) {
+      const wi = dbGetWorkItem(wiId as ULID);
+      const openCount = wi?.doneChecklist?.filter((item) => !item.done).length ?? 0;
+      if (openCount > 0) {
+        openChecklistWarning = `${openCount} checklist item${openCount !== 1 ? 's' : ''} still open`;
+      }
+    }
     try {
       const workItem = await runtime.moveWorkItemV2({
         id: wiId,
@@ -261,6 +301,9 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       });
       // Announce is fired inside moveWorkItemV2 (via workItemService or
       // project-runtime's write-door); no additional broadcast here.
+      if (openChecklistWarning) {
+        return c.json({ ok: true, workItem, warning: openChecklistWarning });
+      }
       return c.json({ ok: true, workItem });
     } catch (err) {
       const msg = (err as Error).message;
@@ -327,6 +370,63 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 500);
     }
+  });
+
+  // Slice B — replace a card's done-checklist (FD-12 write door).
+  app.post('/api/projects/:projectId/work-items/set-done-checklist', async (c) => {
+    const id = c.req.param('projectId');
+    const runtime = deps.resolveProject(id);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    const body = await c.req.json<{ id?: string; items?: unknown }>();
+    const wiId = typeof body.id === 'string' ? body.id.trim() : '';
+    if (!wiId) return c.json({ ok: false, error: 'id required' }, 400);
+    if (!Array.isArray(body.items)) return c.json({ ok: false, error: 'items (array) required' }, 400);
+    const items = body.items as DoneChecklistItem[];
+    let row: WorkItem | null = null;
+    workItemGateway.tryCommitWorkItemChange({
+      projectId: id as ULID,
+      mutate: () => {
+        row = dbSetDoneChecklist(wiId as ULID, items);
+        return row ? { row, reason: 'checklist-set' } : null;
+      },
+    });
+    if (!row) return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
+    return c.json({ ok: true, workItem: row });
+  });
+
+  // Slice B — flip one checklist item (targeted single-column write, FD-12 write door).
+  // Slice C — after a successful tick, fire the auto-move trigger if all items are done.
+  app.post('/api/projects/:projectId/work-items/tick-done-checklist-item', async (c) => {
+    const id = c.req.param('projectId');
+    const runtime = deps.resolveProject(id);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${id}` }, 404);
+    const body = await c.req.json<{ id?: string; itemId?: string; done?: unknown }>();
+    const wiId = typeof body.id === 'string' ? body.id.trim() : '';
+    const itemId = typeof body.itemId === 'string' ? body.itemId.trim() : '';
+    const done = body.done !== false; // default true; explicit false to un-tick
+    if (!wiId) return c.json({ ok: false, error: 'id required' }, 400);
+    if (!itemId) return c.json({ ok: false, error: 'itemId required' }, 400);
+    let row: WorkItem | null = null;
+    const result = workItemGateway.tryCommitWorkItemChange({
+      projectId: id as ULID,
+      mutate: () => {
+        row = dbTickDoneChecklistItem(wiId as ULID, itemId, done);
+        return row ? { row, reason: 'checklist-ticked' } : null;
+      },
+    });
+    if (result === null) {
+      // Distinguish WI-not-found (404) from item-not-found (clean no-op, 200).
+      const wi = dbGetWorkItem(wiId as ULID);
+      if (!wi) return c.json({ ok: false, error: `unknown work item: ${wiId}` }, 404);
+      return c.json({ ok: true, workItem: wi }); // item not found — no-op
+    }
+    // Slice C: after a successful tick, check if all items are now done and
+    // fire the auto-move path if so. Runs outside the tick transaction so the
+    // tick is committed before the stage-move reads back the updated checklist.
+    triggerChecklistAutoMoveIfComplete(wiId as ULID, runtime.project);
+    // Re-read so the response reflects any auto-move that just happened.
+    const finalWi = dbGetWorkItem(wiId as ULID) ?? result.workItem;
+    return c.json({ ok: true, workItem: finalWi });
   });
 
   app.post('/api/projects/:projectId/work-items/create', async (c) => {
@@ -440,6 +540,95 @@ export function registerWorkItemRoutes(app: Hono, deps: WorkItemRoutesDeps): voi
       const msg = (err as Error).message;
       const is400 = /^unknown stage:|^title required$/.test(msg);
       return c.json({ ok: false, error: msg }, is400 ? 400 : 500);
+    }
+  });
+
+  // pc-pty-chat-434 — agent dossier (Track B).
+  // GET: return the current dossier (fresh empty shape when no row — no DB write).
+  // PUT: partial-patch upsert with optimistic-concurrency guard.
+  app.get('/api/projects/:projectId/work-items/:wiId/dossier', (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const wiRef = c.req.param('wiId');
+    const runtime = deps.resolveProject(projectId);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+
+    const wi = resolveWorkItemRef(runtime.project.id, wiRef);
+    if (!wi) return c.json({ ok: false, error: `unknown work item: ${wiRef}` }, 404);
+    if (wi.deletedAt != null) return c.json({ ok: false, error: `work item is archived: ${wiRef}` }, 404);
+
+    const row = getDossier(wi.id);
+    if (!row) {
+      return c.json({
+        ok: true,
+        fresh: true,
+        dossier: {
+          workItemId: wi.id,
+          state: '',
+          decisions: '',
+          openQuestions: '',
+          updatedByRunId: null,
+          updatedByAgent: null,
+          version: 0,
+          createdAt: null,
+          updatedAt: null,
+        },
+      });
+    }
+    return c.json({ ok: true, fresh: false, dossier: row });
+  });
+
+  app.put('/api/projects/:projectId/work-items/:wiId/dossier', async (c) => {
+    const projectId = c.req.param('projectId') as ULID;
+    const wiRef = c.req.param('wiId');
+    const runtime = deps.resolveProject(projectId);
+    if (!runtime) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
+
+    const wi = resolveWorkItemRef(runtime.project.id, wiRef);
+    if (!wi) return c.json({ ok: false, error: `unknown work item: ${wiRef}` }, 404);
+    if (wi.deletedAt != null) return c.json({ ok: false, error: `work item is archived: ${wiRef}` }, 404);
+
+    const body = await c.req.json<{
+      state?: string;
+      decisions?: string;
+      open_questions?: string;
+      expected_version?: number;
+      agent_run_id?: string | null;
+    }>();
+
+    try {
+      const dossier = upsertDossier({
+        workItemId: wi.id,
+        ...(body.state !== undefined ? { state: body.state } : {}),
+        ...(body.decisions !== undefined ? { decisions: body.decisions } : {}),
+        ...(body.open_questions !== undefined ? { openQuestions: body.open_questions } : {}),
+        ...(body.expected_version !== undefined ? { expectedVersion: body.expected_version } : {}),
+        agentRunId: (body.agent_run_id as ULID | null) ?? null,
+      });
+
+      // Emit live event (non-fatal).
+      try {
+        insertLiveEvent(getDb(), {
+          scope: 'project',
+          projectId: runtime.project.id,
+          type: 'work-item-dossier.changed',
+          entity: 'work-item-dossier',
+          entityId: wi.id,
+          version: dossier.version,
+          payload: { workItemId: wi.id, version: dossier.version },
+        });
+      } catch {
+        /* non-fatal */
+      }
+
+      return c.json({ ok: true, dossier });
+    } catch (err) {
+      if (err instanceof DossierVersionConflictError) {
+        return c.json(
+          { ok: false, error: err.message, current: err.currentRow },
+          409,
+        );
+      }
+      return c.json({ ok: false, error: (err as Error).message }, 500);
     }
   });
 

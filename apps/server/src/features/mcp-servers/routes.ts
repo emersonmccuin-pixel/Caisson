@@ -50,6 +50,14 @@ export interface McpServerRoutesDeps {
    * Defaults to the SDK auth() when omitted (tests can inject a stub).
    */
   oauthAuthFn?: AuthFn;
+  /**
+   * pc-pty-chat-451: kill + re-ensure the project's orchestrator so it
+   * respawns with the updated project MCP server set. Called fire-and-forget
+   * after a project-scoped server is created or deleted. When absent the
+   * restart is deferred to the next close+resume cycle (still correct — the
+   * resume path always rebuilds the config from the current DB state).
+   */
+  restartProjectOrchestrator?: (projectId: string) => void;
 }
 
 export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {}): void {
@@ -124,6 +132,11 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
     const id = c.req.param('id') as ULID;
     const row = softDeleteMcpServerRegistry(id);
     if (!row) return c.json({ ok: false, error: `unknown mcp server: ${id}` }, 404);
+    // pc-pty-chat-451 — if the deleted server was project-scoped, restart that
+    // project's orchestrator so it no longer includes the removed server.
+    if (row.scope === 'project' && row.projectId) {
+      deps.restartProjectOrchestrator?.(row.projectId);
+    }
     return c.json({ ok: true });
   });
 
@@ -175,6 +188,10 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
       if (deps.probe) {
         void runAndStoreProbe(server.id, server.transport).catch(() => {});
       }
+      // pc-pty-chat-451 — restart the project orchestrator so it picks up the
+      // new server immediately on next spawn (history preserved via --resume).
+      // Row is already committed above; restart fires after.
+      deps.restartProjectOrchestrator?.(projectId);
       return c.json({ ok: true, server }, 201);
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 422);

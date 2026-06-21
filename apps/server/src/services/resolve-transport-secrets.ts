@@ -56,6 +56,7 @@ export function resolveTransportSecrets(
   const resolved: PodMcpServerConfig = {
     ...(transport.command !== undefined ? { command: transport.command } : {}),
     ...(transport.args !== undefined ? { args: transport.args } : {}),
+    ...(transport.cwd !== undefined ? { cwd: transport.cwd } : {}),
     ...(transport.type !== undefined ? { type: transport.type } : {}),
     ...(transport.url !== undefined ? { url: transport.url } : {}),
   };
@@ -101,6 +102,7 @@ export function migrateTransportPlaintextToVault(vault: SecretsVault): number {
     const newTransport: McpServerTransport = {
       ...(transport.command !== undefined ? { command: transport.command } : {}),
       ...(transport.args !== undefined ? { args: transport.args } : {}),
+      ...(transport.cwd !== undefined ? { cwd: transport.cwd } : {}),
       ...(transport.type !== undefined ? { type: transport.type } : {}),
       ...(transport.url !== undefined ? { url: transport.url } : {}),
     };
