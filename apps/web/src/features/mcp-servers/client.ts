@@ -41,6 +41,16 @@ export const mcpServersApi = {
       (r) => r.server,
     ),
 
+  /** OC (pc-pty-chat-460): start the OAuth consent flow for an HTTP server.
+   *  Returns { status: 'authorized' } when tokens are already valid, or
+   *  { status: 'redirect', authorizationUrl } when the user must authorize in
+   *  the system browser. */
+  startAuth: (id: string) =>
+    postJson<
+      | { ok: true; status: 'authorized' }
+      | { ok: true; status: 'redirect'; authorizationUrl: string }
+    >(`/api/mcp-servers/${id}/auth/start`, {}).then((r) => r),
+
   // Project scope
   listForProject: (projectId: string) =>
     getJson<{ ok: true; servers: McpServer[] }>(

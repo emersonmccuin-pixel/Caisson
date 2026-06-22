@@ -22,6 +22,12 @@ interface DesktopUpdateState {
 interface PcDesktopBridge {
   isDesktop: true;
   platform: string;
+  /**
+   * Open a URL in the system browser via Electron shell.openExternal.
+   * Used by the OAuth broker flow: after auth/start returns an authorizationUrl,
+   * the renderer calls this to open the provider's login page. Only https/http.
+   */
+  openExternal(url: string): Promise<void>;
   /** Open the native OS folder chooser. Returns the chosen path, or null if cancelled. */
   chooseFolder(): Promise<string | null>;
   updates: {

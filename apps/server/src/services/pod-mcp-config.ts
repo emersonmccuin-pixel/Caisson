@@ -146,6 +146,13 @@ export function parseMcpServerTransport(v: unknown): McpServerTransport {
     if (cfg.url.trim().length === 0) throw new Error('mcp.url must not be empty');
     out.url = cfg.url;
   }
+  // OC (pc-pty-chat-460) — OAuth marker; only valid on HTTP transports.
+  if (cfg.authType !== undefined) {
+    if (cfg.authType !== 'oauth') {
+      throw new Error('mcp.authType must be "oauth" when set');
+    }
+    out.authType = 'oauth';
+  }
   if (out.command === undefined && out.url === undefined) {
     throw new Error('mcp server config requires either command (stdio) or url (http)');
   }
@@ -160,6 +167,9 @@ export function parseMcpServerTransport(v: unknown): McpServerTransport {
   }
   if (out.command !== undefined && out.headers !== undefined) {
     throw new Error('mcp.headers is only valid with url (http), not command');
+  }
+  if (out.command !== undefined && out.authType !== undefined) {
+    throw new Error('mcp.authType is only valid with url (http), not command');
   }
   return out;
 }
