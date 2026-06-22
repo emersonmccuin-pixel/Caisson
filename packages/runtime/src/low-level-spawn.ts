@@ -82,10 +82,21 @@ export interface LowLevelSpawnInput {
   /** Initial source JSONL line cursor. When omitted, resume mode skips the
    *  existing file tail and fresh mode starts at 0. */
   jsonlStartLine?: number;
-  /** First user turn body — pasted via bracketed paste + echo-ack after the
-   *  ready gate opens. Fresh only; never used on resume (resume continues
-   *  the in-progress conversation). */
+  /** First user turn body. Fresh only; never used on resume (resume continues
+   *  the in-progress conversation). Two delivery modes:
+   *   - `initialInputAtLaunch: true` (dispatched workers, pc-pty-chat-455):
+   *     passed to claude as the positional `[prompt]` arg at spawn, so claude
+   *     submits it itself once MCP servers connect — no paste, no echo-ack, no
+   *     ConPTY screen-scrape. This is the reliable path for the known-up-front
+   *     worker prompt.
+   *   - otherwise: pasted via bracketed paste + echo-ack after the ready gate
+   *     (the interactive path; kept for any fresh send that isn't a launch). */
   initialInput?: string;
+  /** pc-pty-chat-455 — deliver `initialInput` as claude's positional `[prompt]`
+   *  launch arg instead of pasting it after ready. Set by AgentRun for fresh
+   *  dispatched workers (non-empty initialInput). Never for the orchestrator
+   *  (empty initialInput) or resume. */
+  initialInputAtLaunch?: boolean;
   /** Override path to the rewritten `.mcp.json`. Defaults to `.mcp.json`
    *  relative to the worktree. The MCP bundle handoff (Section 20.A) means
    *  this file's `command` field must point at the bundled
@@ -732,6 +743,23 @@ export function buildLowLevelSpawnArgs(
     args.push('--session-id', input.ccProviderSessionId);
   } else {
     args.push('--resume', input.ccProviderSessionId);
+  }
+
+  // pc-pty-chat-455 — launch-arg delivery: hand the worker's first turn to claude
+  // as the positional [prompt] arg so claude submits it itself AFTER its MCP
+  // servers connect (verified: the agent has its tools on turn one). This
+  // replaces the fragile post-ready bracketed-paste + echo-ack for dispatched
+  // workers — the spawn-failed/send-failed surface. Fresh + non-empty only;
+  // node-pty passes argv directly to CreateProcess (no shell), so a multi-line /
+  // multi-KB prompt is preserved verbatim and there's no injection surface.
+  // MUST be the LAST arg (commander treats it as the positional).
+  if (
+    input.mode === 'fresh' &&
+    input.initialInputAtLaunch &&
+    typeof input.initialInput === 'string' &&
+    input.initialInput.length > 0
+  ) {
+    args.push(input.initialInput);
   }
 
   // ☠ FD-3: no dev-channels flag — the mailbox is the one notify door.

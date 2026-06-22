@@ -582,7 +582,14 @@ export class AgentRun extends EventEmitter {
       inputBody !== undefined && inputBody.length > 0 ? 'busy' : 'ready',
     );
 
-    if (inputBody !== undefined && inputBody.length > 0) {
+    // pc-pty-chat-455 — fresh dispatched workers receive their first turn as the
+    // positional [prompt] launch arg (buildLowLevelSpawnArgs); claude submits it
+    // itself after MCP connects. Nothing to send here — skip the paste/echo-ack
+    // entirely (this was the spawn-failed/send-failed surface). The turn is
+    // already running; lifecycle continues event-driven via onJsonlEvent.
+    if (this.deliverInitialInputAtLaunch(mode)) {
+      // already delivered at launch — no post-ready send
+    } else if (inputBody !== undefined && inputBody.length > 0) {
       try {
         if (mode === 'resume') {
           // M7 live-fire fix — a resume send raced CC's replay repaint: the
@@ -677,6 +684,21 @@ export class AgentRun extends EventEmitter {
     return false;
   }
 
+  /** pc-pty-chat-455 — true when the first turn is delivered as claude's
+   *  positional [prompt] launch arg rather than pasted after the ready gate.
+   *  Applies to fresh dispatched workers (non-empty initialInput). Excludes the
+   *  orchestrator (empty initialInput) and resume (continues the conversation;
+   *  the answer is delivered with a JSONL receipt via sendResumeInputWithReceipt).
+   *  ONE source of truth — read by both buildSpawnInput (to set the launch arg)
+   *  and runSpawnPhase (to skip the post-ready send). */
+  private deliverInitialInputAtLaunch(mode: 'fresh' | 'resume'): boolean {
+    return (
+      mode === 'fresh' &&
+      typeof this.input.initialInput === 'string' &&
+      this.input.initialInput.length > 0
+    );
+  }
+
   /** Build the LowLevelSpawn input. Caller (Session 9 wiring) is expected to
    *  have already materialized the pod + rewritten `.mcp.json`; here we just
    *  hand the descriptor through. Shared by fresh and resume spawn. */
@@ -687,8 +709,12 @@ export class AgentRun extends EventEmitter {
       env: this.input.env,
       ccProviderSessionId: this.input.ccProviderSessionId,
       mode,
-      // initialInput is delivered explicitly via echo-ack after the gate opens;
-      // we don't pass it to LowLevelSpawn (kept as a no-op pass-through field).
+      // pc-pty-chat-455 — when delivering at launch (fresh dispatched worker),
+      // pass initialInput so buildLowLevelSpawnArgs appends it as the positional
+      // [prompt]; claude submits it after MCP connects. Otherwise initialInput is
+      // pasted via echo-ack after the gate (resume answers, interactive sends).
+      initialInput: this.input.initialInput,
+      initialInputAtLaunch: this.deliverInitialInputAtLaunch(mode),
       mcpConfigPath: this.input.mcpConfigPath,
       settingsPath: this.input.settingsPath,
       settingSources: this.input.settingSources,
