@@ -133,6 +133,12 @@ export interface McpServerTransport {
   url?: string;
   /** HTTP request headers; values may be plain strings or vault refs. */
   headers?: Record<string, TransportValue>;
+  /** OC (pc-pty-chat-460) — when `'oauth'`, this HTTP server uses OAuth 2.1 +
+   *  PKCE for authentication. The UI renders an "Authorize" button; consent
+   *  happens interactively in the system browser before any spawn. At spawn
+   *  time `resolveTransportSecrets` resolves the stored access token into the
+   *  Authorization header. Only valid on HTTP transports (those with `url`). */
+  authType?: 'oauth';
 }
 
 /** Provenance of an agent row. `'stock'` rows are seeded by PC at boot;

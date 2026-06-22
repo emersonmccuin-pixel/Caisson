@@ -19,6 +19,7 @@ import type { Hono } from 'hono';
 import type { McpServerRegistryRow, McpServerTransport, PodMcpServerConfig, PodScope, ULID } from '@pc/domain';
 import {
   createMcpServerRegistry,
+  getCredentialByServerAndKind,
   getProjectById,
   getMcpServerRegistry,
   listMcpServersRegistry,
@@ -105,7 +106,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
   /** GET /api/mcp-servers — list global registry servers */
   app.get('/api/mcp-servers', (c) => {
     const servers = listMcpServersRegistry({ scope: 'global' });
-    return c.json({ ok: true, servers });
+    return c.json({ ok: true, servers: servers.map(withAuthState) });
   });
 
   /** POST /api/mcp-servers — create a global registry server */
@@ -120,7 +121,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
       if (deps.probe) {
         void runAndStoreProbe(server).catch(() => {});
       }
-      return c.json({ ok: true, server }, 201);
+      return c.json({ ok: true, server: withAuthState(server) }, 201);
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 422);
     }
@@ -131,7 +132,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
     const id = c.req.param('id') as ULID;
     const server = getMcpServerRegistry(id);
     if (!server) return c.json({ ok: false, error: `unknown mcp server: ${id}` }, 404);
-    return c.json({ ok: true, server });
+    return c.json({ ok: true, server: withAuthState(server) });
   });
 
   /** PATCH /api/mcp-servers/:id — update name / description / transport */
@@ -145,7 +146,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
     if (!result.ok) return c.json({ ok: false, error: result.error }, 400);
     try {
       const server = patchMcpServerRegistry(id, result.patch);
-      return c.json({ ok: true, server });
+      return c.json({ ok: true, server: server ? withAuthState(server) : server });
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 422);
     }
@@ -179,7 +180,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
     const existing = getMcpServerRegistry(id);
     if (!existing) return c.json({ ok: false, error: `unknown mcp server: ${id}` }, 404);
     const updated = await runAndStoreProbe(existing);
-    return c.json({ ok: true, server: updated ?? existing });
+    return c.json({ ok: true, server: withAuthState(updated ?? existing) });
   });
 
   // ── Project scope ───────────────────────────────────────────────────────────
@@ -192,7 +193,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
       if (!runtime) return c.json({ ok: false, error: `unknown project: ${projectId}` }, 404);
     }
     const servers = listMcpServersRegistry({ scope: 'project', projectId: projectId as ULID });
-    return c.json({ ok: true, servers });
+    return c.json({ ok: true, servers: servers.map(withAuthState) });
   });
 
   /** POST /api/projects/:projectId/mcp-servers — create a project-scoped server */
@@ -216,7 +217,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
       // new server immediately on next spawn (history preserved via --resume).
       // Row is already committed above; restart fires after.
       deps.restartProjectOrchestrator?.(projectId);
-      return c.json({ ok: true, server }, 201);
+      return c.json({ ok: true, server: withAuthState(server) }, 201);
     } catch (err) {
       return c.json({ ok: false, error: (err as Error).message }, 422);
     }
@@ -250,6 +251,14 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** OC (pc-pty-chat-460): enrich a registry row with its OAuth authState by
+ *  joining the linked oauth_tokens credential row. Returns the row unchanged
+ *  when no credential exists (authState: null). */
+function withAuthState(server: McpServerRegistryRow): McpServerRegistryRow & { authState: string | null } {
+  const cred = getCredentialByServerAndKind(server.id, 'oauth_tokens');
+  return { ...server, authState: cred ? cred.authState : null };
+}
 
 type ParseOk<T> = { ok: true } & T;
 type ParseErr = { ok: false; error: string };

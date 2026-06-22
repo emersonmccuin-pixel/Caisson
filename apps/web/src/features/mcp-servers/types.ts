@@ -24,6 +24,10 @@ export interface McpTransport {
   url?: string;
   /** HTTP: request headers; values may be plain strings or vault refs (masked ••••••••). */
   headers?: Record<string, TransportValue>;
+  /** OC (pc-pty-chat-460) — when 'oauth', the server uses OAuth 2.1 + PKCE.
+   *  The UI renders an Authorize button; consent happens interactively in the
+   *  system browser before any spawn. */
+  authType?: 'oauth';
 }
 
 export interface McpServer {
@@ -35,6 +39,10 @@ export interface McpServer {
   transport: McpTransport;
   discoveredTools: string[] | null;
   discoveryStatus: McpDiscoveryStatus;
+  /** OC (pc-pty-chat-460) — OAuth credential lifecycle state. Surfaced by the
+   *  GET routes from the linked `oauth_tokens` credential row. Null when no
+   *  credential exists yet (server never authorized). */
+  authState?: string | null;
   rev: number;
   createdAt: number;
   updatedAt: number;

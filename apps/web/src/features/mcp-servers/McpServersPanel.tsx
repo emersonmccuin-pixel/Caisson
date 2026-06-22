@@ -18,6 +18,15 @@ import { useCallback, useEffect, useState } from 'react';
 import type { CreateMcpServerInput, McpDiscoveryStatus, McpServer, McpTransport } from './client';
 import { mcpServersApi } from './client';
 
+// ── Auth state badge labels ───────────────────────────────────────────────────
+const AUTH_STATE_LABELS: Record<string, string> = {
+  connected: '✓ connected',
+  'needs-auth': '⚠ needs auth',
+  expired: '⚠ expired',
+  error: '✕ auth error',
+  none: '',
+};
+
 // -- Props --------------------------------------------------------------------
 
 interface McpServersPanelProps {
@@ -170,6 +179,13 @@ function ServerRow({
   const [probing, setProbing] = useState(false);
   const [probeErr, setProbeErr] = useState<string | null>(null);
   const [toolsExpanded, setToolsExpanded] = useState(false);
+  // OAuth authorization state
+  const [authorizing, setAuthorizing] = useState(false);
+  const [authErr, setAuthErr] = useState<string | null>(null);
+  const [authPending, setAuthPending] = useState(false);
+  const [manualUrl, setManualUrl] = useState<string | null>(null);
+
+  const isOAuth = server.transport.authType === 'oauth';
 
   const transportSummary = server.transport.command
     ? `stdio: ${server.transport.command}`
@@ -188,6 +204,45 @@ function ServerRow({
     }
   }
 
+  async function handleAuthorize() {
+    setAuthorizing(true);
+    setAuthErr(null);
+    setAuthPending(false);
+    setManualUrl(null);
+    try {
+      const result = await mcpServersApi.startAuth(server.id);
+      if (result.status === 'authorized') {
+        // Tokens already valid — refresh the row so the badge shows 'connected'.
+        const refreshed = await mcpServersApi.getServer(server.id);
+        onServerUpdated(refreshed);
+      } else {
+        // Browser redirect required.
+        if (window.pcDesktop?.openExternal) {
+          await window.pcDesktop.openExternal(result.authorizationUrl);
+          setAuthPending(true);
+        } else {
+          // Not running in the desktop shell — show the URL for manual copy.
+          setManualUrl(result.authorizationUrl);
+        }
+      }
+    } catch (e) {
+      setAuthErr((e as Error).message);
+    } finally {
+      setAuthorizing(false);
+    }
+  }
+
+  async function handleCheckStatus() {
+    try {
+      const refreshed = await mcpServersApi.getServer(server.id);
+      onServerUpdated(refreshed);
+      setAuthPending(false);
+      setManualUrl(null);
+    } catch (e) {
+      setAuthErr((e as Error).message);
+    }
+  }
+
   return (
     <div
       className={`flex flex-col gap-1 px-3 py-2 ${
@@ -196,16 +251,28 @@ function ServerRow({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-sm font-medium text-foreground">{server.name}</span>
             <DiscoveryBadge status={server.discoveryStatus} toolCount={server.discoveredTools?.length ?? null} />
+            {isOAuth && <AuthStateBadge authState={server.authState ?? null} />}
           </div>
           {server.description && (
             <div className="truncate text-xs text-muted-foreground">{server.description}</div>
           )}
           <div className="font-mono text-[10px] text-muted-foreground">{transportSummary}</div>
         </div>
-        <div className="flex shrink-0 items-start gap-1">
+        <div className="flex shrink-0 items-start gap-1 flex-wrap justify-end">
+          {isOAuth && (
+            <button
+              type="button"
+              onClick={() => void handleAuthorize()}
+              disabled={authorizing}
+              title="Start OAuth authorization in system browser"
+              className="border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] text-primary hover:bg-primary/20 disabled:opacity-50"
+            >
+              {authorizing ? 'Authorizing…' : 'Authorize'}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void handleProbe()}
@@ -236,6 +303,45 @@ function ServerRow({
         <div className="text-[10px] text-destructive">{probeErr}</div>
       )}
 
+      {authErr && (
+        <div className="text-[10px] text-destructive">Authorization error: {authErr}</div>
+      )}
+
+      {authPending && (
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+          <span>Authorization opened in browser. When done, check status.</span>
+          <button
+            type="button"
+            onClick={() => void handleCheckStatus()}
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            Check status
+          </button>
+        </div>
+      )}
+
+      {manualUrl && (
+        <div className="flex flex-col gap-1">
+          <div className="text-[10px] text-muted-foreground">
+            Open this URL in a browser to authorize, then click &quot;Check status&quot;:
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              readOnly
+              value={manualUrl}
+              className="min-w-0 flex-1 border border-border bg-muted/30 px-2 py-0.5 font-mono text-[10px] text-foreground"
+            />
+            <button
+              type="button"
+              onClick={() => void handleCheckStatus()}
+              className="border border-border bg-card px-2 py-0.5 text-[10px] text-foreground hover:bg-muted"
+            >
+              Check status
+            </button>
+          </div>
+        </div>
+      )}
+
       {server.discoveredTools && server.discoveredTools.length > 0 && (
         <div className="mt-0.5">
           <button
@@ -260,6 +366,38 @@ function ServerRow({
         </div>
       )}
     </div>
+  );
+}
+
+// -- Auth state badge ----------------------------------------------------------
+
+function AuthStateBadge({ authState }: { authState: string | null }) {
+  if (!authState || authState === 'none' || authState === null) {
+    return (
+      <span className="inline-flex items-center border border-border bg-muted/30 px-1 py-0 font-mono text-[9px] text-muted-foreground">
+        · needs auth
+      </span>
+    );
+  }
+  if (authState === 'connected') {
+    return (
+      <span className="inline-flex items-center border border-green-700/40 bg-green-900/20 px-1 py-0 font-mono text-[9px] font-medium text-green-400">
+        {AUTH_STATE_LABELS['connected']}
+      </span>
+    );
+  }
+  if (authState === 'expired' || authState === 'needs-auth') {
+    return (
+      <span className="inline-flex items-center border border-yellow-700/40 bg-yellow-900/20 px-1 py-0 font-mono text-[9px] font-medium text-yellow-400">
+        {AUTH_STATE_LABELS[authState] ?? authState}
+      </span>
+    );
+  }
+  // error or unknown
+  return (
+    <span className="inline-flex items-center border border-destructive/40 bg-destructive/10 px-1 py-0 font-mono text-[9px] font-medium text-destructive">
+      {AUTH_STATE_LABELS[authState] ?? authState}
+    </span>
   );
 }
 
@@ -464,6 +602,21 @@ function ServerForm({ mode, draft, onDraftChange, onSave, onCancel }: ServerForm
               className="w-full border border-border bg-background px-2 py-1 font-mono text-xs text-foreground placeholder:text-muted-foreground/60"
             />
           </FormRow>
+
+          <FormRow
+            label="OAuth"
+            help="Enable if this server requires OAuth 2.1 authorization. An Authorize button will appear on the server row so you can authorize once in the system browser before use."
+          >
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={draft.oauthEnabled}
+                onChange={(e) => set({ oauthEnabled: e.target.checked })}
+                className="h-3.5 w-3.5 accent-primary"
+              />
+              Use OAuth 2.1 + PKCE
+            </label>
+          </FormRow>
         </>
       )}
 
@@ -528,6 +681,8 @@ interface ServerDraft {
   // http fields
   url: string;
   headers: string; // KEY=Value per line; vault-stored values show as KEY=••••••••
+  /** OC (pc-pty-chat-460) — when true, transport.authType='oauth' is set. */
+  oauthEnabled: boolean;
   // Vault ref maps — hold credential IDs so round-trip saves don't overwrite
   // a vaulted secret with the mask string (Risk R1).
   headersVaultRefs: Record<string, string>; // header key → credId
@@ -551,6 +706,7 @@ function emptyDraft(): ServerDraft {
     cwd: '',
     url: '',
     headers: '',
+    oauthEnabled: false,
     headersVaultRefs: {},
     envVaultRefs: {},
   };
@@ -604,6 +760,7 @@ function draftFromServer(s: McpServer): ServerDraft {
     cwd: s.transport.cwd ?? '',
     url: s.transport.url ?? '',
     headers: headersLines,
+    oauthEnabled: s.transport.authType === 'oauth',
     headersVaultRefs,
     envVaultRefs,
   };
@@ -657,6 +814,7 @@ function draftToInput(draft: ServerDraft): CreateMcpServerInput {
     transport = {
       url: draft.url.trim(),
       ...(Object.keys(headersObj).length ? { headers: headersObj } : {}),
+      ...(draft.oauthEnabled ? { authType: 'oauth' as const } : {}),
     };
   }
   return {
