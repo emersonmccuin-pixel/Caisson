@@ -96,9 +96,22 @@ test('resolveTransportSecrets: missing credential throws', () => {
   assert.throws(() => resolveTransportSecrets(transport, vault), /not found/);
 });
 
-test('resolveTransportSecrets: non-string payload throws', () => {
+test('resolveTransportSecrets: oauth_tokens credential resolves to Bearer access_token', () => {
   const vault = makeVault();
-  const cred = vault.store({ ownerScope: 'global', kind: 'oauth_tokens', plaintext: { access_token: 'tok' } });
+  const cred = vault.store({
+    ownerScope: 'global',
+    kind: 'oauth_tokens',
+    plaintext: { access_token: 'tok-xyz', token_type: 'Bearer', expires_in: 3600 },
+  });
+  const ref = { $secretRef: cred.id };
+  const transport = { url: MCP_URL, headers: { Authorization: ref } };
+  const resolved = resolveTransportSecrets(transport, vault);
+  assert.equal(resolved.headers?.['Authorization'], 'Bearer tok-xyz');
+});
+
+test('resolveTransportSecrets: non-string payload without access_token throws', () => {
+  const vault = makeVault();
+  const cred = vault.store({ ownerScope: 'global', kind: 'static', plaintext: { some_object: true } });
   const ref = { $secretRef: cred.id };
   const transport = { url: MCP_URL, headers: { Authorization: ref } };
   assert.throws(() => resolveTransportSecrets(transport, vault), /not a string/);

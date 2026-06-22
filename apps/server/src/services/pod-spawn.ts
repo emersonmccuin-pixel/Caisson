@@ -18,6 +18,7 @@
 import { getDossier, getPodForSpawn, getMcpServerRegistry, listMcpAttachmentsForAgent, listMcpServersRegistry } from '@pc/db';
 import { resolveTransportSecrets } from './resolve-transport-secrets.ts';
 import { tryGetSecretsVault } from './secrets-vault.ts';
+import { refreshOAuthTokenIfNeeded } from './oauth-refresh.ts';
 import type { PodMcpServerConfig, ULID } from '@pc/domain';
 import { materializePodPlugin, type MaterializedPluginPod, type PodWorkItemContext } from '@pc/runtime';
 import {
@@ -422,4 +423,72 @@ export function buildRegistryMcpConfig(
     // Non-fatal: never block spawn because the registry is unavailable.
   }
   return { servers, catalog };
+}
+
+// ── Pre-spawn OAuth refresh ────────────────────────────────────────────────────
+
+/** Proactively refresh near-expiry OAuth tokens for all HTTP MCP servers that
+ *  would be included in this spawn. Mirrors the server-selection logic of
+ *  buildRegistryMcpConfig so only actually-included servers are checked.
+ *
+ *  Call from async agent-dispatch paths BEFORE preparePodSpawn. The synchronous
+ *  orchestrator ensurePty() path is deferred to Step OD.
+ *
+ *  Non-fatal at every level: individual server refresh failures are caught and
+ *  swallowed (the server will be skipped by buildRegistryMcpConfig's own
+ *  try/catch when its token resolution fails). */
+export async function refreshOAuthTokensForSpawn(
+  agentName: string,
+  spawnProjectId: ULID | null,
+  opts: { includeProjectServers?: boolean; redirectPort?: number } = {},
+): Promise<void> {
+  const vault = tryGetSecretsVault();
+  if (!vault) return;
+
+  const bundle = getPodForSpawn(agentName, spawnProjectId);
+  if (!bundle) return;
+
+  const redirectPort = opts.redirectPort ?? Number(process.env.PORT ?? 4040);
+  const tasks: Array<Promise<void>> = [];
+  const includedServerIds = new Set<ULID>();
+
+  try {
+    const attachments = listMcpAttachmentsForAgent(bundle.agent.id);
+    for (const att of attachments) {
+      const row = getMcpServerRegistry(att.mcpServerId);
+      if (!row) continue;
+      if (row.scope === 'project' && row.projectId !== spawnProjectId) continue;
+      includedServerIds.add(row.id);
+      if (!row.transport.url) continue; // OAuth only applies to HTTP servers.
+      tasks.push(
+        refreshOAuthTokenIfNeeded(
+          row.id,
+          row.transport.url,
+          row.scope as 'global' | 'project',
+          vault,
+          redirectPort,
+        ).catch(() => {}),
+      );
+    }
+
+    if (opts.includeProjectServers && spawnProjectId) {
+      for (const row of listMcpServersRegistry({ projectId: spawnProjectId })) {
+        if (includedServerIds.has(row.id)) continue;
+        if (!row.transport.url) continue;
+        tasks.push(
+          refreshOAuthTokenIfNeeded(
+            row.id,
+            row.transport.url,
+            row.scope as 'global' | 'project',
+            vault,
+            redirectPort,
+          ).catch(() => {}),
+        );
+      }
+    }
+  } catch {
+    // Non-fatal: if listing attachments fails, skip refresh entirely.
+  }
+
+  await Promise.allSettled(tasks);
 }

@@ -83,6 +83,39 @@ test('buildRegistryMcpConfig passes through plain-string headers unchanged', () 
   assert.equal(result.servers[server.name].headers?.['X-Version'], '2', 'plain header preserved');
 });
 
+test('buildRegistryMcpConfig resolves oauth_tokens $secretRef to Bearer access_token', () => {
+  const key = randomBytes(32);
+  const vault = new SecretsVault(key);
+  initVault(key);
+
+  // Store an OAuthTokens payload (as created by VaultOAuthStorage.storeTokens).
+  const cred = vault.store({
+    ownerScope: 'global',
+    kind: 'oauth_tokens',
+    plaintext: { access_token: 'oauth-access-tok', token_type: 'Bearer', expires_in: 3600 },
+  });
+  const server = createMcpServerRegistry({
+    scope: 'global',
+    name: 'oauth-token-srv-' + Date.now(),
+    transport: {
+      url: MCP_URL,
+      headers: { Authorization: { $secretRef: cred.id } },
+    },
+  });
+
+  const agent = makeAgent();
+  upsertMcpAttachment({ agentId: agent.id, mcpServerId: server.id, enabledTools: '*' });
+
+  const result = buildRegistryMcpConfig(agent.id);
+
+  assert.ok(result.servers[server.name], 'server present in config');
+  assert.equal(
+    result.servers[server.name].headers?.['Authorization'],
+    'Bearer oauth-access-tok',
+    'oauth_tokens resolves to Bearer <access_token>',
+  );
+});
+
 test('buildRegistryMcpConfig skips a server when $secretRef credential is missing', () => {
   const missingRef = { $secretRef: '01MISSING000000000000000000' };
   const server = createMcpServerRegistry({

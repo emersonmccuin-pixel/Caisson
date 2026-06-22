@@ -166,6 +166,34 @@ test('VaultOAuthStorage — invalidate("all") removes all vault-backed state', a
   assert.equal(await storage.loadDiscoveryState(), undefined);
 });
 
+test('DCR client info survives restart — new VaultOAuthStorage instance loads from vault', async () => {
+  // Sub-task OA: confirm that kind=\'static\' DCR registration stored by one
+  // VaultOAuthStorage instance is loaded correctly by a fresh instance (simulating
+  // a process restart) — i.e. no re-registration attempt on the next auth/start.
+  const vault = new SecretsVault(randomBytes(32));
+  const serverId = newId();
+
+  // "First process" — store DCR client info.
+  const storage1 = new VaultOAuthStorage(vault, serverId, 'global');
+  const dcr = {
+    client_id: 'dcr-registered-client',
+    client_secret: 'dcr-secret',
+    redirect_uris: ['http://127.0.0.1:4040/api/oauth/callback'],
+  };
+  await storage1.storeClientInformation(dcr);
+
+  // "Process restart" — brand-new VaultOAuthStorage instance, same vault + serverId.
+  const storage2 = new VaultOAuthStorage(vault, serverId, 'global');
+  const loaded = await storage2.loadClientInformation();
+  assert.ok(loaded, 'client info must be loadable from a fresh storage instance after restart');
+  assert.equal(loaded.client_id, 'dcr-registered-client', 'client_id survives restart');
+
+  // storeTokens round-trip on the new instance also works (vault is healthy).
+  await storage2.storeTokens({ access_token: 'post-restart-tok', token_type: 'Bearer' });
+  const tok = await storage2.loadTokens();
+  assert.equal(tok?.access_token, 'post-restart-tok');
+});
+
 // ── createOAuthProvider factory ───────────────────────────────────────────────
 
 test('createOAuthProvider — builds provider with correct redirect URL and default client metadata', () => {

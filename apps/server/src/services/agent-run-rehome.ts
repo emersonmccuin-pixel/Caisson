@@ -19,7 +19,7 @@ import { ContractService } from '@pc/app-services';
 import type { ExpectedOutput } from '@pc/domain';
 
 import type { AgentHostReattachClient } from './agent-host-reattach.ts';
-import { preparePodSpawn } from './pod-spawn.ts';
+import { preparePodSpawn, refreshOAuthTokensForSpawn } from './pod-spawn.ts';
 
 function scratchDirFor(projectId: string, agentRunId: string): string {
   const root = process.env.PC_DATA_DIR ?? 'data';
@@ -67,6 +67,9 @@ export async function reHomeRunOnCurrentHost(
       /* best-effort; missing workItem context is non-fatal */
     }
   }
+
+  // OA/OB — pre-spawn OAuth token refresh. Non-fatal per server.
+  await refreshOAuthTokensForSpawn(row.podName, row.projectId);
 
   // 4. Re-run pod prep to get materialised paths (mcpConfigPath, settingsPath,
   //    pluginDir). If this throws the pod is effectively un-usable — skip.
