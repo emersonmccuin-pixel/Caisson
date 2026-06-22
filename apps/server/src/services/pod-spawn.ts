@@ -16,6 +16,8 @@
 // when PC's runtime became isolated from terminal Claude Code sessions.
 
 import { getDossier, getPodForSpawn, getMcpServerRegistry, listMcpAttachmentsForAgent, listMcpServersRegistry } from '@pc/db';
+import { resolveTransportSecrets } from './resolve-transport-secrets.ts';
+import { tryGetSecretsVault } from './secrets-vault.ts';
 import type { PodMcpServerConfig, ULID } from '@pc/domain';
 import { materializePodPlugin, type MaterializedPluginPod, type PodWorkItemContext } from '@pc/runtime';
 import {
@@ -368,6 +370,10 @@ export function buildRegistryMcpConfig(
   const servers: Record<string, PodMcpServerConfig> = {};
   const catalog: Record<string, readonly string[]> = {};
   try {
+    // Resolve vault secrets once per call; fall back to cast when vault is not
+    // yet initialized (dev mode without Electron vault init).
+    const vault = tryGetSecretsVault();
+
     const attachments = listMcpAttachmentsForAgent(agentId);
     for (const att of attachments) {
       const row = getMcpServerRegistry(att.mcpServerId);
@@ -375,13 +381,19 @@ export function buildRegistryMcpConfig(
       // Project-scoped servers only apply when the spawn's project matches.
       // Global servers always apply.
       if (row.scope === 'project' && row.projectId !== spawnProjectId) continue;
-      // Slice 7+ will call resolveTransportSecrets here. Until then, cast to
-      // PodMcpServerConfig — safe after the Slice 2 migration runs (no plain
-      // tokens remain in the DB; SecretRefs are opaque to the spawn path until
-      // injection is wired in Slice 7).
-      // wrapStdioCwd: if the stored transport has a `cwd`, transform it into a
-      // shell cd-wrapper (CC ignores a bare cwd field on stdio mcp.json entries).
-      servers[row.name] = wrapStdioCwd(row.transport as unknown as PodMcpServerConfig);
+      // Resolve $secretRef values in headers/env to live plaintext strings.
+      // wrapStdioCwd: transforms a `cwd` field into a shell cd-wrapper because
+      // CC silently ignores a bare cwd field on stdio mcp.json entries.
+      let config: PodMcpServerConfig;
+      try {
+        config = vault
+          ? resolveTransportSecrets(row.transport, vault)
+          : (row.transport as unknown as PodMcpServerConfig);
+      } catch {
+        // Non-fatal: skip this server if secret resolution fails (e.g. missing cred).
+        continue;
+      }
+      servers[row.name] = wrapStdioCwd(config);
       const selected = att.enabledTools === '*' ? (row.discoveredTools ?? []) : att.enabledTools;
       catalog[row.name] = selected.map((t) => qualifyMcpToolName(row.name, t));
     }
@@ -394,7 +406,15 @@ export function buildRegistryMcpConfig(
       for (const row of projectServers) {
         // Attachment wins — skip if already present from the attachment loop.
         if (row.name in servers) continue;
-        servers[row.name] = wrapStdioCwd(row.transport as unknown as PodMcpServerConfig);
+        let config: PodMcpServerConfig;
+        try {
+          config = vault
+            ? resolveTransportSecrets(row.transport, vault)
+            : (row.transport as unknown as PodMcpServerConfig);
+        } catch {
+          continue;
+        }
+        servers[row.name] = wrapStdioCwd(config);
         catalog[row.name] = (row.discoveredTools ?? []).map((t) => qualifyMcpToolName(row.name, t));
       }
     }

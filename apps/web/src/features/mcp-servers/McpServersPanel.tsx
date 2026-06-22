@@ -6,7 +6,12 @@
 //
 // Transport is split into two modes:
 //   stdio: command (required) + args (optional) + env (optional key=value rows)
-//   http:  url (required)
+//   http:  url (required) + headers (optional key=value rows)
+//
+// Vault-stored secrets (headers/env values that the boot-time migration has
+// encrypted) are shown as ••••••••. Re-saving a masked value passes the
+// original $secretRef through unchanged — it never overwrites the vaulted
+// credential with the mask string (Risk R1 from the build plan).
 
 import { useCallback, useEffect, useState } from 'react';
 
@@ -436,15 +441,30 @@ function ServerForm({ mode, draft, onDraftChange, onSave, onCancel }: ServerForm
       )}
 
       {draft.transportMode === 'http' && (
-        <FormRow label="URL" required help="Full URL of the MCP HTTP endpoint">
-          <input
-            type="url"
-            value={draft.url}
-            onChange={(e) => set({ url: e.target.value })}
-            placeholder="http://localhost:3000/mcp"
-            className="w-full border border-border bg-background px-2 py-1 font-mono text-sm text-foreground placeholder:text-muted-foreground/60"
-          />
-        </FormRow>
+        <>
+          <FormRow label="URL" required help="Full URL of the MCP HTTP endpoint">
+            <input
+              type="url"
+              value={draft.url}
+              onChange={(e) => set({ url: e.target.value })}
+              placeholder="http://localhost:3000/mcp"
+              className="w-full border border-border bg-background px-2 py-1 font-mono text-sm text-foreground placeholder:text-muted-foreground/60"
+            />
+          </FormRow>
+
+          <FormRow
+            label="Headers"
+            help="One Key=Value per line (e.g. Authorization=Bearer sk-…). Values are encrypted at rest. Vault-stored secrets appear as ••••••••."
+          >
+            <textarea
+              value={draft.headers}
+              onChange={(e) => set({ headers: e.target.value })}
+              placeholder={'Authorization=Bearer sk-...\nX-API-Key=abc123'}
+              rows={3}
+              className="w-full border border-border bg-background px-2 py-1 font-mono text-xs text-foreground placeholder:text-muted-foreground/60"
+            />
+          </FormRow>
+        </>
       )}
 
       <div className="flex justify-end gap-2 pt-1">
@@ -503,10 +523,15 @@ interface ServerDraft {
   // stdio fields
   command: string;
   args: string;
-  env: string;
+  env: string; // KEY=VALUE per line; vault-stored values show as KEY=••••••••
   cwd: string;
   // http fields
   url: string;
+  headers: string; // KEY=Value per line; vault-stored values show as KEY=••••••••
+  // Vault ref maps — hold credential IDs so round-trip saves don't overwrite
+  // a vaulted secret with the mask string (Risk R1).
+  headersVaultRefs: Record<string, string>; // header key → credId
+  envVaultRefs: Record<string, string>;     // env key → credId
 }
 
 interface FormState {
@@ -525,22 +550,62 @@ function emptyDraft(): ServerDraft {
     env: '',
     cwd: '',
     url: '',
+    headers: '',
+    headersVaultRefs: {},
+    envVaultRefs: {},
   };
+}
+
+/** Sentinel displayed in the textarea for vault-stored (encrypted) values.
+ *  Only characters outside printable ASCII are used so a real header/env
+ *  value can never collide with this mask string. */
+const VAULT_MASK = '••••••••';
+
+function isVaultRef(v: unknown): v is { $secretRef: string } {
+  return typeof v === 'object' && v !== null && '$secretRef' in v;
 }
 
 function draftFromServer(s: McpServer): ServerDraft {
   const isHttp = !!s.transport.url;
+
+  // For any env/header value that is a vault ref, show the mask string and
+  // record the credential id so round-trip saves can pass the ref through
+  // unchanged (never overwrite the vault entry with the mask string).
+  const envVaultRefs: Record<string, string> = {};
+  const headersVaultRefs: Record<string, string> = {};
+
+  const envLines = Object.entries(s.transport.env ?? {})
+    .map(([k, v]) => {
+      if (isVaultRef(v)) {
+        envVaultRefs[k] = v.$secretRef;
+        return `${k}=${VAULT_MASK}`;
+      }
+      return `${k}=${String(v)}`;
+    })
+    .join('\n');
+
+  const headersLines = Object.entries(s.transport.headers ?? {})
+    .map(([k, v]) => {
+      if (isVaultRef(v)) {
+        headersVaultRefs[k] = v.$secretRef;
+        return `${k}=${VAULT_MASK}`;
+      }
+      return `${k}=${String(v)}`;
+    })
+    .join('\n');
+
   return {
     name: s.name,
     description: s.description,
     transportMode: isHttp ? 'http' : 'stdio',
     command: s.transport.command ?? '',
     args: (s.transport.args ?? []).join(' '),
-    env: Object.entries(s.transport.env ?? {})
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n'),
+    env: envLines,
     cwd: s.transport.cwd ?? '',
     url: s.transport.url ?? '',
+    headers: headersLines,
+    headersVaultRefs,
+    envVaultRefs,
   };
 }
 
@@ -548,12 +613,22 @@ function draftToInput(draft: ServerDraft): CreateMcpServerInput {
   let transport: McpTransport;
   if (draft.transportMode === 'stdio') {
     const argsArr = draft.args.trim() ? draft.args.trim().split(/\s+/) : undefined;
-    const envObj: Record<string, string> = {};
+    const envObj: Record<string, string | { $secretRef: string }> = {};
     for (const line of draft.env.split('\n')) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       const eq = trimmed.indexOf('=');
-      if (eq > 0) envObj[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+      if (eq > 0) {
+        const key = trimmed.slice(0, eq);
+        const val = trimmed.slice(eq + 1);
+        // If the user left a masked vault value unchanged, pass the ref through
+        // so the vault credential is not overwritten with the mask string.
+        if (val === VAULT_MASK && draft.envVaultRefs[key]) {
+          envObj[key] = { $secretRef: draft.envVaultRefs[key] };
+        } else {
+          envObj[key] = val;
+        }
+      }
     }
     const cwdTrimmed = draft.cwd.trim();
     transport = {
@@ -563,7 +638,26 @@ function draftToInput(draft: ServerDraft): CreateMcpServerInput {
       ...(cwdTrimmed ? { cwd: cwdTrimmed } : {}),
     };
   } else {
-    transport = { url: draft.url.trim() };
+    const headersObj: Record<string, string | { $secretRef: string }> = {};
+    for (const line of draft.headers.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq > 0) {
+        const key = trimmed.slice(0, eq);
+        const val = trimmed.slice(eq + 1);
+        // If the user left a masked vault value unchanged, pass the ref through.
+        if (val === VAULT_MASK && draft.headersVaultRefs[key]) {
+          headersObj[key] = { $secretRef: draft.headersVaultRefs[key] };
+        } else {
+          headersObj[key] = val;
+        }
+      }
+    }
+    transport = {
+      url: draft.url.trim(),
+      ...(Object.keys(headersObj).length ? { headers: headersObj } : {}),
+    };
   }
   return {
     name: draft.name.trim(),

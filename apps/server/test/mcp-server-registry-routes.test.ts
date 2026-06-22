@@ -203,3 +203,97 @@ test('project scope: 404 for unknown project', async () => {
   const res = await app.request('/api/projects/NOTAPROJECT/mcp-servers');
   assert.equal(res.status, 404);
 });
+
+// ─── Headers support (pc-pty-chat-457) ────────────────────────────────────────
+
+test('POST /api/mcp-servers — creates an HTTP server with headers', async () => {
+  const app = makeApp();
+  const res = await app.request('/api/mcp-servers', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: 'http-headers-server',
+      transport: {
+        url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer sk-test-123' },
+      },
+    }),
+  });
+  assert.equal(res.status, 201);
+  const body = (await res.json()) as {
+    ok: boolean;
+    server: { transport: { url: string; headers: Record<string, string> } };
+  };
+  assert.equal(body.ok, true);
+  assert.equal(body.server.transport.url, 'https://example.com/mcp');
+  assert.deepEqual(body.server.transport.headers, { Authorization: 'Bearer sk-test-123' });
+});
+
+test('GET /api/mcp-servers/:id — round-trips headers on read-back', async () => {
+  const app = makeApp();
+  const created = await app
+    .request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'http-roundtrip-server',
+        transport: {
+          url: 'https://rt.example.com/mcp',
+          headers: { 'X-API-Key': 'mykey', 'X-Version': '2' },
+        },
+      }),
+    })
+    .then((r) => r.json() as Promise<{ ok: boolean; server: { id: string } }>);
+  assert.equal(created.ok, true);
+
+  const res = await app.request(`/api/mcp-servers/${created.server.id}`);
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    ok: boolean;
+    server: { transport: { headers: Record<string, string> } };
+  };
+  assert.deepEqual(body.server.transport.headers, { 'X-API-Key': 'mykey', 'X-Version': '2' });
+});
+
+test('PATCH /api/mcp-servers/:id — can add headers to an HTTP server', async () => {
+  const app = makeApp();
+  const created = await app
+    .request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'patch-add-headers-server', transport: { url: 'https://patch.example.com/mcp' } }),
+    })
+    .then((r) => r.json() as Promise<{ ok: boolean; server: { id: string } }>);
+  const id = created.server.id;
+
+  const res = await app.request(`/api/mcp-servers/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      transport: { url: 'https://patch.example.com/mcp', headers: { 'X-API-Key': 'my-key' } },
+    }),
+  });
+  assert.equal(res.status, 200);
+  const body = (await res.json()) as {
+    ok: boolean;
+    server: { transport: { headers: Record<string, string> } };
+  };
+  assert.equal(body.ok, true);
+  assert.deepEqual(body.server.transport.headers, { 'X-API-Key': 'my-key' });
+});
+
+test('POST /api/mcp-servers — 400 when headers paired with stdio command', async () => {
+  const app = makeApp();
+  const res = await app.request('/api/mcp-servers', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: 'bad-headers-stdio',
+      transport: { command: 'node', headers: { Authorization: 'Bearer x' } },
+    }),
+  });
+  assert.equal(res.status, 400);
+  const body = (await res.json()) as { ok: boolean; error: string };
+  assert.equal(body.ok, false);
+  assert.match(body.error, /headers/);
+});

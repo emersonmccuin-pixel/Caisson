@@ -4,8 +4,11 @@
 //   /api/mcp-servers          — global scope (list, create, get, patch, delete, probe)
 //   /api/projects/:id/mcp-servers — project scope (list, create)
 //
-// Transport validation delegates to the existing parsePodMcpServerConfig
+// Transport validation delegates to parseMcpServerTransport
 // (apps/server/src/services/pod-mcp-config.ts) — ONE path, no duplicate.
+// parseMcpServerTransport (not parsePodMcpServerConfig) is used here because
+// the registry form accepts the stored-form McpServerTransport shape, which
+// includes headers (with optional $secretRef values) on HTTP servers.
 //
 // P2 additions:
 //   POST /api/mcp-servers/:id/probe  — trigger a discovery probe; returns updated row.
@@ -26,7 +29,7 @@ import {
 } from '@pc/db';
 import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
 import { COMMAND_PLANNER_POD_NAME } from '../../services/command-planner-pod-content.ts';
-import { parsePodMcpServerConfig } from '../../services/pod-mcp-config.ts';
+import { parseMcpServerTransport } from '../../services/pod-mcp-config.ts';
 import { registerOAuthRoutes, type AuthFn } from './oauth-routes.ts';
 
 export type ProbeFn = (config: PodMcpServerConfig) => Promise<{ status: 'ok' | 'failed'; tools?: string[]; error?: string }>;
@@ -242,9 +245,9 @@ function parseServerBody(
   if (!b.name || typeof b.name !== 'string' || !b.name.trim()) {
     return { ok: false, error: 'name is required and must be a non-empty string' };
   }
-  let transport: ReturnType<typeof parsePodMcpServerConfig>;
+  let transport: ReturnType<typeof parseMcpServerTransport>;
   try {
-    transport = parsePodMcpServerConfig(b.transport);
+    transport = parseMcpServerTransport(b.transport);
   } catch (err) {
     return { ok: false, error: `transport: ${(err as Error).message}` };
   }
@@ -282,7 +285,7 @@ function parsePatchBody(
   }
   if (b.transport !== undefined) {
     try {
-      patch.transport = parsePodMcpServerConfig(b.transport);
+      patch.transport = parseMcpServerTransport(b.transport);
     } catch (err) {
       return { ok: false, error: `transport: ${(err as Error).message}` };
     }
