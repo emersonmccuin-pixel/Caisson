@@ -3,17 +3,27 @@
 export type McpDiscoveryStatus = 'ok' | 'failed' | 'stale';
 export type McpServerScope = 'global' | 'project';
 
-/** Transport shape — matches the server-side PodMcpServerConfig. */
+/** A transport header or env value in its stored form: either a plain string
+ *  or a vault reference. The boot-time migration converts all plaintext
+ *  header/env values to SecretRefs; the UI masks them as •••••••• and rounds
+ *  them trip correctly without overwriting the vaulted credential. */
+export type TransportValue = string | { $secretRef: string };
+
+/** Transport shape — matches the server-side McpServerTransport. */
 export interface McpTransport {
   /** stdio: executable to run */
   command?: string;
   args?: string[];
-  env?: Record<string, string>;
+  /** stdio: env vars; values may be plain strings or vault refs (masked ••••••••). */
+  env?: Record<string, TransportValue>;
   /** stdio: working directory the server launches from (optional) */
   cwd?: string;
+  /** HTTP: transport type ('http', 'sse') */
+  type?: string;
   /** HTTP: endpoint URL */
   url?: string;
-  headers?: Record<string, string>;
+  /** HTTP: request headers; values may be plain strings or vault refs (masked ••••••••). */
+  headers?: Record<string, TransportValue>;
 }
 
 export interface McpServer {
