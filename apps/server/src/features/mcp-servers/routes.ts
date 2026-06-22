@@ -31,6 +31,9 @@ import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
 import { COMMAND_PLANNER_POD_NAME } from '../../services/command-planner-pod-content.ts';
 import { parseMcpServerTransport } from '../../services/pod-mcp-config.ts';
 import { registerOAuthRoutes, type AuthFn } from './oauth-routes.ts';
+import { resolveTransportSecrets } from '../../services/resolve-transport-secrets.ts';
+import { tryGetSecretsVault } from '../../services/secrets-vault.ts';
+import { refreshOAuthTokenIfNeeded } from '../../services/oauth-refresh.ts';
 
 export type ProbeFn = (config: PodMcpServerConfig) => Promise<{ status: 'ok' | 'failed'; tools?: string[]; error?: string }>;
 
@@ -67,13 +70,31 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
 
   // ── Shared helper: run probe + persist result ────────────────────────────────
 
-  // Slice 5+ will call resolveTransportSecrets before probing. Until then the
-  // stored McpServerTransport is cast to PodMcpServerConfig (safe for servers
-  // with no SecretRef values; ref-carrying transports are migrated by Slice 2,
-  // auth-aware probe wired in Slice 5).
-  async function runAndStoreProbe(id: ULID, config: McpServerTransport): Promise<McpServerRegistryRow | null> {
-    const probeResult = await deps.probe!(config as unknown as PodMcpServerConfig);
-    return setMcpServerDiscovery(id, {
+  // OA/OB — resolve transport secrets (including OAuth token refresh) before
+  // probing. HTTP servers with near-expiry oauth_tokens are refreshed first so
+  // the probe uses a valid Bearer token.
+  async function runAndStoreProbe(server: McpServerRegistryRow): Promise<McpServerRegistryRow | null> {
+    const vault = tryGetSecretsVault();
+    let config: PodMcpServerConfig;
+    try {
+      if (vault && server.transport.url) {
+        await refreshOAuthTokenIfNeeded(
+          server.id,
+          server.transport.url,
+          server.scope as 'global' | 'project',
+          vault,
+          deps.port ?? Number(process.env.PORT ?? 4040),
+        );
+      }
+      config = vault
+        ? resolveTransportSecrets(server.transport, vault)
+        : (server.transport as unknown as PodMcpServerConfig);
+    } catch {
+      // Non-fatal: use raw transport when secret resolution or refresh fails.
+      config = server.transport as unknown as PodMcpServerConfig;
+    }
+    const probeResult = await deps.probe!(config);
+    return setMcpServerDiscovery(server.id, {
       status: probeResult.status,
       tools: probeResult.status === 'ok' ? (probeResult.tools ?? []) : null,
     });
@@ -97,7 +118,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
       const server = createMcpServerRegistry(result.input);
       // P2: fire-and-forget auto-probe; does not delay the create response.
       if (deps.probe) {
-        void runAndStoreProbe(server.id, server.transport).catch(() => {});
+        void runAndStoreProbe(server).catch(() => {});
       }
       return c.json({ ok: true, server }, 201);
     } catch (err) {
@@ -157,7 +178,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
     const id = c.req.param('id') as ULID;
     const existing = getMcpServerRegistry(id);
     if (!existing) return c.json({ ok: false, error: `unknown mcp server: ${id}` }, 404);
-    const updated = await runAndStoreProbe(id, existing.transport);
+    const updated = await runAndStoreProbe(existing);
     return c.json({ ok: true, server: updated ?? existing });
   });
 
@@ -189,7 +210,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
       const server = createMcpServerRegistry(result.input);
       // P2: fire-and-forget auto-probe.
       if (deps.probe) {
-        void runAndStoreProbe(server.id, server.transport).catch(() => {});
+        void runAndStoreProbe(server).catch(() => {});
       }
       // pc-pty-chat-451 — restart the project orchestrator so it picks up the
       // new server immediately on next spawn (history preserved via --resume).

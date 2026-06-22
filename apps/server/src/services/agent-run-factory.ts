@@ -63,7 +63,7 @@ import {
 } from '@pc/runtime';
 
 import { type VerificationBlock } from './agent-event-header.ts';
-import { preparePodSpawn, type PodSpawnPrep } from './pod-spawn.ts';
+import { preparePodSpawn, refreshOAuthTokensForSpawn, type PodSpawnPrep } from './pod-spawn.ts';
 
 import {
   getActiveRunRegistry,
@@ -428,6 +428,10 @@ export async function dispatchFreshAgent(
     };
   }
 
+  // OA/OB — pre-spawn OAuth token refresh for HTTP MCP servers with near-expiry
+  // tokens. Non-fatal: individual server failures are swallowed inside the helper.
+  await refreshOAuthTokensForSpawn(input.agentName, input.projectId ?? null);
+
   let podPrep: PodSpawnPrep | null = null;
   try {
     podPrep = preparePodSpawn({
@@ -709,6 +713,9 @@ export async function dispatchContinueAgent(
       }
     }
   }
+
+  // OA/OB — pre-spawn OAuth token refresh. Non-fatal per server.
+  await refreshOAuthTokensForSpawn(plan.plan.podName, input.projectId ?? null);
 
   let podPrep: PodSpawnPrep | null = null;
   try {

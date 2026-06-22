@@ -36,6 +36,14 @@ function resolveValue(key: string, v: TransportValue, vault: SecretsVault): stri
   if (payload === null) {
     throw new Error(`resolveTransportSecrets: credential "${credId}" not found (key="${key}")`);
   }
+  // OAuth tokens are stored as OAuthTokens objects — extract access_token and
+  // wrap with the "Bearer" scheme so the header is ready for HTTP use.
+  if (typeof payload === 'object' && payload !== null) {
+    const obj = payload as Record<string, unknown>;
+    if (typeof obj.access_token === 'string') {
+      return `Bearer ${obj.access_token}`;
+    }
+  }
   if (typeof payload !== 'string') {
     throw new Error(
       `resolveTransportSecrets: credential "${credId}" payload is not a string (key="${key}")`,
