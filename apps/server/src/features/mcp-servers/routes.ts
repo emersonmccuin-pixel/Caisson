@@ -29,14 +29,19 @@ import {
   softDeleteMcpServerRegistry,
 } from '@pc/db';
 import { COMMAND_PROJECT_SLUG } from '@pc/contracts';
+import type { OAuthClientProvider } from '@pc/mcp/oauth/provider';
 import { COMMAND_PLANNER_POD_NAME } from '../../services/command-planner-pod-content.ts';
 import { parseMcpServerTransport } from '../../services/pod-mcp-config.ts';
 import { registerOAuthRoutes, type AuthFn } from './oauth-routes.ts';
 import { resolveTransportSecrets } from '../../services/resolve-transport-secrets.ts';
 import { tryGetSecretsVault } from '../../services/secrets-vault.ts';
 import { refreshOAuthTokenIfNeeded } from '../../services/oauth-refresh.ts';
+import { createOAuthProvider } from '../../services/oauth-provider.ts';
 
-export type ProbeFn = (config: PodMcpServerConfig) => Promise<{ status: 'ok' | 'failed'; tools?: string[]; error?: string }>;
+export type ProbeFn = (
+  config: PodMcpServerConfig,
+  opts?: { authProvider?: OAuthClientProvider },
+) => Promise<{ status: 'ok' | 'failed'; tools?: string[]; error?: string }>;
 
 export interface McpServerRoutesDeps {
   /** Resolves a project runtime by id; null → 404. */
@@ -76,6 +81,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
   // the probe uses a valid Bearer token.
   async function runAndStoreProbe(server: McpServerRegistryRow): Promise<McpServerRegistryRow | null> {
     const vault = tryGetSecretsVault();
+    const port = deps.port ?? Number(process.env.PORT ?? 4040);
     let config: PodMcpServerConfig;
     try {
       if (vault && server.transport.url) {
@@ -84,7 +90,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
           server.transport.url,
           server.scope as 'global' | 'project',
           vault,
-          deps.port ?? Number(process.env.PORT ?? 4040),
+          port,
         );
       }
       config = vault
@@ -94,7 +100,20 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
       // Non-fatal: use raw transport when secret resolution or refresh fails.
       config = server.transport as unknown as PodMcpServerConfig;
     }
-    const probeResult = await deps.probe!(config);
+    // For authType:'oauth' servers, pass a VaultOAuthProvider so the SDK
+    // attaches the stored Bearer token and handles 401→refresh automatically.
+    let probeOpts: { authProvider?: OAuthClientProvider } | undefined;
+    if (vault && server.transport.authType === 'oauth') {
+      probeOpts = {
+        authProvider: createOAuthProvider({
+          serverId: server.id,
+          ownerScope: server.scope as 'global' | 'project',
+          redirectPort: port,
+          onRedirectToAuthorization: () => {}, // no-op — probe never opens a browser
+        }),
+      };
+    }
+    const probeResult = await deps.probe!(config, probeOpts);
     return setMcpServerDiscovery(server.id, {
       status: probeResult.status,
       tools: probeResult.status === 'ok' ? (probeResult.tools ?? []) : null,
@@ -229,6 +248,7 @@ export function registerMcpServerRoutes(app: Hono, deps: McpServerRoutesDeps = {
   registerOAuthRoutes(app, {
     port: deps.port ?? Number(process.env.PORT ?? 4040),
     authFn: deps.oauthAuthFn,
+    runProbe: deps.probe ? runAndStoreProbe : undefined,
   });
 
   // ── Orchestrator pod resolution (P4a) ────────────────────────────────────────

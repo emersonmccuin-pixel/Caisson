@@ -8,6 +8,7 @@
 // never rejects. Callers store the result (ok or failed) and surface it.
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { PodMcpServerConfig } from '@pc/domain';
 import { buildTransport } from './transport.js';
 
@@ -16,6 +17,12 @@ export const PROBE_TIMEOUT_MS = 10_000;
 export type ProbeOk = { status: 'ok'; tools: string[] };
 export type ProbeFailed = { status: 'failed'; error: string; timedOut?: boolean };
 export type ProbeResult = ProbeOk | ProbeFailed;
+
+export interface ProbeMcpServerOpts {
+  /** For OAuth HTTP servers: pass the vault-backed provider so the SDK
+   *  attaches the stored Bearer token and auto-handles 401→refresh. */
+  authProvider?: OAuthClientProvider;
+}
 
 /**
  * Probe a single MCP server for its tool list.
@@ -27,6 +34,7 @@ export type ProbeResult = ProbeOk | ProbeFailed;
 export async function probeMcpServer(
   config: PodMcpServerConfig,
   timeoutMs: number = PROBE_TIMEOUT_MS,
+  opts?: ProbeMcpServerOpts,
 ): Promise<ProbeResult> {
   // We need to be able to close the transport/client from the timeout handler
   // so the subprocess doesn't linger after the timeout fires.
@@ -46,7 +54,7 @@ export async function probeMcpServer(
     const client = new Client({ name: 'pc-probe', version: '0.0.0' }, { capabilities: {} });
 
     try {
-      const built = buildTransport(config);
+      const built = buildTransport(config, opts);
       if (!built.ok) return { status: 'failed', error: built.error };
       const transport = built.transport;
 

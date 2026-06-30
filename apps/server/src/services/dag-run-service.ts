@@ -26,7 +26,8 @@ import {
   resolveAgentForDispatch,
   workflowRunsV2Repo,
 } from '@pc/db';
-import { callMcpTool, type CallToolOutcome } from '@pc/mcp/call';
+import { callMcpTool, type CallToolOutcome, type CallMcpToolOpts } from '@pc/mcp/call';
+import type { OAuthClientProvider } from '@pc/mcp/oauth/provider';
 import { DagExecutor, type DagExecutorDeps, type DagNodeContext, type NodeOutcome } from './dag-executor.ts';
 import { announceRunCreated, writeDagAndStatus } from './workflow-run-writer.ts';
 import {
@@ -52,6 +53,9 @@ import type { AgentHostReattachClient } from './agent-host-reattach.ts';
 import type { WorkItemService } from './work-item.ts';
 import type { WorktreeService } from './worktree.ts';
 import { landBranch } from './landing-service.ts';
+import { tryGetSecretsVault } from './secrets-vault.ts';
+import { resolveTransportSecrets } from './resolve-transport-secrets.ts';
+import { createOAuthProvider } from './oauth-provider.ts';
 
 /** FD-12 — the one write door (repo write + outbox receipt in one txn). */
 const workItemGateway = new WorkItemMutationGateway();
@@ -198,6 +202,7 @@ export interface DagRunServiceOptions {
     tool: string,
     args: Record<string, unknown>,
     timeoutMs?: number,
+    opts?: { authProvider?: OAuthClientProvider },
   ) => Promise<CallToolOutcome>;
 }
 
@@ -491,11 +496,31 @@ export function makeExecutorDeps(
 
     const caller = opts.mcpToolCaller ?? callMcpTool;
     const startedAt = Date.now();
-    // Slice 8+ will call resolveTransportSecrets here. Until then, cast to
-    // PodMcpServerConfig (safe for plain-string transports; Slice 2 migrated
-    // any pre-existing plaintext to refs, so this only fires for un-migrated
-    // servers — which cannot exist after migration runs at boot).
-    const result = await caller(row.transport as unknown as PodMcpServerConfig, node.tool, args, node.timeout);
+    // Resolve transport secrets (Slice 8 completes this for all types; today we
+    // handle what we can). Fall back to cast for non-vault or resolution errors.
+    const vault = tryGetSecretsVault();
+    let callConfig: PodMcpServerConfig;
+    let callOpts: CallMcpToolOpts | undefined;
+    try {
+      callConfig = vault
+        ? resolveTransportSecrets(row.transport, vault)
+        : (row.transport as unknown as PodMcpServerConfig);
+    } catch {
+      callConfig = row.transport as unknown as PodMcpServerConfig;
+    }
+    // For authType:'oauth' servers, pass a VaultOAuthProvider so the SDK
+    // attaches the stored Bearer token and handles 401→refresh.
+    if (row.transport.authType === 'oauth' && vault) {
+      callOpts = {
+        authProvider: createOAuthProvider({
+          serverId: row.id,
+          ownerScope: row.scope as 'global' | 'project',
+          redirectPort: Number(process.env.PORT ?? 4040),
+          onRedirectToAuthorization: () => {}, // no-op — call nodes never open a browser
+        }),
+      };
+    }
+    const result = await caller(callConfig, node.tool, args, node.timeout, callOpts);
     const durationMs = Date.now() - startedAt;
 
     // Diary line: which external action ran, where, and how it went — the

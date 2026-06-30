@@ -116,6 +116,94 @@ test('buildRegistryMcpConfig resolves oauth_tokens $secretRef to Bearer access_t
   );
 });
 
+test('buildRegistryMcpConfig injects Authorization:Bearer for authType:oauth server with stored token', () => {
+  const key = randomBytes(32);
+  const vault = new SecretsVault(key);
+  initVault(key);
+
+  // Register an OAuth server with NO Authorization header in the transport
+  // (the pattern the UI creates: authType:'oauth', no $secretRef header).
+  const server = createMcpServerRegistry({
+    scope: 'global',
+    name: 'oauth-bearer-inject-' + Date.now(),
+    transport: {
+      url: MCP_URL,
+      authType: 'oauth' as const,
+    },
+  });
+
+  // Store tokens in the vault the way the OAuth callback does.
+  vault.upsertForServer(server.id, 'oauth_tokens', 'global', {
+    access_token: 'injected-access-tok',
+    token_type: 'Bearer',
+    expires_in: 3600,
+  });
+
+  const agent = makeAgent();
+  upsertMcpAttachment({ agentId: agent.id, mcpServerId: server.id, enabledTools: '*' });
+
+  const result = buildRegistryMcpConfig(agent.id);
+
+  assert.ok(result.servers[server.name], 'OAuth server present in config');
+  assert.equal(
+    result.servers[server.name].headers?.['Authorization'],
+    'Bearer injected-access-tok',
+    'Bearer token injected into spawn-time config for authType:oauth server',
+  );
+});
+
+test('buildRegistryMcpConfig leaves non-oauth server headers unchanged', () => {
+  const key = randomBytes(32);
+  const vault = new SecretsVault(key);
+  initVault(key);
+
+  const cred = vault.store({ ownerScope: 'global', kind: 'static', plaintext: 'Bearer static-tok' });
+  const server = createMcpServerRegistry({
+    scope: 'global',
+    name: 'non-oauth-static-' + Date.now(),
+    transport: {
+      url: MCP_URL,
+      headers: { Authorization: { $secretRef: cred.id } },
+    },
+  });
+
+  const agent = makeAgent();
+  upsertMcpAttachment({ agentId: agent.id, mcpServerId: server.id, enabledTools: '*' });
+
+  const result = buildRegistryMcpConfig(agent.id);
+
+  assert.ok(result.servers[server.name], 'static server present');
+  assert.equal(
+    result.servers[server.name].headers?.['Authorization'],
+    'Bearer static-tok',
+    'static $secretRef resolved; no oauth injection',
+  );
+});
+
+test('buildRegistryMcpConfig does not inject Bearer when no token stored for authType:oauth', () => {
+  // OAuth server registered but user hasn't completed the Authorize flow yet.
+  const server = createMcpServerRegistry({
+    scope: 'global',
+    name: 'oauth-no-token-' + Date.now(),
+    transport: {
+      url: MCP_URL,
+      authType: 'oauth' as const,
+    },
+  });
+
+  const agent = makeAgent();
+  upsertMcpAttachment({ agentId: agent.id, mcpServerId: server.id, enabledTools: '*' });
+
+  const result = buildRegistryMcpConfig(agent.id);
+
+  assert.ok(result.servers[server.name], 'server present even without token');
+  assert.equal(
+    result.servers[server.name].headers?.['Authorization'],
+    undefined,
+    'no Authorization header injected when no token stored',
+  );
+});
+
 test('buildRegistryMcpConfig skips a server when $secretRef credential is missing', () => {
   const missingRef = { $secretRef: '01MISSING000000000000000000' };
   const server = createMcpServerRegistry({
