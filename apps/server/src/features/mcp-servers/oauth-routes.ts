@@ -20,7 +20,7 @@
 //   same API process — in-memory bridging is correct for v1.
 
 import type { Hono } from 'hono';
-import type { ULID } from '@pc/domain';
+import type { McpServerRegistryRow, ULID } from '@pc/domain';
 import { getMcpServerRegistry, getCredentialByServerAndKind } from '@pc/db';
 import {
   auth,
@@ -70,6 +70,11 @@ export interface OAuthRoutesDeps {
    * Tests inject a stub to avoid real network calls.
    */
   authFn?: AuthFn;
+  /**
+   * When provided, called fire-and-forget after a successful OAuth callback so
+   * discoveryStatus updates to 'ok' immediately without the user clicking Probe.
+   */
+  runProbe?: (server: McpServerRegistryRow) => Promise<McpServerRegistryRow | null>;
 }
 
 // ── Route registration ────────────────────────────────────────────────────────
@@ -192,6 +197,14 @@ export function registerOAuthRoutes(app: Hono, deps: OAuthRoutesDeps): void {
       }
     } catch {
       // Non-fatal — tokens are stored; state update retried on next connect.
+    }
+
+    // Auto re-probe so discoveryStatus goes green without manual trigger.
+    if (deps.runProbe) {
+      const serverRow = getMcpServerRegistry(serverId);
+      if (serverRow) {
+        void deps.runProbe(serverRow).catch(() => {});
+      }
     }
 
     return c.html(completePage(), 200);

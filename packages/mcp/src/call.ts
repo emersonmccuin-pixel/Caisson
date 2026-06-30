@@ -9,10 +9,17 @@
 // completed with output; failed → typed step failure).
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { PodMcpServerConfig } from '@pc/domain';
 import { buildTransport } from './transport.js';
 
 export const CALL_TOOL_TIMEOUT_MS = 120_000;
+
+export interface CallMcpToolOpts {
+  /** For OAuth HTTP servers: pass the vault-backed provider so the SDK
+   *  attaches the stored Bearer token and auto-handles 401→refresh. */
+  authProvider?: OAuthClientProvider;
+}
 
 export type CallToolOk = {
   status: 'ok';
@@ -54,6 +61,7 @@ export async function callMcpTool(
   toolName: string,
   args: Record<string, unknown>,
   timeoutMs: number = CALL_TOOL_TIMEOUT_MS,
+  opts?: CallMcpToolOpts,
 ): Promise<CallToolOutcome> {
   let closeTransport: (() => Promise<void>) | null = null;
 
@@ -73,7 +81,7 @@ export async function callMcpTool(
     const client = new Client({ name: 'pc-workflow-call', version: '0.0.0' }, { capabilities: {} });
 
     try {
-      const built = buildTransport(config);
+      const built = buildTransport(config, opts);
       if (!built.ok) return { status: 'failed', error: built.error };
       const transport = built.transport;
 

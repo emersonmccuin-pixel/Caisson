@@ -1322,7 +1322,7 @@ registerWorkflowRoutes(app, {
 
 registerMcpServerRoutes(app, {
   resolveProject,
-  probe: probeMcpServer,
+  probe: (config, opts) => probeMcpServer(config, undefined, opts),
   // pc-pty-chat-451 — kill + re-ensure the orchestrator so it immediately
   // picks up any project-scoped server that was just registered or deleted.
   // Mirrors the onPodChanged → restartIfOrchestratorPod + ensureOrchestratorPty

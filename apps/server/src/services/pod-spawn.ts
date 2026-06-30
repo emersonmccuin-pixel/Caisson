@@ -19,6 +19,7 @@ import { getDossier, getPodForSpawn, getMcpServerRegistry, listMcpAttachmentsFor
 import { resolveTransportSecrets } from './resolve-transport-secrets.ts';
 import { tryGetSecretsVault } from './secrets-vault.ts';
 import { refreshOAuthTokenIfNeeded } from './oauth-refresh.ts';
+import type { OAuthTokens } from '@pc/mcp/oauth/provider';
 import type { PodMcpServerConfig, ULID } from '@pc/domain';
 import { materializePodPlugin, type MaterializedPluginPod, type PodWorkItemContext } from '@pc/runtime';
 import {
@@ -334,6 +335,31 @@ function qualifyMcpToolName(serverName: string, tool: string): string {
   return tool.startsWith('mcp__') ? tool : `mcp__${serverName}__${tool}`;
 }
 
+/** For `authType:'oauth'` HTTP servers, inject `Authorization: Bearer <token>`
+ *  into the spawn-time config so the Claude CLI (which can't accept a Node
+ *  authProvider object) sends the stored token.  Returns the config unchanged
+ *  for non-OAuth servers or when no token is stored.
+ *
+ *  IMPORTANT: injects only into the transient spawn-time copy — NEVER writes
+ *  back to the stored transport row. */
+function injectOAuthBearerIfNeeded(
+  serverId: ULID,
+  transport: { authType?: 'oauth' },
+  config: PodMcpServerConfig,
+  vault: NonNullable<ReturnType<typeof tryGetSecretsVault>>,
+): PodMcpServerConfig {
+  if (transport.authType !== 'oauth') return config;
+  const tokens = vault.getByServerAndKind(serverId, 'oauth_tokens') as OAuthTokens | null;
+  if (!tokens || typeof tokens.access_token !== 'string') return config;
+  return {
+    ...config,
+    headers: {
+      ...(config.headers ?? {}),
+      Authorization: `Bearer ${tokens.access_token}`,
+    },
+  };
+}
+
 /** Load the registry-based MCP servers attached to `agentId` and return the
  *  extra `servers` (to merge into `baselineMcpServers`) and `catalog` (to
  *  merge into `mcpToolCatalog`) entries they contribute.
@@ -385,11 +411,13 @@ export function buildRegistryMcpConfig(
       // Resolve $secretRef values in headers/env to live plaintext strings.
       // wrapStdioCwd: transforms a `cwd` field into a shell cd-wrapper because
       // CC silently ignores a bare cwd field on stdio mcp.json entries.
+      // For authType:'oauth' servers, also inject Bearer from the vault credential.
       let config: PodMcpServerConfig;
       try {
         config = vault
           ? resolveTransportSecrets(row.transport, vault)
           : (row.transport as unknown as PodMcpServerConfig);
+        if (vault) config = injectOAuthBearerIfNeeded(row.id, row.transport, config, vault);
       } catch {
         // Non-fatal: skip this server if secret resolution fails (e.g. missing cred).
         continue;
@@ -412,6 +440,7 @@ export function buildRegistryMcpConfig(
           config = vault
             ? resolveTransportSecrets(row.transport, vault)
             : (row.transport as unknown as PodMcpServerConfig);
+          if (vault) config = injectOAuthBearerIfNeeded(row.id, row.transport, config, vault);
         } catch {
           continue;
         }
