@@ -13,6 +13,7 @@
 // machine.  The SDK auth() / StreamableHTTPClientTransport drive discovery,
 // DCR, PKCE, token exchange, and refresh — we only persist state.
 
+import { randomUUID } from 'node:crypto';
 import type {
   OAuthClientInformationMixed,
   OAuthClientMetadata,
@@ -128,10 +129,26 @@ export class VaultOAuthProvider implements OAuthClientProvider {
 
   private readonly _cfg: VaultOAuthProviderConfig;
 
+  // OAuth `state` — generated once per provider instance, cached so it is
+  // stable across the auth/start → callback round-trip (see state() below).
+  private _state: string | undefined;
+
   constructor(cfg: VaultOAuthProviderConfig) {
     this._cfg = cfg;
     this.redirectUrl = cfg.redirectUrl;
     this.clientMetadata = cfg.clientMetadata;
+  }
+
+  // --- state (CSRF guard + pending-session key) ----------------------------
+  // The MCP SDK only appends a `state` parameter to the authorization URL when
+  // the provider implements state(). Without it the URL has no state, so the
+  // authorization server redirects back with `code` but no `state`, and the
+  // callback (which keys its pending-auth session — holding the in-memory PKCE
+  // codeVerifier — on state) rejects the return with "Missing code or state".
+  // Generated once and cached so both legs of the flow see the same value.
+  async state(): Promise<string> {
+    if (this._state === undefined) this._state = randomUUID();
+    return this._state;
   }
 
   // --- clientInformation / saveClientInformation ----------------------------

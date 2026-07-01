@@ -250,6 +250,32 @@ test('VaultOAuthProvider — redirectUrl and clientMetadata are surfaced correct
   assert.equal(provider.clientMetadata.client_name, 'Caisson');
 });
 
+test('VaultOAuthProvider — state() returns a non-empty value, stable across calls', async () => {
+  const provider = new VaultOAuthProvider({
+    redirectUrl: 'http://127.0.0.1:4040/api/oauth/callback',
+    clientMetadata: { redirect_uris: ['http://127.0.0.1:4040/api/oauth/callback'] },
+    onRedirectToAuthorization: () => {},
+    storage: new InMemoryOAuthStorage(),
+  });
+
+  // The SDK only appends `state` to the authorization URL when the provider
+  // implements state(). Without a stable value the loopback callback can never
+  // match its pending-auth session → "Missing code or state parameter".
+  const s1 = await provider.state();
+  const s2 = await provider.state();
+  assert.ok(typeof s1 === 'string' && s1.length > 0, 'state() returns a non-empty string');
+  assert.equal(s1, s2, 'state() is stable across the auth/start → callback round-trip');
+
+  // Distinct provider instances get distinct state (CSRF isolation).
+  const other = new VaultOAuthProvider({
+    redirectUrl: 'http://127.0.0.1:4040/api/oauth/callback',
+    clientMetadata: { redirect_uris: ['http://127.0.0.1:4040/api/oauth/callback'] },
+    onRedirectToAuthorization: () => {},
+    storage: new InMemoryOAuthStorage(),
+  });
+  assert.notEqual(await other.state(), s1, 'each provider instance has its own state');
+});
+
 test('VaultOAuthProvider — invalidateCredentials("all") clears storage', async () => {
   const storage = new InMemoryOAuthStorage();
   const provider = new VaultOAuthProvider({
