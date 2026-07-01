@@ -69,6 +69,16 @@ export function resolveTransportSecrets(
     ...(transport.url !== undefined ? { url: transport.url } : {}),
   };
 
+  // A URL-based server MUST carry `type: 'http'` for the Claude CLI to connect
+  // to it (a bare `{ url }` entry in mcp.json is not recognized as an HTTP MCP
+  // server → its tools register from discovery but every call fails with "No
+  // such tool available"). The registry transport parser does not persist a
+  // `type`, so default it here — the ONE funnel both the probe and the spawn
+  // config flow through. Never touches the stored row.
+  if (resolved.url !== undefined && resolved.type === undefined) {
+    resolved.type = 'http';
+  }
+
   if (transport.headers) {
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(transport.headers)) {

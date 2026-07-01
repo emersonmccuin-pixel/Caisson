@@ -89,6 +89,24 @@ test('transport with no headers/env resolves without error', () => {
   assert.equal(resolved.env, undefined);
 });
 
+test('url server with no type defaults to type:http (CLI needs it to connect)', () => {
+  const vault = makeVault();
+  const resolved = resolveTransportSecrets({ url: MCP_URL, authType: 'oauth' }, vault);
+  assert.equal(resolved.type, 'http', 'a bare url server is materialized as type:http');
+});
+
+test('url server with an explicit type is left unchanged', () => {
+  const vault = makeVault();
+  const resolved = resolveTransportSecrets({ type: 'sse', url: MCP_URL }, vault);
+  assert.equal(resolved.type, 'sse', 'explicit type is preserved, not overwritten');
+});
+
+test('stdio (command) server is never given a type:http default', () => {
+  const vault = makeVault();
+  const resolved = resolveTransportSecrets({ command: 'node', args: ['x.js'] }, vault);
+  assert.equal(resolved.type, undefined, 'stdio server stays typeless');
+});
+
 test('resolveTransportSecrets: missing credential throws', () => {
   const vault = makeVault();
   const missingRef = { $secretRef: '01MISSING000000000000000000' };
