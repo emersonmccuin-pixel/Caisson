@@ -63,18 +63,13 @@ jobs:
       # into it. (Slower; a build-then-single-publish restructure is the faster fix.)
       max-parallel: 1
       matrix:
-        # macOS re-enabled 2026-06-06: signing + notarization verified end-to-end
-        # (run 27073972156). The earlier "codesign hang" was a transient Apple
-        # timestamp-server stall, not our bundle — see pc-pty-chat-245. The 30-min
-        # job timeout is the safety net if Apple's TSA stalls again (re-run the job).
-        #
-        # macOS = Apple Silicon only (macos-14, arm64) + Windows. Intel (macos-13)
-        # DROPPED 2026-06-07 (Emerson): GitHub's Intel mac runners are deprecated +
-        # scarce and stalled releases by head-of-line-blocking the serialized matrix
-        # (pc-pty-chat-294 / pc-pty-chat-302). If Intel demand returns, add it back
-        # via an x64 cross-build on the arm64 runner rather than a macos-13 runner.
-        # macOS-gated steps below match startsWith(matrix.os, 'macos').
-        os: [macos-14, windows-latest]
+        # Windows-only (2026-07-01, Emerson): macOS DROPPED. This is a personal
+        # Windows app; macOS notarization is gated on an Apple Developer legal
+        # agreement that isn't in effect (notarytool HTTP 403), so the mac job
+        # blocked every release. The mac-gated steps below (startsWith(matrix.os,
+        # 'macos')) stay in the file, inert, so re-adding 'macos-14' here is the
+        # only change needed if mac ships again.
+        os: [windows-latest]
 
     steps:
       - name: Checkout
