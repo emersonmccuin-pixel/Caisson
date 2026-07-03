@@ -19,7 +19,6 @@ import {
   createWorktree,
   detectIntegrationBranch,
   ensureMergeWorktree,
-  fastForwardWorktree,
   getWorktreeStatus,
   gitMergeState,
   mergeBranchIntoHead,
@@ -383,35 +382,8 @@ test('resolveLocalBranchHead: returns local branch SHA and ignores missing branc
   assert.equal(await resolveLocalBranchHead(repoDir, 'missing-branch'), null);
 });
 
-test('fastForwardWorktree: fast-forwards a checked-out local branch', async () => {
-  const repo = mkdtempSync(join(tmpdir(), 'pc-ff-wt-'));
-  const g = (...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'ignore' });
-  const out = (...args: string[]) => execFileSync('git', args, { cwd: repo }).toString().trim();
-  try {
-    g('init');
-    g('config', 'user.email', 't@t');
-    g('config', 'user.name', 't');
-    writeFileSync(join(repo, 'a.txt'), 'base\n');
-    g('add', '.');
-    g('commit', '-m', 'base');
-    g('branch', '-m', 'main');
-    const base = out('rev-parse', 'HEAD');
-    g('checkout', '-b', 'ahead');
-    writeFileSync(join(repo, 'b.txt'), 'ahead\n');
-    g('add', '.');
-    g('commit', '-m', 'ahead');
-    const ahead = out('rev-parse', 'HEAD');
-    g('checkout', 'main');
-    assert.equal(out('rev-parse', 'HEAD'), base);
-
-    await fastForwardWorktree(repo, ahead);
-
-    assert.equal(out('rev-parse', 'HEAD'), ahead);
-    assert.equal((await getWorktreeStatus(repo)).branch, 'main');
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
-});
+// (`fastForwardWorktree` deleted — the engine never mutates the main
+// checkout's working tree.)
 
 // ── createWorktree: startPoint (pc-pty-chat-417) ─────────────────────────────
 

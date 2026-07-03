@@ -22,7 +22,6 @@ export {
   destroyWorktree,
   detectIntegrationBranch,
   ensureMergeWorktree,
-  fastForwardWorktree,
   gitMergeState,
   getWorktreeStatus,
   listBranchesByPrefix,

@@ -168,6 +168,31 @@ test('requireExpectedOutput: pod with no default + no inline spec → null (abor
   assert.equal(created.length, 0, 'must not create a spec-less contract');
 });
 
+test('spec-less chain → null even WITHOUT requireExpectedOutput (2026-07-03: no caller may mint an empty auto-pass contract)', () => {
+  // Continuations call without requireExpectedOutput. Before this fix they
+  // could mint a NULL-spec contract that verifies nothing and auto-passes;
+  // now the resolver returns null and the continuation path carries the
+  // parent's contract (or aborts typed).
+  const { service, created } = fakeService();
+  const id = resolveContractForDispatch(
+    {
+      projectId: 'P1' as any,
+      workItemId: null,
+      agentRunId: 'R1' as any,
+      podName: 'snowflake-expert',
+      contractService: service,
+    },
+    {
+      listContractsForWorkItem: (() => []) as any,
+      getWorkItem: (() => null) as any,
+      setAgentRunContractId: (() => {}) as any,
+      getPodRowExpectedOutput: (() => null) as any,
+    },
+  );
+  assert.equal(id, null, 'no resolvable spec → null for every caller');
+  assert.equal(created.length, 0, 'must not create a spec-less contract');
+});
+
 test('requireExpectedOutput: explicit inline spec on a custom pod → still creates', () => {
   const { service, created } = fakeService();
   const id = resolveContractForDispatch(

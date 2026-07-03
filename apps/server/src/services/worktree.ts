@@ -28,7 +28,6 @@ import {
   deleteBranch as _deleteBranch,
   destroyWorktree as _destroyWorktree,
   ensureMergeWorktree as _ensureMergeWorktree,
-  fastForwardWorktree as _fastForwardWorktree,
   gitMergeState as _gitMergeState,
   getWorktreeStatus as _getWorktreeStatus,
   listBranchesByPrefix as _listBranchesByPrefix,
@@ -145,15 +144,14 @@ export interface WorktreeServiceDeps {
    * git (used in `tryAdvanceLocalIntegration` tests).
    */
   updateRef?: (workspaceDir: string, branch: string, sha: string) => Promise<void>;
-  /** Override for checked-out branch fast-forward (tests avoid real git). */
-  fastForwardWorktree?: (workspaceDir: string, sha: string) => Promise<void>;
 }
 
 /** Names the engine reaps automatically: per-run isolation worktrees, per-
- *  landing merge worktrees (torn down after each successful push; husks from
- *  crash-aborted merges are collected on the next sweep), and the legacy
- *  shared merge worktree name (`__dev-merge`) whose creator was removed in
- *  pc-pty-chat-443 Fix C — exact match only, never broadened to `__dev-*`. */
+ *  landing merge worktrees (torn down after each successful push; crash
+ *  leftovers — registered or husk — are collected by the sweep once their run
+ *  branch is gone, with parked conflicts kept), and the legacy shared merge
+ *  worktree name (`__dev-merge`) whose creator was removed in pc-pty-chat-443
+ *  Fix C — exact match only, never broadened to `__dev-*`. */
 const REAPABLE_NAME_RE = /^(agent|wf)-[A-Za-z0-9._-]+$|^__merge-[A-Za-z0-9._-]+$|^__dev-merge$/;
 
 export interface WorktreeSweepResult {
@@ -351,21 +349,11 @@ export class WorktreeService {
     const wtPath = resolve(this.baseDir, name);
 
     const integration = await this.getIntegrationBranch();
-    const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
-    const mainStatus = await statusFn(this.workspaceDir);
-    if (mainStatus.branch !== integration) {
-      throw new Error(
-        `MAINLINE GUARD: repo dispatch requires the main checkout to be on "${integration}" ` +
-          `before creating an agent worktree; current checkout is ` +
-          `${mainStatus.branch ? `"${mainStatus.branch}"` : 'detached HEAD'}`,
-      );
-    }
-    if (!mainStatus.clean) {
-      throw new Error(
-        `MAINLINE GUARD: repo dispatch requires a clean "${integration}" checkout before ` +
-          'creating an agent worktree',
-      );
-    }
+    // The fork start-point comes from refs (resolveIntegrationTip), never from
+    // the main checkout's working tree — so the orchestrator's branch/dirtiness
+    // in the main checkout is irrelevant to dispatch and must never block it.
+    // (The old MAINLINE GUARD required an on-branch, clean main checkout here;
+    // it coupled dispatch to orchestrator state for no correctness gain.)
 
     // D1a (pc-pty-chat-440): use resolveIntegrationTip (origin/<integration> >
     // local ref) so new branches always fork from the most-advanced landed
@@ -474,9 +462,18 @@ export class WorktreeService {
     const out: Array<{ name: string; branch: string; path: string | null }> = [];
     const seen = new Set<string>();
 
+    // Engine merge worktrees (`__merge-*`, legacy `__dev-merge`) are landing
+    // infrastructure, not stranded run work — they are detached, so their dir
+    // name is not a branch and would surface as a phantom, un-actionable
+    // "stranded branch". The sweep owns their lifecycle; exclude them here.
     const entries = (await this.list()).slice(1).filter((e) => {
       const name = nameFromPath(e.path);
-      return normalize(e.path).startsWith(baseNorm) && name !== null && REAPABLE_NAME_RE.test(name);
+      return (
+        normalize(e.path).startsWith(baseNorm) &&
+        name !== null &&
+        REAPABLE_NAME_RE.test(name) &&
+        !name.startsWith('__')
+      );
     });
     for (const entry of entries) {
       const name = nameFromPath(entry.path)!;
@@ -539,15 +536,56 @@ export class WorktreeService {
     });
 
     const mergedFn = this.deps.branchMergedInto ?? _branchMergedInto;
+    const listBranchesFn = this.deps.listBranchesByPrefix ?? _listBranchesByPrefix;
+    const branches = await listBranchesFn(this.workspaceDir, ['agent-', 'wf-']);
     const survivors = new Set<string>();
     for (const entry of entries) {
       const name = nameFromPath(entry.path)!;
-      const branch = entry.branch ?? name;
       if (inUse.has(normalize(entry.path))) {
         result.kept.push({ name, reason: 'in-use' });
         survivors.add(name);
         continue;
       }
+
+      // Engine merge worktrees are DETACHED — their dir name is not a branch,
+      // so the merged-branch predicate below can never classify them (they used
+      // to leak forever as "unmerged"). Explicit lifecycle instead:
+      //  - MERGE_HEAD present → parked conflict a human is resolving; keep.
+      //  - the run branch still exists → landing pending/in-flight (the branch
+      //    is only deleted after a verified land); keep.
+      //  - otherwise → crash husk from a finished landing; reap.
+      if (name.startsWith('__')) {
+        const runBranch = name.startsWith('__merge-') ? name.slice('__merge-'.length) : null;
+        if (runBranch) {
+          let mergeInProgress = false;
+          try {
+            const stateFn = this.deps.gitMergeState ?? _gitMergeState;
+            mergeInProgress = (await stateFn(entry.path, runBranch, integration)).mergeInProgress;
+          } catch {
+            /* unreadable worktree state — fall through to the branch check */
+          }
+          if (mergeInProgress) {
+            result.kept.push({ name, reason: 'in-use' });
+            survivors.add(name);
+            continue;
+          }
+          if (branches.includes(runBranch)) {
+            result.kept.push({ name, reason: 'in-use' });
+            survivors.add(name);
+            continue;
+          }
+        }
+        try {
+          await this.destroy(entry.path, true);
+          result.removedWorktrees.push(name);
+        } catch (err) {
+          result.failed.push({ name, op: 'worktree-remove', message: (err as Error).message });
+          survivors.add(name);
+        }
+        continue;
+      }
+
+      const branch = entry.branch ?? name;
       if (!(await mergedFn(this.workspaceDir, branch, integration))) {
         result.kept.push({ name, reason: 'unmerged' });
         survivors.add(name);
@@ -567,8 +605,6 @@ export class WorktreeService {
     // Merged branches with no worktree left (teardown crash window, manual
     // dir deletes). In-use names are skipped so a mid-re-drive merge node can
     // still resolve its branch ref.
-    const listBranchesFn = this.deps.listBranchesByPrefix ?? _listBranchesByPrefix;
-    const branches = await listBranchesFn(this.workspaceDir, ['agent-', 'wf-']);
     const deleteFn = this.deps.deleteBranch ?? _deleteBranch;
     for (const branch of branches) {
       if (survivors.has(branch) || inUseNames.has(branch)) continue;
@@ -653,7 +689,9 @@ export class WorktreeService {
       await this.provision(entry.path);
       upsertWorktree({ name, path: entry.path });
       await this.refresh();
-      return entry;
+      // Same base receipt as the match/create paths — dispatch stamps these on
+      // the run/contract, and verification anchors its committed-diff on baseSha.
+      return { ...entry, baseBranch: integration, ...(baseSha ? { baseSha } : {}) };
     }
   }
 
@@ -790,13 +828,17 @@ export class WorktreeService {
 
   /**
    * Belt-and-suspenders after a successful landing: advance the LOCAL
-   * integration branch ref to the merge-worktree HEAD so standard git tools
-   * see the merged work, and so the local ref is available as a fallback
-   * start-point for new run worktrees.
+   * integration branch ref to the landed tip so standard git tools see the
+   * merged work, and so the local ref is available as a fallback start-point
+   * for new run worktrees.
    *
-   * When the main worktree is on the integration branch, fast-forward it so
-   * the working tree/index stay coherent. When it is on some other branch,
-   * move only the local integration ref with `git update-ref`.
+   * The engine NEVER mutates the main checkout's working tree — that checkout
+   * belongs to the orchestrator. When the main worktree has the integration
+   * branch checked out, this is a no-op (moving a checked-out ref corrupts
+   * `git status`, and fast-forwarding the tree races the live orchestrator);
+   * the orchestrator pulls on its own schedule, and new worktrees fork from
+   * origin/<integration> regardless. Only when the integration branch is NOT
+   * checked out does this move the local ref with `git update-ref`.
    *
    * Best-effort: never throws. Failure is logged and the landing is unaffected.
    */
@@ -805,25 +847,20 @@ export class WorktreeService {
       const integration = await this.getIntegrationBranch();
 
       const statusFn = this.deps.getWorktreeStatus ?? _getWorktreeStatus;
-      const { branch: mainBranch, clean } = await statusFn(this.workspaceDir);
+      const { branch: mainBranch } = await statusFn(this.workspaceDir);
+
+      if (mainBranch === integration) {
+        // Orchestrator owns the main checkout — never touch its tree or its
+        // checked-out ref. resolveIntegrationTip prefers origin, so forks
+        // stay correct even while the local ref lags.
+        return;
+      }
 
       // Resolve the most-advanced SHA (origin > local). No mergeWtPath: the
       // shared __dev-merge is a dead path post-pc-pty-chat-443 fix A.
       const tipFn = this.deps.resolveIntegrationTip ?? _resolveIntegrationTip;
       const sha = await tipFn(this.workspaceDir, integration);
       if (!sha) return; // fresh repo or nothing resolvable — nothing to advance to
-
-      if (mainBranch === integration) {
-        if (!clean) {
-          console.warn(
-            `[worktree] skipped fast-forward of ${integration}: main checkout is dirty`,
-          );
-          return;
-        }
-        const ffFn = this.deps.fastForwardWorktree ?? _fastForwardWorktree;
-        await ffFn(this.workspaceDir, sha);
-        return;
-      }
 
       const updateFn = this.deps.updateRef ?? _updateRef;
       await updateFn(this.workspaceDir, integration, sha);

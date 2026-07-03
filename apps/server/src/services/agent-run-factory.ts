@@ -36,6 +36,7 @@ import { resolve } from 'node:path';
 import {
   computePodRevision,
   resolveAgentForDispatch,
+  getAgentRunRow,
   getProjectById,
   getWorkItem,
   insertAgentRunRow,
@@ -784,7 +785,7 @@ export async function dispatchContinueAgent(
 
   // Re-link the contract to the continuation run (same resolution as the fresh
   // path); this keeps the run↔contract link pointed at the latest producer.
-  const contractId = resolveContractForDispatch({
+  let contractId = resolveContractForDispatch({
     projectId: input.projectId,
     workItemId: continueWorkItemId,
     agentRunId: plan.plan.agentRunId,
@@ -794,6 +795,45 @@ export async function dispatchContinueAgent(
     worktreeBaseBranch: plan.plan.worktreeBaseBranch,
     worktreeBaseSha: plan.plan.worktreeBaseSha,
   });
+
+  // A continuation is the SAME piece of work — when resolution produced no
+  // contract (no WI, no resolvable spec), carry the parent run's contract
+  // forward rather than spawning contract-less.
+  if (!contractId) {
+    try {
+      const parentContractId = getAgentRunRow(input.parentAgentRunId)?.contractId ?? null;
+      if (parentContractId) {
+        const contractSvc = deps.contractService ?? new ContractService();
+        contractSvc.setRun(parentContractId, plan.plan.agentRunId);
+        setAgentRunContractId(plan.plan.agentRunId, parentContractId);
+        contractId = parentContractId;
+      }
+    } catch (err) {
+      console.error(
+        `[agent-run-factory] parent-contract carry failed for continuation ${plan.plan.agentRunId}:`,
+        err,
+      );
+    }
+  }
+
+  // Contract invariant — mirrors the fresh path's abort: NO run spawns without
+  // a contract, continuations included (the old lenient path could spawn
+  // contract-less and skip verification entirely).
+  if (!contractId) {
+    const reason =
+      `continuation of run "${input.parentAgentRunId}" has no contract — the parent run carries ` +
+      'no contract link and no expected_output could be resolved; re-dispatch fresh with an explicit spec';
+    markAgentRunTerminal({
+      id: plan.plan.agentRunId,
+      status: 'failed',
+      result: null,
+      failureCause: 'contract-required',
+      failureReason: reason,
+      completedAt: now,
+    });
+    podPrep.cleanup();
+    return { ok: false, cause: 'contract-required', error: reason };
+  }
 
   // Register the run-keyed settlement waiter BEFORE start (see fresh path).
   activeReg.onSettled(plan.plan.agentRunId, (s) =>
@@ -1297,12 +1337,12 @@ export function resolveContractForDispatch(
       if (expectedOutput?.kind === 'repo' && expectedOutput.isolation !== 'worktree') {
         expectedOutput = { ...expectedOutput, isolation: 'worktree' };
       }
-      // Empty-contract guard (2026-06-07). A fresh dispatch whose resolution
-      // chain produced no spec would mint a contract that checks nothing and
-      // auto-passes. Abort instead — the caller gets a typed `expected-output-
-      // required` refusal. Continuations (requireExpectedOutput falsy) stay
-      // lenient: they reuse the parent's contract above and rarely reach here.
-      if (!expectedOutput && args.requireExpectedOutput) {
+      // Empty-contract guard (2026-06-07, tightened 2026-07-03). A dispatch
+      // whose resolution chain produced no spec must never mint a contract
+      // that checks nothing and auto-passes — for ANY caller. Return null;
+      // fresh dispatches abort typed, continuations fall back to carrying the
+      // parent run's contract (and abort typed if there is none).
+      if (!expectedOutput) {
         return null;
       }
       const acceptanceCriteria =

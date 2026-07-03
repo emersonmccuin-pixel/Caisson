@@ -634,7 +634,19 @@ export function makeExecutorDeps(
     // pc-pty-chat-415 (R5) — the mechanics live in landing-service.landBranch
     // (the ONE landing path, shared with acceptance-side landing). This node
     // keeps the workflow-specific effects: diary events + conflict card move.
-    const result = await landBranch(opts.worktrees, branch);
+    const result = await landBranch(opts.worktrees, branch, {
+      // Record-then-teardown: the durable git_merged event is written after
+      // both positive receipts but BEFORE teardown deletes the run branch.
+      onLanded: ({ into, idempotent }) => {
+        runGateway.appendRunEvent({
+          projectId: opts.projectId,
+          runId: run.id,
+          type: 'git_merged',
+          nodeId: node.id,
+          data: idempotent ? { branch, into, idempotent: true } : { branch, into },
+        });
+      },
+    });
     if (result.outcome === 'conflict') {
       await emitConflict();
       return { outcome: 'conflict' };
@@ -642,13 +654,6 @@ export function makeExecutorDeps(
     if (result.outcome === 'failed') {
       return { outcome: 'failed', error: result.error };
     }
-    runGateway.appendRunEvent({
-      projectId: opts.projectId,
-      runId: run.id,
-      type: 'git_merged',
-      nodeId: node.id,
-      data: result.idempotent ? { branch, into: result.into, idempotent: true } : { branch, into: result.into },
-    });
     return { outcome: 'merged' };
   };
 

@@ -622,7 +622,7 @@ export function registerAgentRunRoutes(app: Hono, deps: AgentRunRouteDeps): void
       // pc-pty-chat-439 (belt-and-suspenders): non-repo dispatches run in an
       // isolated scratch dir, not the live project folder. Stray files written
       // by the agent (e.g. Bash heredoc artifacts) cannot dirty the mainline
-      // dev tree or trip the MAINLINE GUARD on the next repo dispatch.
+      // dev tree (the orchestrator's checkout).
       // Read/Glob/Grep are absolute-path reads and are unaffected by cwd.
       const adHocScratch = resolvePath(
         process.env.PC_DATA_DIR ?? 'data',

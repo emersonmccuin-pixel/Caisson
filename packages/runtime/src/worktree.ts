@@ -513,14 +513,9 @@ export async function updateRef(workspaceDir: string, branch: string, sha: strin
   await exec('git', ['update-ref', `refs/heads/${branch}`, sha], { cwd: resolve(workspaceDir) });
 }
 
-/**
- * Fast-forward the checked-out worktree to `targetSha`. Used only when the
- * main checkout is already on the canonical branch; unlike update-ref, this
- * updates the working tree and index together.
- */
-export async function fastForwardWorktree(workspaceDir: string, targetSha: string): Promise<void> {
-  await exec('git', ['merge', '--ff-only', targetSha], { cwd: resolve(workspaceDir) });
-}
+// ☠ `fastForwardWorktree` DELETED — the engine never mutates the main
+// checkout's working tree; when the integration branch is checked out there,
+// tryAdvanceLocalIntegration is a no-op (the orchestrator owns that checkout).
 
 /**
  * Ensure a lightweight git worktree at `wtPath` for merge operations, checked

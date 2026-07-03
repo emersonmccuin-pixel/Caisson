@@ -106,6 +106,10 @@ test('provision/attach: installRunner is called when branch already exists (orph
   assert.equal(entry.path, fakeEntry(name).path, 'entry path is correct');
   assert.equal(installed.length, 1, 'installRunner called exactly once');
   assert.equal(installed[0], fakeEntry(name).path, 'installRunner called with the attached worktree path');
+  // 2026-07-03 fix: the attach path must return the same base receipt as the
+  // create/match paths — verification anchors its committed-diff on baseSha.
+  assert.equal(entry.baseBranch, 'dev', 'attach path carries baseBranch receipt');
+  assert.equal(entry.baseSha, 'abc1234', 'attach path carries baseSha receipt');
 });
 
 test('provision/attach: install failure propagates — orphan recovery does not swallow the error', async () => {

@@ -118,6 +118,42 @@ test('landBranch: integration resolver failure → failed with the fix-it messag
   assert.match((result as { error: string }).error, /not found/);
 });
 
+// ── record-then-teardown ordering (2026-07-03 durability fix) ────────────────
+
+test('landBranch: onLanded fires after push receipts and BEFORE teardown', async () => {
+  const { wt, calls } = fakeWorktrees();
+  const result = await landBranch(wt, 'agent-abc', {
+    onLanded: ({ into, idempotent }) => {
+      calls.push(`record(${into},${idempotent})`);
+    },
+  });
+  assert.equal(result.outcome, 'merged');
+  assert.deepEqual(calls, ['merge', 'push', 'record(dev,false)', 'teardown']);
+});
+
+test('landBranch: onLanded fires on the idempotent path too, before teardown', async () => {
+  const { wt, calls } = fakeWorktrees({ startMerged: true, startPushed: true });
+  const result = await landBranch(wt, 'agent-abc', {
+    onLanded: ({ idempotent }) => {
+      calls.push(`record(idempotent=${idempotent})`);
+    },
+  });
+  assert.deepEqual(result, { outcome: 'merged', into: 'dev', idempotent: true });
+  assert.deepEqual(calls, ['record(idempotent=true)', 'teardown']);
+});
+
+test('landBranch: onLanded throw → typed failed, teardown NOT run (branch preserved for re-land)', async () => {
+  const { wt, calls } = fakeWorktrees();
+  const result = await landBranch(wt, 'agent-abc', {
+    onLanded: () => {
+      throw new Error('db write failed (simulated)');
+    },
+  });
+  assert.equal(result.outcome, 'failed');
+  assert.match((result as { error: string }).error, /landed-record write failed/);
+  assert.deepEqual(calls, ['merge', 'push'], 'no teardown after a failed durable record');
+});
+
 // ── landAcceptedContract ─────────────────────────────────────────────────────
 
 function seedAcceptedRepoContract(slug: string, worktreeDir: string | null) {
@@ -172,6 +208,27 @@ test('landAcceptedContract: accepted standalone repo contract lands with durable
   assert.equal(row.landedBranch, 'agent-deadbeef');
   assert.equal(row.landedSha, 'sealed123', 'receipt = the SEALED sha, not an agent claim');
   assert.equal(row.landedAt, 1234567);
+});
+
+test('landAcceptedContract: landed status is durable BEFORE the branch teardown (crash-window ordering)', async () => {
+  const WT = join(tmpDir, 'worktrees', 'land-order', 'agent-0rder123');
+  const { contract } = seedAcceptedRepoContract('land-order', WT);
+  const { wt } = fakeWorktrees();
+  const statusAtTeardown: (string | null)[] = [];
+  const origTeardown = wt.teardownAfterMerge;
+  wt.teardownAfterMerge = async (branch) => {
+    statusAtTeardown.push(getContract(contract.id as ULID)!.landingStatus);
+    await origTeardown(branch);
+  };
+
+  const result = await landAcceptedContract(contract.id as ULID, { worktreesFor: () => wt });
+
+  assert.equal(result.applicable && result.outcome, 'landed');
+  assert.deepEqual(
+    statusAtTeardown,
+    ['landed'],
+    'the contract must already read landed when the branch teardown runs — a crash mid-teardown re-drives to the idempotent short-circuit',
+  );
 });
 
 test('landAcceptedContract: conflict parks durably + notifies the dispatcher', async () => {

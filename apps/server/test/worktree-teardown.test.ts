@@ -34,6 +34,11 @@ function entry(name: string): WorktreeEntry {
   return { path: join(FAKE_BASE, name), branch: name, head: 'abc1234' };
 }
 
+/** Engine merge worktrees are created with `--detach` — branch is null. */
+function detachedEntry(name: string): WorktreeEntry {
+  return { path: join(FAKE_BASE, name), branch: null, head: 'abc1234' };
+}
+
 const MAIN: WorktreeEntry = { path: FAKE_WORKSPACE, branch: 'dev', head: 'abc' };
 
 before(() => runMigrations());
@@ -314,6 +319,101 @@ test('sweep: __dev-merge husk reaped when not in use (pc-pty-chat-445)', async (
   const r = await svc.sweepStale([]);
   assert.deepEqual(r.removedHusks, ['__dev-merge'], '__dev-merge must be reaped by the husk pass');
   assert.deepEqual(removedDirs, [join(FAKE_BASE, '__dev-merge')]);
+});
+
+// ── registered engine merge worktrees (2026-07-03 leak fix) ─────────────────
+//
+// A crash mid-landing leaves `__merge-<branch>` REGISTERED with git (not a
+// husk). It is detached, so its dir name is not a branch — the old sweep kept
+// it forever as "unmerged". Lifecycle now: parked conflict (MERGE_HEAD) or
+// live run branch → keep; otherwise → reap via destroyWorktree.
+
+test('sweep: registered __merge-* with no MERGE_HEAD and no run branch is reaped', async () => {
+  const destroyed: string[] = [];
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    pruneWorktrees: async () => {},
+    listWorktrees: async () => [MAIN, detachedEntry('__merge-agent-gone')],
+    branchMergedInto: async () => false,
+    gitMergeState: async () => ({ alreadyMerged: false, mergeInProgress: false, pushed: false }),
+    destroyWorktree: async (_ws, p) => { destroyed.push(p); },
+    deleteBranch: async () => {},
+    listBranchesByPrefix: async () => [], // run branch 'agent-gone' no longer exists
+    listBaseDirNames: async () => [],
+  });
+
+  const r = await svc.sweepStale([]);
+  assert.deepEqual(r.removedWorktrees, ['__merge-agent-gone']);
+  assert.deepEqual(destroyed, [join(FAKE_BASE, '__merge-agent-gone')]);
+  assert.deepEqual(r.kept, [], 'no phantom "unmerged" keep for a crash-orphaned merge worktree');
+});
+
+test('sweep: registered __merge-* with MERGE_HEAD (parked conflict) is kept', async () => {
+  const destroyed: string[] = [];
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    pruneWorktrees: async () => {},
+    listWorktrees: async () => [MAIN, detachedEntry('__merge-agent-conflicted')],
+    branchMergedInto: async () => false,
+    gitMergeState: async () => ({ alreadyMerged: false, mergeInProgress: true, pushed: false }),
+    destroyWorktree: async (_ws, p) => { destroyed.push(p); },
+    deleteBranch: async () => {},
+    listBranchesByPrefix: async () => [],
+    listBaseDirNames: async () => [],
+  });
+
+  const r = await svc.sweepStale([]);
+  assert.deepEqual(destroyed, [], 'a parked conflict must never be destroyed');
+  assert.deepEqual(r.kept, [{ name: '__merge-agent-conflicted', reason: 'in-use' }]);
+});
+
+test('sweep: registered __merge-* whose run branch still exists is kept (landing pending)', async () => {
+  const destroyed: string[] = [];
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    pruneWorktrees: async () => {},
+    listWorktrees: async () => [MAIN, detachedEntry('__merge-agent-pending')],
+    branchMergedInto: async () => false,
+    gitMergeState: async () => ({ alreadyMerged: false, mergeInProgress: false, pushed: false }),
+    destroyWorktree: async (_ws, p) => { destroyed.push(p); },
+    deleteBranch: async () => {},
+    listBranchesByPrefix: async () => ['agent-pending'], // branch alive → landing not finished
+    listBaseDirNames: async () => [],
+  });
+
+  const r = await svc.sweepStale([]);
+  assert.deepEqual(destroyed, [], 'merge worktree of an unfinished landing must survive');
+  assert.deepEqual(r.kept, [{ name: '__merge-agent-pending', reason: 'in-use' }]);
+});
+
+test('sweep: REGISTERED __dev-merge (legacy) is reaped via destroy, not just the husk pass', async () => {
+  const destroyed: string[] = [];
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    pruneWorktrees: async () => {},
+    listWorktrees: async () => [MAIN, detachedEntry('__dev-merge')],
+    branchMergedInto: async () => false,
+    destroyWorktree: async (_ws, p) => { destroyed.push(p); },
+    deleteBranch: async () => {},
+    listBranchesByPrefix: async () => [],
+    listBaseDirNames: async () => [],
+  });
+
+  const r = await svc.sweepStale([]);
+  assert.deepEqual(r.removedWorktrees, ['__dev-merge']);
+  assert.deepEqual(destroyed, [join(FAKE_BASE, '__dev-merge')]);
+});
+
+test('stranded: registered __merge-* worktrees are excluded from the stranded report', async () => {
+  const svc = new WorktreeService(FAKE_WORKSPACE, FAKE_BASE, DEV, {
+    pruneWorktrees: async () => {},
+    listWorktrees: async () => [MAIN, detachedEntry('__merge-agent-gone'), entry('agent-real')],
+    branchMergedInto: async () => false,
+    listBranchesByPrefix: async () => [],
+  });
+
+  const out = await svc.listStranded([]);
+  assert.deepEqual(
+    out.map((s) => s.name),
+    ['agent-real'],
+    'engine merge worktrees are landing infrastructure, never phantom stranded branches',
+  );
 });
 
 test('sweep: __dev-merge NOT reaped when in use (guard intact)', async () => {

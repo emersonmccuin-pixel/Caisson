@@ -9,7 +9,7 @@
 // intact. We reconstruct the start-run request verbatim from the stored row
 // and send it to the current live host so the run executes without manual retry.
 
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { resolveAgentForDispatch } from '@pc/db';
@@ -37,6 +37,16 @@ export async function reHomeRunOnCurrentHost(
   row: AgentRunRow,
   hostClient: AgentHostReattachClient,
 ): Promise<'re-sent' | 'failed' | 'skip'> {
+  // 0. Dispatch invariants apply to RE-dispatch too. A guarded path stamps the
+  //    contract before the host ever sees a start-run, so a row without one is
+  //    a crash orphan from the pre-insert→contract window — never re-spawn it
+  //    contract-less. Same for the cwd: a missing/deleted worktree dir means
+  //    the original provisioning never completed (or was reclaimed); spawning
+  //    into it would be a silent integrity violation. 'skip' → the caller
+  //    finalizes the row as a typed host-lost failure.
+  if (!row.contractId) return 'skip';
+  if (!row.worktreeDir?.trim() || !existsSync(row.worktreeDir)) return 'skip';
+
   // 1. Pod still registered? If not, there is nothing to dispatch to.
   const podRow = resolveAgentForDispatch(row.podName, row.projectId);
   if (!podRow) return 'skip';

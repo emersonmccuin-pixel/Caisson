@@ -56,12 +56,25 @@ export type LandBranchResult =
   | { outcome: 'conflict'; into: string | null }
   | { outcome: 'failed'; into: string | null; error: string };
 
-/** Idempotent merge → receipts → push → receipts → teardown. The ONE set of
- *  landing mechanics; the workflow merge node and the acceptance door both
- *  call here. Never throws — every path is a typed outcome. */
+export interface LandBranchOpts {
+  /** Durable "landed" record write. Called AFTER both positive receipts
+   *  (merge ancestry + origin push) but BEFORE any teardown — teardown deletes
+   *  the run branch, which is the only key the idempotent re-drive can use, so
+   *  the durable record MUST exist first (record-then-teardown, mirroring the
+   *  abandon door). A crash after this call re-drives to an idempotent
+   *  short-circuit instead of a bogus re-merge of a deleted branch. A throw
+   *  here aborts teardown and returns a typed 'failed' — re-land re-records. */
+  onLanded?: (receipt: { into: string; idempotent: boolean }) => void | Promise<void>;
+}
+
+/** Idempotent merge → receipts → push → receipts → durable record → teardown.
+ *  The ONE set of landing mechanics; the workflow merge node and the
+ *  acceptance door both call here. Never throws — every path is a typed
+ *  outcome. */
 export async function landBranch(
   worktrees: LandingWorktrees,
   branch: string,
+  opts: LandBranchOpts = {},
 ): Promise<LandBranchResult> {
   // Resolve the merge target up front. A resolver failure (no configured
   // branch + nothing detectable, or a configured branch missing from the
@@ -117,6 +130,16 @@ export async function landBranch(
           };
         }
       }
+      // Durable record BEFORE teardown (see LandBranchOpts.onLanded).
+      try {
+        await opts.onLanded?.({ into, idempotent: true });
+      } catch (err) {
+        return {
+          outcome: 'failed',
+          into,
+          error: `landed-record write failed (work IS merged+pushed; re-land to re-record): ${(err as Error).message}`,
+        };
+      }
       // pc-pty-chat-417: advance the local integration ref so future
       // run worktrees fork from the landed state (best-effort, never throws).
       await worktrees.tryAdvanceLocalIntegration?.();
@@ -160,6 +183,16 @@ export async function landBranch(
       };
     }
 
+    // Durable record BEFORE teardown (see LandBranchOpts.onLanded).
+    try {
+      await opts.onLanded?.({ into, idempotent: false });
+    } catch (err) {
+      return {
+        outcome: 'failed',
+        into,
+        error: `landed-record write failed (work IS merged+pushed; re-land to re-record): ${(err as Error).message}`,
+      };
+    }
     // pc-pty-chat-417: advance the local integration ref so future
     // run worktrees fork from the landed state (best-effort, never throws).
     await worktrees.tryAdvanceLocalIntegration?.();
@@ -289,19 +322,25 @@ export async function landAcceptedContract(
   // re-driven at boot (mechanics are idempotent).
   service.setLanding({ id: contractId, landingStatus: 'pending', landedBranch: branch });
 
-  const result = await landBranch(worktrees, branch);
+  const sealedSha = (contract.deliverable as { commit?: string } | null)?.commit ?? null;
+  const result = await landBranch(worktrees, branch, {
+    // Record-then-teardown: the 'landed' write happens INSIDE the mechanics,
+    // after both positive receipts but before the run branch is deleted — a
+    // crash mid-teardown re-drives to the idempotent 'landed' short-circuit
+    // instead of failing on a branch that no longer exists.
+    onLanded: () => {
+      service.setLanding({
+        id: contractId,
+        landingStatus: 'landed',
+        landedBranch: branch,
+        landedSha: sealedSha,
+        landingError: null,
+        landedAt: now(),
+      });
+    },
+  });
 
   if (result.outcome === 'merged') {
-    const sealedSha =
-      (contract.deliverable as { commit?: string } | null)?.commit ?? null;
-    service.setLanding({
-      id: contractId,
-      landingStatus: 'landed',
-      landedBranch: branch,
-      landedSha: sealedSha,
-      landingError: null,
-      landedAt: now(),
-    });
     return { applicable: true, outcome: 'landed', branch, into: result.into };
   }
 
